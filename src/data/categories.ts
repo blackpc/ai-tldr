@@ -60,4 +60,10 @@ export const CATEGORY_META: Record<Category, CategoryMeta> = {
     short: "##",
     blurb: "Leaderboards + evals",
   },
+  ecosystem: {
+    id: "ecosystem",
+    label: "ECOSYSTEM",
+    short: "Ψ",
+    blurb: "Governance, foundations, license / org changes",
+  },
 };

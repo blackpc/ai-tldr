@@ -1,6 +1,6 @@
 ---
 prompt-id: tldr.update-releases
-prompt-version: 2.0.0
+prompt-version: 2.1.0
 output-target: src/data/releases.json
 schema: src/data/schema.ts
 invoke-as: subagent
@@ -96,6 +96,38 @@ Include items only if they are **concrete and verifiable**. Each item has a
 | `paper`     | arXiv/conference paper with measurable claims                             |
 | `dataset`   | newly-released training/eval dataset                                      |
 | `benchmark` | new or substantially-updated benchmark / leaderboard                      |
+| `ecosystem` | governance / structural news about an existing project — see below       |
+
+### `ecosystem` — what counts and what does NOT
+
+`ecosystem` is for **structural** news about projects and orgs that ML
+practitioners genuinely care about, but which is not a code/model/paper
+release. Use it sparingly.
+
+**Allowed**:
+- A project moves to (or from) a foundation (e.g. PyTorch Foundation,
+  Linux Foundation, ASF, CNCF).
+- A license change on a widely-used project (Apache → BSL, MIT → AGPL,
+  weights license loosened or restricted).
+- A major project rebrand or fork that the community now treats as
+  canonical.
+- A lab spinout or shutdown (e.g. a research lab becomes a standalone
+  company; an open-source project becomes a closed product).
+- A platform deprecating a model or API in a way that breaks downstream
+  users.
+
+**Not allowed** (drop these — they are noise, not ecosystem news):
+- Funding rounds, valuations, M&A unless there is an immediate
+  product / license / governance impact.
+- Hires, departures, executive shuffles.
+- Roadmap announcements, "coming soon" posts.
+- Conference dates, awards, blog posts about culture or strategy.
+
+Ecosystem items still need a fully verified canonical URL and image, like
+any other item. They almost always combine with another category — e.g.
+a foundation move is `["ecosystem", "tool"]` if the project is a library;
+a license change on a model is `["ecosystem", "model"]`. Pure
+`["ecosystem"]` items are rare and should be obviously big.
 
 **Multi-category is normal and encouraged.** A trending GitHub project that
 ships a working product is `["repo", "tool"]`. A paper that introduces a

@@ -13,7 +13,8 @@ export type Category =
   | "algorithm"
   | "paper"
   | "dataset"
-  | "benchmark";
+  | "benchmark"
+  | "ecosystem";
 
 export const CATEGORY_ORDER: Category[] = [
   "model",
@@ -23,6 +24,7 @@ export const CATEGORY_ORDER: Category[] = [
   "paper",
   "dataset",
   "benchmark",
+  "ecosystem",
 ];
 
 export type Importance = "rumor" | "notable" | "major" | "seismic";
