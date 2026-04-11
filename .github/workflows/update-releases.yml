@@ -1,0 +1,123 @@
+name: Update releases (every 8h)
+
+# Runs the AI/TLDR daily release sweep on a schedule.
+#
+# What it does:
+#   1. Checks out the repo
+#   2. Installs Bun deps
+#   3. Runs Claude Code with a short delegation prompt that reads
+#      prompts/update-releases.md and follows it (web-fetch + verify
+#      every URL/image, refresh src/data/releases.json)
+#   4. Runs `bun run build` to confirm the new feed parses + page builds
+#   5. If src/data/releases.json changed, commits + pushes back to master
+#
+# Required secret:
+#   CLAUDE_CODE_OAUTH_TOKEN — generate locally with `claude setup-token`
+#                              then `gh secret set CLAUDE_CODE_OAUTH_TOKEN`
+#                              (or paste it in the GitHub UI)
+
+on:
+  schedule:
+    # every 8 hours at minute 0 (00:00, 08:00, 16:00 UTC)
+    - cron: "0 */8 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-releases
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          # use default GITHUB_TOKEN; permissions: contents:write above
+          # gives us push rights for the bot commit at the end
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run release sweep with Claude Code
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Short delegation prompt — the real prompt is the file in the
+          # repo, which Claude reads via its Read tool. Single source of
+          # truth: prompts/update-releases.md.
+          prompt: |
+            You are running as the AI/TLDR scheduled release updater inside
+            a GitHub Actions workflow. The working directory is the repo
+            root.
+
+            STEP 1. Read the file `prompts/update-releases.md` from the
+            repo. That file is the SINGLE SOURCE OF TRUTH for how to
+            refresh `src/data/releases.json`. Follow it exactly. Pay
+            particular attention to the ZERO-HALLUCINATION POLICY at the
+            top — every `url`, every entry in `links`, and every `image.url`
+            MUST be fetched in this run with WebFetch and confirmed to
+            return 200 + relevant content. No memory-based URLs.
+
+            STEP 2. Use today's actual date (the system clock in this
+            runner) for the `--since` window and the `generatedAt` field.
+            Default window: include releases from the last 7 days. Set
+            `source` to `"github-actions-sweep"`.
+
+            STEP 3. Aim for 10–18 items in the new feed, spread across as
+            many of the categories as you can verify (model, repo, tool,
+            algorithm, paper, dataset, benchmark). Multi-category items are
+            encouraged — see the prompt file. Empty categories are fine if
+            you cannot honestly fill them, but try.
+
+            STEP 4. After writing `src/data/releases.json`, run
+            `bun run build` to confirm the JSON still parses against
+            `src/data/schema.ts` and the page builds. If the build fails,
+            fix the JSON and re-run until it passes.
+
+            STEP 5. Stop. Do NOT commit or push yourself — the next
+            workflow step handles the git ops. Just leave the modified
+            file in the working tree.
+
+            Return a short report (≤200 words) of what you changed.
+          claude_args: |
+            --model claude-opus-4-5
+            --permission-mode acceptEdits
+            --allowedTools "WebSearch,WebFetch,Read,Write,Edit,Bash(bun:*),Bash(ls:*),Bash(cat:*),Bash(grep:*)"
+
+      - name: Show diff
+        run: |
+          echo "::group::git status"
+          git status --short
+          echo "::endgroup::"
+          echo "::group::git diff src/data/releases.json"
+          git --no-pager diff src/data/releases.json | head -200 || true
+          echo "::endgroup::"
+
+      - name: Commit and push if releases.json changed
+        run: |
+          set -euo pipefail
+          if [[ -z "$(git status --porcelain src/data/releases.json)" ]]; then
+            echo "No changes to releases.json — nothing to commit."
+            exit 0
+          fi
+          git config user.name  "ai-tldr-bot"
+          git config user.email "41898282+ai-tldr-bot@users.noreply.github.com"
+          git add src/data/releases.json
+          git commit -m "feat(content): scheduled release sweep $(date -u +%Y-%m-%dT%H:%MZ)
+
+          Refreshed src/data/releases.json via prompts/update-releases.md.
+
+          Co-Authored-By: Claude Code Action <noreply@anthropic.com>"
+          git push origin HEAD:${{ github.ref_name }}
