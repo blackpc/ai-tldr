@@ -10,19 +10,46 @@ import { ReleaseModal } from "./components/ReleaseModal";
 import { InfluencersPage } from "./components/InfluencersPage";
 import { influencers } from "./data/influencers";
 
-/** Find item by id from hash. Hash format: #item-id */
-function itemFromHash(items: ReleaseItem[]): ReleaseItem | null {
-  const hash = window.location.hash.slice(1); // strip #
-  if (!hash) return null;
-  return items.find((i) => i.id === hash) ?? null;
+/** Parse current URL into a route. Supported paths:
+ *   /                     → feed home
+ *   /influencers          → influencers page
+ *   /releases/<id>        → feed with modal open for that item
+ * Legacy hash formats (#id, #influencers) still work so old bookmarks
+ * and shared links keep functioning.
+ */
+type Route =
+  | { kind: "feed" }
+  | { kind: "influencers" }
+  | { kind: "release"; id: string };
+
+function parseRoute(): Route {
+  const hash = window.location.hash.slice(1);
+  if (hash === "influencers") return { kind: "influencers" };
+
+  const path = window.location.pathname;
+  if (path === "/influencers" || path === "/influencers/") {
+    return { kind: "influencers" };
+  }
+  const m = path.match(/^\/releases\/([^/]+)\/?$/);
+  if (m) return { kind: "release", id: m[1] };
+
+  if (hash) return { kind: "release", id: hash };
+  return { kind: "feed" };
+}
+
+function itemFromRoute(
+  route: Route,
+  items: ReleaseItem[],
+): ReleaseItem | null {
+  if (route.kind !== "release") return null;
+  return items.find((i) => i.id === route.id) ?? null;
 }
 
 type Page = "feed" | "influencers";
 
 function App() {
-  const [page, setPage] = useState<Page>(() =>
-    window.location.hash === "#influencers" ? "influencers" : "feed",
-  );
+  const [route, setRoute] = useState<Route>(() => parseRoute());
+  const page: Page = route.kind === "influencers" ? "influencers" : "feed";
   const [active, setActive] = useState<Set<Category>>(new Set());
   const [query, setQuery] = useState("");
 
@@ -33,42 +60,63 @@ function App() {
     [sorted, active, query],
   );
 
-  // Modal state driven by URL hash
-  const [openItem, setOpenItem] = useState<ReleaseItem | null>(() =>
-    itemFromHash(sorted),
+  const openItem = useMemo(
+    () => itemFromRoute(route, sorted),
+    [route, sorted],
   );
 
-  // Open modal = push hash into URL
-  const openModal = useCallback(
-    (item: ReleaseItem) => {
-      window.history.pushState(null, "", `#${item.id}`);
-      setOpenItem(item);
-    },
-    [],
-  );
-
-  // Close modal = clear hash on *current* history entry (replaceState),
-  // NOT history.back(). back() would navigate to the previous entry which
-  // might have a *different* modal's hash → reopening that modal.
-  const closeModal = useCallback(() => {
-    if (window.location.hash) {
-      window.history.replaceState(
-        null,
-        "",
-        window.location.pathname + window.location.search,
-      );
-    }
-    setOpenItem(null);
+  // Nav: go to feed home
+  const goFeed = useCallback(() => {
+    window.history.pushState(null, "", "/");
+    setRoute({ kind: "feed" });
   }, []);
 
-  // Sync modal state with browser back/forward
+  // Nav: go to influencers
+  const goInfluencers = useCallback(() => {
+    window.history.pushState(null, "", "/influencers");
+    setRoute({ kind: "influencers" });
+  }, []);
+
+  // Open modal = navigate to /releases/<id>
+  const openModal = useCallback((item: ReleaseItem) => {
+    window.history.pushState(null, "", `/releases/${item.id}`);
+    setRoute({ kind: "release", id: item.id });
+  }, []);
+
+  // Close modal = go back to feed (or influencers if that's where we came
+  // from). replaceState, NOT history.back() — back() could navigate to a
+  // previous entry with a different modal already open.
+  const closeModal = useCallback(() => {
+    const target = page === "influencers" ? "/influencers" : "/";
+    window.history.replaceState(null, "", target);
+    setRoute(page === "influencers" ? { kind: "influencers" } : { kind: "feed" });
+  }, [page]);
+
+  // Sync route with browser back/forward
   useEffect(() => {
-    const onPop = () => {
-      setOpenItem(itemFromHash(sorted));
-    };
+    const onPop = () => setRoute(parseRoute());
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, [sorted]);
+  }, []);
+
+  // Keep <title> and <meta description> in sync with current route
+  // so the tab title updates as users navigate and Google's JS-rendering
+  // crawler sees the right thing. Static HTML pages already have the
+  // correct tags baked in by scripts/prerender.ts.
+  useEffect(() => {
+    if (route.kind === "release") {
+      const item = sorted.find((i) => i.id === route.id);
+      if (item) {
+        document.title = `${item.title} — ${item.org} | AI/TLDR`;
+        return;
+      }
+    }
+    if (route.kind === "influencers") {
+      document.title = "AI Influencers — Who to Follow | AI/TLDR";
+      return;
+    }
+    document.title = "AI/TLDR — New AI Models, Tools & Papers This Week";
+  }, [route, sorted]);
 
   const toggle = (c: Category) => {
     setActive((prev) => {
@@ -93,7 +141,7 @@ function App() {
           <button
             type="button"
             className={`nav-link ${page === "feed" ? "nav-active" : ""}`}
-            onClick={() => { setPage("feed"); window.history.replaceState(null, "", window.location.pathname); }}
+            onClick={goFeed}
           >
             <span className="nav-link-lbl">RELEASES</span>
             <span className="nav-link-num">{feed.items.length}</span>
@@ -101,7 +149,7 @@ function App() {
           <button
             type="button"
             className={`nav-link ${page === "influencers" ? "nav-active" : ""}`}
-            onClick={() => { setPage("influencers"); window.history.replaceState(null, "", "#influencers"); }}
+            onClick={goInfluencers}
           >
             <span className="nav-link-lbl">INFLUENCERS</span>
             <span className="nav-link-num">{influencers.length}</span>

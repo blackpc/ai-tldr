@@ -11,8 +11,47 @@ a JSON feed that an automated agent refreshes every 8 hours.
 bun install        # install deps
 bun dev            # dev server
 bun run typecheck  # type-check
-bun run build      # production build
+bun run build      # production build (vite + scripts/prerender.ts)
 ```
+
+## Routing
+
+Path-based, not hash-based:
+- `/` → feed home
+- `/influencers` → influencers page
+- `/releases/<id>` → feed with the modal open for that release
+
+`src/App.tsx` parses `window.location.pathname`. Modal open/close uses
+`pushState` / `replaceState` — no page reloads. Legacy hash URLs
+(`#<id>`, `#influencers`) still work as a fallback for old bookmarks.
+
+## Build pipeline
+
+`bun run build` runs three steps in order:
+
+1. `tsc -b` — type-check the whole project
+2. `vite build` — bundle the SPA into `dist/index.html` + assets
+3. `bun scripts/prerender.ts` — post-processes `dist/` to generate:
+   - `dist/index.html` (homepage with correct meta tags)
+   - `dist/influencers/index.html`
+   - `dist/releases/<id>/index.html` — one per release, with
+     per-item `<title>`, `<meta>`, OG tags, Twitter card, and
+     Article JSON-LD injected from `src/data/releases.json`
+   - `dist/sitemap.xml` (all URLs)
+   - `dist/robots.txt`
+
+The prerender script is the **single source of truth for SEO**. It
+reads `releases.json` directly, so whenever the agent updates the
+feed, the next build produces a fresh static HTML file for every new
+release without any manual work.
+
+`public/_redirects` tells Cloudflare Pages to fall back to
+`/index.html` with a 200 for any path that doesn't match a generated
+file, so the SPA's client-side router handles unknown paths.
+
+To override the base URL used in canonical tags + sitemap, set the
+`SITE_URL` env var before running `bun run build`. Default is
+`https://ai-tldr.blackpc-me.workers.dev`.
 
 ## Key conventions
 
