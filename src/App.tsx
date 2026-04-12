@@ -40,10 +40,16 @@ function App() {
     [],
   );
 
-  // Close modal = go back (pops hash) or replace hash if no history
+  // Close modal = clear hash on *current* history entry (replaceState),
+  // NOT history.back(). back() would navigate to the previous entry which
+  // might have a *different* modal's hash → reopening that modal.
   const closeModal = useCallback(() => {
     if (window.location.hash) {
-      window.history.back();
+      window.history.replaceState(
+        null,
+        "",
+        window.location.pathname + window.location.search,
+      );
     }
     setOpenItem(null);
   }, []);
