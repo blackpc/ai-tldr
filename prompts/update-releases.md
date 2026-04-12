@@ -107,29 +107,36 @@ Include items only if they are **concrete and verifiable**. Each item has a
 | `benchmark` | new or substantially-updated benchmark / leaderboard                      | LOW      |
 | `ecosystem` | governance / structural news about an existing project — see below        | LOW      |
 
-### Content mix guidance (not quotas — use judgment)
+### Content mix — priorities, not caps
 
 The feed should feel like "here are the coolest things happening in AI
 this week that you can actually use, learn from, or get excited about."
-Aim for roughly this mix per sweep (adjust to what's actually available):
 
-- **repos: 3–6.** GitHub trending is the richest vein. Look for tools
-  people are actually starring, not just papers-with-code.
-- **tools: 3–5.** Prioritize tools you can install and try right now.
-  Cover a diverse range of functional areas — the feed shouldn't be
-  dominated by the same kind of tool every sweep. Actively look for
-  tools that solve different problems from what's already in the feed.
-- **models: 2–4.** Frontier + notable open-weights.
-- **tutorials: 1–3.** Guides from official docs, popular blogs, or YouTube
-  with a working repo. The "I can do this tonight" test.
-- **showcases: 1–2.** Impressive demos or shipped products that make people
-  go "wait, AI can do that now?"
-- **resources: 1–2.** New awesome-lists, cheat sheets, comparison tables.
-- **papers: 0–2.** Only if genuinely impactful AND has code/demo. Academic
-  papers without code that a practitioner can try are low value for this
-  audience.
-- **algorithms, datasets, benchmarks, ecosystem: 0–2 each.** Include when
-  genuinely interesting, skip when not.
+**Do not cap any category.** If 10 great repos shipped this week, include
+all 10. If 5 models dropped, include all 5. The quality bar (verified
+URLs, real explainers) is the only filter — never skip a legitimate
+release because you already have "enough" of that type.
+
+Priority order for effort (spend more search time on the top):
+
+1. **repos + tools** — the core of the feed. Things people can star,
+   install, and try. Cover a diverse range of functional areas — the
+   feed shouldn't be dominated by the same kind of tool every sweep.
+2. **models** — frontier + notable open-weights.
+3. **tutorials, showcases, resources** — things people can learn from
+   or get excited about.
+4. **papers, algorithms** — only if genuinely impactful AND has code or
+   a demo a practitioner can try. Skip pure theory.
+5. **datasets, benchmarks, ecosystem** — include when genuinely
+   interesting, not as filler.
+
+### Search diversity — fill the gaps
+
+After your first search pass, check what you found. If the results are
+dominated by one area (e.g. all coding agents, or all frontier models),
+run additional searches to find releases in underrepresented areas. The
+goal is a feed where someone scrolling sees a variety of things — not
+the same type of tool ten times.
 
 ### `ecosystem` — what counts and what does NOT
 
