@@ -116,11 +116,10 @@ Aim for roughly this mix per sweep (adjust to what's actually available):
 - **repos: 3–6.** GitHub trending is the richest vein. Look for tools
   people are actually starring, not just papers-with-code.
 - **tools: 3–5.** Prioritize tools you can install and try right now.
-  Specifically look for: **AI memory systems** (Cognee, MemPalace, Mem0,
-  Zep, Letta), **agent frameworks** (CrewAI, AutoGen, LangGraph, Smolagents),
-  **local inference** (Ollama, llama.cpp, vLLM, LMStudio), **coding agents**
-  (Claude Code, Cursor, Cline, Aider, Codex), **RAG tools** (RAGFlow,
-  Unstructured, LlamaIndex), **IDE plugins**, **CLI tools**, **MCP servers**.
+  Look across these niches: AI memory / knowledge management, agent
+  frameworks, local inference engines, coding agents, RAG pipelines,
+  IDE plugins, CLI tools, MCP servers. Search for what's trending
+  this week — don't favor any specific project by name.
 - **models: 2–4.** Frontier + notable open-weights.
 - **tutorials: 1–3.** Guides from official docs, popular blogs, or YouTube
   with a working repo. The "I can do this tonight" test.
@@ -193,9 +192,10 @@ the current location each run.
 5. **Awesome lists + resources**: search "awesome-llm", "awesome-agents",
    "awesome-rag" on GitHub for recently updated lists. Check
    huggingface.co/papers/trending for trending papers WITH code.
-6. **AI memory / RAG ecosystem** (specific niche): search for new releases
-   from Cognee, MemPalace, Mem0, Zep, Letta/MemGPT, LangMem,
-   BerriAI/litellm, ChromaDB, Weaviate, Qdrant, Milvus.
+6. **AI memory / RAG / knowledge management**: search for new releases
+   in the memory and retrieval space — vector DBs, knowledge graphs,
+   agent memory layers, RAG pipelines. Find what's trending, don't
+   hardcode project names.
 7. **arXiv** (cs.CL / cs.LG / cs.AI) — only papers with a linked repo
    that has real stars, or from the labs above. Skip pure theory.
 8. **Eval/leaderboard sites**: lmsys arena, swebench, livebench.
