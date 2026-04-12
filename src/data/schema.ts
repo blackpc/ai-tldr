@@ -97,7 +97,70 @@ export interface ReleaseFeed {
   generatedAt: string;
   promptVersion: string;
   source: string;
-  /** Item IDs pinned as "Editor's Choice" — displayed at the top of the feed regardless of date. */
-  editorChoice?: string[];
   items: ReleaseItem[];
+}
+
+// -------------------------------------------------------------------------
+// Sweep log
+// -------------------------------------------------------------------------
+//
+// The update agent writes `src/data/releases.json` AND appends one entry
+// to `src/data/sweeps.json` per run. The sweep log powers the /log page
+// so users can see what changed, when, and why. It is append-only — the
+// agent MUST NOT rewrite existing entries.
+//
+
+export interface SweepAddedItem {
+  id: string;
+  title: string;
+  /** Primary (first) category of the added item. */
+  category: Category;
+  /** One-sentence "why was this included". */
+  note: string;
+}
+
+export interface SweepUpdatedItem {
+  id: string;
+  title: string;
+  /** One-sentence "what changed". */
+  note: string;
+}
+
+export interface SweepRemovedItem {
+  id: string;
+  title: string;
+  /** One-sentence "why was this dropped". */
+  reason: string;
+}
+
+/**
+ * One entry in the sweep log. Append-only — the agent writes a fresh
+ * entry per run and never edits old ones.
+ */
+export interface SweepReport {
+  /** Kebab slug from timestamp, e.g. "sweep-2026-04-12t1642z". */
+  id: string;
+  /** ISO timestamp the sweep ran. Matches the feed's `generatedAt`. */
+  timestamp: string;
+  /**
+   * Run label. Same convention as `ReleaseFeed.source`:
+   *   "github-actions-sweep"  — the every-8h cron
+   *   "manual-backfill"       — human-kicked backfill
+   *   "manual-<reason>"       — any other human-kicked run
+   */
+  source: string;
+  /** 1–2 sentence friendly prose summary of the whole sweep. */
+  summary: string;
+  counts: {
+    added: number;
+    updated: number;
+    removed: number;
+  };
+  added: SweepAddedItem[];
+  updated: SweepUpdatedItem[];
+  removed: SweepRemovedItem[];
+}
+
+export interface SweepLog {
+  sweeps: SweepReport[];
 }

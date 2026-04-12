@@ -81,9 +81,12 @@ it. Or drop it.
   Default: **7 days before now**. (A daily sweep should not silently miss
   releases just because the previous run was a few days ago.)
 - `--max <N>`           → optional hard cap on items per category. Unset by
-  default. **There is no built-in cap.** If 12 great repos drop in a week,
-  ship 12. Quality bar (the zero-hallucination policy and the explainer
-  requirements) is the only filter — quotas are not.
+  default. **There is no built-in cap, and there is no built-in floor.**
+  Quality bar, not quota: a typical sweep is **3–15 items**. If the window
+  genuinely has 25 hot releases, ship 25. If it has 2, ship 2. **Never add
+  filler to pad a quiet week.** A short, fully-verified sweep beats a long
+  sweep with three obscure 10-star repos. The zero-hallucination policy and
+  the "is this actually notable" test are the only filters.
 - The previous `src/data/releases.json` (read it; do not duplicate ids; do
   not re-verify items that are already in the feed unless `--reverify` is
   passed).
@@ -107,15 +110,38 @@ Include items only if they are **concrete and verifiable**. Each item has a
 | `benchmark` | new or substantially-updated benchmark / leaderboard                      | LOW      |
 | `ecosystem` | governance / structural news about an existing project — see below        | LOW      |
 
-### Content mix — priorities, not caps
+### Content mix — priorities, not caps or quotas
 
 The feed should feel like "here are the coolest things happening in AI
 this week that you can actually use, learn from, or get excited about."
 
 **Do not cap any category.** If 10 great repos shipped this week, include
-all 10. If 5 models dropped, include all 5. The quality bar (verified
-URLs, real explainers) is the only filter — never skip a legitimate
-release because you already have "enough" of that type.
+all 10. If 5 models dropped, include all 5.
+
+**Also do not pad.** If only 3 things that pass the notability bar shipped
+this week, ship 3. Never add obscure repos with a handful of stars, vague
+blog posts, or "announcements" about roadmap items to fatten the list. A
+typical sweep is 3–15 items; the numbers fluctuate with what actually
+shipped. The shame is not "my sweep is small," the shame is "my sweep has
+filler."
+
+**Notability test** — for each candidate, ask: _would a working AI/ML
+practitioner stop scrolling to read this_? If no, drop it. Concrete signals
+that a release passes the bar:
+
+- a GitHub repo with meaningful traction (hundreds+ stars, trending page,
+  or backing from a known lab / maintainer)
+- a product launch or API release from an org people have heard of, with a
+  real announcement post (not a tweet, not a roadmap)
+- a paper with measurable claims AND code/demo AND discussion (e.g. HF
+  trending papers, Simon Willison / TLDR newsletter pickup)
+- a model with open weights or public API access that people can actually
+  run, from a SOTA or notable lab
+- an ecosystem change with real downstream impact (license, foundation,
+  deprecation)
+
+If a candidate only has one weak signal and you're tempted to include it
+"to round out the sweep" — drop it.
 
 Priority order for effort (spend more search time on the top):
 
@@ -320,6 +346,47 @@ Every item MUST have an `image` object: `{ url, alt, fit?, credit? }`.
 - Before writing each link, fetch it and confirm 200 + relevance. Yes, every
   link, every run. If the host environment caches fetches, use the cache —
   but the verification step is non-negotiable.
+
+## Sweep report — append to sweeps.json
+
+After you've written `src/data/releases.json`, you MUST also append one
+entry to `src/data/sweeps.json`. This is the feed that powers the `/log`
+page — it is how users (and you, next run) can see what changed.
+
+1. Read `src/data/sweeps.json`. It has shape `{ sweeps: SweepReport[] }`
+   where `SweepReport` is defined in `src/data/schema.ts`.
+2. Compute the diff vs. the previous `releases.json` (the file you just
+   overwrote): which items did you ADD, UPDATE (same id, changed content),
+   and REMOVE?
+3. Build ONE new `SweepReport`:
+   - `id` — kebab slug from the timestamp, e.g. `sweep-2026-04-12t1642z`
+   - `timestamp` — same ISO as the feed's `generatedAt`
+   - `source` — `"github-actions-sweep"` for cron runs;
+     `"manual-<reason>"` for human-kicked runs (e.g. `manual-backfill`)
+   - `summary` — ONE or TWO sentences, friendly and direct. Describe the
+     sweep as a whole, not each item. Examples:
+     - "Quiet morning — three hot drops led by the Gemma 4 family on
+       HuggingFace."
+     - "Busy week across models and agent repos; 18 items including
+       three frontier-lab releases."
+     Same banned words as explainers (no "revolutionary", "game-changing",
+     "unprecedented", etc).
+   - `counts` — `{ added: N, updated: N, removed: N }`
+   - `added[]` — one entry per added item: `{ id, title, category, note }`
+     where `category` is the item's FIRST (primary) category and `note`
+     is one short sentence explaining why this item was picked.
+   - `updated[]` — one entry per item whose existing content changed:
+     `{ id, title, note }`. Most sweeps will have zero of these.
+   - `removed[]` — if you dropped a previously-shipped item, list it as
+     `{ id, title, reason }`. Also usually zero.
+4. APPEND (do not prepend, do not rewrite old entries) this new
+   SweepReport to the `sweeps` array and write the file back.
+5. If `sweeps.json` doesn't exist yet, create it as
+   `{ "sweeps": [<your report>] }`. Normally it exists.
+
+**The sweep report is NOT optional.** A run without a report is an
+incomplete run. Generate it even if you added zero items — a "no new
+releases that pass the bar" sweep is still a valuable entry in the log.
 
 ## Output
 

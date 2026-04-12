@@ -88,23 +88,47 @@ jobs:
             Default window: include releases from the last 7 days. Set
             `source` to `"github-actions-sweep"`.
 
-            STEP 3. Aim for 10–18 items in the new feed, spread across as
-            many of the categories as you can verify (model, repo, tool,
-            algorithm, paper, dataset, benchmark). Multi-category items are
-            encouraged — see the prompt file. Empty categories are fine if
-            you cannot honestly fill them, but try.
+            STEP 3. Quality bar, NOT a quota. Only include releases
+            that are genuinely notable — trending repos with real
+            adoption, products with real launches, papers people are
+            actually discussing, models people will actually run.
+            Don't pad to hit a number, don't skip a hot week to stay
+            small. A typical sweep is 3–15 items. If the window
+            genuinely has 25 hot releases, ship 25. If it has 2, ship
+            2. Zero filler, ever. Follow the "Search diversity — fill
+            the gaps" strategy in the prompt file to broaden coverage,
+            but never add a weak item just to expand the list.
 
-            STEP 4. After writing `src/data/releases.json`, run
-            `bun run build` to confirm the JSON still parses against
-            `src/data/schema.ts`, the page builds, AND the per-release
-            static HTML pages generate without errors
-            (scripts/prerender.ts runs as the last build step). If any
-            step fails, fix the JSON and re-run until the full build
-            passes — a broken prerender means broken SEO for the sweep.
+            STEP 4. Generate a sweep report. Read `src/data/sweeps.json`
+            and APPEND one new entry to the `sweeps` array describing
+            what this run changed. Do NOT rewrite existing entries.
+            The new entry must conform to `SweepReport` in
+            `src/data/schema.ts`. Required fields:
+              - `id`: "sweep-<generatedAt ISO, compacted>"
+              - `timestamp`: same as feed `generatedAt`
+              - `source`: "github-actions-sweep" (or "manual-<reason>"
+                for manual runs)
+              - `summary`: 1–2 sentences, friendly and direct tone.
+                Summarize the sweep as a whole. Same banned words as
+                explainer copy (no "revolutionary", "game-changing"…).
+              - `counts`: { added, updated, removed }
+              - `added`: array of { id, title, category (the primary
+                one), note } — `note` is ONE sentence explaining why
+                this item was included.
+              - `updated` / `removed`: fill in if you modified or
+                dropped items, otherwise `[]`.
+            Write the file back. The log page reads this file directly.
 
-            STEP 5. Stop. Do NOT commit or push yourself — the next
+            STEP 5. After writing both files, run `bun run build` to
+            confirm releases.json + sweeps.json still parse, the page
+            builds, AND the per-release + /log static HTML pages
+            generate without errors (scripts/prerender.ts runs as the
+            last build step). If any step fails, fix and re-run until
+            the full build passes.
+
+            STEP 6. Stop. Do NOT commit or push yourself — the next
             workflow step handles the git ops. Just leave the modified
-            file in the working tree.
+            files in the working tree.
 
             Return a short report (≤200 words) of what you changed.
           claude_args: |
@@ -122,7 +146,7 @@ jobs:
           git --no-pager diff src/data/releases.json | head -200 || true
           echo "::endgroup::"
 
-      - name: Commit and push if releases.json changed
+      - name: Commit and push if releases.json or sweeps.json changed
         env:
           # Pass the workflow's GITHUB_TOKEN explicitly. The Claude Code
           # action mutates git config during its run and the credential
@@ -131,16 +155,17 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          if [[ -z "$(git status --porcelain src/data/releases.json)" ]]; then
-            echo "No changes to releases.json — nothing to commit."
+          if [[ -z "$(git status --porcelain src/data/releases.json src/data/sweeps.json)" ]]; then
+            echo "No changes to releases.json or sweeps.json — nothing to commit."
             exit 0
           fi
           git config user.name  "ai-tldr-bot"
           git config user.email "41898282+ai-tldr-bot@users.noreply.github.com"
-          git add src/data/releases.json
+          git add src/data/releases.json src/data/sweeps.json
           git commit -m "feat(content): scheduled release sweep $(date -u +%Y-%m-%dT%H:%MZ)
 
-          Refreshed src/data/releases.json via prompts/update-releases.md.
+          Refreshed src/data/releases.json and appended a sweep log
+          entry to src/data/sweeps.json via prompts/update-releases.md.
 
           Co-Authored-By: Claude Code Action <noreply@anthropic.com>"
           # Push via tokenized HTTPS URL — survives any prior git config

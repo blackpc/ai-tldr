@@ -1,9 +1,13 @@
 import raw from "./releases.json";
+import { EDITOR_CHOICE } from "./editor-choice";
 import type { Category, ReleaseFeed, ReleaseItem } from "./schema";
 
 export const feed = raw as ReleaseFeed;
 
-const pinned = new Set(feed.editorChoice ?? []);
+// Pinned IDs live in src/data/editor-choice.ts — a human editorial
+// decision, completely outside the agent's write path so scheduled
+// sweeps can't clobber them.
+const pinned = new Set<string>(EDITOR_CHOICE);
 
 export const isEditorChoice = (item: ReleaseItem): boolean => pinned.has(item.id);
 

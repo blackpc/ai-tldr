@@ -108,7 +108,7 @@ export function InfluencersPage() {
   return (
     <>
       <div className="inf-header">
-        <h2 className="inf-title">AI INFLUENCERS</h2>
+        <h1 className="inf-title">Top AI Influencers to Follow</h1>
         <span className="inf-subtitle">
           {influencers.length} creators · sorted by reach
         </span>

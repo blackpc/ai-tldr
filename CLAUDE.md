@@ -51,7 +51,7 @@ file, so the SPA's client-side router handles unknown paths.
 
 To override the base URL used in canonical tags + sitemap, set the
 `SITE_URL` env var before running `bun run build`. Default is
-`https://ai-tldr.blackpc-me.workers.dev`.
+`https://ai-tldr.dev` (the public domain).
 
 ## Key conventions
 

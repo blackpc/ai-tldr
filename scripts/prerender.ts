@@ -32,7 +32,6 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import feed from "../src/data/releases.json" with { type: "json" };
-import { influencers } from "../src/data/influencers";
 import type { ReleaseItem } from "../src/data/schema";
 
 // -----------------------------------------------------------------------
@@ -41,7 +40,7 @@ import type { ReleaseItem } from "../src/data/schema";
 
 const SITE_URL =
   process.env.SITE_URL?.replace(/\/$/, "") ||
-  "https://ai-tldr.blackpc-me.workers.dev";
+  "https://ai-tldr.dev";
 const DEFAULT_OG_IMAGE = `${SITE_URL}/og-image.png`;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -78,28 +77,138 @@ interface PageMeta {
   publishedTime?: string;
 }
 
+// -----------------------------------------------------------------------
+// JSON-LD helpers
+// -----------------------------------------------------------------------
+//
+// One JSON-LD block per page, tuned for the schema type that matches the
+// page's content. Google's rich result validators are picky: missing a
+// required property silently disables the rich result, so we err on the
+// side of filling every optional field that has a cheap source of truth.
+//
+
+function wrapJsonLd(data: unknown): string {
+  return `<script type="application/ld+json">\n${JSON.stringify(data, null, 2)}\n</script>`;
+}
+
+const ORG_REF = {
+  "@type": "Organization",
+  "@id": `${SITE_URL}/#org`,
+  name: "AI/TLDR",
+  url: `${SITE_URL}/`,
+  logo: {
+    "@type": "ImageObject",
+    url: `${SITE_URL}/og-image.png`,
+    width: 1200,
+    height: 630,
+  },
+};
+
+const WEBSITE_REF = {
+  "@type": "WebSite",
+  "@id": `${SITE_URL}/#website`,
+  url: `${SITE_URL}/`,
+  name: "AI/TLDR",
+  alternateName: "AI TLDR",
+  description:
+    "Every new AI model, repo, tool, and paper worth knowing — refreshed every 8 hours and explained in plain English.",
+  inLanguage: "en-US",
+  publisher: { "@id": `${SITE_URL}/#org` },
+};
+
+/**
+ * Homepage JSON-LD: WebSite + Organization as a @graph so Google can
+ * pick up sitelinks search metadata + rich brand metadata in one block.
+ */
+function renderJsonLdHome(): string {
+  return wrapJsonLd({
+    "@context": "https://schema.org",
+    "@graph": [WEBSITE_REF, ORG_REF],
+  });
+}
+
+/**
+ * CollectionPage JSON-LD for the /influencers and /log index pages.
+ * Ties the page back to the WebSite + Organization entities via @id.
+ */
+function renderJsonLdCollectionPage(opts: {
+  url: string;
+  name: string;
+  description: string;
+}): string {
+  return wrapJsonLd({
+    "@context": "https://schema.org",
+    "@type": "CollectionPage",
+    "@id": `${opts.url}#webpage`,
+    url: opts.url,
+    name: opts.name,
+    description: opts.description,
+    inLanguage: "en-US",
+    isPartOf: { "@id": `${SITE_URL}/#website` },
+    publisher: { "@id": `${SITE_URL}/#org` },
+  });
+}
+
 function renderJsonLdArticle(item: ReleaseItem): string {
+  const url = `${SITE_URL}/releases/${item.id}`;
+  const description = item.explainer?.tagline ?? item.summary;
   const data = {
     "@context": "https://schema.org",
     "@type": "Article",
     headline: item.title,
-    description: item.explainer?.tagline ?? item.summary,
+    description,
+    url,
     datePublished: item.date,
+    // We don't track per-item modification timestamps, so fall back to the
+    // feed-level generatedAt — crawlers use this to decide whether to
+    // recrawl, and "never modified" signals a stale feed.
+    dateModified: (feed as { generatedAt?: string }).generatedAt ?? item.date,
     author: {
       "@type": "Organization",
       name: item.org,
     },
-    publisher: {
-      "@type": "Organization",
-      name: "AI/TLDR",
+    publisher: { "@id": `${SITE_URL}/#org` },
+    image: {
+      "@type": "ImageObject",
+      url: item.image?.url ?? DEFAULT_OG_IMAGE,
+      width: 1200,
+      height: 630,
     },
-    image: item.image?.url ?? DEFAULT_OG_IMAGE,
     mainEntityOfPage: {
       "@type": "WebPage",
-      "@id": `${SITE_URL}/releases/${item.id}`,
+      "@id": url,
     },
+    isPartOf: { "@id": `${SITE_URL}/#website` },
+    articleSection: item.categories[0],
+    keywords: item.tags.join(", "),
   };
-  return `<script type="application/ld+json">\n${JSON.stringify(data, null, 2)}\n</script>`;
+  return wrapJsonLd(data);
+}
+
+/**
+ * BreadcrumbList for release pages. Two levels: Home → release title.
+ * (There's no intermediate `/releases` index page — the homepage IS
+ * the release listing — so we link straight back to `/`.)
+ */
+function renderJsonLdBreadcrumb(item: ReleaseItem): string {
+  return wrapJsonLd({
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: [
+      {
+        "@type": "ListItem",
+        position: 1,
+        name: "AI/TLDR",
+        item: `${SITE_URL}/`,
+      },
+      {
+        "@type": "ListItem",
+        position: 2,
+        name: item.title,
+        item: `${SITE_URL}/releases/${item.id}`,
+      },
+    ],
+  });
 }
 
 function renderMetaBlock(meta: PageMeta): string {
@@ -155,6 +264,15 @@ function injectMeta(
     "",
   );
   html = html.replace(/<link\s+rel="canonical"[^>]*?>\s*/g, "");
+  // Strip the dev-fallback JSON-LD block from the template. Prerender
+  // injects a page-specific JSON-LD stack (WebSite+Org for home,
+  // CollectionPage for /influencers + /log, Article+Breadcrumb for each
+  // release) so each page carries exactly the schema that matches its
+  // content instead of sharing the dev WebSite fallback.
+  html = html.replace(
+    /<script\s+type="application\/ld\+json"[^>]*>[\s\S]*?<\/script>\s*/g,
+    "",
+  );
   // Clean up the "<!-- Canonical -->", "<!-- Open Graph -->", and
   // "<!-- Twitter Card -->" section comments so the resulting head
   // isn't littered with empty labels.
@@ -170,9 +288,9 @@ function injectMeta(
     `$1\n    ${block}`,
   );
 
-  // Optional: inject an additional JSON-LD block (e.g. Article schema
-  // for individual release pages) just before </head>. The existing
-  // WebSite JSON-LD stays for the homepage.
+  // Inject the page-specific JSON-LD stack just before </head>. Callers
+  // pass exactly the schema that matches the page — Article+Breadcrumb
+  // for a release, WebSite+Org for home, CollectionPage for index pages.
   if (extraJsonLd) {
     html = html.replace("</head>", `  ${extraJsonLd}\n  </head>`);
   }
@@ -184,6 +302,24 @@ function injectMeta(
 // Per-item meta builders
 // -----------------------------------------------------------------------
 
+/**
+ * Build a release page's `<title>`, aiming to stay under 60 characters
+ * so Google doesn't silently truncate the brand suffix. Priority order:
+ *   1. `${title} — ${org} | AI/TLDR`  (ideal)
+ *   2. `${title} | AI/TLDR`            (drop org)
+ *   3. `${title}`                      (title alone; release names
+ *       longer than 60 chars will still wrap in SERPs, but at least
+ *       we don't waste a truncated brand suffix)
+ */
+function buildReleaseTitle(item: ReleaseItem): string {
+  const brand = " | AI/TLDR";
+  const withOrg = `${item.title} — ${item.org}${brand}`;
+  if (withOrg.length <= 60) return withOrg;
+  const withoutOrg = `${item.title}${brand}`;
+  if (withoutOrg.length <= 60) return withoutOrg;
+  return item.title;
+}
+
 function releaseMeta(item: ReleaseItem): PageMeta {
   const tagline = item.explainer?.tagline ?? item.summary;
   // Description should be ≤ 160 chars for best SEO truncation behavior.
@@ -192,7 +328,7 @@ function releaseMeta(item: ReleaseItem): PageMeta {
     : tagline;
 
   return {
-    title: `${item.title} — ${item.org} | AI/TLDR`,
+    title: buildReleaseTitle(item),
     description,
     canonical: `${SITE_URL}/releases/${item.id}`,
     ogType: "article",
@@ -202,22 +338,38 @@ function releaseMeta(item: ReleaseItem): PageMeta {
   };
 }
 
-const INFLUENCERS_META: PageMeta = {
-  title: "AI Influencers — Who to Follow in AI | AI/TLDR",
-  description:
-    "Curated list of top AI creators, researchers, and newsletter authors across YouTube, Twitter/X, GitHub, blogs, and podcasts — sorted by reach.",
-  canonical: `${SITE_URL}/influencers`,
-  ogType: "website",
-  ogImage: DEFAULT_OG_IMAGE,
-};
+// ---- Static page meta ---------------------------------------------------
+// Title guidance:  primary keyword first, brand suffix, ≤60 chars.
+// Description guidance:  120–158 chars, natural keyword usage, CTA.
 
 const HOME_META: PageMeta = {
-  title: "AI/TLDR — New AI Models, Tools & Papers This Week",
+  title: "New AI Releases Daily — Models, Tools & Papers | AI/TLDR",
   description:
-    "Daily curated feed of new AI releases — each explained so you actually understand what shipped and why it matters.",
+    "Every new AI model, repo, tool, and paper worth knowing — refreshed every 8 hours and explained in plain English. Track what's shipping today.",
   canonical: `${SITE_URL}/`,
   ogType: "website",
   ogImage: DEFAULT_OG_IMAGE,
+  ogImageAlt: "AI/TLDR — new AI releases explained daily",
+};
+
+const INFLUENCERS_META: PageMeta = {
+  title: "Top AI Influencers to Follow — 110 Creators Ranked | AI/TLDR",
+  description:
+    "The AI creators, researchers and newsletter authors worth following — ranked by reach across YouTube, X/Twitter, GitHub, podcasts, blogs and Substack.",
+  canonical: `${SITE_URL}/influencers`,
+  ogType: "website",
+  ogImage: DEFAULT_OG_IMAGE,
+  ogImageAlt: "Top AI influencers to follow — ranked by reach",
+};
+
+const LOG_META: PageMeta = {
+  title: "AI Release Changelog — What Shipped & When | AI/TLDR",
+  description:
+    "The full changelog of AI/TLDR sweeps — every AI model, repo, tool, paper and dataset added, with a one-line note on why each was picked.",
+  canonical: `${SITE_URL}/log`,
+  ogType: "website",
+  ogImage: DEFAULT_OG_IMAGE,
+  ogImageAlt: "AI/TLDR sweep log — changelog of AI releases",
 };
 
 // -----------------------------------------------------------------------
@@ -258,29 +410,51 @@ async function main() {
   console.log(`[prerender] SITE_URL = ${SITE_URL}`);
   const template = await readFile(TEMPLATE_PATH, "utf8");
 
-  // 1. Homepage — overwrite dist/index.html with full meta block
-  await writeHtml("index.html", injectMeta(template, HOME_META));
-
-  // 2. Influencers page
+  // 1. Homepage — WebSite + Organization JSON-LD graph
   await writeHtml(
-    "influencers/index.html",
-    injectMeta(template, INFLUENCERS_META),
+    "index.html",
+    injectMeta(template, HOME_META, renderJsonLdHome()),
   );
 
-  // 3. One page per release
+  // 2. Influencers page — CollectionPage JSON-LD
+  await writeHtml(
+    "influencers/index.html",
+    injectMeta(
+      template,
+      INFLUENCERS_META,
+      renderJsonLdCollectionPage({
+        url: `${SITE_URL}/influencers`,
+        name: "Top AI Influencers to Follow",
+        description: INFLUENCERS_META.description,
+      }),
+    ),
+  );
+
+  // 3. Sweep log page — CollectionPage JSON-LD
+  await writeHtml(
+    "log/index.html",
+    injectMeta(
+      template,
+      LOG_META,
+      renderJsonLdCollectionPage({
+        url: `${SITE_URL}/log`,
+        name: "AI Release Changelog",
+        description: LOG_META.description,
+      }),
+    ),
+  );
+
+  // 4. One page per release — Article + BreadcrumbList JSON-LD
   let count = 0;
   const items = feed.items as ReleaseItem[];
   for (const item of items) {
-    const html = injectMeta(
-      template,
-      releaseMeta(item),
-      renderJsonLdArticle(item),
-    );
+    const jsonLd = `${renderJsonLdArticle(item)}\n    ${renderJsonLdBreadcrumb(item)}`;
+    const html = injectMeta(template, releaseMeta(item), jsonLd);
     await writeHtml(`releases/${item.id}/index.html`, html);
     count++;
   }
 
-  // 4. Sitemap
+  // 5. Sitemap
   const today = new Date().toISOString().slice(0, 10);
   const sitemap = buildSitemap([
     { loc: `${SITE_URL}/`, lastmod: today, changefreq: "daily", priority: 1.0 },
@@ -289,6 +463,12 @@ async function main() {
       lastmod: today,
       changefreq: "weekly",
       priority: 0.8,
+    },
+    {
+      loc: `${SITE_URL}/log`,
+      lastmod: today,
+      changefreq: "daily",
+      priority: 0.7,
     },
     ...items.map((i) => ({
       loc: `${SITE_URL}/releases/${i.id}`,
@@ -299,12 +479,12 @@ async function main() {
   ]);
   await writeFile(join(DIST, "sitemap.xml"), sitemap, "utf8");
 
-  // 5. robots.txt
+  // 6. robots.txt
   const robots = `User-agent: *\nAllow: /\nSitemap: ${SITE_URL}/sitemap.xml\n`;
   await writeFile(join(DIST, "robots.txt"), robots, "utf8");
 
   console.log(
-    `[prerender] wrote ${count} release pages + 1 influencers page + sitemap.xml + robots.txt`,
+    `[prerender] wrote ${count} release pages + influencers + /log + sitemap.xml + robots.txt`,
   );
 }
 
