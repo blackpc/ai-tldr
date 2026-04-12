@@ -97,5 +97,7 @@ export interface ReleaseFeed {
   generatedAt: string;
   promptVersion: string;
   source: string;
+  /** Item IDs pinned as "Editor's Choice" — displayed at the top of the feed regardless of date. */
+  editorChoice?: string[];
   items: ReleaseItem[];
 }

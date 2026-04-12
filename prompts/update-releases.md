@@ -247,8 +247,15 @@ the current location each run.
 - **`tags`** lowercase, hyphenated. Use as many as honestly apply — there
   is **no cap**. The UI will lay them out. Stop at the point where the next
   tag is just noise.
-- **`date`** is the public release date as stated by the source (YYYY-MM-DD),
-  not the day you found it.
+- **`date`** is the **real public release date** as stated by the source
+  (YYYY-MM-DD), **NOT** the day the agent discovered it. This is critical
+  because the feed is sorted purely by date descending — an item discovered
+  today but released 6 months ago must carry its original release date and
+  will appear in its correct chronological position in the feed, not at the
+  top. Always verify the release date from the primary source. If the source
+  doesn't state an explicit date, use the earliest verifiable publication
+  date (e.g. GitHub first release tag, arXiv submission date, blog post
+  publish date).
 
 ## Image — required, verified, hotlinkable
 
@@ -316,8 +323,12 @@ Every item MUST have an `image` object: `{ url, alt, fit?, credit? }`.
 
 ## Output
 
-Write the full updated feed (existing items + new items, sorted by `date`
-descending) to `src/data/releases.json`. Set:
+Write the full updated feed (existing items + new items, sorted by **`date`
+descending** — this is the ONLY sort order) to `src/data/releases.json`.
+The UI renders items in this exact order as a single continuous feed (no
+grouping by importance). Card size is driven by `importance`, so a `seismic`
+item gets a large card and a `notable` item gets a small card, but they all
+live in one chronological stream. Set:
 
 - `generatedAt`   → current ISO timestamp
 - `promptVersion` → frontmatter `prompt-version` above

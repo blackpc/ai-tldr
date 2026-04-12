@@ -107,6 +107,13 @@ function App() {
         totalAll={sorted.length}
       />
 
+      <div className="legend">
+        <span className="legend-item"><span className="legend-swatch swatch-seismic"></span>SEISMIC — resets the field</span>
+        <span className="legend-item"><span className="legend-swatch swatch-major"></span>MAJOR — broad impact</span>
+        <span className="legend-item"><span className="legend-swatch swatch-notable"></span>NOTABLE — solid, niche</span>
+        <span className="legend-item"><span className="legend-swatch swatch-picked"></span>EDITOR'S CHOICE</span>
+      </div>
+
       <main className="grid" role="feed" aria-label="AI release feed">
         {visible.length === 0 ? (
           <div className="grid-empty">

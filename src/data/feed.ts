@@ -3,19 +3,20 @@ import type { Category, ReleaseFeed, ReleaseItem } from "./schema";
 
 export const feed = raw as ReleaseFeed;
 
-const importanceRank: Record<ReleaseItem["importance"], number> = {
-  seismic: 4,
-  major: 3,
-  notable: 2,
-  rumor: 1,
-};
+const pinned = new Set(feed.editorChoice ?? []);
 
-export const allItems = (): ReleaseItem[] =>
-  [...feed.items].sort((a, b) => {
-    const r = importanceRank[b.importance] - importanceRank[a.importance];
-    if (r !== 0) return r;
-    return a.date < b.date ? 1 : -1;
-  });
+export const isEditorChoice = (item: ReleaseItem): boolean => pinned.has(item.id);
+
+export const allItems = (): ReleaseItem[] => {
+  const sorted = [...feed.items].sort((a, b) => (a.date < b.date ? 1 : -1));
+  if (pinned.size === 0) return sorted;
+  const top: ReleaseItem[] = [];
+  const rest: ReleaseItem[] = [];
+  for (const item of sorted) {
+    (pinned.has(item.id) ? top : rest).push(item);
+  }
+  return [...top, ...rest];
+};
 
 export const itemsByCategory = (cat: Category): ReleaseItem[] =>
   feed.items

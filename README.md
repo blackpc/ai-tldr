@@ -33,12 +33,23 @@ understand what you're looking at.
    to discover and verify every release — no hallucination, no
    invented URLs, no made-up metrics.
 3. **The frontend** is a Bun + Vite + React + TypeScript single-page
-   app with a brutalist editorial design. Cards are sized by importance,
-   filterable by category, and searchable. Clicking a card opens a
-   detail modal with the full explainer and verified source links.
+   app with a brutalist editorial design. The feed is a **single
+   chronological stream sorted by release date** (newest first). Card
+   size is driven by importance (seismic = large, notable = small) but
+   there is no grouping — all items flow together. Cards are filterable
+   by category and searchable. Clicking a card opens a detail modal
+   with the full explainer and verified source links.
 
 ## Key design decisions
 
+- **Flat chronological feed.** Items are sorted by real release date
+  (newest first), never grouped by importance. Card size reflects
+  importance visually, but the stream is continuous. Old discoveries
+  (e.g. a cool tool from 6 months ago) land at their correct date
+  position, not at the top.
+- **Real release dates, not discovery dates.** The `date` field is
+  always the original public release date from the primary source.
+  This means retroactive additions appear in their correct place.
 - **No quantity caps.** If 30 things ship in a day, the feed shows 30
   things. The agent does not skip releases to hit a target number.
 - **Multi-category items.** Each release can belong to multiple
