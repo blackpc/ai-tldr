@@ -14,12 +14,18 @@ export type Category =
   | "paper"
   | "dataset"
   | "benchmark"
-  | "ecosystem";
+  | "ecosystem"
+  | "tutorial"
+  | "showcase"
+  | "resource";
 
 export const CATEGORY_ORDER: Category[] = [
   "model",
   "repo",
   "tool",
+  "tutorial",
+  "showcase",
+  "resource",
   "algorithm",
   "paper",
   "dataset",

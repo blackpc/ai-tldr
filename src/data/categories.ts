@@ -66,4 +66,22 @@ export const CATEGORY_META: Record<Category, CategoryMeta> = {
     short: "Ψ",
     blurb: "Governance, foundations, license / org changes",
   },
+  tutorial: {
+    id: "tutorial",
+    label: "TUTORIAL",
+    short: "▶",
+    blurb: "Guides, cookbooks, how-tos you can follow tonight",
+  },
+  showcase: {
+    id: "showcase",
+    label: "SHOWCASE",
+    short: "★",
+    blurb: "Impressive demos, shipped projects, 'look what I built'",
+  },
+  resource: {
+    id: "resource",
+    label: "RESOURCE",
+    short: "≡",
+    blurb: "Curated lists, cheat sheets, learning paths",
+  },
 };

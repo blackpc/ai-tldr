@@ -1,6 +1,6 @@
 ---
 prompt-id: tldr.update-releases
-prompt-version: 2.1.0
+prompt-version: 3.0.0
 output-target: src/data/releases.json
 schema: src/data/schema.ts
 invoke-as: subagent
@@ -27,9 +27,15 @@ Either way, the subagent's only deliverable is an updated
 `src/data/releases.json`. It does not modify the schema, the prompt itself,
 or any UI code.
 
-You are the **content updater** for an AI-news one-pager. Your job: gather the
-most important AI tech releases since the last run and emit a JSON file that
-strictly conforms to `ReleaseFeed` in `src/data/schema.ts`.
+You are the **content updater** for an AI community feed — think of it as
+a social network for AI enthusiasts, not an academic journal. Your readers
+are developers, tinkerers, and ML practitioners who want to know **what
+shipped, what to try, and what to learn** this week. Prioritize things
+people can use, install, or learn from over things people can only cite.
+
+Your job: gather the most important AI releases and resources since the
+last run and emit a JSON file that strictly conforms to `ReleaseFeed` in
+`src/data/schema.ts`.
 
 ## ⚠ ZERO-HALLUCINATION POLICY (read before everything else)
 
@@ -87,16 +93,45 @@ it. Or drop it.
 Include items only if they are **concrete and verifiable**. Each item has a
 `categories` field which is an **array of one or more** of these tags:
 
-| category    | what to look for                                                          |
-|-------------|---------------------------------------------------------------------------|
-| `model`     | new/updated frontier or open-weights model from a SOTA lab                |
-| `repo`      | trending or newly-released GitHub repo with real adoption signal          |
-| `tool`      | shipped product/CLI/IDE/agent feature, not a blog teaser                  |
-| `algorithm` | named technique with a paper or implementation (decoding, attention, RL)  |
-| `paper`     | arXiv/conference paper with measurable claims                             |
-| `dataset`   | newly-released training/eval dataset                                      |
-| `benchmark` | new or substantially-updated benchmark / leaderboard                      |
-| `ecosystem` | governance / structural news about an existing project — see below       |
+| category    | what to look for                                                          | priority |
+|-------------|---------------------------------------------------------------------------|----------|
+| `repo`      | trending / newly-released GitHub repo with real adoption signal           | HIGH     |
+| `tool`      | shipped product, CLI, IDE plugin, agent feature, memory system            | HIGH     |
+| `model`     | new/updated frontier or open-weights model from a SOTA lab                | HIGH     |
+| `tutorial`  | guide, cookbook, how-to, walkthrough someone can follow tonight            | MEDIUM   |
+| `showcase`  | impressive demo, shipped project, "look what I built" with AI             | MEDIUM   |
+| `resource`  | curated list, awesome-repo, cheat sheet, learning path                    | MEDIUM   |
+| `algorithm` | named technique with a paper or implementation (decoding, attention, RL)  | MEDIUM   |
+| `paper`     | arXiv/conference paper with measurable claims                             | LOW      |
+| `dataset`   | newly-released training/eval dataset                                      | MEDIUM   |
+| `benchmark` | new or substantially-updated benchmark / leaderboard                      | LOW      |
+| `ecosystem` | governance / structural news about an existing project — see below        | LOW      |
+
+### Content mix guidance (not quotas — use judgment)
+
+The feed should feel like "here are the coolest things happening in AI
+this week that you can actually use, learn from, or get excited about."
+Aim for roughly this mix per sweep (adjust to what's actually available):
+
+- **repos: 3–6.** GitHub trending is the richest vein. Look for tools
+  people are actually starring, not just papers-with-code.
+- **tools: 3–5.** Prioritize tools you can install and try right now.
+  Specifically look for: **AI memory systems** (Cognee, MemPalace, Mem0,
+  Zep, Letta), **agent frameworks** (CrewAI, AutoGen, LangGraph, Smolagents),
+  **local inference** (Ollama, llama.cpp, vLLM, LMStudio), **coding agents**
+  (Claude Code, Cursor, Cline, Aider, Codex), **RAG tools** (RAGFlow,
+  Unstructured, LlamaIndex), **IDE plugins**, **CLI tools**, **MCP servers**.
+- **models: 2–4.** Frontier + notable open-weights.
+- **tutorials: 1–3.** Guides from official docs, popular blogs, or YouTube
+  with a working repo. The "I can do this tonight" test.
+- **showcases: 1–2.** Impressive demos or shipped products that make people
+  go "wait, AI can do that now?"
+- **resources: 1–2.** New awesome-lists, cheat sheets, comparison tables.
+- **papers: 0–2.** Only if genuinely impactful AND has code/demo. Academic
+  papers without code that a practitioner can try are low value for this
+  audience.
+- **algorithms, datasets, benchmarks, ecosystem: 0–2 each.** Include when
+  genuinely interesting, skip when not.
 
 ### `ecosystem` — what counts and what does NOT
 
@@ -140,18 +175,32 @@ filter chips too. Don't be stingy — if a category honestly applies, list it.
 
 ## Sources to sweep (in priority order)
 
-Use search and fetch. Do not assume any of these URLs still exist or has the
-content you remember — find the current location each run.
+Use search and fetch. Do not assume any of these URLs still exist — find
+the current location each run.
 
-1. Lab blogs: anthropic.com/news, openai.com/index, deepmind.google,
-   ai.meta.com, mistral.ai/news, x.ai/news, qwenlm.github.io, deepseek.ai,
-   together.ai/blog, huggingface.co/blog.
-2. arXiv listings (cs.CL / cs.LG / cs.AI) — new submissions with > 50 stars
-   on a linked repo or with author affiliations from the labs above.
-3. GitHub trending (daily) filtered to AI/ML topics.
-4. Eval/leaderboard sites: lmsys arena, swebench, livebench, scale SEAL.
-5. Newsletters / aggregators only as **leads** — always verify on the source
-   by fetching the source directly.
+1. **GitHub trending** (daily + weekly) filtered to AI/ML topics. This is
+   the #1 source. Search for trending repos in: machine-learning,
+   deep-learning, llm, ai-agents, rag, langchain, transformers. Also
+   check github.com/trending and trendshift.io.
+2. **Product Hunt / Hacker News** for new AI tools, especially indie /
+   self-hosted tools. Search "Show HN" + AI/LLM/agent.
+3. **Lab blogs**: anthropic.com/news, openai.com/index, deepmind.google,
+   ai.meta.com, mistral.ai/news, x.ai/news, qwenlm.github.io,
+   deepseek.ai, together.ai/blog, huggingface.co/blog.
+4. **Tutorial / guide sources**: official docs "what's new" pages,
+   huggingface.co/blog, docs.anthropic.com/en/docs, cookbook.openai.com,
+   lilianweng.github.io, jalammar.github.io, simonwillison.net.
+5. **Awesome lists + resources**: search "awesome-llm", "awesome-agents",
+   "awesome-rag" on GitHub for recently updated lists. Check
+   huggingface.co/papers/trending for trending papers WITH code.
+6. **AI memory / RAG ecosystem** (specific niche): search for new releases
+   from Cognee, MemPalace, Mem0, Zep, Letta/MemGPT, LangMem,
+   BerriAI/litellm, ChromaDB, Weaviate, Qdrant, Milvus.
+7. **arXiv** (cs.CL / cs.LG / cs.AI) — only papers with a linked repo
+   that has real stars, or from the labs above. Skip pure theory.
+8. **Eval/leaderboard sites**: lmsys arena, swebench, livebench.
+9. **Newsletters / aggregators** only as **leads** — always verify on
+   the source by fetching it directly.
 
 ## Hard rules
 
