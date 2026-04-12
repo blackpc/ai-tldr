@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import "./App.css";
 
@@ -8,10 +8,16 @@ import { ReleaseCard } from "./components/ReleaseCard";
 import { FilterBar } from "./components/FilterBar";
 import { ReleaseModal } from "./components/ReleaseModal";
 
+/** Find item by id from hash. Hash format: #item-id */
+function itemFromHash(items: ReleaseItem[]): ReleaseItem | null {
+  const hash = window.location.hash.slice(1); // strip #
+  if (!hash) return null;
+  return items.find((i) => i.id === hash) ?? null;
+}
+
 function App() {
   const [active, setActive] = useState<Set<Category>>(new Set());
   const [query, setQuery] = useState("");
-  const [openItem, setOpenItem] = useState<ReleaseItem | null>(null);
 
   const sorted = useMemo(() => allItems(), []);
   const counts = useMemo(() => categoryCounts(), []);
@@ -19,6 +25,37 @@ function App() {
     () => filterItems(sorted, { categories: active, query }),
     [sorted, active, query],
   );
+
+  // Modal state driven by URL hash
+  const [openItem, setOpenItem] = useState<ReleaseItem | null>(() =>
+    itemFromHash(sorted),
+  );
+
+  // Open modal = push hash into URL
+  const openModal = useCallback(
+    (item: ReleaseItem) => {
+      window.history.pushState(null, "", `#${item.id}`);
+      setOpenItem(item);
+    },
+    [],
+  );
+
+  // Close modal = go back (pops hash) or replace hash if no history
+  const closeModal = useCallback(() => {
+    if (window.location.hash) {
+      window.history.back();
+    }
+    setOpenItem(null);
+  }, []);
+
+  // Sync modal state with browser back/forward
+  useEffect(() => {
+    const onPop = () => {
+      setOpenItem(itemFromHash(sorted));
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [sorted]);
 
   const toggle = (c: Category) => {
     setActive((prev) => {
@@ -34,7 +71,7 @@ function App() {
       <header className="page-head">
         <div className="brand">
           <span className="brand-mark">█</span>
-          <span className="brand-name">AI/TLDR</span>
+          <h1 className="brand-name">AI/TLDR</h1>
           <span className="brand-sub">
             daily release sweep · v{feed.promptVersion}
           </span>
@@ -45,7 +82,9 @@ function App() {
             <span className="head-stat-lbl">RELEASES</span>
           </span>
           <span className="head-stat">
-            <span className="head-stat-num">{feed.generatedAt.slice(0, 10)}</span>
+            <span className="head-stat-num">
+              {feed.generatedAt.slice(0, 10)}
+            </span>
             <span className="head-stat-lbl">LAST SWEEP</span>
           </span>
         </div>
@@ -62,20 +101,20 @@ function App() {
         totalAll={sorted.length}
       />
 
-      <main className="grid">
+      <main className="grid" role="feed" aria-label="AI release feed">
         {visible.length === 0 ? (
           <div className="grid-empty">
             // no releases match — adjust filters
           </div>
         ) : (
           visible.map((item) => (
-            <ReleaseCard key={item.id} item={item} onOpen={setOpenItem} />
+            <ReleaseCard key={item.id} item={item} onOpen={openModal} />
           ))
         )}
       </main>
 
       {openItem && (
-        <ReleaseModal item={openItem} onClose={() => setOpenItem(null)} />
+        <ReleaseModal item={openItem} onClose={closeModal} />
       )}
     </div>
   );

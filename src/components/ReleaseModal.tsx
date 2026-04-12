@@ -93,7 +93,7 @@ export function ReleaseModal({
         {/* Right: content pane */}
         <div className="modal-right">
           <header className="modal-head">
-            <h1 className="modal-title">{item.title}</h1>
+            <h2 className="modal-title">{item.title}</h2>
             <p className="modal-org">{item.org}</p>
             <p className="modal-tagline">{ex.tagline}</p>
           </header>
