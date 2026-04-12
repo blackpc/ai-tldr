@@ -10,7 +10,6 @@ import { ReleaseModal } from "./components/ReleaseModal";
 import { InfluencersPage } from "./components/InfluencersPage";
 import { SweepLogPage } from "./components/SweepLogPage";
 import { influencers } from "./data/influencers";
-import { sweepCount } from "./data/sweeps";
 
 /** Parse current URL into a route. Supported paths:
  *   /                     → feed home
@@ -217,7 +216,6 @@ function App() {
             aria-label="Sweep log"
           >
             <span className="nav-link-glyph" aria-hidden="true">▤</span>
-            <span className="nav-link-num">{sweepCount()}</span>
           </button>
         </nav>
         <div className="page-head-right">

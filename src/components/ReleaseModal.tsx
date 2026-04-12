@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import type { ReleaseItem } from "../data/schema";
 import { CATEGORY_META } from "../data/categories";
 import { ReleaseImage } from "./ReleaseImage";
+import { ShareButtons } from "./ShareButtons";
 
 const importanceLabel: Record<ReleaseItem["importance"], string> = {
   rumor: "RUMOR",
@@ -88,6 +89,8 @@ export function ReleaseModal({
               ))}
             </ul>
           </section>
+
+          <ShareButtons item={item} />
         </aside>
 
         {/* Right: content pane */}
