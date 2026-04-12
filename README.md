@@ -1,73 +1,110 @@
-# React + TypeScript + Vite
+# AI/TLDR
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A comprehensive, real-time tracker of everything shipping in AI.
 
-Currently, two official plugins are available:
+## What this is
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+AI/TLDR is **not** a curated newsletter that picks 10 highlights per week.
+It is a **high-volume feed** that captures every notable AI release — models,
+tools, repos, tutorials, datasets, benchmarks, showcases, and more. Think
+Hacker News or Product Hunt, but specifically for AI.
 
-## React Compiler
+The volume is high because AI moves fast. Dozens of things ship every day
+across hundreds of labs and thousands of repos. The quality bar is "is this
+real and verifiable" — not "is this one of the top 5 this week." Categories
+and filters exist so users can navigate a large feed, not to limit what
+goes in.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Who it's for
 
-## Expanding the ESLint configuration
+AI enthusiasts, developers, ML practitioners, tinkerers — anyone who wants
+to know what shipped today and what they can try tonight. The tone is
+practical and social, not academic. Every release has a plain-English
+explainer (what is it, how it works, why it matters) so you actually
+understand what you're looking at.
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## How it works
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+1. **Content lives in a single JSON file** (`src/data/releases.json`)
+   that conforms to the schema in `src/data/schema.ts`.
+2. **An automated agent** runs on a cron schedule (every 8 hours via
+   GitHub Actions) and refreshes the feed by following the prompt in
+   `prompts/update-releases.md`. The agent uses web search and fetch
+   to discover and verify every release — no hallucination, no
+   invented URLs, no made-up metrics.
+3. **The frontend** is a Bun + Vite + React + TypeScript single-page
+   app with a brutalist editorial design. Cards are sized by importance,
+   filterable by category, and searchable. Clicking a card opens a
+   detail modal with the full explainer and verified source links.
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+## Key design decisions
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+- **No quantity caps.** If 30 things ship in a day, the feed shows 30
+  things. The agent does not skip releases to hit a target number.
+- **Multi-category items.** Each release can belong to multiple
+  categories (e.g. a trending GitHub repo that ships a working CLI is
+  `["repo", "tool"]`). Filter chips match any category.
+- **Zero-hallucination policy.** Every URL, image, metric, and claim
+  in the feed must be fetched and verified by the agent in the run
+  that produced it. If a URL can't be verified, the item gets dropped.
+- **Diversity by design.** The agent checks for underrepresented
+  categories after its first search pass and runs additional searches
+  to fill gaps — no hardcoded product names or niche lists.
+- **Explainers are the product.** Every item has a structured explainer
+  (what is it / how it works / why it matters / who it's for / how to
+  try it). This is the thing that makes the site worth visiting vs.
+  just scrolling GitHub trending.
+
+## Architecture
+
+```
+src/
+  data/
+    schema.ts          # TypeScript types (ReleaseItem, ReleaseFeed, Category, etc.)
+    releases.json      # The content — written by the agent, rendered by the UI
+    categories.ts      # Category metadata (labels, glyphs, blurbs)
+    feed.ts            # Typed accessors, filters, sort helpers
+  components/
+    ReleaseCard.tsx     # Grid card with image, badges, tagline
+    ReleaseModal.tsx    # 16:9 detail modal with explainer panels + sources
+    ReleaseImage.tsx    # Image with onError fallback
+    FilterBar.tsx       # Category chips + search input
+  App.tsx               # Page shell, filter state, URL-driven modal
+  App.css               # All layout + component styles
+  index.css             # Global reset + CSS variables
+  main.tsx              # React entrypoint
+
+prompts/
+  update-releases.md    # The agent prompt — single source of truth for content updates
+
+.github/workflows/
+  update-releases.yml   # Cron job that runs the agent every 8 hours
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## Running locally
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+bun install
+bun dev
 ```
+
+## Adding a category
+
+1. Add the value to the `Category` union and `CATEGORY_ORDER` in `src/data/schema.ts`.
+2. Add a matching entry in `src/data/categories.ts`.
+3. Done — filter chips, cards, and modal badges pick it up automatically.
+
+## Updating content
+
+The feed updates automatically via GitHub Actions. To trigger manually:
+
+```bash
+gh workflow run "Update releases (every 8h)" --repo blackpc/ai-tldr
+```
+
+Or run the agent locally by spawning a Claude Code subagent with
+`prompts/update-releases.md` as the task prompt.
+
+## License
+
+MIT
