@@ -13,6 +13,6 @@
  */
 
 export const EDITOR_CHOICE: readonly string[] = [
-  "anthropic-glasswing-mythos",
-  "meta-muse-spark",
+  "overworld-waypoint-1-5",
+  "coleam00-archon",
 ];

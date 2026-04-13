@@ -71,7 +71,7 @@ export function ReleaseCard({
 
       <p className="card-tagline">{item.explainer.tagline}</p>
 
-      {item.importance === "seismic" && (
+      {(item.importance === "seismic" || picked) && (
         <p className="card-preview">
           {item.explainer.whatIsIt.split(/(?<=\.)\s+/).slice(0, 2).join(" ")}
         </p>
