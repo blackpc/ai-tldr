@@ -13,6 +13,7 @@
  */
 
 export const EDITOR_CHOICE: readonly string[] = [
+  "mempalace-memory-system",
   "overworld-waypoint-1-5",
   "coleam00-archon",
 ];
