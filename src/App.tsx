@@ -3,6 +3,78 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import "./App.css";
 
 import { allItems, categoryCounts, feed, filterItems } from "./data/feed";
+
+const SWEEP_INTERVAL = 8 * 60 * 60 * 1000; // 8 hours in ms
+
+/** Format duration as "Xh Ym" */
+function formatDuration(ms: number): string {
+  const totalMins = Math.floor(ms / 60000);
+  if (totalMins < 1) return "now";
+  if (totalMins < 60) return `${totalMins}m`;
+  const hours = Math.floor(totalMins / 60);
+  const mins = totalMins % 60;
+  return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+}
+
+/** Live sweep timer showing time since last sweep and until next */
+function SweepTimer({ lastSweep }: { lastSweep: string }) {
+  const lastTime = new Date(lastSweep).getTime();
+
+  const calcState = () => {
+    const now = Date.now();
+    const elapsed = now - lastTime;
+    const remaining = Math.max(0, lastTime + SWEEP_INTERVAL - now);
+    const progress = Math.min(1, elapsed / SWEEP_INTERVAL);
+    return { elapsed, remaining, progress };
+  };
+
+  const [state, setState] = useState(calcState);
+  const [flip, setFlip] = useState(false);
+  const [sweep, setSweep] = useState(false);
+
+  useEffect(() => {
+    const tick = () => {
+      // Trigger flip animation
+      setFlip(true);
+      setTimeout(() => {
+        setState(calcState());
+        setFlip(false);
+      }, 150);
+
+      // Trigger sweep glow
+      setSweep(true);
+      setTimeout(() => setSweep(false), 600);
+    };
+
+    // Sync to start of each minute
+    const now = Date.now();
+    const msToNextMin = 60000 - (now % 60000);
+    const timeout = setTimeout(() => {
+      tick();
+      const interval = setInterval(tick, 60000);
+      return () => clearInterval(interval);
+    }, msToNextMin);
+
+    return () => clearTimeout(timeout);
+  }, [lastTime]);
+
+  return (
+    <span className={`sweep-timer${sweep ? " sweep-timer-glow" : ""}`}>
+      <span className="sweep-timer-row">
+        <span className={`sweep-timer-ago${flip ? " sweep-flip" : ""}`}>
+          {formatDuration(state.elapsed)} ago
+        </span>
+        <span className={`sweep-timer-next${flip ? " sweep-flip" : ""}`}>
+          next {formatDuration(state.remaining)}
+        </span>
+      </span>
+      <span
+        className="sweep-timer-bar"
+        style={{ "--progress": state.progress } as React.CSSProperties}
+      />
+    </span>
+  );
+}
 import type { Category, ReleaseItem } from "./data/schema";
 import { ReleaseCard } from "./components/ReleaseCard";
 import { FilterBar } from "./components/FilterBar";
@@ -219,11 +291,9 @@ function App() {
           </button>
         </nav>
         <div className="page-head-right">
-          <span className="head-stat">
-            <span className="head-stat-num">
-              {feed.generatedAt.slice(0, 10)}
-            </span>
-            <span className="head-stat-lbl">LAST SWEEP</span>
+          <span className="head-stat sweep-stat">
+            <SweepTimer lastSweep={feed.generatedAt} />
+            <span className="head-stat-lbl">SWEEP CYCLE</span>
           </span>
         </div>
       </header>
