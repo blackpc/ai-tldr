@@ -351,6 +351,8 @@ function App() {
         >
           GitHub
         </a>
+        {" "}·{" "}
+        <a href="mailto:support@shep.bot">support@shep.bot</a>
       </footer>
     </div>
   );
