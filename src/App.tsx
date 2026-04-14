@@ -62,7 +62,7 @@ function SweepTimer({ lastSweep }: { lastSweep: string }) {
     <span className={`sweep-timer${sweep ? " sweep-timer-glow" : ""}`}>
       <span className="sweep-timer-row">
         <span className={`sweep-timer-ago${flip ? " sweep-flip" : ""}`}>
-          {formatDuration(state.elapsed)} ago
+          {formatDuration(state.elapsed) === "now" ? "just now" : `${formatDuration(state.elapsed)} ago`}
         </span>
         <span className={`sweep-timer-next${flip ? " sweep-flip" : ""}`}>
           next {formatDuration(state.remaining)}
