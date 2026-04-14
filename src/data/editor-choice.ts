@@ -13,6 +13,14 @@
  */
 
 export const EDITOR_CHOICE: readonly string[] = [
+  // HYPE DIRECTION: Multi-agent parallel development is here. Run refactor + test +
+  // docs agents side-by-side in a single window, each in its own Git worktree.
+  // Claude and Cursor shipped the same UX pattern within days — this is the new standard.
+  "anthropic-claude-code-desktop-redesign",
+  // HYPE DIRECTION: Tiled agent layouts are becoming table stakes. Cursor 3.1 pioneered
+  // the split-pane approach for watching multiple agents work in parallel. Voice input
+  // and 87% fewer dropped frames make it feel like a native IDE, not a wrapper.
+  "cursor-3-1",
   // Fixes one of the most tedious daily developer tasks — merge conflicts resolved
   // with 3 clicks, validated by the agent, and pushed automatically. This is the
   // kind of AI feature that saves real time every week.
