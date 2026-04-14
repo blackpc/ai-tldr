@@ -40,7 +40,14 @@ concurrency:
 jobs:
   sweep:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Job cap is sized for 2 sweep attempts × 30m each + ~5m for
+    # checkout / bun install / show-diff / commit / push. Each sweep
+    # attempt has its OWN step-level timeout-minutes:30 so a silent
+    # claude-code-action hang trips the step, not the whole job — that
+    # lets the retry step actually run. (Observed failure mode: the SDK
+    # sits idle for 25+ minutes after a 429 or even a clean 200 and
+    # never recovers. Step-level timeout is the only safe escape.)
+    timeout-minutes: 65
 
     steps:
       - name: Checkout
@@ -58,8 +65,22 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Run release sweep with Claude Code
+      - name: Capture current date
+        id: today
+        run: echo "iso=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Run release sweep with Claude Code (attempt 1)
+        id: sweep1
         uses: anthropics/claude-code-action@v1
+        # Step-level timeout: if the action hangs silently we want to
+        # fail THIS step (so the retry step can run), not let the job
+        # timeout kill everything. 30m gives healthy runs plenty of
+        # headroom (observed p100 ~18m) while still catching hangs.
+        timeout-minutes: 30
+        # continue-on-error is what lets the retry step run after a
+        # hang/failure. Without this, a step failure would short-circuit
+        # the job and the retry would be skipped.
+        continue-on-error: true
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Stream Claude's progress into the GH Actions log instead of
@@ -75,6 +96,18 @@ jobs:
             a GitHub Actions workflow. The working directory is the repo
             root.
 
+            TODAY'S DATE IS ${{ steps.today.outputs.iso }}. This is the
+            real, current UTC date from the GitHub runner's system clock.
+            It is NOT fictional, NOT a test fixture, NOT a placeholder.
+            Your training data predates this date, so releases you find
+            in the feed (e.g. "Gemma 4", "GPT-5.4") may be unfamiliar to
+            you — that is expected and correct. Do NOT spend thinking
+            tokens debating whether the date or the feed's past entries
+            are "real". Trust the system clock, trust the repo state, and
+            trust what WebFetch returns from live URLs. If WebFetch
+            reports a release date, USE THAT DATE VERBATIM — never
+            "adjust" a fetched date to match any other convention.
+
             STEP 1. Read the file `prompts/update-releases.md` from the
             repo. That file is the SINGLE SOURCE OF TRUTH for how to
             refresh `src/data/releases.json`. Follow it exactly. Pay
@@ -83,10 +116,10 @@ jobs:
             MUST be fetched in this run with WebFetch and confirmed to
             return 200 + relevant content. No memory-based URLs.
 
-            STEP 2. Use today's actual date (the system clock in this
-            runner) for the `--since` window and the `generatedAt` field.
-            Default window: include releases from the last 7 days. Set
-            `source` to `"github-actions-sweep"`.
+            STEP 2. Use ${{ steps.today.outputs.iso }} as today for the
+            `--since` window and the `generatedAt` field. Default window:
+            include releases from the last 7 days. Set `source` to
+            `"github-actions-sweep"`.
 
             STEP 3. Quality bar, NOT a quota. Only include releases
             that are genuinely notable — trending repos with real
@@ -134,6 +167,114 @@ jobs:
           claude_args: |
             --model claude-opus-4-6
             --verbose
+            --max-turns 60
+            --permission-mode acceptEdits
+            --allowedTools "WebSearch,WebFetch,Read,Write,Edit,Bash(bun:*),Bash(ls:*),Bash(cat:*),Bash(grep:*),Bash(rm:*)"
+
+      - name: Reset working tree before retry
+        # Attempt 1 may have written partial changes before hanging.
+        # Revert tracked files to HEAD so attempt 2 starts clean — we
+        # don't want attempt 2 to either see half-written JSON or fight
+        # with duplicate sweep-report entries.
+        if: steps.sweep1.outcome == 'failure'
+        run: |
+          echo "::warning::Sweep attempt 1 failed or timed out — resetting and retrying."
+          git checkout -- src/data/releases.json src/data/sweeps.json 2>/dev/null || true
+          git status --short
+
+      - name: Run release sweep with Claude Code (attempt 2)
+        id: sweep2
+        # Only runs if attempt 1 failed (timed out, errored, or hung
+        # past the 30m step timeout). Same inputs, no continue-on-error
+        # — if this one also fails, the job fails and the commit step
+        # is skipped automatically (default if: success() gating).
+        if: steps.sweep1.outcome == 'failure'
+        uses: anthropics/claude-code-action@v1
+        timeout-minutes: 30
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          show_full_output: "true"
+          display_report: "true"
+          prompt: |
+            You are running as the AI/TLDR scheduled release updater inside
+            a GitHub Actions workflow. The working directory is the repo
+            root. THIS IS A RETRY — the previous attempt in this same job
+            failed or hung. The working tree has been reset to HEAD, so
+            start fresh and do not assume any prior partial state.
+
+            TODAY'S DATE IS ${{ steps.today.outputs.iso }}. This is the
+            real, current UTC date from the GitHub runner's system clock.
+            It is NOT fictional, NOT a test fixture, NOT a placeholder.
+            Your training data predates this date, so releases you find
+            in the feed (e.g. "Gemma 4", "GPT-5.4") may be unfamiliar to
+            you — that is expected and correct. Do NOT spend thinking
+            tokens debating whether the date or the feed's past entries
+            are "real". Trust the system clock, trust the repo state, and
+            trust what WebFetch returns from live URLs. If WebFetch
+            reports a release date, USE THAT DATE VERBATIM — never
+            "adjust" a fetched date to match any other convention.
+
+            STEP 1. Read the file `prompts/update-releases.md` from the
+            repo. That file is the SINGLE SOURCE OF TRUTH for how to
+            refresh `src/data/releases.json`. Follow it exactly. Pay
+            particular attention to the ZERO-HALLUCINATION POLICY at the
+            top — every `url`, every entry in `links`, and every `image.url`
+            MUST be fetched in this run with WebFetch and confirmed to
+            return 200 + relevant content. No memory-based URLs.
+
+            STEP 2. Use ${{ steps.today.outputs.iso }} as today for the
+            `--since` window and the `generatedAt` field. Default window:
+            include releases from the last 7 days. Set `source` to
+            `"github-actions-sweep"`.
+
+            STEP 3. Quality bar, NOT a quota. Only include releases
+            that are genuinely notable — trending repos with real
+            adoption, products with real launches, papers people are
+            actually discussing, models people will actually run.
+            Don't pad to hit a number, don't skip a hot week to stay
+            small. A typical sweep is 3–15 items. If the window
+            genuinely has 25 hot releases, ship 25. If it has 2, ship
+            2. Zero filler, ever. Follow the "Search diversity — fill
+            the gaps" strategy in the prompt file to broaden coverage,
+            but never add a weak item just to expand the list.
+
+            STEP 4. Generate a sweep report. Read `src/data/sweeps.json`
+            and APPEND one new entry to the `sweeps` array describing
+            what this run changed. Do NOT rewrite existing entries.
+            The new entry must conform to `SweepReport` in
+            `src/data/schema.ts`. Required fields:
+              - `id`: "sweep-<generatedAt ISO, compacted>"
+              - `timestamp`: same as feed `generatedAt`
+              - `source`: "github-actions-sweep-retry" (because this is
+                the 2nd attempt in the job — helps us see retries in
+                the /log page)
+              - `summary`: 1–2 sentences, friendly and direct tone.
+                Summarize the sweep as a whole. Same banned words as
+                explainer copy (no "revolutionary", "game-changing"…).
+              - `counts`: { added, updated, removed }
+              - `added`: array of { id, title, category (the primary
+                one), note } — `note` is ONE sentence explaining why
+                this item was included.
+              - `updated` / `removed`: fill in if you modified or
+                dropped items, otherwise `[]`.
+            Write the file back. The log page reads this file directly.
+
+            STEP 5. After writing both files, run `bun run build` to
+            confirm releases.json + sweeps.json still parse, the page
+            builds, AND the per-release + /log static HTML pages
+            generate without errors (scripts/prerender.ts runs as the
+            last build step). If any step fails, fix and re-run until
+            the full build passes.
+
+            STEP 6. Stop. Do NOT commit or push yourself — the next
+            workflow step handles the git ops. Just leave the modified
+            files in the working tree.
+
+            Return a short report (≤200 words) of what you changed.
+          claude_args: |
+            --model claude-opus-4-6
+            --verbose
+            --max-turns 60
             --permission-mode acceptEdits
             --allowedTools "WebSearch,WebFetch,Read,Write,Edit,Bash(bun:*),Bash(ls:*),Bash(cat:*),Bash(grep:*),Bash(rm:*)"
 
