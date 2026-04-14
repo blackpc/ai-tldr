@@ -82,6 +82,7 @@ import { ReleaseModal } from "./components/ReleaseModal";
 import { InfluencersPage } from "./components/InfluencersPage";
 import { SweepLogPage } from "./components/SweepLogPage";
 import { influencers } from "./data/influencers";
+import { Subscribe } from "./components/Subscribe";
 
 /** Parse current URL into a route. Supported paths:
  *   /                     → feed home
@@ -263,6 +264,7 @@ function App() {
             daily release sweep · v{feed.promptVersion}
           </span>
         </div>
+        <Subscribe />
         <nav className="page-nav">
           <button
             type="button"
