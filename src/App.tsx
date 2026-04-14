@@ -4,7 +4,7 @@ import "./App.css";
 
 import { allItems, categoryCounts, feed, filterItems } from "./data/feed";
 
-const SWEEP_INTERVAL = 8 * 60 * 60 * 1000; // 8 hours in ms
+const SWEEP_INTERVAL = 2 * 60 * 60 * 1000; // 2 hours in ms
 
 /** Format duration as "Xh Ym" */
 function formatDuration(ms: number): string {
