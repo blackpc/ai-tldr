@@ -3,6 +3,7 @@ import { CATEGORY_META } from "../data/categories";
 import { isFresh, isEditorChoice } from "../data/feed";
 import { ReleaseImage } from "./ReleaseImage";
 import { CardShareButton } from "./CardShareButton";
+import { CardAskAIButton } from "./CardAskAIButton";
 
 const importanceLabel: Record<ReleaseItem["importance"], string> = {
   rumor: "RUMOR",
@@ -37,6 +38,7 @@ export function ReleaseCard({
       aria-label={`${item.title} — ${item.org}`}
     >
       <CardShareButton item={item} />
+      <CardAskAIButton item={item} />
 
       <a
         className="card-visit"
