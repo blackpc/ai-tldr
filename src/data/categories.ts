@@ -36,6 +36,12 @@ export const CATEGORY_META: Record<Category, CategoryMeta> = {
     short: ">_",
     blurb: "Shipped products, CLIs, IDE features",
   },
+  security: {
+    id: "security",
+    label: "SECURITY",
+    short: "🛡",
+    blurb: "AI/LLM security tools, red-teaming, guardrails",
+  },
   algorithm: {
     id: "algorithm",
     label: "ALGORITHM",

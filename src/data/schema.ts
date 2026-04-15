@@ -10,6 +10,7 @@ export type Category =
   | "model"
   | "repo"
   | "tool"
+  | "security"
   | "algorithm"
   | "paper"
   | "dataset"
@@ -23,6 +24,7 @@ export const CATEGORY_ORDER: Category[] = [
   "model",
   "repo",
   "tool",
+  "security",
   "tutorial",
   "showcase",
   "resource",
