@@ -3,6 +3,7 @@ import type { ReleaseItem } from "../data/schema";
 import { CATEGORY_META } from "../data/categories";
 import { ReleaseImage } from "./ReleaseImage";
 import { ShareButtons } from "./ShareButtons";
+import { AskAIButtons } from "./AskAIButtons";
 
 const importanceLabel: Record<ReleaseItem["importance"], string> = {
   rumor: "RUMOR",
@@ -91,6 +92,7 @@ export function ReleaseModal({
           </section>
 
           <ShareButtons item={item} />
+          <AskAIButtons item={item} />
         </aside>
 
         {/* Right: content pane */}
