@@ -32,7 +32,7 @@ const ONE_DAY = 1000 * 60 * 60 * 24;
 export const isFresh = (item: ReleaseItem): boolean => {
   const generated = new Date(feed.generatedAt).getTime();
   const released = new Date(item.date).getTime();
-  return generated - released < 3 * ONE_DAY;
+  return generated - released < ONE_DAY;
 };
 
 export const filterItems = (
