@@ -8,8 +8,9 @@ name: Generate daily digest
 #   3. Generates newsletters/daily/YYYY_MM_DD_daily_digest.md
 #   4. Commits + pushes to master
 #
-# Required secret:
+# Required secrets:
 #   CLAUDE_CODE_OAUTH_TOKEN — generate locally with `claude setup-token`
+#   BUTTONDOWN_TOKEN        — Buttondown API token (optional; skipped if unset)
 
 on:
   schedule:
@@ -132,3 +133,44 @@ jobs:
           Co-Authored-By: Claude Code Action <noreply@anthropic.com>"
 
           git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${GITHUB_REF_NAME}"
+
+      # Pushes today's digest to Buttondown as a DRAFT (never published).
+      # Igor reviews and publishes manually from the Buttondown UI.
+      - name: Create Buttondown draft
+        env:
+          BUTTONDOWN_TOKEN: ${{ secrets.BUTTONDOWN_TOKEN }}
+          DIGEST_FILE_DATE: ${{ steps.now.outputs.file_date }}
+          DIGEST_DISPLAY_DATE: ${{ steps.now.outputs.display_date }}
+        run: |
+          set -euo pipefail
+          DIGEST_FILE="newsletters/daily/${DIGEST_FILE_DATE}_daily_digest.md"
+
+          if [[ ! -f "$DIGEST_FILE" ]]; then
+            echo "Digest file not found — skipping Buttondown upload."
+            exit 0
+          fi
+          if [[ -z "${BUTTONDOWN_TOKEN:-}" ]]; then
+            echo "BUTTONDOWN_TOKEN not set — skipping Buttondown upload."
+            exit 0
+          fi
+
+          export DIGEST_FILE
+          node -e '
+            const fs = require("fs");
+            const body = fs.readFileSync(process.env.DIGEST_FILE, "utf8");
+            const subject = `AI/TLDR Daily Digest — ${process.env.DIGEST_DISPLAY_DATE}`;
+            (async () => {
+              const res = await fetch("https://api.buttondown.email/v1/emails", {
+                method: "POST",
+                headers: {
+                  "Authorization": "Token " + process.env.BUTTONDOWN_TOKEN,
+                  "Content-Type": "application/json"
+                },
+                body: JSON.stringify({ subject, body, status: "draft", email_type: "public" })
+              });
+              const text = await res.text();
+              console.log("STATUS:", res.status);
+              console.log(text.slice(0, 800));
+              if (res.status >= 400) process.exit(1);
+            })();
+          '
