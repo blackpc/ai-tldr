@@ -88,9 +88,10 @@ export function ReleaseImage({
     );
   }
 
+  const rumorCls = item.importance === "rumor" ? " item-img-rumor" : "";
   const wrapProps = ytId && interactive
     ? {
-        className: `item-img-frame item-img-playable ${className ?? ""}`,
+        className: `item-img-frame item-img-playable${rumorCls} ${className ?? ""}`,
         role: "button" as const,
         tabIndex: 0,
         "aria-label": `Play video: ${item.title}`,
@@ -106,7 +107,7 @@ export function ReleaseImage({
           }
         },
       }
-    : { className: `item-img-frame ${className ?? ""}` };
+    : { className: `item-img-frame${rumorCls} ${className ?? ""}` };
 
   if (!img || errored) {
     return (
