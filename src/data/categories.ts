@@ -90,4 +90,22 @@ export const CATEGORY_META: Record<Category, CategoryMeta> = {
     short: "≡",
     blurb: "Curated lists, cheat sheets, learning paths",
   },
+  article: {
+    id: "article",
+    label: "ARTICLE",
+    short: "✎",
+    blurb: "Blog posts, threads, essays from influential voices",
+  },
+  video: {
+    id: "video",
+    label: "VIDEO",
+    short: "▷",
+    blurb: "YouTube, talks, and viral demos from top AI creators",
+  },
+  rumor: {
+    id: "rumor",
+    label: "RUMOR",
+    short: "?",
+    blurb: "Credible speculation from reliable sources",
+  },
 };

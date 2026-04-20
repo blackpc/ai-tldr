@@ -1,6 +1,6 @@
 ---
 prompt-id: tldr.update-releases
-prompt-version: 4.1.0
+prompt-version: 5.0.0
 output-target: src/data/releases.json
 schema: src/data/schema.ts
 editor-choice-target: src/data/editor-choice.ts
@@ -85,9 +85,11 @@ it. Or drop it.
 
 ## Inputs
 
-- `--since <ISO date>`  → only include items released on or after this date.
-  Default: **6 hours before now**. We run every 2 hours, so 6h gives overlap.
-  Do NOT backfill older content — that's a separate manual task.
+- `--since <ISO date>`  → only include items with **release date** on or after.
+  Default: **7 days before now**.
+- **CRITICAL: Trending beats recency.** If something released 5 days ago is
+  trending on HN/GitHub/Twitter RIGHT NOW, it's news TODAY. Add it. The feed
+  shows `date` (release date) but sorts by `publishDate` (when we added it).
 - `--max <N>`           → optional hard cap on items per category. Unset by
   default. **There is no built-in cap, and there is no built-in floor.**
   Quality bar, not quota: a typical 2-hour sweep is **0–5 items**. Most sweeps
@@ -107,7 +109,10 @@ Include items only if they are **concrete and verifiable**. Each item has a
 | `repo`      | trending / newly-released GitHub repo with real adoption signal           | HIGH     |
 | `tool`      | shipped product, CLI, IDE plugin, agent feature, memory system            | HIGH     |
 | `model`     | new/updated frontier or open-weights model from a SOTA lab                | HIGH     |
-| `tutorial`  | guide, cookbook, how-to, walkthrough someone can follow tonight            | MEDIUM   |
+| `article`   | blog post, Twitter thread, essay from influential AI voice — see below    | HIGH     |
+| `video`     | YouTube/video from top AI creators, viral demos — see below               | HIGH     |
+| `rumor`     | credible speculation from reliable sources — see below                    | MEDIUM   |
+| `tutorial`  | guide, cookbook, how-to, walkthrough someone can follow tonight           | MEDIUM   |
 | `showcase`  | impressive demo, shipped project, "look what I built" with AI             | MEDIUM   |
 | `resource`  | curated list, awesome-repo, cheat sheet, learning path                    | MEDIUM   |
 | `algorithm` | named technique with a paper or implementation (decoding, attention, RL)  | MEDIUM   |
@@ -208,6 +213,66 @@ released with a paper and a leaderboard repo is `["benchmark", "paper",
 prominent badge); subsequent entries make the item show up under those
 filter chips too. Don't be stingy — if a category honestly applies, list it.
 
+### `article` — influential voices, not random blogs
+
+`article` is for **blog posts, Twitter/X threads, essays, and newsletters**
+from people the AI community actually listens to.
+
+**Allowed**:
+- Blog posts from Simon Willison, Andrej Karpathy, Swyx, Jeremy Howard,
+  Chip Huyen, or similarly respected practitioners
+- Viral Twitter threads with real technical substance (not "AI is amazing!")
+- Deep-dive analysis pieces from major tech outlets (Ars, The Verge tech
+  deep-dives, not press release rewrites)
+- Newsletter issues that break news or provide unique analysis
+
+**Not allowed**:
+- Generic "Top 10 AI Tools" listicles
+- SEO-optimized blog spam
+- Press release rewrites with no added value
+- Opinion pieces without technical substance
+
+### `video` — top creators and viral demos
+
+`video` is for **YouTube videos and video content** from established AI
+creators or genuinely viral AI demos.
+
+**Allowed**:
+- Videos from: Two Minute Papers, Yannic Kilcher, AI Explained, Fireship,
+  3Blue1Brown (AI episodes), Matthew Berman, Sam Witteveen, etc.
+- Conference talks and keynotes from major AI events
+- Viral AI demos with significant view count (100k+ or trending)
+- Official product demo videos from labs
+
+**Not allowed**:
+- 4-hour podcasts (unless genuinely exceptional with timestamps)
+- Tutorial videos (use `tutorial` category instead)
+- Low-effort reaction videos
+- Videos with <10k views unless from known creator
+
+### `rumor` — credible speculation, clearly labeled
+
+`rumor` is for **credible speculation from reliable sources**. Rumors are
+valuable to practitioners — "Opus 4.7 coming this week" helps people plan.
+But rumors must be clearly labeled and sourced.
+
+**Allowed** (use `importance: "rumor"` and `categories: ["rumor"]`):
+- Leaks from known journalists (The Information, Bloomberg AI reporters)
+- Insider posts from current/former lab employees
+- Leaked documents, screenshots, or code references
+- Consistent reports from multiple credible sources
+
+**Not allowed** (drop these entirely):
+- "I heard from a friend who works at..."
+- Anonymous Twitter accounts without track record
+- Pure speculation based on public info ("they filed a trademark so...")
+- Price/date predictions without insider info
+
+**Writing rumor explainers**: Always state the source, confidence level,
+and what would confirm/deny it. Example: "Per The Information, citing two
+sources with direct knowledge. Would be confirmed by official announcement
+or API changes."
+
 ## Sources to sweep (optimized for speed)
 
 We run every 2 hours. Prioritize **fast, high-signal sources** that surface
@@ -215,34 +280,54 @@ new content quickly. Do ONE quick pass through these — no exhaustive scraping.
 
 ### Tier 1 — Check every sweep (fast, structured)
 1. **GitHub trending daily** — `github.com/trending?since=daily` filtered to
-   AI/ML. Just the front page, don't deep-dive into weekly or topics unless
-   daily is empty.
+   AI/ML. Include coding agents (Cursor, Claude Code, Cline, Aider, Continue,
+   OpenCode, Kabnan, t3code, etc.) and local LLM tools.
 2. **Hacker News front page** — `news.ycombinator.com` top 30. Look for
    "Show HN" + AI/LLM/agent, or any AI tool/model post with 100+ points.
 3. **HuggingFace trending** — `huggingface.co/models?sort=trending` and
    `huggingface.co/papers` front page. New models/papers from last few hours.
+4. **Twitter/X AI search** — Search "AI release", "just shipped", "launching
+   today". Check accounts: @kaborailab, @simonw, @swyx, @DrJimFan,
+   @emaborowski, @sama, @daborowick, @ylecun, etc.
+5. **Reddit AI subs** — r/LocalLLaMA hot, r/MachineLearning top/week,
+   r/artificial top. High signal for open-source and self-hosted tools.
 
-### Tier 2 — Check if Tier 1 is sparse
-4. **Lab blogs** (only if they posted today): openai.com/index,
-   anthropic.com/news, deepmind.google, mistral.ai/news, x.ai/blog.
-5. **Product Hunt today** — producthunt.com front page, AI category.
+### Tier 2 — Check daily
+6. **Lab blogs**: openai.com/index, anthropic.com/news, deepmind.google,
+   mistral.ai/news, x.ai/blog, meta.ai/blog, cohere.com/blog.
+7. **Product Hunt today** — producthunt.com front page, AI category.
+8. **YouTube AI channels** — new uploads from Two Minute Papers, AI Explained,
+   Yannic Kilcher, Fireship (AI videos), Matthew Berman.
+9. **Newsletters** (if you can access): TLDR AI, The Batch, Import AI,
+   Ben's Bites, Ahead of AI.
 
-### Tier 3 — Skip unless explicitly backfilling
-- arXiv deep dives, awesome-list updates, tutorial sites, newsletters.
+### Tier 3 — Weekly or manual backfill
+- arXiv deep dives, awesome-list updates, tutorial sites.
+- Conference announcements and workshop papers.
 - These are for manual backfill sweeps, not automated 2-hour cycles.
+
+### Tools to watch (not exhaustive)
+Coding agents and AI-assisted dev tools are HIGH priority:
+- Cursor, Claude Code, Windsurf, Cline, Aider, Continue
+- OpenCode, Kabnan, t3code, Codium, Tabnine, Codeium
+- Any new entrant trending on GitHub or HN
 
 **Stop early**: If you find 3–5 solid items from Tier 1, ship them. Don't
 keep searching to pad the list. Empty sweeps are fine and expected.
 
 ## Hard rules
 
-- **No rumors, no Twitter speculation, no roadmap items.** If you cannot link
-  a primary source, drop it.
+- **Rumors are ALLOWED** when from credible sources (journalists, insiders,
+  leaked docs) — use `categories: ["rumor"]` and `importance: "rumor"`. See
+  the `rumor` category section below.
+- **No unsourced speculation.** Random Twitter guesses without insider info
+  are not rumors — drop them.
+- **No roadmap items.** "Coming soon" without a ship date is not news.
 - **Deduplicate** against the existing feed by `id` (kebab-case
   `<org>-<short-slug>`).
 - **`importance`** scale (judge each release on its own merits — there is
   **no per-week quota** on any tier):
-  - `rumor`   → never used (see above)
+  - `rumor`   → credible speculation from reliable sources (ALLOWED)
   - `notable` → solid release, narrow or specialist audience
   - `major`   → broad impact across the field; multiple downstream teams
                 will care this week
@@ -278,14 +363,15 @@ keep searching to pad the list. Empty sweeps are fine and expected.
   is **no cap**. The UI will lay them out. Stop at the point where the next
   tag is just noise.
 - **`date`** is the **real public release date** as stated by the source
-  (YYYY-MM-DD), **NOT** the day the agent discovered it. This is critical
-  because the feed is sorted purely by date descending — an item discovered
-  today but released 6 months ago must carry its original release date and
-  will appear in its correct chronological position in the feed, not at the
-  top. Always verify the release date from the primary source. If the source
-  doesn't state an explicit date, use the earliest verifiable publication
-  date (e.g. GitHub first release tag, arXiv submission date, blog post
-  publish date).
+  (YYYY-MM-DD), **NOT** the day the agent discovered it. Always verify the
+  release date from the primary source. If the source doesn't state an
+  explicit date, use the earliest verifiable publication date (e.g. GitHub
+  first release tag, arXiv submission date, blog post publish date).
+- **`publishDate`** is when YOU (the agent) added this item (YYYY-MM-DD,
+  today's date). **The feed is sorted by `publishDate` DESC so new additions
+  appear at top.** The UI displays `date` (release date) to readers. This
+  means a tool released 5 days ago that's trending NOW appears at the top of
+  the feed today, with "Released: April 15" shown to readers.
 
 ## Image — required, verified, hotlinkable
 
@@ -434,8 +520,12 @@ releases that pass the bar" sweep is still a valuable entry in the log.
 
 ## Output
 
-Write the full updated feed (existing items + new items, sorted by **`date`
-descending** — this is the ONLY sort order) to `src/data/releases.json`.
+Write the full updated feed (existing items + new items, sorted by
+**`publishDate` descending, then `date` descending**) to
+`src/data/releases.json`. New items you add today go to the TOP of the feed
+regardless of their release date. For new items, set `publishDate` to today.
+Existing items without `publishDate` use their `date` as fallback.
+
 The UI renders items in this exact order as a single continuous feed (no
 grouping by importance). Card size is driven by `importance`, so a `seismic`
 item gets a large card and a `notable` item gets a small card, but they all

@@ -18,12 +18,18 @@ export type Category =
   | "ecosystem"
   | "tutorial"
   | "showcase"
-  | "resource";
+  | "resource"
+  | "article"
+  | "video"
+  | "rumor";
 
 export const CATEGORY_ORDER: Category[] = [
   "model",
   "repo",
   "tool",
+  "article",
+  "video",
+  "rumor",
   "security",
   "tutorial",
   "showcase",
@@ -73,6 +79,22 @@ export interface ReleaseImage {
   credit?: string;
 }
 
+/**
+ * Author/creator attribution used by article + video items.
+ * Renders as a small avatar overlay in the corner of the image preview.
+ * Every field must be verified — no guessed avatar URLs.
+ */
+export interface ReleaseAuthor {
+  /** Real name, e.g. "Andrej Karpathy". */
+  name: string;
+  /** Popular @handle or channel tag, e.g. "@karpathy" or "@3blue1brown". */
+  handle?: string;
+  /** HTTPS avatar URL — must return 200. Prefer platform-hosted (github, x.com, youtube). */
+  avatarUrl?: string;
+  /** Optional link to author's profile/channel page. */
+  profileUrl?: string;
+}
+
 export interface ReleaseItem {
   id: string;
   /**
@@ -83,7 +105,17 @@ export interface ReleaseItem {
   categories: Category[];
   title: string;
   org: string;
+  /**
+   * The original public release date (YYYY-MM-DD). When the thing was
+   * actually released, not when we discovered it. Displayed to readers.
+   */
   date: string;
+  /**
+   * When we added this item to our feed (YYYY-MM-DD). The feed is sorted
+   * by publishDate DESC so new additions appear at top. If omitted,
+   * defaults to `date` for backwards compatibility.
+   */
+  publishDate?: string;
   url: string;
   /** Short summary — the headline blurb. ≤240 chars. */
   summary: string;
@@ -93,6 +125,11 @@ export interface ReleaseItem {
   links?: { label: string; url: string }[];
   explainer: Explainer;
   image?: ReleaseImage;
+  /**
+   * Author / creator attribution. Used primarily for article + video items
+   * to show an avatar overlay on the card image. Optional elsewhere.
+   */
+  author?: ReleaseAuthor;
 }
 
 export interface ReleaseFeed {
