@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import "./App.css";
 
@@ -130,6 +137,54 @@ function parseCategoriesFromUrl(): Set<Category> {
   );
 }
 
+/** Initial card count rendered; incremented by PAGE_SIZE as the
+ *  user scrolls. Tuned so the first paint stays cheap but the
+ *  viewport isn't obviously empty below the fold. Count lives in
+ *  React state (deliberately not URL-stateful — this is UI scroll
+ *  depth, not a shareable query), plus a sessionStorage snapshot so
+ *  refresh restores where you were. */
+const INITIAL_COUNT = 30;
+const PAGE_SIZE = 20;
+
+/** Feed scroll/count is persisted in `window.history.state` for the
+ *  current entry — invisible in the URL, survives refresh (the
+ *  browser reattaches state to the same entry), and each back/
+ *  forward entry gets its own stash. The payload pins the active
+ *  category string so a refresh under a different filter falls back
+ *  to a fresh page instead of restoring into a now-empty region. */
+type ScrollSnapshot = { y: number; n: number; cat: string };
+
+function serializeCat(active: Set<Category>): string {
+  return CATEGORY_ORDER.filter((c) => active.has(c)).join(",");
+}
+
+function currentUrl(): string {
+  return window.location.pathname + window.location.search;
+}
+
+function readScrollState(): ScrollSnapshot | null {
+  const s = window.history.state as unknown;
+  if (s && typeof s === "object") {
+    const obj = s as Record<string, unknown>;
+    if (
+      typeof obj.y === "number" &&
+      typeof obj.n === "number" &&
+      typeof obj.cat === "string"
+    ) {
+      return { y: obj.y, n: obj.n, cat: obj.cat };
+    }
+  }
+  return null;
+}
+
+function writeScrollState(snap: ScrollSnapshot): void {
+  window.history.replaceState(snap, "", currentUrl());
+}
+
+function clearScrollState(): void {
+  window.history.replaceState(null, "", currentUrl());
+}
+
 /** Build a feed-home URL (/, optionally with ?cat=a,b,c) from a category set. */
 function buildFeedUrl(active: Set<Category>): string {
   if (active.size === 0) return "/";
@@ -161,12 +216,34 @@ function App() {
   );
   const [query, setQuery] = useState("");
 
+  // Rehydrate the scroll state from history once at mount. The same
+  // entry keeps its state across refresh, so landing here with a
+  // matching cat string means we were here before — restore both
+  // visibleCount (now, for the render) and scrollY (in a layout
+  // effect, below). Stale-cat states are dropped so you can't land
+  // in an empty region after switching filters out-of-band.
+  const initialSnapshotRef = useRef<ScrollSnapshot | null>(null);
+  const [visibleCount, setVisibleCount] = useState<number>(() => {
+    const snap = readScrollState();
+    if (!snap) return INITIAL_COUNT;
+    const currentCat = new URLSearchParams(window.location.search).get("cat") ?? "";
+    if (snap.cat !== currentCat) return INITIAL_COUNT;
+    initialSnapshotRef.current = snap;
+    return Math.max(snap.n, INITIAL_COUNT);
+  });
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+
   const sorted = useMemo(() => allItems(), []);
   const counts = useMemo(() => categoryCounts(), []);
   const visible = useMemo(
     () => filterItems(sorted, { categories: active, query }),
     [sorted, active, query],
   );
+  const shown = useMemo(
+    () => visible.slice(0, visibleCount),
+    [visible, visibleCount],
+  );
+  const hasMore = visibleCount < visible.length;
 
   const openItem = useMemo(
     () => itemFromRoute(route, sorted),
@@ -210,27 +287,30 @@ function App() {
 
   // Close modal = go back to whichever page we came from. replaceState,
   // NOT history.back() — back() could navigate to a previous entry with
-  // a different modal already open. When returning to feed, preserve the
-  // active category filter in the URL so a reload keeps the chips.
+  // a different modal already open. For the feed route we also re-
+  // attach the current scroll snapshot to the entry we're writing, so
+  // refresh-at-modal-close still lands exactly where the feed was.
   const closeModal = useCallback(() => {
-    const target =
-      page === "influencers"
-        ? "/influencers"
-        : page === "log"
-          ? "/log"
-          : buildFeedUrl(active);
-    const next: Route =
-      page === "influencers"
-        ? { kind: "influencers" }
-        : page === "log"
-          ? { kind: "log" }
-          : { kind: "feed" };
-    window.history.replaceState(null, "", target);
+    const isFeed = page !== "influencers" && page !== "log";
+    const target = page === "influencers"
+      ? "/influencers"
+      : page === "log"
+        ? "/log"
+        : buildFeedUrl(active);
+    const next: Route = page === "influencers"
+      ? { kind: "influencers" }
+      : page === "log"
+        ? { kind: "log" }
+        : { kind: "feed" };
+    const state = isFeed && window.scrollY > 0
+      ? { y: window.scrollY, n: visibleCount, cat: serializeCat(active) }
+      : null;
+    window.history.replaceState(state, "", target);
     setRoute(next);
-  }, [page, active]);
+  }, [page, active, visibleCount]);
 
-  // Sync route + filter with browser back/forward. The filter is encoded
-  // in ?cat=..., so popstate has to re-read both together.
+  // Sync route + filter with browser back/forward. visibleCount is
+  // intentionally not URL-synced, so popstate leaves it alone.
   useEffect(() => {
     const onPop = () => {
       setRoute(parseRoute());
@@ -264,22 +344,119 @@ function App() {
   }, [route, sorted]);
 
   // Each chip toggle is a new history entry so the back button walks
-  // through prior filter states. Only meaningful on the feed page —
-  // chips aren't shown elsewhere, so no other route can trigger this.
+  // through prior filter states. Changing the filter always resets the
+  // scroll-depth back to the first page — otherwise you could land on
+  // "page 5" of a category you just toggled on, with nothing above it
+  // matching. Only meaningful on the feed page; chips aren't shown
+  // elsewhere, so no other route can trigger this.
   const toggle = useCallback((c: Category) => {
     setActive((prev) => {
       const next = new Set(prev);
       if (next.has(c)) next.delete(c);
       else next.add(c);
+      // pushState with null state creates a clean entry — no stale
+      // scroll snapshot from the prior filter.
       window.history.pushState(null, "", buildFeedUrl(next));
       return next;
     });
+    setVisibleCount(INITIAL_COUNT);
+    window.scrollTo(0, 0);
   }, []);
 
   const clearFilters = useCallback(() => {
     setActive(new Set());
+    setVisibleCount(INITIAL_COUNT);
     window.history.pushState(null, "", "/");
+    window.scrollTo(0, 0);
   }, []);
+
+  // Query changes also reset scroll-depth for the same reason filters
+  // do — the matching-set changes, so prior counts are meaningless.
+  // No pushState here (search is UI-local, not URL-stateful), so we
+  // clear the current entry's state explicitly.
+  const handleQuery = useCallback((q: string) => {
+    setQuery(q);
+    setVisibleCount(INITIAL_COUNT);
+    clearScrollState();
+  }, []);
+
+  // Infinite scroll: grow the rendered slice when the sentinel enters
+  // the viewport. rootMargin 800px pre-loads the next page before the
+  // user hits the bottom, so the grid appears seamless.
+  useEffect(() => {
+    if (!hasMore || route.kind !== "feed") return;
+    const el = sentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setVisibleCount((c) => Math.min(c + PAGE_SIZE, visible.length));
+        }
+      },
+      { rootMargin: "800px 0px" },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasMore, route.kind, visible.length]);
+
+  // Restore scroll-Y once after the initial render, if the snapshot
+  // we rehydrated at mount time is still applicable. Runs in a layout
+  // effect so the scroll lands before paint (no visible jump). We
+  // also take over scroll-restoration from the browser for this path
+  // — the default "auto" mode would race our restore and usually
+  // lose, since our cards haven't all measured yet on the first tick.
+  useLayoutEffect(() => {
+    const snap = initialSnapshotRef.current;
+    if (!snap || route.kind !== "feed") return;
+    if ("scrollRestoration" in window.history) {
+      window.history.scrollRestoration = "manual";
+    }
+    window.scrollTo(0, snap.y);
+    initialSnapshotRef.current = null;
+  }, [route.kind]);
+
+  // Persist scrollY + visibleCount to sessionStorage as the user
+  // scrolls (rAF-throttled) and on page hide. Reads the current
+  // `active` / `visibleCount` via refs so the listener doesn't need
+  // to re-attach on every state tick.
+  const visibleCountRef = useRef(visibleCount);
+  const activeRef = useRef(active);
+  useEffect(() => { visibleCountRef.current = visibleCount; }, [visibleCount]);
+  useEffect(() => { activeRef.current = active; }, [active]);
+  useEffect(() => {
+    if (route.kind !== "feed") return;
+    let raf = 0;
+    const save = () => {
+      const y = window.scrollY;
+      // At the top = "clean state". Drop any snapshot so a refresh
+      // lands on a fresh 30-item page rather than restoring the max
+      // scroll the user ever reached this session.
+      if (y <= 0) {
+        clearScrollState();
+        return;
+      }
+      writeScrollState({
+        y,
+        n: visibleCountRef.current,
+        cat: serializeCat(activeRef.current),
+      });
+    };
+    const onScroll = () => {
+      if (raf) return;
+      raf = window.requestAnimationFrame(() => {
+        save();
+        raf = 0;
+      });
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("pagehide", save);
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("pagehide", save);
+      if (raf) window.cancelAnimationFrame(raf);
+      save(); // catch the final position on route change
+    };
+  }, [route.kind]);
 
   return (
     <div className="page">
@@ -346,7 +523,7 @@ function App() {
             query={query}
             onToggle={toggle}
             onClear={clearFilters}
-            onQuery={setQuery}
+            onQuery={handleQuery}
             totalShown={visible.length}
             totalAll={sorted.length}
           />
@@ -364,11 +541,22 @@ function App() {
                 // no releases match — adjust filters
               </div>
             ) : (
-              visible.map((item) => (
+              shown.map((item) => (
                 <ReleaseCard key={item.id} item={item} onOpen={openModal} />
               ))
             )}
           </main>
+          {hasMore && (
+            <div
+              ref={sentinelRef}
+              className="feed-sentinel"
+              aria-hidden="true"
+            >
+              <span className="feed-sentinel-dot" />
+              <span className="feed-sentinel-dot" />
+              <span className="feed-sentinel-dot" />
+            </div>
+          )}
         </>
       ) : page === "influencers" ? (
         <InfluencersPage />
