@@ -75,7 +75,7 @@ function SweepTimer({ lastSweep }: { lastSweep: string }) {
     </span>
   );
 }
-import type { Category, ReleaseItem } from "./data/schema";
+import { CATEGORY_ORDER, type Category, type ReleaseItem } from "./data/schema";
 import { ReleaseCard } from "./components/ReleaseCard";
 import { FilterBar } from "./components/FilterBar";
 import { ReleaseModal } from "./components/ReleaseModal";
@@ -117,6 +117,26 @@ function parseRoute(): Route {
   return { kind: "feed" };
 }
 
+/** Parse ?cat=a,b,c from current URL into a validated category set. */
+function parseCategoriesFromUrl(): Set<Category> {
+  const valid = new Set<Category>(CATEGORY_ORDER);
+  const cat = new URLSearchParams(window.location.search).get("cat");
+  if (!cat) return new Set();
+  return new Set(
+    cat
+      .split(",")
+      .map((c) => c.trim())
+      .filter((c): c is Category => valid.has(c as Category)),
+  );
+}
+
+/** Build a feed-home URL (/, optionally with ?cat=a,b,c) from a category set. */
+function buildFeedUrl(active: Set<Category>): string {
+  if (active.size === 0) return "/";
+  const cats = CATEGORY_ORDER.filter((c) => active.has(c)).join(",");
+  return `/?cat=${cats}`;
+}
+
 function itemFromRoute(
   route: Route,
   items: ReleaseItem[],
@@ -136,7 +156,9 @@ function pageFromRoute(route: Route): Page {
 function App() {
   const [route, setRoute] = useState<Route>(() => parseRoute());
   const page: Page = pageFromRoute(route);
-  const [active, setActive] = useState<Set<Category>>(new Set());
+  const [active, setActive] = useState<Set<Category>>(() =>
+    parseCategoriesFromUrl(),
+  );
   const [query, setQuery] = useState("");
 
   const sorted = useMemo(() => allItems(), []);
@@ -151,10 +173,12 @@ function App() {
     [route, sorted],
   );
 
-  // Nav: go to feed home
+  // Nav: go to feed home. Drops any active category filter — clicking the
+  // nav link is a "reset" action; to keep a filter, users navigate back.
   const goFeed = useCallback(() => {
     window.history.pushState(null, "", "/");
     setRoute({ kind: "feed" });
+    setActive(new Set());
   }, []);
 
   // Nav: go to influencers
@@ -186,14 +210,15 @@ function App() {
 
   // Close modal = go back to whichever page we came from. replaceState,
   // NOT history.back() — back() could navigate to a previous entry with
-  // a different modal already open.
+  // a different modal already open. When returning to feed, preserve the
+  // active category filter in the URL so a reload keeps the chips.
   const closeModal = useCallback(() => {
     const target =
       page === "influencers"
         ? "/influencers"
         : page === "log"
           ? "/log"
-          : "/";
+          : buildFeedUrl(active);
     const next: Route =
       page === "influencers"
         ? { kind: "influencers" }
@@ -202,11 +227,15 @@ function App() {
           : { kind: "feed" };
     window.history.replaceState(null, "", target);
     setRoute(next);
-  }, [page]);
+  }, [page, active]);
 
-  // Sync route with browser back/forward
+  // Sync route + filter with browser back/forward. The filter is encoded
+  // in ?cat=..., so popstate has to re-read both together.
   useEffect(() => {
-    const onPop = () => setRoute(parseRoute());
+    const onPop = () => {
+      setRoute(parseRoute());
+      setActive(parseCategoriesFromUrl());
+    };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
@@ -234,14 +263,23 @@ function App() {
     document.title = "AI/TLDR — New AI Models, Tools & Papers This Week";
   }, [route, sorted]);
 
-  const toggle = (c: Category) => {
+  // Each chip toggle is a new history entry so the back button walks
+  // through prior filter states. Only meaningful on the feed page —
+  // chips aren't shown elsewhere, so no other route can trigger this.
+  const toggle = useCallback((c: Category) => {
     setActive((prev) => {
       const next = new Set(prev);
       if (next.has(c)) next.delete(c);
       else next.add(c);
+      window.history.pushState(null, "", buildFeedUrl(next));
       return next;
     });
-  };
+  }, []);
+
+  const clearFilters = useCallback(() => {
+    setActive(new Set());
+    window.history.pushState(null, "", "/");
+  }, []);
 
   return (
     <div className="page">
@@ -307,7 +345,7 @@ function App() {
             counts={counts}
             query={query}
             onToggle={toggle}
-            onClear={() => setActive(new Set())}
+            onClear={clearFilters}
             onQuery={setQuery}
             totalShown={visible.length}
             totalAll={sorted.length}

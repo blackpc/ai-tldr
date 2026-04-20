@@ -232,6 +232,16 @@ from people the AI community actually listens to.
 - Press release rewrites with no added value
 - Opinion pieces without technical substance
 
+**Data requirements for articles**:
+- `org` — the author's name or publication (e.g. "Simon Willison",
+  "Interconnects AI"), **NOT** "Medium", "Substack", or other platforms
+- `author` — REQUIRED. Include:
+  - `name`: real name (e.g. "Simon Willison")
+  - `handle`: social handle with @ (e.g. "@simonw")
+  - `avatarUrl`: GitHub avatar (`https://github.com/<user>.png`) or
+    platform-hosted image — must return 200
+  - `profileUrl`: link to author's main page (blog, Twitter, GitHub)
+
 ### `video` — top creators and viral demos
 
 `video` is for **YouTube videos and video content** from established AI
@@ -249,6 +259,18 @@ creators or genuinely viral AI demos.
 - Tutorial videos (use `tutorial` category instead)
 - Low-effort reaction videos
 - Videos with <10k views unless from known creator
+
+**Data requirements for videos**:
+- `org` — the **channel name** (e.g. "Two Minute Papers", "AI Explained",
+  "Fireship"), **NOT** "YouTube". For official lab demos, use the lab name
+  (e.g. "OpenAI", "Anthropic").
+- `author` — REQUIRED. Include:
+  - `name`: creator's real name or channel name
+  - `handle`: YouTube handle with @ (e.g. "@TwoMinutePapers") or channel tag
+  - `avatarUrl`: YouTube channel avatar or creator's GitHub/Twitter avatar —
+    must return 200. For YouTube avatars, fetch the channel page and extract
+    the avatar URL from the page metadata.
+  - `profileUrl`: link to the YouTube channel page
 
 ### `rumor` — credible speculation, clearly labeled
 

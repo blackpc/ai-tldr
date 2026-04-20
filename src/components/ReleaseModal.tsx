@@ -99,7 +99,39 @@ export function ReleaseModal({
         <div className="modal-right">
           <header className="modal-head">
             <h2 className="modal-title">{item.title}</h2>
-            <p className="modal-org">{item.org}</p>
+            {item.author ? (
+              <p className="modal-org">
+                {item.author.profileUrl ? (
+                  <a
+                    href={item.author.profileUrl}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    className="modal-author-link"
+                  >
+                    {item.author.name}
+                    {item.author.handle && (
+                      <span className="modal-author-handle">
+                        {" "}
+                        {item.author.handle}
+                      </span>
+                    )}
+                    <span className="modal-author-arrow"> ↗</span>
+                  </a>
+                ) : (
+                  <>
+                    {item.author.name}
+                    {item.author.handle && (
+                      <span className="modal-author-handle">
+                        {" "}
+                        {item.author.handle}
+                      </span>
+                    )}
+                  </>
+                )}
+              </p>
+            ) : (
+              <p className="modal-org">{item.org}</p>
+            )}
             <p className="modal-tagline">{ex.tagline}</p>
           </header>
 

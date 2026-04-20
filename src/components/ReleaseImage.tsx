@@ -28,8 +28,8 @@ export function ReleaseImage({
   const ytId = getYouTubeId(item);
   const author = item.author;
 
-  const overlay = author ? (
-    <div className="img-author" aria-hidden="true">
+  const authorContent = author ? (
+    <>
       {author.avatarUrl && !avatarErrored ? (
         <img
           className="img-author-avatar"
@@ -50,7 +50,27 @@ export function ReleaseImage({
           <span className="img-author-handle">{author.handle}</span>
         )}
       </span>
-    </div>
+    </>
+  ) : null;
+
+  const overlay = author ? (
+    author.profileUrl ? (
+      <a
+        className="img-author img-author-link"
+        href={author.profileUrl}
+        target="_blank"
+        rel="noreferrer noopener"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+        aria-label={`Visit ${author.name}'s profile`}
+      >
+        {authorContent}
+      </a>
+    ) : (
+      <div className="img-author" aria-hidden="true">
+        {authorContent}
+      </div>
+    )
   ) : null;
 
   if (playing && ytId) {
