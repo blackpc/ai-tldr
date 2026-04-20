@@ -29,7 +29,9 @@ Example: `newsletters/daily/2026_04_15_daily_digest.md`
 
 1. **Check if today's digest exists:**
    ```bash
-   ls newsletters/daily/$(date +%Y_%m_%d)_daily_digest.md 2>/dev/null
+   # UTC matches the GH Actions workflow — a local run late evening in
+   # a positive-offset timezone would otherwise look for tomorrow's file.
+   ls newsletters/daily/$(date -u +%Y_%m_%d)_daily_digest.md 2>/dev/null
    ```
 
 2. **If exists, ask user what to do:**
