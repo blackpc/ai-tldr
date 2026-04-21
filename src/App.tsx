@@ -18,6 +18,7 @@ import { InfluencersPage } from "./components/InfluencersPage";
 import { SweepLogPage } from "./components/SweepLogPage";
 import { influencers } from "./data/influencers";
 import { Subscribe } from "./components/Subscribe";
+import { BuyMeCoffee } from "./components/BuyMeCoffee";
 
 /** Parse current URL into a route. Supported paths:
  *   /                     → feed home
@@ -146,6 +147,30 @@ function App() {
   // Sort is session-only (resets on reload). Default "publish" so sweep
   // additions surface at the top with the NEW badge.
   const [sort, setSort] = useState<SortMode>("publish");
+  // Mobile hamburger drawer (nav + BMC + Subscribe). No-op on desktop
+  // because CSS shows the secondary actions inline regardless.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuBtnRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDocClick = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (!menuRef.current?.contains(t) && !menuBtnRef.current?.contains(t)) {
+        setMenuOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen]);
 
   // Rehydrate the scroll state from history once at mount. The same
   // entry keeps its state across refresh, so landing here with a
@@ -440,34 +465,65 @@ function App() {
             daily release sweep · v{feed.promptVersion}
           </span>
         </a>
-        <nav className="page-nav">
-          <button
-            type="button"
-            className={`nav-link ${page === "feed" ? "nav-active" : ""}`}
-            onClick={goFeed}
-          >
-            <span className="nav-link-lbl">RELEASES</span>
-            <span className="nav-link-num">{feed.items.length}</span>
-          </button>
-          <button
-            type="button"
-            className={`nav-link ${page === "influencers" ? "nav-active" : ""}`}
-            onClick={goInfluencers}
-          >
-            <span className="nav-link-lbl">INFLUENCERS</span>
-            <span className="nav-link-num">{influencers.length}</span>
-          </button>
-          <button
-            type="button"
-            className={`nav-link nav-link-icon ${page === "log" ? "nav-active" : ""}`}
-            onClick={goLog}
-            title="Sweep log — what changed & when"
-            aria-label="Sweep log"
-          >
-            <span className="nav-link-glyph" aria-hidden="true">▤</span>
-          </button>
-        </nav>
-        <Subscribe />
+
+        <button
+          ref={menuBtnRef}
+          type="button"
+          className={`hamburger ${menuOpen ? "hamburger-open" : ""}`}
+          onClick={() => setMenuOpen((v) => !v)}
+          aria-expanded={menuOpen}
+          aria-controls="page-head-secondary"
+          aria-label={menuOpen ? "Close menu" : "Open menu"}
+        >
+          <span className="hamburger-glyph" aria-hidden="true">
+            {menuOpen ? "✕" : "☰"}
+          </span>
+        </button>
+
+        <div
+          id="page-head-secondary"
+          ref={menuRef}
+          className={`page-head-secondary ${menuOpen ? "secondary-open" : ""}`}
+        >
+          <BuyMeCoffee />
+          <nav className="page-nav">
+            <button
+              type="button"
+              className={`nav-link ${page === "feed" ? "nav-active" : ""}`}
+              onClick={() => {
+                setMenuOpen(false);
+                goFeed();
+              }}
+            >
+              <span className="nav-link-lbl">RELEASES</span>
+              <span className="nav-link-num">{feed.items.length}</span>
+            </button>
+            <button
+              type="button"
+              className={`nav-link ${page === "influencers" ? "nav-active" : ""}`}
+              onClick={() => {
+                setMenuOpen(false);
+                goInfluencers();
+              }}
+            >
+              <span className="nav-link-lbl">INFLUENCERS</span>
+              <span className="nav-link-num">{influencers.length}</span>
+            </button>
+            <button
+              type="button"
+              className={`nav-link nav-link-icon ${page === "log" ? "nav-active" : ""}`}
+              onClick={() => {
+                setMenuOpen(false);
+                goLog();
+              }}
+              title="Sweep log — what changed & when"
+              aria-label="Sweep log"
+            >
+              <span className="nav-link-glyph" aria-hidden="true">▤</span>
+            </button>
+          </nav>
+          <Subscribe />
+        </div>
       </header>
 
       {page === "feed" ? (
