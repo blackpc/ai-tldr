@@ -11,8 +11,22 @@ const pinned = new Set<string>(EDITOR_CHOICE);
 
 export const isEditorChoice = (item: ReleaseItem): boolean => pinned.has(item.id);
 
-export const allItems = (): ReleaseItem[] => {
-  const sorted = [...feed.items].sort((a, b) => (a.date < b.date ? 1 : -1));
+/**
+ * Default sort is "publish" — items ordered by the date we added them to
+ * the feed, so sweep additions land at the top with a NEW badge. "release"
+ * orders by the original public release date (the `date` field).
+ * `publishDate` falls back to `date` for pre-2026-04 items that predate
+ * the field.
+ */
+export type SortMode = "publish" | "release";
+
+const sortKey = (item: ReleaseItem, mode: SortMode): string =>
+  mode === "publish" ? item.publishDate ?? item.date : item.date;
+
+export const allItems = (mode: SortMode = "publish"): ReleaseItem[] => {
+  const sorted = [...feed.items].sort((a, b) =>
+    sortKey(a, mode) < sortKey(b, mode) ? 1 : -1,
+  );
   if (pinned.size === 0) return sorted;
   const top: ReleaseItem[] = [];
   const rest: ReleaseItem[] = [];
@@ -22,17 +36,21 @@ export const allItems = (): ReleaseItem[] => {
   return [...top, ...rest];
 };
 
-export const itemsByCategory = (cat: Category): ReleaseItem[] =>
+export const itemsByCategory = (
+  cat: Category,
+  mode: SortMode = "publish",
+): ReleaseItem[] =>
   feed.items
     .filter((i) => i.categories.includes(cat))
-    .sort((a, b) => (a.date < b.date ? 1 : -1));
+    .sort((a, b) => (sortKey(a, mode) < sortKey(b, mode) ? 1 : -1));
 
-const ONE_DAY = 1000 * 60 * 60 * 24;
+// 36h instead of 24 so an item added at (say) 11pm yesterday still
+// reads as NEW through tomorrow — `publishDate` is date-only granularity.
+const NEW_WINDOW_MS = 36 * 60 * 60 * 1000;
 
 export const isFresh = (item: ReleaseItem): boolean => {
-  const generated = new Date(feed.generatedAt).getTime();
-  const released = new Date(item.date).getTime();
-  return generated - released < ONE_DAY;
+  const pub = new Date(item.publishDate ?? item.date).getTime();
+  return Date.now() - pub < NEW_WINDOW_MS;
 };
 
 export const filterItems = (

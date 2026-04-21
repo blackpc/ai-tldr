@@ -57,17 +57,34 @@ To override the base URL used in canonical tags + sitemap, set the
 
 ### Feed ordering
 
-The feed is a **single chronological stream sorted by release date DESC**.
-There is NO grouping by importance. Card size (grid span) is driven by the
-`importance` field (seismic = large, major = medium, notable = small), but
-all items flow together in one date-ordered list.
+Two sort modes, toggled via the header switcher in `FilterBar`:
 
-### Dates are real release dates
+- **`publish` (default)** — orders by `publishDate` DESC (when we added the
+  item to the feed). Newly ingested sweep items surface at the top and get
+  a `NEW` badge for ~36h. This is what users see by default.
+- **`release`** — orders by `date` DESC (original public release date).
+  Useful for seeing the actual chronological release timeline.
 
-The `date` field on every item is the **original public release date**, not
-the date the agent discovered it. Retroactive additions (e.g. a cool tool
-from months ago) appear at their correct chronological position, not at the
-top of the feed.
+Sort mode is session-only React state (not URL-stateful). Switching modes
+resets scroll position and the visible-count slice. There is NO grouping by
+importance. Card size (grid span) is driven by the `importance` field
+(seismic = large, major = medium, notable = small), but all items flow
+together in one date-ordered list.
+
+### Dates: `date` vs `publishDate`
+
+Each item has two dates:
+
+- `date` — the **original public release date** (YYYY-MM-DD), always shown
+  on the card and in meta/Article JSON-LD. Retroactive additions (e.g. a
+  cool tool from months ago) keep their real release date here.
+- `publishDate` — optional (YYYY-MM-DD). When the agent added the item to
+  our feed. Defaults to `date` if omitted (backwards-compat for pre-2026-04
+  entries). Used for the default sort and for the `NEW` badge (`isFresh`).
+
+Every cron sweep that adds an item MUST set `publishDate` to the sweep's
+day, so new additions float to the top under the default sort regardless
+of how old their `date` is.
 
 ### Content updates
 

@@ -9,79 +9,7 @@ import {
 
 import "./App.css";
 
-import { allItems, categoryCounts, feed, filterItems } from "./data/feed";
-
-const SWEEP_INTERVAL = 2 * 60 * 60 * 1000; // 2 hours in ms
-
-/** Format duration as "Xh Ym" */
-function formatDuration(ms: number): string {
-  const totalMins = Math.floor(ms / 60000);
-  if (totalMins < 1) return "now";
-  if (totalMins < 60) return `${totalMins}m`;
-  const hours = Math.floor(totalMins / 60);
-  const mins = totalMins % 60;
-  return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
-}
-
-/** Live sweep timer showing time since last sweep and until next */
-function SweepTimer({ lastSweep }: { lastSweep: string }) {
-  const lastTime = new Date(lastSweep).getTime();
-
-  const calcState = () => {
-    const now = Date.now();
-    const elapsed = now - lastTime;
-    const remaining = Math.max(0, lastTime + SWEEP_INTERVAL - now);
-    const progress = Math.min(1, elapsed / SWEEP_INTERVAL);
-    return { elapsed, remaining, progress };
-  };
-
-  const [state, setState] = useState(calcState);
-  const [flip, setFlip] = useState(false);
-  const [sweep, setSweep] = useState(false);
-
-  useEffect(() => {
-    const tick = () => {
-      // Trigger flip animation
-      setFlip(true);
-      setTimeout(() => {
-        setState(calcState());
-        setFlip(false);
-      }, 150);
-
-      // Trigger sweep glow
-      setSweep(true);
-      setTimeout(() => setSweep(false), 600);
-    };
-
-    // Sync to start of each minute
-    const now = Date.now();
-    const msToNextMin = 60000 - (now % 60000);
-    const timeout = setTimeout(() => {
-      tick();
-      const interval = setInterval(tick, 60000);
-      return () => clearInterval(interval);
-    }, msToNextMin);
-
-    return () => clearTimeout(timeout);
-  }, [lastTime]);
-
-  return (
-    <span className={`sweep-timer${sweep ? " sweep-timer-glow" : ""}`}>
-      <span className="sweep-timer-row">
-        <span className={`sweep-timer-ago${flip ? " sweep-flip" : ""}`}>
-          {formatDuration(state.elapsed) === "now" ? "just now" : `${formatDuration(state.elapsed)} ago`}
-        </span>
-        <span className={`sweep-timer-next${flip ? " sweep-flip" : ""}`}>
-          next {formatDuration(state.remaining)}
-        </span>
-      </span>
-      <span
-        className="sweep-timer-bar"
-        style={{ "--progress": state.progress } as React.CSSProperties}
-      />
-    </span>
-  );
-}
+import { allItems, categoryCounts, feed, filterItems, type SortMode } from "./data/feed";
 import { CATEGORY_ORDER, type Category, type ReleaseItem } from "./data/schema";
 import { ReleaseCard } from "./components/ReleaseCard";
 import { FilterBar } from "./components/FilterBar";
@@ -215,6 +143,9 @@ function App() {
     parseCategoriesFromUrl(),
   );
   const [query, setQuery] = useState("");
+  // Sort is session-only (resets on reload). Default "publish" so sweep
+  // additions surface at the top with the NEW badge.
+  const [sort, setSort] = useState<SortMode>("publish");
 
   // Rehydrate the scroll state from history once at mount. The same
   // entry keeps its state across refresh, so landing here with a
@@ -233,7 +164,7 @@ function App() {
   });
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
-  const sorted = useMemo(() => allItems(), []);
+  const sorted = useMemo(() => allItems(sort), [sort]);
   const counts = useMemo(() => categoryCounts(), []);
   const visible = useMemo(
     () => filterItems(sorted, { categories: active, query }),
@@ -363,6 +294,16 @@ function App() {
     window.scrollTo(0, 0);
   }, []);
 
+  // Sort-mode change resets the visible slice and scroll position for the
+  // same reason a filter toggle does — the item order changes, so the old
+  // scroll-depth snapshot is meaningless. Session-only (no URL / storage).
+  const handleSort = useCallback((s: SortMode) => {
+    setSort(s);
+    setVisibleCount(INITIAL_COUNT);
+    clearScrollState();
+    window.scrollTo(0, 0);
+  }, []);
+
   const clearFilters = useCallback(() => {
     setActive(new Set());
     setVisibleCount(INITIAL_COUNT);
@@ -461,7 +402,27 @@ function App() {
   return (
     <div className="page">
       <header className="page-head">
-        <div className="brand">
+        <a
+          className="brand"
+          href="/"
+          onClick={(e) => {
+            // Let middle-click / Ctrl+click / Cmd+click / Shift-click open
+            // in a new tab or window the way a normal link would — only
+            // intercept plain left-clicks to do client-side nav.
+            if (
+              e.button !== 0 ||
+              e.ctrlKey ||
+              e.metaKey ||
+              e.shiftKey ||
+              e.altKey
+            ) {
+              return;
+            }
+            e.preventDefault();
+            goFeed();
+          }}
+          aria-label="AI/TLDR — home"
+        >
           <span className="brand-mark">█</span>
           {/*
             The brand element doubles as the <h1> ONLY on the feed home,
@@ -478,8 +439,7 @@ function App() {
           <span className="brand-sub">
             daily release sweep · v{feed.promptVersion}
           </span>
-        </div>
-        <Subscribe />
+        </a>
         <nav className="page-nav">
           <button
             type="button"
@@ -507,12 +467,7 @@ function App() {
             <span className="nav-link-glyph" aria-hidden="true">▤</span>
           </button>
         </nav>
-        <div className="page-head-right">
-          <span className="head-stat sweep-stat">
-            <SweepTimer lastSweep={feed.generatedAt} />
-            <span className="head-stat-lbl">SWEEP CYCLE</span>
-          </span>
-        </div>
+        <Subscribe />
       </header>
 
       {page === "feed" ? (
@@ -521,19 +476,14 @@ function App() {
             active={active}
             counts={counts}
             query={query}
+            sort={sort}
             onToggle={toggle}
             onClear={clearFilters}
             onQuery={handleQuery}
+            onSort={handleSort}
             totalShown={visible.length}
             totalAll={sorted.length}
           />
-
-          <div className="legend">
-            <span className="legend-item"><span className="legend-swatch swatch-seismic"></span>SEISMIC — resets the field</span>
-            <span className="legend-item"><span className="legend-swatch swatch-major"></span>MAJOR — broad impact</span>
-            <span className="legend-item"><span className="legend-swatch swatch-notable"></span>NOTABLE — solid, niche</span>
-            <span className="legend-item"><span className="legend-swatch swatch-picked"></span>EDITOR'S CHOICE</span>
-          </div>
 
           <main className="grid" role="feed" aria-label="AI release feed">
             {visible.length === 0 ? (

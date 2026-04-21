@@ -21,6 +21,10 @@ export function ReleaseCard({
 }) {
   const fresh = isFresh(item);
   const picked = isEditorChoice(item);
+  // Always show the publish date on the card (when we added it to the
+  // feed) — matches the default feed ordering. Falls back to `date` for
+  // pre-2026-04 items that predate the `publishDate` field.
+  const displayDate = item.publishDate ?? item.date;
 
   return (
     <article
@@ -66,7 +70,7 @@ export function ReleaseCard({
         </span>
         {picked && <span className="badge badge-picked">EDITOR'S CHOICE</span>}
         {fresh && <span className="badge badge-new">NEW</span>}
-        <span className="card-date">{item.date}</span>
+        <span className="card-date" title="Publish date">{displayDate}</span>
       </div>
 
       <h2 className="card-title">{item.title}</h2>
