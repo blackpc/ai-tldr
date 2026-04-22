@@ -1,28 +1,23 @@
 import { useEffect, useRef, useState } from "react";
 import { CATEGORY_ORDER, type Category } from "../data/schema";
 import { CATEGORY_META } from "../data/categories";
-import type { SortMode } from "../data/feed";
 
 export function FilterBar({
   active,
   counts,
   query,
-  sort,
   onToggle,
   onClear,
   onQuery,
-  onSort,
   totalShown,
   totalAll,
 }: {
   active: Set<Category>;
   counts: Record<Category, number>;
   query: string;
-  sort: SortMode;
   onToggle: (cat: Category) => void;
   onClear: () => void;
   onQuery: (q: string) => void;
-  onSort: (s: SortMode) => void;
   totalShown: number;
   totalAll: number;
 }) {
@@ -63,28 +58,6 @@ export function FilterBar({
   return (
     <div className="filterbar" role="toolbar" aria-label="Feed controls">
       <div className="fb-anchor fb-anchor-left">
-        <div className="sort-toggle" role="group" aria-label="Sort order">
-          <span className="sort-label">SORT</span>
-          <button
-            type="button"
-            className={`sort-opt ${sort === "publish" ? "sort-on" : ""}`}
-            onClick={() => onSort("publish")}
-            title="Publish date — newest additions first"
-            aria-pressed={sort === "publish"}
-          >
-            PUBLISH
-          </button>
-          <button
-            type="button"
-            className={`sort-opt ${sort === "release" ? "sort-on" : ""}`}
-            onClick={() => onSort("release")}
-            title="Release date — newest releases first"
-            aria-pressed={sort === "release"}
-          >
-            RELEASE
-          </button>
-        </div>
-
         <button
           ref={btnRef}
           type="button"

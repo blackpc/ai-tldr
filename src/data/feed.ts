@@ -12,20 +12,18 @@ const pinned = new Set<string>(EDITOR_CHOICE);
 export const isEditorChoice = (item: ReleaseItem): boolean => pinned.has(item.id);
 
 /**
- * Default sort is "publish" — items ordered by the date we added them to
- * the feed, so sweep additions land at the top with a NEW badge. "release"
- * orders by the original public release date (the `date` field).
+ * Items are always ordered by `publishDate` DESC — when we added the item
+ * to the feed — so sweep additions land at the top with a NEW badge.
  * `publishDate` falls back to `date` for pre-2026-04 items that predate
- * the field.
+ * the field. ISO timestamps and YYYY-MM-DD strings both sort correctly
+ * lexically.
  */
-export type SortMode = "publish" | "release";
+const sortKey = (item: ReleaseItem): string =>
+  item.publishDate ?? item.date;
 
-const sortKey = (item: ReleaseItem, mode: SortMode): string =>
-  mode === "publish" ? item.publishDate ?? item.date : item.date;
-
-export const allItems = (mode: SortMode = "publish"): ReleaseItem[] => {
+export const allItems = (): ReleaseItem[] => {
   const sorted = [...feed.items].sort((a, b) =>
-    sortKey(a, mode) < sortKey(b, mode) ? 1 : -1,
+    sortKey(a) < sortKey(b) ? 1 : -1,
   );
   if (pinned.size === 0) return sorted;
   const top: ReleaseItem[] = [];
@@ -36,13 +34,10 @@ export const allItems = (mode: SortMode = "publish"): ReleaseItem[] => {
   return [...top, ...rest];
 };
 
-export const itemsByCategory = (
-  cat: Category,
-  mode: SortMode = "publish",
-): ReleaseItem[] =>
+export const itemsByCategory = (cat: Category): ReleaseItem[] =>
   feed.items
     .filter((i) => i.categories.includes(cat))
-    .sort((a, b) => (sortKey(a, mode) < sortKey(b, mode) ? 1 : -1));
+    .sort((a, b) => (sortKey(a) < sortKey(b) ? 1 : -1));
 
 // 36h instead of 24 so an item added at (say) 11pm yesterday still
 // reads as NEW through tomorrow — `publishDate` is date-only granularity.

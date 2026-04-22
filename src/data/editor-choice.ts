@@ -16,7 +16,14 @@
  */
 
 export const EDITOR_CHOICE: readonly string[] = [
-  // Anthropic's new flagship: 3x agentic coding throughput, 3.75MP vision, 128k output
+  // Anthropic stripped Claude Code from the $20 Pro plan in an A/B test on April 21 —
+  // the second flat-rate AI plan repricing this week. Existential question for the
+  // entire $20/mo agentic-coding tier; trending hard across X, HN, and tech press.
+  "anthropic-claude-code-pro-test",
+  // OpenAI's first reasoning-augmented image model: Thinking mode, 2K resolution,
+  // 8 consistent images per prompt. Resets the bar for what an image API can do.
+  "openai-gpt-image-2",
+  // Anthropic's flagship: 3x agentic coding throughput, 3.75MP vision, 128k output
   // tokens — at the same price as Opus 4.6. Step-change for long-horizon agent tasks.
   "anthropic-claude-opus-4-7",
 ];

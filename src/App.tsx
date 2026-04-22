@@ -9,7 +9,7 @@ import {
 
 import "./App.css";
 
-import { allItems, categoryCounts, feed, filterItems, type SortMode } from "./data/feed";
+import { allItems, categoryCounts, feed, filterItems } from "./data/feed";
 import { CATEGORY_ORDER, type Category, type ReleaseItem } from "./data/schema";
 import { ReleaseCard } from "./components/ReleaseCard";
 import { FilterBar } from "./components/FilterBar";
@@ -144,9 +144,6 @@ function App() {
     parseCategoriesFromUrl(),
   );
   const [query, setQuery] = useState("");
-  // Sort is session-only (resets on reload). Default "publish" so sweep
-  // additions surface at the top with the NEW badge.
-  const [sort, setSort] = useState<SortMode>("publish");
   // Mobile hamburger drawer (nav + BMC + Subscribe). No-op on desktop
   // because CSS shows the secondary actions inline regardless.
   const [menuOpen, setMenuOpen] = useState(false);
@@ -189,7 +186,7 @@ function App() {
   });
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
-  const sorted = useMemo(() => allItems(sort), [sort]);
+  const sorted = useMemo(() => allItems(), []);
   const counts = useMemo(() => categoryCounts(), []);
   const visible = useMemo(
     () => filterItems(sorted, { categories: active, query }),
@@ -316,16 +313,6 @@ function App() {
       return next;
     });
     setVisibleCount(INITIAL_COUNT);
-    window.scrollTo(0, 0);
-  }, []);
-
-  // Sort-mode change resets the visible slice and scroll position for the
-  // same reason a filter toggle does — the item order changes, so the old
-  // scroll-depth snapshot is meaningless. Session-only (no URL / storage).
-  const handleSort = useCallback((s: SortMode) => {
-    setSort(s);
-    setVisibleCount(INITIAL_COUNT);
-    clearScrollState();
     window.scrollTo(0, 0);
   }, []);
 
@@ -532,11 +519,9 @@ function App() {
             active={active}
             counts={counts}
             query={query}
-            sort={sort}
             onToggle={toggle}
             onClear={clearFilters}
             onQuery={handleQuery}
-            onSort={handleSort}
             totalShown={visible.length}
             totalAll={sorted.length}
           />
