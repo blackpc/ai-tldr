@@ -26,11 +26,11 @@ export const allItems = (): ReleaseItem[] => {
     sortKey(a) < sortKey(b) ? 1 : -1,
   );
   if (pinned.size === 0) return sorted;
-  const top: ReleaseItem[] = [];
-  const rest: ReleaseItem[] = [];
-  for (const item of sorted) {
-    (pinned.has(item.id) ? top : rest).push(item);
-  }
+  const byId = new Map(feed.items.map((i) => [i.id, i]));
+  const top = EDITOR_CHOICE.map((id) => byId.get(id)).filter(
+    (i): i is ReleaseItem => i !== undefined,
+  );
+  const rest = sorted.filter((i) => !pinned.has(i.id));
   return [...top, ...rest];
 };
 
