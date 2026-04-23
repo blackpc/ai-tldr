@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { allSweeps } from "../data/sweeps";
 import type { SweepReport } from "../data/schema";
+import { track } from "../lib/analytics";
 
 const PAGE_SIZE = 20;
 
@@ -193,7 +194,11 @@ export function SweepLogPage({
               <button
                 type="button"
                 className="log-more"
-                onClick={() => setPage((p) => p + 1)}
+                onClick={() => {
+                  const next = page + 1;
+                  track("log:load-more", { page: next });
+                  setPage(next);
+                }}
               >
                 LOAD MORE ({sweeps.length - visible.length} MORE)
               </button>

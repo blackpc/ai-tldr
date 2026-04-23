@@ -19,6 +19,7 @@ import { SweepLogPage } from "./components/SweepLogPage";
 import { influencers } from "./data/influencers";
 import { Subscribe } from "./components/Subscribe";
 import { BuyMeCoffee } from "./components/BuyMeCoffee";
+import { track } from "./lib/analytics";
 
 /** Parse current URL into a route. Supported paths:
  *   /                     → feed home
@@ -203,9 +204,13 @@ function App() {
     [route, sorted],
   );
 
+  const pageRef = useRef<Page>(page);
+  useEffect(() => { pageRef.current = page; }, [page]);
+
   // Nav: go to feed home. Drops any active category filter — clicking the
   // nav link is a "reset" action; to keep a filter, users navigate back.
   const goFeed = useCallback(() => {
+    track("nav", { to: "feed", from: pageRef.current });
     window.history.pushState(null, "", "/");
     setRoute({ kind: "feed" });
     setActive(new Set());
@@ -213,18 +218,26 @@ function App() {
 
   // Nav: go to influencers
   const goInfluencers = useCallback(() => {
+    track("nav", { to: "influencers", from: pageRef.current });
     window.history.pushState(null, "", "/influencers");
     setRoute({ kind: "influencers" });
   }, []);
 
   // Nav: go to sweep log
   const goLog = useCallback(() => {
+    track("nav", { to: "log", from: pageRef.current });
     window.history.pushState(null, "", "/log");
     setRoute({ kind: "log" });
   }, []);
 
   // Open modal = navigate to /releases/<id>
   const openModal = useCallback((item: ReleaseItem) => {
+    track("release:open", {
+      id: item.id,
+      category: item.categories[0],
+      importance: item.importance,
+      source: "card",
+    });
     window.history.pushState(null, "", `/releases/${item.id}`);
     setRoute({ kind: "release", id: item.id });
   }, []);
@@ -232,10 +245,17 @@ function App() {
   // Open a release from the sweep log — the caller only knows the id.
   const openReleaseById = useCallback(
     (id: string) => {
+      const item = sorted.find((i) => i.id === id);
+      track("release:open", {
+        id,
+        category: item?.categories[0],
+        importance: item?.importance,
+        source: "log",
+      });
       window.history.pushState(null, "", `/releases/${id}`);
       setRoute({ kind: "release", id });
     },
-    [],
+    [sorted],
   );
 
   // Close modal = go back to whichever page we came from. replaceState,
@@ -307,6 +327,11 @@ function App() {
       const next = new Set(prev);
       if (next.has(c)) next.delete(c);
       else next.add(c);
+      track("filter:toggle", {
+        category: c,
+        active: next.has(c),
+        totalActive: next.size,
+      });
       // pushState with null state creates a clean entry — no stale
       // scroll snapshot from the prior filter.
       window.history.pushState(null, "", buildFeedUrl(next));

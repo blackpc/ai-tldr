@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CATEGORY_ORDER, type Category } from "../data/schema";
 import { CATEGORY_META } from "../data/categories";
+import { track } from "../lib/analytics";
 
 export function FilterBar({
   active,
@@ -50,6 +51,25 @@ export function FilterBar({
       document.removeEventListener("keydown", onKey);
     };
   }, [open]);
+
+  // Fire search:used once the query settles (600ms idle) with ≥2 chars.
+  // A ref tracks the last-reported length so a user who keeps typing
+  // only generates one event per query session.
+  const lastReportedRef = useRef<number>(0);
+  useEffect(() => {
+    const len = query.trim().length;
+    if (len < 2) {
+      lastReportedRef.current = 0;
+      return;
+    }
+    const t = setTimeout(() => {
+      if (len !== lastReportedRef.current) {
+        track("search:used", { length: len });
+        lastReportedRef.current = len;
+      }
+    }, 600);
+    return () => clearTimeout(t);
+  }, [query]);
 
   // Only show the x/y count when a filter is active. Otherwise "152/152" is
   // pure visual noise.

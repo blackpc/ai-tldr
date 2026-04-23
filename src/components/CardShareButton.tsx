@@ -7,6 +7,7 @@ import {
   IconShareDots,
   useShareTargets,
 } from "./ShareButtons";
+import { track } from "../lib/analytics";
 
 /**
  * Single share trigger button that sits in the top-right corner of
@@ -90,6 +91,11 @@ export function CardShareButton({ item }: { item: ReleaseItem }) {
               data-platform="native"
               onClick={(e) => {
                 e.stopPropagation();
+                track("release:share", {
+                  id: item.id,
+                  platform: "native",
+                  source: "card",
+                });
                 handleNativeShare();
                 setOpen(false);
               }}
@@ -106,6 +112,11 @@ export function CardShareButton({ item }: { item: ReleaseItem }) {
             data-platform="copy"
             onClick={(e) => {
               e.stopPropagation();
+              track("release:share", {
+                id: item.id,
+                platform: "copy",
+                source: "card",
+              });
               handleCopy();
               // Let the user see the checkmark + yellow flash for a
               // moment, then auto-dismiss the popup. 1400ms is just
@@ -132,6 +143,11 @@ export function CardShareButton({ item }: { item: ReleaseItem }) {
               role="menuitem"
               onClick={(e) => {
                 e.stopPropagation();
+                track("release:share", {
+                  id: item.id,
+                  platform: p.id,
+                  source: "card",
+                });
                 setOpen(false);
               }}
             >

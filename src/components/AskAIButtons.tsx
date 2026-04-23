@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { ReleaseItem } from "../data/schema";
+import { track } from "../lib/analytics";
 
 /**
  * "ASK AI" row for the release modal — mirrors ShareButtons styling.
@@ -129,7 +130,13 @@ export function useAITargets(item: ReleaseItem): AIPlatform[] {
   ];
 }
 
-export function AskAIButtons({ item }: { item: ReleaseItem }) {
+export function AskAIButtons({
+  item,
+  source = "modal",
+}: {
+  item: ReleaseItem;
+  source?: "card" | "modal";
+}) {
   const platforms = useAITargets(item);
 
   return (
@@ -146,6 +153,13 @@ export function AskAIButtons({ item }: { item: ReleaseItem }) {
             data-platform={p.id}
             title={`Ask ${p.label}`}
             aria-label={`Ask ${p.label} about this release`}
+            onClick={() =>
+              track("release:ask-ai", {
+                id: item.id,
+                platform: p.id,
+                source,
+              })
+            }
           >
             {p.icon}
           </a>

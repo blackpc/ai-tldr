@@ -8,6 +8,7 @@ import {
   IconGrok,
   useAITargets,
 } from "./AskAIButtons";
+import { track } from "../lib/analytics";
 
 /**
  * AI chatbot icon for the card — a sparkle/brain glyph that matches
@@ -92,6 +93,11 @@ export function CardAskAIButton({ item }: { item: ReleaseItem }) {
             role="menuitem"
             onClick={(e) => {
               e.stopPropagation();
+              track("release:ask-ai", {
+                id: item.id,
+                platform: "chatgpt",
+                source: "card",
+              });
               setOpen(false);
             }}
           >
@@ -108,6 +114,11 @@ export function CardAskAIButton({ item }: { item: ReleaseItem }) {
             role="menuitem"
             onClick={(e) => {
               e.stopPropagation();
+              track("release:ask-ai", {
+                id: item.id,
+                platform: "claude",
+                source: "card",
+              });
               setOpen(false);
             }}
           >
@@ -124,6 +135,11 @@ export function CardAskAIButton({ item }: { item: ReleaseItem }) {
             role="menuitem"
             onClick={(e) => {
               e.stopPropagation();
+              track("release:ask-ai", {
+                id: item.id,
+                platform: "gemini",
+                source: "card",
+              });
               setOpen(false);
             }}
           >
@@ -140,6 +156,11 @@ export function CardAskAIButton({ item }: { item: ReleaseItem }) {
             role="menuitem"
             onClick={(e) => {
               e.stopPropagation();
+              track("release:ask-ai", {
+                id: item.id,
+                platform: "perplexity",
+                source: "card",
+              });
               setOpen(false);
             }}
           >
@@ -156,6 +177,11 @@ export function CardAskAIButton({ item }: { item: ReleaseItem }) {
             role="menuitem"
             onClick={(e) => {
               e.stopPropagation();
+              track("release:ask-ai", {
+                id: item.id,
+                platform: "grok",
+                source: "card",
+              });
               setOpen(false);
             }}
           >

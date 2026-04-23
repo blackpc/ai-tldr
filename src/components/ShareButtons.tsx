@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import type { ReleaseItem } from "../data/schema";
+import { track } from "../lib/analytics";
 
 /**
  * Compact share row for the release modal. One row of 30×30 square
@@ -231,7 +232,13 @@ export function useShareTargets(item: ReleaseItem): ShareTargets {
   };
 }
 
-export function ShareButtons({ item }: { item: ReleaseItem }) {
+export function ShareButtons({
+  item,
+  source = "modal",
+}: {
+  item: ReleaseItem;
+  source?: "card" | "modal";
+}) {
   const { platforms, canNativeShare, copied, handleCopy, handleNativeShare } =
     useShareTargets(item);
 
@@ -244,7 +251,14 @@ export function ShareButtons({ item }: { item: ReleaseItem }) {
             type="button"
             className="share-btn"
             data-platform="native"
-            onClick={handleNativeShare}
+            onClick={() => {
+              track("release:share", {
+                id: item.id,
+                platform: "native",
+                source,
+              });
+              handleNativeShare();
+            }}
             title="Share…"
             aria-label="Open native share sheet"
           >
@@ -255,7 +269,14 @@ export function ShareButtons({ item }: { item: ReleaseItem }) {
           type="button"
           className={`share-btn ${copied ? "share-btn-copied" : ""}`}
           data-platform="copy"
-          onClick={handleCopy}
+          onClick={() => {
+            track("release:share", {
+              id: item.id,
+              platform: "copy",
+              source,
+            });
+            handleCopy();
+          }}
           title={copied ? "Copied!" : "Copy link"}
           aria-label={copied ? "Link copied" : "Copy link to this release"}
         >
@@ -271,6 +292,13 @@ export function ShareButtons({ item }: { item: ReleaseItem }) {
             data-platform={p.id}
             title={p.label}
             aria-label={`Share on ${p.label}`}
+            onClick={() =>
+              track("release:share", {
+                id: item.id,
+                platform: p.id,
+                source,
+              })
+            }
           >
             {p.icon}
           </a>

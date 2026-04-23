@@ -4,6 +4,7 @@ import { CATEGORY_META } from "../data/categories";
 import { ReleaseImage } from "./ReleaseImage";
 import { ShareButtons } from "./ShareButtons";
 import { AskAIButtons } from "./AskAIButtons";
+import { track } from "../lib/analytics";
 
 const importanceLabel: Record<ReleaseItem["importance"], string> = {
   rumor: "RUMOR",
@@ -82,6 +83,13 @@ export function ReleaseModal({
                     target="_blank"
                     rel="noreferrer noopener"
                     className="source-link"
+                    onClick={() =>
+                      track("release:url-click", {
+                        id: item.id,
+                        category: item.categories[0],
+                        source: "modal",
+                      })
+                    }
                   >
                     <span className="source-label">{l.label}</span>
                     <span className="source-arrow">↗</span>
@@ -91,8 +99,8 @@ export function ReleaseModal({
             </ul>
           </section>
 
-          <ShareButtons item={item} />
-          <AskAIButtons item={item} />
+          <ShareButtons item={item} source="modal" />
+          <AskAIButtons item={item} source="modal" />
         </aside>
 
         {/* Right: content pane */}

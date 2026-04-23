@@ -5,6 +5,7 @@ import {
   type Influencer,
   type Platform,
 } from "../data/influencers";
+import { track } from "../lib/analytics";
 
 const ALL_PLATFORMS: Platform[] = [
   "youtube",
@@ -31,6 +32,12 @@ function InfluencerCard({ person, rank }: { person: Influencer; rank: number }) 
       href={person.url}
       target="_blank"
       rel="noreferrer noopener"
+      onClick={() =>
+        track("influencer:click", {
+          id: person.id,
+          platform: person.platform,
+        })
+      }
     >
       <span className="inf-rank">#{rank}</span>
       <img

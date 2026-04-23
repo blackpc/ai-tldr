@@ -8,6 +8,8 @@
  * glance while rendering instantly, prerendering cleanly, and being
  * fully controllable in CSS.
  */
+import { track } from "../lib/analytics";
+
 export function BuyMeCoffee() {
   return (
     <a
@@ -17,6 +19,7 @@ export function BuyMeCoffee() {
       rel="noopener noreferrer"
       aria-label="Buy me a coffee"
       title="Buy me a coffee"
+      onClick={() => track("bmc:click")}
     >
       <span className="bmc-emoji" aria-hidden="true">☕</span>
       <span className="bmc-text">Buy me a coffee</span>

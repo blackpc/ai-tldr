@@ -4,6 +4,7 @@ import { isFresh, isEditorChoice } from "../data/feed";
 import { ReleaseImage } from "./ReleaseImage";
 import { CardShareButton } from "./CardShareButton";
 import { CardAskAIButton } from "./CardAskAIButton";
+import { track } from "../lib/analytics";
 
 const importanceLabel: Record<ReleaseItem["importance"], string> = {
   rumor: "RUMOR",
@@ -61,7 +62,14 @@ export function ReleaseCard({
         href={item.url}
         target="_blank"
         rel="noreferrer noopener"
-        onClick={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          track("release:url-click", {
+            id: item.id,
+            category: item.categories[0],
+            source: "card",
+          });
+        }}
         onKeyDown={(e) => e.stopPropagation()}
         aria-label={`Open ${item.title} source in new tab`}
         title="Open source ↗"

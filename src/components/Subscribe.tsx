@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { track } from "../lib/analytics";
 
 const BUTTONDOWN_USERNAME = "blackpcme";
 
@@ -23,12 +24,15 @@ export function Subscribe() {
       );
 
       if (res.ok || res.status === 201) {
+        track("subscribe:submit", { ok: true });
         setStatus("success");
         setEmail("");
       } else {
+        track("subscribe:submit", { ok: false });
         setStatus("error");
       }
     } catch {
+      track("subscribe:submit", { ok: false });
       setStatus("error");
     }
   };
