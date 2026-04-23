@@ -16,6 +16,9 @@
  */
 
 export const EDITOR_CHOICE: readonly string[] = [
+  // OpenAI's newest flagship: faster and more capable than GPT-5.4, especially for
+  // agentic coding, computer use, and scientific research — shipped April 23.
+  "rumor-openai-gpt-5-5-spud",
   // Anthropic stripped Claude Code from the $20 Pro plan in an A/B test on April 21 —
   // the second flat-rate AI plan repricing this week. Existential question for the
   // entire $20/mo agentic-coding tier; trending hard across X, HN, and tech press.
