@@ -97,3 +97,48 @@ every URL. No hallucination.
 
 Every URL, image, metric, and claim must be fetched and verified. If it
 can't be verified, drop the item.
+
+## UI work: verify in the browser
+
+**`bun run typecheck` does NOT mean a UI change is done.** Types are
+satisfied ≠ the feature still works. Layout bugs, z-index/stacking
+regressions, `overflow: hidden` clipping, popover positioning, mobile
+breakpoints, and "I accidentally hid a button I didn't touch" problems
+all pass typecheck cleanly.
+
+For any non-trivial UI change (anything touching layout, CSS positioning,
+responsive breakpoints, header, filter bar, card structure, modal, or
+z-index), before calling the task done:
+
+1. **Start `bun dev` and load the page in a browser.** Verify the
+   feature you changed works.
+2. **Regression-check neighbouring UI.** Explicitly check features that
+   share the same container / stacking context / breakpoint that you
+   touched. Header refactor → check cards. Card CSS change → check
+   modal. Mobile CSS change → check both mobile and desktop widths.
+3. **Resize the browser** between desktop (≥1100px), tablet (~900px),
+   mobile (~400px). Each major breakpoint has its own media query and
+   can regress independently.
+4. **Open DevTools and confirm the DOM is what you expect** for the
+   specific element you were working on. If an element is "gone", check
+   computed style for `display: none`, `visibility`, `opacity`, and the
+   element's bounding box — it may be rendered but clipped / offscreen.
+5. **If you can't verify in a browser**, say so explicitly to the user
+   rather than claiming done. Don't substitute "typecheck passes" for
+   "I watched it work."
+
+### Known regression hotspots
+
+- **`.card` has `overflow: hidden`** — absolute-positioned children that
+  extend beyond card bounds get clipped. When adding a new popover
+  inside a card, render it in a portal or move it outside.
+- **`position: relative` on a new parent** creates a new stacking
+  context — `z-index: 6` children inside it no longer compete with
+  `z-index: 10` elements outside. Check every time you add
+  `position: relative` to a container.
+- **Mobile drawers / popovers with `position: absolute`** anchor to the
+  nearest positioned ancestor. If you refactor the header, double-check
+  the drawer still anchors to the right element.
+- **`flex-wrap` on `.page-head`** — the header layout depends on items
+  fitting on one line. Changing `flex-wrap` on any parent can cascade
+  rows in unexpected ways.
