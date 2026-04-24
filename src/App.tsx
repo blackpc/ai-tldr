@@ -19,7 +19,7 @@ import { SweepLogPage } from "./components/SweepLogPage";
 import { influencers } from "./data/influencers";
 import { Subscribe } from "./components/Subscribe";
 import { BuyMeCoffee } from "./components/BuyMeCoffee";
-import { track } from "./lib/analytics";
+import { track, useHeartbeat, useScrollDepth } from "./lib/analytics";
 
 /** Parse current URL into a route. Supported paths:
  *   /                     → feed home
@@ -206,6 +206,12 @@ function App() {
 
   const pageRef = useRef<Page>(page);
   useEffect(() => { pageRef.current = page; }, [page]);
+
+  // Passive engagement tracking — scroll depth milestones and 15s
+  // heartbeats. Keyed on route.kind so each page (feed, influencers,
+  // log, release-modal) is measured independently.
+  useScrollDepth(route.kind);
+  useHeartbeat(route.kind);
 
   // Nav: go to feed home. Drops any active category filter — clicking the
   // nav link is a "reset" action; to keep a filter, users navigate back.

@@ -86,6 +86,13 @@ small, typed, and PII-free.
 | `influencer:click` | `{ id, platform }` | `InfluencersPage` profile tile |
 | `log:load-more` | `{ page }` | `SweepLogPage` pagination button |
 
+### Passive engagement
+
+| Event | Properties | Where |
+|---|---|---|
+| `scroll:depth` | `{ depth: 25 \| 50 \| 75 \| 100, route }` | `useScrollDepth(route.kind)` in `App`, fires once per milestone per route |
+| `heartbeat` | `{ seconds, route }` | `useHeartbeat(route.kind)` in `App`, every 15s while tab visible, 30min ceiling per route |
+
 ## Implementation notes
 
 - **ReleaseCard vs ReleaseModal url-click:** both wrap the same
@@ -102,6 +109,14 @@ small, typed, and PII-free.
   `useEffect` + `setTimeout` in `FilterBar`.
 - **No-op safety:** `track()` itself guards against missing
   `window.umami`, so call sites don't need any guard.
+- **Scroll depth:** tracked on `window.scroll` (passive), measured as
+  `(scrollY + innerHeight) / scrollHeight`. Max-reached depth only —
+  scrolling back up doesn't re-fire. `route` dep on the hook resets
+  the fired set per page so each route is measured independently.
+- **Heartbeat:** single `setInterval(15s)` per route; the callback
+  no-ops when `document.hidden`, so the `seconds` property reflects
+  actual visible time rather than wall-clock time. 30-minute ceiling
+  (120 beats) prevents runaway events from an abandoned tab.
 
 ## Files changed
 
