@@ -198,6 +198,14 @@ export interface SweepReport {
   added: SweepAddedItem[];
   updated: SweepUpdatedItem[];
   removed: SweepRemovedItem[];
+  /**
+   * Categories the sweep actually searched this run, regardless of
+   * whether any item was added for them. Proves breadth-of-search
+   * for "zero items this sweep" runs and lets us audit which
+   * categories get neglected over time. Optional on legacy entries
+   * written before the coverage rule; required on new sweeps.
+   */
+  coverage?: Category[];
 }
 
 export interface SweepLog {

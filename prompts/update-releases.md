@@ -1,6 +1,6 @@
 ---
 prompt-id: tldr.update-releases
-prompt-version: 5.0.0
+prompt-version: 5.1.0
 output-target: src/data/releases.json
 schema: src/data/schema.ts
 editor-choice-target: src/data/editor-choice.ts
@@ -145,6 +145,7 @@ Include items only if they are **concrete and verifiable**. Each item has a
 | `article`   | blog post, Twitter thread, essay from influential AI voice — see below    | HIGH     |
 | `video`     | YouTube/video from top AI creators, viral demos — see below               | HIGH     |
 | `rumor`     | credible speculation from reliable sources — see below                    | MEDIUM   |
+| `security`  | AI/LLM security tool, red-teaming framework, guardrail, jailbreak paper   | MEDIUM   |
 | `tutorial`  | guide, cookbook, how-to, walkthrough someone can follow tonight           | MEDIUM   |
 | `showcase`  | impressive demo, shipped project, "look what I built" with AI             | MEDIUM   |
 | `resource`  | curated list, awesome-repo, cheat sheet, learning path                    | MEDIUM   |
@@ -187,24 +188,53 @@ that a release passes the bar:
 If a candidate only has one weak signal and you're tempted to include it
 "to round out the sweep" — drop it.
 
-Priority order for effort (spend more search time on the top):
+Priority within each sweep — once you've searched every category (see
+"Category coverage" below), spend extra judgment time on the highest-
+impact candidates first:
 
-1. **repos + tools** — the core of the feed. Things people can star,
-   install, and try. Cover a diverse range of functional areas — the
-   feed shouldn't be dominated by the same kind of tool every sweep.
-2. **models** — frontier + notable open-weights.
-3. **tutorials, showcases, resources** — things people can learn from
-   or get excited about.
-4. **papers, algorithms** — only if genuinely impactful AND has code or
-   a demo a practitioner can try. Skip pure theory.
-5. **datasets, benchmarks, ecosystem** — include when genuinely
-   interesting, not as filler.
+1. **Frontier-lab pricing / access / plan changes** — auto-seismic per the
+   MISSION section. Almost always the lead item.
+2. **New flagship models** from top labs.
+3. **Trending repos + tools** with real adoption (hundreds+ stars or HN
+   front page).
+4. **Articles / videos / rumors** from the influential-voices list — these
+   are often the most-discussed items even when nothing "shipped".
+5. **Papers, algorithms, datasets, benchmarks, ecosystem** — include when
+   genuinely impactful (code / real-world impact / multi-outlet coverage),
+   skip pure theory or filler.
 
-### Diversity comes from frequency, not extra passes
+This is about where to invest *judgment time*, not where to *search*. You
+still search every category — see below.
 
-With 2-hour sweeps, diversity happens naturally over time. Do NOT run
-extra search passes to "fill gaps" — that's wasted work. If today's sweep
-is all coding agents, tomorrow's might be all models. That's fine.
+### Category coverage — every sweep must TRY every category
+
+This is the rule that keeps the feed from collapsing into "coding agent of
+the day, every day". With 2-hour cadence and no coverage requirement, the
+agent naturally gravitates to the fastest structured sources (GitHub
+trending, HN, HF) which are all `repo` / `tool` / `model` biased, and
+categories like `video`, `article`, `rumor`, `tutorial`, `showcase`,
+`resource`, `dataset`, `benchmark`, `ecosystem` go weeks without being
+populated.
+
+**Hard rule: every sweep must query at least one primary source for EVERY
+category in the table above**, before emitting. See the per-category
+source map in "Sources to sweep" below. This is a search requirement, not
+an inclusion requirement — if nothing in a category passes the notability
+bar this sweep, emit zero items for that category. That is fine and
+expected. What is NOT fine is skipping the search entirely.
+
+**The zero-hallucination policy and the "never add filler" rule are NOT
+weakened by this.** If you searched and nothing qualifies, ship nothing
+for that category. If you searched and found a weak candidate, drop it.
+The rule only forces you to *look*, not to *include*.
+
+**Sweep report must prove coverage.** The `SweepReport` you append to
+`sweeps.json` must include a `coverage` field — an array of the
+categories you actually searched this sweep, regardless of whether they
+produced an item. See the Sweep report section for the exact schema. A
+sweep with `added: 0` and `coverage: []` is a failed sweep; a sweep
+with `added: 0` and all categories listed in `coverage` is a successful
+"nothing hot today" sweep.
 
 ### `ecosystem` — what counts and what does NOT
 
@@ -328,47 +358,130 @@ and what would confirm/deny it. Example: "Per The Information, citing two
 sources with direct knowledge. Would be confirmed by official announcement
 or API changes."
 
-## Sources to sweep (optimized for speed)
+## Sources to sweep — category coverage map
 
-We run every 2 hours. Prioritize **fast, high-signal sources** that surface
-new content quickly. Do ONE quick pass through these — no exhaustive scraping.
+**Every sweep must query at least one source per category below.** Most
+categories take one search + a page fetch — total overhead per sweep is
+small, and the payoff is a feed that doesn't collapse into "coding agent
+of the day, every day".
 
-### Tier 1 — Check every sweep (fast, structured)
-1. **GitHub trending daily** — `github.com/trending?since=daily` filtered to
-   AI/ML. Include coding agents (Cursor, Claude Code, Cline, Aider, Continue,
-   OpenCode, Kabnan, t3code, etc.) and local LLM tools.
-2. **Hacker News front page** — `news.ycombinator.com` top 30. Look for
-   "Show HN" + AI/LLM/agent, or any AI tool/model post with 100+ points.
-3. **HuggingFace trending** — `huggingface.co/models?sort=trending` and
-   `huggingface.co/papers` front page. New models/papers from last few hours.
-4. **Twitter/X AI search** — Search "AI release", "just shipped", "launching
-   today". Check accounts: @kaborailab, @simonw, @swyx, @DrJimFan,
-   @emaborowski, @sama, @daborowick, @ylecun, etc.
-5. **Reddit AI subs** — r/LocalLLaMA hot, r/MachineLearning top/week,
-   r/artificial top. High signal for open-source and self-hosted tools.
+You may skip a category's sources only if you genuinely searched a
+reasonable substitute (e.g. if the YouTube channel list is down, a
+general `youtube.com` search for the same creators counts). You may NOT
+skip a category just because it "usually has nothing" — that's exactly
+how categories die.
 
-### Tier 2 — Check daily
-6. **Lab blogs**: openai.com/index, anthropic.com/news, deepmind.google,
-   mistral.ai/news, x.ai/blog, meta.ai/blog, cohere.com/blog.
-7. **Product Hunt today** — producthunt.com front page, AI category.
-8. **YouTube AI channels** — new uploads from Two Minute Papers, AI Explained,
-   Yannic Kilcher, Fireship (AI videos), Matthew Berman.
-9. **Newsletters** (if you can access): TLDR AI, The Batch, Import AI,
-   Ben's Bites, Ahead of AI.
+### `repo` — GitHub + Show HN
+- `github.com/trending?since=daily` filtered to AI/ML.
+- Hacker News "Show HN" posts tagged AI/LLM/agent.
+- Any HN front-page post that is a repo link with 100+ points.
 
-### Tier 3 — Weekly or manual backfill
-- arXiv deep dives, awesome-list updates, tutorial sites.
-- Conference announcements and workshop papers.
-- These are for manual backfill sweeps, not automated 2-hour cycles.
+### `tool` — product launches, shipped features
+- Hacker News front page top 30 — AI tool/product posts with 100+ points.
+- Product Hunt today (`producthunt.com`), AI category.
+- Lab product blogs: openai.com/index, anthropic.com/news, cursor.com/blog,
+  windsurf.com/blog, github.blog (Copilot), vercel.com/blog (AI SDK).
+- Coding agents to watch: Cursor, Claude Code, Windsurf, Cline, Aider,
+  Continue, OpenCode, Kabnan, t3code, Codium, Tabnine, Codeium.
 
-### Tools to watch (not exhaustive)
-Coding agents and AI-assisted dev tools are HIGH priority:
-- Cursor, Claude Code, Windsurf, Cline, Aider, Continue
-- OpenCode, Kabnan, t3code, Codium, Tabnine, Codeium
-- Any new entrant trending on GitHub or HN
+### `model` — frontier + open-weights
+- HuggingFace trending: `huggingface.co/models?sort=trending`.
+- Lab blogs: openai.com/index, anthropic.com/news, deepmind.google,
+  mistral.ai/news, x.ai/blog, ai.meta.com/blog, cohere.com/blog,
+  qwenlm.github.io, moonshot.ai.
+- r/LocalLLaMA hot (open weights).
 
-**Stop early**: If you find 3–5 solid items from Tier 1, ship them. Don't
-keep searching to pad the list. Empty sweeps are fine and expected.
+### `paper` — arXiv + HF Papers
+- `huggingface.co/papers` front page — trending AI papers with discussion.
+- `arxiv.org/list/cs.LG/recent`, `cs.CL/recent`, `cs.AI/recent` — pick
+  items that *also* have code, a demo, or public discussion. Skip pure
+  theory with no implementation.
+
+### `dataset` — new training/eval corpora
+- `huggingface.co/datasets?sort=trending`.
+- Lab releases when a paper or model ships with a novel public dataset.
+
+### `benchmark` — leaderboards + evals
+- HF leaderboards (`huggingface.co/spaces` trending — filter to evals).
+- LMSys / ChatBot Arena updates.
+- New eval repos on GitHub trending tagged `benchmark` / `eval`.
+
+### `algorithm` — named techniques
+- arXiv papers AND HN/Twitter discussion threads that name a new
+  decoding / attention / training / RL method with a reference
+  implementation.
+
+### `article` — influential voices
+- simonwillison.net (Simon Willison), karpathy.ai, latent.space (Swyx),
+  interconnects.ai (Nathan Lambert), oxen.ai/blog, eugeneyan.com,
+  lilianweng.github.io, chiphuyen.com.
+- Substack: Stratechery (AI posts), Ahead of AI (Sebastian Raschka),
+  Import AI (Jack Clark), The Batch (Andrew Ng).
+- Twitter/X viral technical threads (1M+ impressions) with real substance.
+
+### `video` — YouTube + conference talks
+- YouTube channels (check new uploads within last 48h, even on 2-hour
+  cadence — videos don't drop every 2 hours):
+  Two Minute Papers, AI Explained, Yannic Kilcher, Fireship (AI episodes),
+  Matthew Berman, Sam Witteveen, 1littlecoder, Wes Roth, AICodeKing,
+  David Ondrej, Riley Brown.
+- Official lab demo videos (OpenAI, Anthropic, DeepMind, Google AI channels).
+- Conference keynotes / talks (NeurIPS, ICML, ICLR, KDD, YC AI Startup
+  School) when clips drop.
+
+### `rumor` — credible speculation
+- theinformation.com (AI coverage), bloomberg.com/technology (AI beat
+  reporters), theverge.com/ai, theregister.com/AI.
+- Substack rumors from credible insiders (only those with track record).
+- Twitter leaks with screenshots / code references from known sources.
+- See the `rumor` category rules above — no anonymous speculation.
+
+### `security` — AI/LLM safety, red-teaming, guardrails
+- github.com/trending filtered to security-tagged AI/LLM projects.
+- HN posts on LLM jailbreaks, prompt-injection attacks, model extraction.
+- arXiv `cs.CR` recent, filtered to AI/ML.
+- Lab safety posts: anthropic.com/news (alignment), openai.com/research
+  (safety), deepmind.google/research/safety.
+- Security-focused newsletters (Simon Willison's prompt-injection
+  coverage is the canonical source).
+
+### `tutorial` — guides, cookbooks
+- Anthropic/OpenAI/Google cookbooks (new entries).
+- Hugging Face blog tutorials.
+- github.com/anthropics/anthropic-cookbook,
+  github.com/openai/openai-cookbook — new commits / new notebooks.
+- DeepLearning.AI short courses (new launches).
+
+### `showcase` — "look what I built"
+- Hacker News "Show HN" AI projects with 100+ points.
+- r/LocalLLaMA / r/MachineLearning "I built X" threads trending.
+- Twitter viral demos with working link (not just a video).
+
+### `resource` — curated lists, learning paths
+- New / newly-trending `awesome-*` repos on GitHub trending.
+- HN posts about comprehensive learning paths / cheat sheets with traction.
+- New issues of major newsletters (TLDR AI, The Batch, Ben's Bites) when
+  they publish a genuinely novel guide (not the daily news roundup).
+
+### `ecosystem` — structural news
+- PyTorch Foundation, Linux Foundation AI, LF & Data announcements.
+- License changes on widely-used projects (HN front page usually flags these).
+- Lab spinouts / shutdowns covered by multiple outlets.
+- Major deprecations announced by labs (see lab blogs above).
+
+### Social signal sources — cross-reference for hype
+Check these every sweep to verify "is this actually trending":
+- Hacker News front page top 30.
+- r/LocalLLaMA hot, r/MachineLearning top/week, r/artificial top.
+- Twitter/X AI search: "AI release", "just shipped", "launching today".
+  Check: @simonw, @swyx, @karpathy, @DrJimFan, @sama, @ylecun,
+  @AnthropicAI, @OpenAI, @GoogleDeepMind.
+
+### What to do when a category is empty
+If after genuinely searching a category's sources you find no item that
+passes the notability bar, **include it in `coverage` but emit zero items
+for it**. This is the normal case for half the categories on any given
+sweep. The goal is to *look*, not to inflate numbers.
 
 ## Hard rules
 
@@ -587,6 +700,17 @@ page — it is how users (and you, next run) can see what changed.
      `{ id, title, note }`. Most sweeps will have zero of these.
    - `removed[]` — if you dropped a previously-shipped item, list it as
      `{ id, title, reason }`. Also usually zero.
+   - `coverage[]` — **REQUIRED.** Array of category ids you actually
+     queried this sweep per the category coverage map above, regardless
+     of whether any item was added for them. This is the proof that a
+     zero-result sweep still *looked* everywhere. Example for a typical
+     sweep (all 15 categories): `["model", "repo", "tool", "article",
+     "video", "rumor", "security", "paper", "dataset", "benchmark",
+     "algorithm", "tutorial", "showcase", "resource", "ecosystem"]`.
+     If you legitimately could not reach a category's sources this run
+     (e.g. persistent fetch failure), leave it out AND note the reason
+     in `summary`. Do NOT pad this list with categories you did not
+     actually search — it is the audit trail.
    - If you changed `editor-choice.ts` in this sweep, mention it in
      `summary` (e.g. "Pinned Foo Labs' open-weights drop; rotated out
      last week's benchmark paper."). No separate schema field needed.
@@ -636,7 +760,23 @@ For every item in the file you are about to write, answer YES to all of:
 7. Does every claim in `summary` and `explainer` trace to a fetched source?
 8. Does the item have ≥ 2 entries in `links` covering distinct facets?
 
-If any answer is NO → fix or drop the item. Then re-run the self-check.
+And at the sweep level, answer YES to:
+
+9. Did I query at least one primary source for EVERY category in the
+   coverage map? Count them — there are 15 categories (model, repo, tool,
+   article, video, rumor, security, paper, dataset, benchmark, algorithm,
+   tutorial, showcase, resource, ecosystem). If my `coverage[]` array
+   has fewer than 15 entries, I either skipped categories (fix: actually
+   search them) or I'm about to pad the array with categories I didn't
+   check (fix: don't — truncate to what I actually searched and explain
+   in `summary`).
+10. For each category where I searched and found nothing, am I confident
+    that's because nothing qualified, NOT because I bounced off the first
+    page of the first source? A 2-minute check of 2-3 sources per
+    category is the minimum.
+
+If any answer is NO → fix or drop the item, and re-search the missing
+categories. Then re-run the self-check.
 
 ## Cadence
 
