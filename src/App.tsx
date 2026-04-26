@@ -493,7 +493,7 @@ function App() {
           title="Buy me a coffee"
           onClick={() => track("bmc:click")}
         >
-          <span aria-hidden="true">☕</span>
+          <img src="/coffee.png" alt="" aria-hidden="true" />
         </a>
 
         <button
