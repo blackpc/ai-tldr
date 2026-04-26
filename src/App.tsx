@@ -479,9 +479,6 @@ function App() {
           ) : (
             <p className="brand-name">AI/TLDR</p>
           )}
-          <span className="brand-sub">
-            daily release sweep · v{feed.promptVersion}
-          </span>
         </a>
 
         <a
@@ -494,6 +491,7 @@ function App() {
           onClick={() => track("bmc:click")}
         >
           <img src="/coffee.png" alt="" aria-hidden="true" />
+          <span className="bmc-icon-text">Buy me a coffee</span>
         </a>
 
         <button

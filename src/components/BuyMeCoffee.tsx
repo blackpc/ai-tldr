@@ -21,7 +21,7 @@ export function BuyMeCoffee() {
       title="Buy me a coffee"
       onClick={() => track("bmc:click")}
     >
-      <span className="bmc-emoji" aria-hidden="true">☕</span>
+      <img className="bmc-img" src="/coffee.png" alt="" aria-hidden="true" />
       <span className="bmc-text">Buy me a coffee</span>
     </a>
   );
