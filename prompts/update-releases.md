@@ -1,6 +1,6 @@
 ---
 prompt-id: tldr.update-releases
-prompt-version: 5.2.0
+prompt-version: 5.3.0
 output-target: src/data/releases.json
 schema: src/data/schema.ts
 invoke-as: subagent
@@ -296,11 +296,15 @@ from people the AI community actually listens to.
 - `org` — the author's name or publication (e.g. "Simon Willison",
   "Interconnects AI"), **NOT** "Medium", "Substack", or other platforms
 - `author` — REQUIRED. Include:
-  - `name`: real name (e.g. "Simon Willison")
-  - `handle`: social handle with @ (e.g. "@simonw")
-  - `avatarUrl`: GitHub avatar (`https://github.com/<user>.png`) or
-    platform-hosted image — must return 200
-  - `profileUrl`: link to author's main page (blog, Twitter, GitHub)
+  - `name`: real name (e.g. "Simon Willison") — REQUIRED.
+  - `handle`: social handle with @ (e.g. "@simonw") — recommended.
+  - `profileUrl`: link to author's main page (blog, Twitter, GitHub) —
+    REQUIRED. Must be fetched + return 200.
+  - `avatarUrl`: **OPTIONAL.** Include only if you can find one cheaply
+    (GitHub `https://github.com/<user>.png` is the easiest — works for
+    anyone with a public GitHub). Do NOT drop the item just because the
+    avatar can't be verified — name + profileUrl is enough. The UI
+    falls back to a tinted initial when avatar is missing.
 
 ### `video` — top creators and viral demos
 
@@ -324,13 +328,28 @@ creators or genuinely viral AI demos.
 - `org` — the **channel name** (e.g. "Two Minute Papers", "AI Explained",
   "Fireship"), **NOT** "YouTube". For official lab demos, use the lab name
   (e.g. "OpenAI", "Anthropic").
+- `image.url` — use the deterministic YouTube thumbnail pattern:
+  `https://i.ytimg.com/vi/{VIDEO_ID}/hqdefault.jpg`. This always works
+  for any public YouTube video, no page-render needed.
 - `author` — REQUIRED. Include:
-  - `name`: creator's real name or channel name
-  - `handle`: YouTube handle with @ (e.g. "@TwoMinutePapers") or channel tag
-  - `avatarUrl`: YouTube channel avatar or creator's GitHub/Twitter avatar —
-    must return 200. For YouTube avatars, fetch the channel page and extract
-    the avatar URL from the page metadata.
-  - `profileUrl`: link to the YouTube channel page
+  - `name`: creator's real name or channel name — REQUIRED.
+  - `handle`: YouTube handle with @ (e.g. "@TwoMinutePapers") — recommended.
+  - `profileUrl`: link to the YouTube channel page (e.g.
+    `https://www.youtube.com/@TwoMinutePapers`) — REQUIRED. Must return 200.
+  - `avatarUrl`: **OPTIONAL.** Do NOT drop the video just because you
+    can't extract the YouTube channel avatar. YouTube channel pages are
+    JS-rendered and reliably extracting the `yt3.googleusercontent.com`
+    avatar URL via WebFetch often fails. If you have it, include it; if
+    you don't, ship the video without it. The UI falls back to a
+    channel-initial avatar.
+  - **Easy path**: hit `https://www.youtube.com/oembed?url={VIDEO_URL}&format=json`
+    — it returns a clean JSON object with `title`, `author_name`,
+    `author_url`, `thumbnail_url` for any public YouTube video.
+    No page-render, no scraping, no auth. Use this to fill `org`,
+    `author.name`, `author.profileUrl`, and verify the video exists.
+
+**Drop-the-item bar for videos**: only `name` and `profileUrl` are hard
+required on `author`. Missing avatar is NOT a reason to drop a video.
 
 ### `rumor` — credible speculation, clearly labeled
 
