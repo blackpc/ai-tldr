@@ -1,6 +1,5 @@
 import type { ReleaseItem } from "../data/schema";
 import { CATEGORY_META } from "../data/categories";
-import { isFresh } from "../data/feed";
 import { ReleaseImage } from "./ReleaseImage";
 import { CardShareButton } from "./CardShareButton";
 import { CardAskAIButton } from "./CardAskAIButton";
@@ -35,7 +34,6 @@ export function ReleaseCard({
   item: ReleaseItem;
   onOpen: (item: ReleaseItem) => void;
 }) {
-  const fresh = isFresh(item);
   const displayDate = formatPublish(item.publishDate ?? item.date);
 
   return (
@@ -87,7 +85,6 @@ export function ReleaseCard({
         <span className={`badge badge-imp imp-${item.importance}`}>
           {importanceLabel[item.importance]}
         </span>
-        {fresh && <span className="badge badge-new">NEW</span>}
         <span className="card-date" title="Publish date">{displayDate}</span>
       </div>
 

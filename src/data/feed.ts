@@ -5,10 +5,9 @@ export const feed = raw as ReleaseFeed;
 
 /**
  * Items are always ordered by `publishDate` DESC — when we added the item
- * to the feed — so sweep additions land at the top with a NEW badge.
- * `publishDate` falls back to `date` for pre-2026-04 items that predate
- * the field. ISO timestamps and YYYY-MM-DD strings both sort correctly
- * lexically.
+ * to the feed — so sweep additions land at the top. `publishDate` falls
+ * back to `date` for pre-2026-04 items that predate the field. ISO
+ * timestamps and YYYY-MM-DD strings both sort correctly lexically.
  */
 const sortKey = (item: ReleaseItem): string =>
   item.publishDate ?? item.date;
@@ -20,15 +19,6 @@ export const itemsByCategory = (cat: Category): ReleaseItem[] =>
   feed.items
     .filter((i) => i.categories.includes(cat))
     .sort((a, b) => (sortKey(a) < sortKey(b) ? 1 : -1));
-
-// 36h instead of 24 so an item added at (say) 11pm yesterday still
-// reads as NEW through tomorrow — `publishDate` is date-only granularity.
-const NEW_WINDOW_MS = 36 * 60 * 60 * 1000;
-
-export const isFresh = (item: ReleaseItem): boolean => {
-  const pub = new Date(item.publishDate ?? item.date).getTime();
-  return Date.now() - pub < NEW_WINDOW_MS;
-};
 
 export const filterItems = (
   items: ReleaseItem[],
