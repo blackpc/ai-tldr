@@ -1,6 +1,6 @@
 import type { ReleaseItem } from "../data/schema";
 import { CATEGORY_META } from "../data/categories";
-import { isFresh, isEditorChoice } from "../data/feed";
+import { isFresh } from "../data/feed";
 import { ReleaseImage } from "./ReleaseImage";
 import { CardShareButton } from "./CardShareButton";
 import { CardAskAIButton } from "./CardAskAIButton";
@@ -36,12 +36,11 @@ export function ReleaseCard({
   onOpen: (item: ReleaseItem) => void;
 }) {
   const fresh = isFresh(item);
-  const picked = isEditorChoice(item);
   const displayDate = formatPublish(item.publishDate ?? item.date);
 
   return (
     <article
-      className={`card card-${item.importance}${picked ? " card-picked" : ""}`}
+      className={`card card-${item.importance}`}
       data-importance={item.importance}
       onClick={() => onOpen(item)}
       role="button"
@@ -88,7 +87,6 @@ export function ReleaseCard({
         <span className={`badge badge-imp imp-${item.importance}`}>
           {importanceLabel[item.importance]}
         </span>
-        {picked && <span className="badge badge-picked">EDITOR'S CHOICE</span>}
         {fresh && <span className="badge badge-new">NEW</span>}
         <span className="card-date" title="Publish date">{displayDate}</span>
       </div>
@@ -97,7 +95,7 @@ export function ReleaseCard({
 
       <p className="card-tagline">{item.explainer.tagline}</p>
 
-      {(item.importance === "seismic" || picked) && (
+      {item.importance === "seismic" && (
         <p className="card-preview">
           {item.explainer.whatIsIt.split(/(?<=\.)\s+/).slice(0, 2).join(" ")}
         </p>

@@ -1,9 +1,8 @@
 ---
 prompt-id: tldr.update-releases
-prompt-version: 5.1.0
+prompt-version: 5.2.0
 output-target: src/data/releases.json
 schema: src/data/schema.ts
-editor-choice-target: src/data/editor-choice.ts
 invoke-as: subagent
 ---
 
@@ -55,13 +54,11 @@ Concrete signals a story is HYPE-LEVEL right now:
 - **r/LocalLLaMA / r/MachineLearning / r/ChatGPT** front page.
 - **"Quiet" changes by frontier labs** that get caught and amplified —
   pricing page edits, plan restructurings, removed features, new
-  rate limits, model deprecations. These are almost always seismic +
-  pinned because they affect millions of paying users immediately.
+  rate limits, model deprecations. These are almost always seismic
+  because they affect millions of paying users immediately.
 
-When a story is hype-level, **default to `seismic` + `Editor's Choice`**.
-The 3-4 cap on Editor's Choice exists to keep the bar high, not to keep
-real news off the pin list — if four are pinned and a hotter story
-breaks, rotate the weakest one out in the same sweep.
+When a story is hype-level, **default to `seismic`**. Under-calling
+hype is a worse failure than over-calling.
 
 **SPEED IS CRITICAL.** We run every 2 hours. Your job is to catch:
 - **Hyped releases** — things blowing up on HN/GitHub/Twitter right now
@@ -507,12 +504,12 @@ sweep. The goal is to *look*, not to inflate numbers.
     artificially demote real frontier releases to fit a quota.
 
   **Auto-`seismic` triggers** (no judgment call needed — if any of these
-  apply, the item IS seismic and goes to Editor's Choice):
+  apply, the item IS seismic):
   - Any pricing / plan / access change from a frontier lab (Anthropic,
     OpenAI, Google DeepMind, GitHub Copilot, Cursor, Perplexity) that
     affects existing or new paying users — even if it's framed as a
     "test" or "experiment". Example: Anthropic A/B-testing Claude Code
-    out of the Pro plan = seismic + pinned, regardless of test scope.
+    out of the Pro plan = seismic, regardless of test scope.
   - A new flagship model from a top-5 lab (OpenAI, Anthropic, Google
     DeepMind, Meta, xAI, Mistral, Moonshot, Qwen) — including image,
     video, and voice models, not just text. A new "GPT-X.Y", "Claude
@@ -631,43 +628,6 @@ Every item MUST have an `image` object: `{ url, alt, fit?, credit? }`.
   link, every run. If the host environment caches fetches, use the cache —
   but the verification step is non-negotiable.
 
-## Editor's Choice — maintain `src/data/editor-choice.ts`
-
-Editor's Choice is a tiny, hand-feeling shortlist of releases pinned to the
-top of the feed. It is NOT a "what's new" list — that's what the chronological
-feed is for. It is "if a reader only looks at the top three cards, these are
-the things they should not miss."
-
-Rules:
-
-1. **Hard cap: 3–4 items.** Never more. If four are pinned and a better
-   release ships, rotate the weakest one out in the same sweep.
-2. **Bar is high.** Only `importance: "seismic"` releases, or `"major"`
-   releases that are genuinely interesting / unusual (a surprise open-source
-   drop from a closed lab, a technique that resets a benchmark, a tool that
-   a lot of practitioners will actually switch to). If you're debating
-   whether something qualifies, it doesn't.
-3. **Freshness bias, but not a rule.** Prefer recent picks. An item older
-   than ~2 weeks should almost always be rotated out unless it's still the
-   single most important thing in its space.
-4. **Respect existing human picks.** If an entry is already in the list and
-   still passes the bar, leave it. Only remove a human-added pin if it has
-   clearly fallen below the bar (superseded, retracted, or stale).
-5. **Every pin keeps a 1–2 line `//` comment above its ID** explaining why
-   it's pinned. Be concrete: name the capability, the number, or the
-   significance. No marketing words.
-6. **Order matters.** First entry in the array renders first. Put the most
-   important / most recent pin at the top.
-7. **IDs must exist in `releases.json`.** Never pin an id you didn't also
-   ship in the feed this run.
-
-The file is plain TypeScript with a `readonly string[]` export. Preserve
-the file header comment. Diff-friendly: one id per line, one comment
-block above each id.
-
-Rewrite the file on every sweep if (and only if) the pin list should
-change. If no change is needed, leave the file untouched.
-
 ## Sweep report — append to sweeps.json
 
 After you've written `src/data/releases.json`, you MUST also append one
@@ -711,9 +671,6 @@ page — it is how users (and you, next run) can see what changed.
      (e.g. persistent fetch failure), leave it out AND note the reason
      in `summary`. Do NOT pad this list with categories you did not
      actually search — it is the audit trail.
-   - If you changed `editor-choice.ts` in this sweep, mention it in
-     `summary` (e.g. "Pinned Foo Labs' open-weights drop; rotated out
-     last week's benchmark paper."). No separate schema field needed.
 4. APPEND (do not prepend, do not rewrite old entries) this new
    SweepReport to the `sweeps` array and write the file back.
 5. If `sweeps.json` doesn't exist yet, create it as

@@ -180,8 +180,6 @@ Ordered by impact.
 - `releases.json` gets rewritten. No SEO action needed — prerender
   regenerates all release pages + sitemap on the next build.
 - `sweeps.json` gets one new entry. `/log` regenerates automatically.
-- `editorChoice` lives in `src/data/editor-choice.ts` and is NEVER
-  touched by the agent — see [CLAUDE.md](CLAUDE.md).
 
 **Whenever the PUBLIC DOMAIN changes**:
 

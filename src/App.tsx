@@ -484,6 +484,18 @@ function App() {
           </span>
         </a>
 
+        <a
+          className="bmc-icon"
+          href="https://buymeacoffee.com/silver_d"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Buy me a coffee"
+          title="Buy me a coffee"
+          onClick={() => track("bmc:click")}
+        >
+          <span aria-hidden="true">☕</span>
+        </a>
+
         <button
           ref={menuBtnRef}
           type="button"

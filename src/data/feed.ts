@@ -1,15 +1,7 @@
 import raw from "./releases.json";
-import { EDITOR_CHOICE } from "./editor-choice";
 import type { Category, ReleaseFeed, ReleaseItem } from "./schema";
 
 export const feed = raw as ReleaseFeed;
-
-// Pinned IDs live in src/data/editor-choice.ts — a human editorial
-// decision, completely outside the agent's write path so scheduled
-// sweeps can't clobber them.
-const pinned = new Set<string>(EDITOR_CHOICE);
-
-export const isEditorChoice = (item: ReleaseItem): boolean => pinned.has(item.id);
 
 /**
  * Items are always ordered by `publishDate` DESC — when we added the item
@@ -21,18 +13,8 @@ export const isEditorChoice = (item: ReleaseItem): boolean => pinned.has(item.id
 const sortKey = (item: ReleaseItem): string =>
   item.publishDate ?? item.date;
 
-export const allItems = (): ReleaseItem[] => {
-  const sorted = [...feed.items].sort((a, b) =>
-    sortKey(a) < sortKey(b) ? 1 : -1,
-  );
-  if (pinned.size === 0) return sorted;
-  const byId = new Map(feed.items.map((i) => [i.id, i]));
-  const top = EDITOR_CHOICE.map((id) => byId.get(id)).filter(
-    (i): i is ReleaseItem => i !== undefined,
-  );
-  const rest = sorted.filter((i) => !pinned.has(i.id));
-  return [...top, ...rest];
-};
+export const allItems = (): ReleaseItem[] =>
+  [...feed.items].sort((a, b) => (sortKey(a) < sortKey(b) ? 1 : -1));
 
 export const itemsByCategory = (cat: Category): ReleaseItem[] =>
   feed.items
