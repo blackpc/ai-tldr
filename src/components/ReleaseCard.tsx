@@ -12,20 +12,9 @@ const importanceLabel: Record<ReleaseItem["importance"], string> = {
   seismic: "SEISMIC",
 };
 
-// Format publishDate for the card. ISO timestamps render as
-// "YYYY-MM-DD HH:MM UTC" so readers see exactly when each item landed.
-// Date-only strings (legacy, pre-2026-04-22) render as "YYYY-MM-DD".
-function formatPublish(value: string): string {
-  if (!value.includes("T")) return value;
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return value;
-  const yyyy = d.getUTCFullYear();
-  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(d.getUTCDate()).padStart(2, "0");
-  const hh = String(d.getUTCHours()).padStart(2, "0");
-  const mi = String(d.getUTCMinutes()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd} ${hh}:${mi} UTC`;
-}
+// Show the actual release date from the source — when the thing
+// actually shipped, like every other news site. publishDate is
+// internal bookkeeping and not surfaced.
 
 export function ReleaseCard({
   item,
@@ -34,7 +23,7 @@ export function ReleaseCard({
   item: ReleaseItem;
   onOpen: (item: ReleaseItem) => void;
 }) {
-  const displayDate = formatPublish(item.publishDate ?? item.date);
+  const displayDate = item.date;
 
   return (
     <article
