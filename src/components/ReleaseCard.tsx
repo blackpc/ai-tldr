@@ -4,6 +4,7 @@ import { ReleaseImage } from "./ReleaseImage";
 import { CardShareButton } from "./CardShareButton";
 import { CardAskAIButton } from "./CardAskAIButton";
 import { track } from "../lib/analytics";
+import { formatReleaseDate } from "../lib/formatDate";
 
 const importanceLabel: Record<ReleaseItem["importance"], string> = {
   rumor: "RUMOR",
@@ -12,10 +13,6 @@ const importanceLabel: Record<ReleaseItem["importance"], string> = {
   seismic: "SEISMIC",
 };
 
-// Show the actual release date from the source — when the thing
-// actually shipped, like every other news site. publishDate is
-// internal bookkeeping and not surfaced.
-
 export function ReleaseCard({
   item,
   onOpen,
@@ -23,7 +20,6 @@ export function ReleaseCard({
   item: ReleaseItem;
   onOpen: (item: ReleaseItem) => void;
 }) {
-  const displayDate = item.date;
 
   return (
     <article
@@ -74,7 +70,7 @@ export function ReleaseCard({
         <span className={`badge badge-imp imp-${item.importance}`}>
           {importanceLabel[item.importance]}
         </span>
-        <span className="card-date" title="Publish date">{displayDate}</span>
+        <span className="card-date" title="Release date (local time)">{formatReleaseDate(item.date)}</span>
       </div>
 
       <h2 className="card-title">{item.title}</h2>

@@ -57,26 +57,22 @@ To override the base URL used in canonical tags + sitemap, set the
 
 ### Feed ordering
 
-Single sort: `publishDate` DESC (when we added the item to the feed).
-Newly ingested sweep items surface at the top. There is NO grouping by
-importance and NO user-facing sort switcher. Card size (grid span) is
+Single sort: `date` DESC — the original public release date. There is
+NO grouping by importance and NO user-facing sort switcher. What you
+see on the card is what the feed sorts by. Card size (grid span) is
 driven by the `importance` field (seismic = large, major = medium,
 notable = small), but all items flow together in one date-ordered list.
 
-### Dates: `date` vs `publishDate`
+### Dates: ONE field
 
-Each item has two dates:
+Each item has exactly one date field:
 
-- `date` — the **original public release date** (YYYY-MM-DD), always shown
-  on the card and in meta/Article JSON-LD. Retroactive additions (e.g. a
-  cool tool from months ago) keep their real release date here.
-- `publishDate` — optional (YYYY-MM-DD). When the agent added the item to
-  our feed. Defaults to `date` if omitted (backwards-compat for pre-2026-04
-  entries). Used for feed ordering.
+- `date` — the public release date (YYYY-MM-DD). Drives ordering AND
+  what readers see on cards / meta tags / Article JSON-LD.
 
-Every cron sweep that adds an item MUST set `publishDate` to the sweep's
-day, so new additions float to the top regardless of how old their
-`date` is.
+There is no separate `publishDate`. If something is too old to belong
+at the top of the feed, don't add it — the 72h hard cap in
+`finalize-sweep.ts` enforces this.
 
 ### Content updates
 

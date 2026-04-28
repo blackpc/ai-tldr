@@ -106,16 +106,10 @@ export interface ReleaseItem {
   title: string;
   org: string;
   /**
-   * The original public release date (YYYY-MM-DD). When the thing was
-   * actually released, not when we discovered it. Displayed to readers.
+   * The single canonical date (YYYY-MM-DD) — when the thing was
+   * publicly released. Drives ordering AND is what readers see.
    */
   date: string;
-  /**
-   * When we added this item to our feed (YYYY-MM-DD). The feed is sorted
-   * by publishDate DESC so new additions appear at top. If omitted,
-   * defaults to `date` for backwards compatibility.
-   */
-  publishDate?: string;
   url: string;
   /** Short summary — the headline blurb. ≤240 chars. */
   summary: string;

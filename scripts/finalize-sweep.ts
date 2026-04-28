@@ -11,9 +11,8 @@
  *   1. Loads draft, current releases.json, current sweeps.json.
  *   2. Validates: every newItems[].id is NOT already in the feed.
  *      (duplicate id → hard fail with a pointer to SWEEP_MEMORY.md.)
- *   3. Stamps publishDate=generatedAt on every new item.
- *   4. Applies updates[] in place (legitimate "fix existing entry" path).
- *   5. Sorts items by publishDate DESC, date DESC.
+ *   3. Applies updates[] in place (legitimate "fix existing entry" path).
+ *   4. Sorts items by date DESC.
  *   6. Writes new releases.json.
  *   7. Builds a SweepReport from the diff vs the prior file:
  *      counts, added[], updated[], removed[], summary, coverage.
@@ -158,11 +157,8 @@ if (minSchemaErrors.length > 0) {
   process.exit(1);
 }
 
-// 3) Stamp publishDate + generatedAt
+// 3) Stamp generatedAt
 const generatedAt = new Date().toISOString();
-for (const item of newItems) {
-  if (!item.publishDate) item.publishDate = generatedAt;
-}
 
 // 4) Apply updates in place
 const updatedReports: { id: string; title: string; note: string }[] = [];
@@ -199,12 +195,7 @@ if (feed.items.length !== beforeRemoval - removalIds.size) {
 
 // 6) Merge new items + sort
 feed.items = [...feed.items, ...newItems];
-feed.items.sort((a, b) => {
-  const ap = a.publishDate ?? a.date;
-  const bp = b.publishDate ?? b.date;
-  if (bp !== ap) return bp.localeCompare(ap);
-  return (b.date ?? "").localeCompare(a.date ?? "");
-});
+feed.items.sort((a, b) => b.date.localeCompare(a.date));
 feed.generatedAt = generatedAt;
 feed.source = sourceLabel;
 
@@ -263,12 +254,8 @@ if (paperPrimary > 2) {
 const todayIso = generatedAt.slice(0, 10);
 const lastVideo = feed.items
   .filter((i) => i.categories.includes("video"))
-  .sort((a, b) =>
-    (b.publishDate ?? b.date).localeCompare(a.publishDate ?? a.date),
-  )[0];
-const lastVideoTs = lastVideo
-  ? new Date(lastVideo.publishDate ?? lastVideo.date).getTime()
-  : 0;
+  .sort((a, b) => b.date.localeCompare(a.date))[0];
+const lastVideoTs = lastVideo ? new Date(lastVideo.date).getTime() : 0;
 const hoursSince = (Date.now() - lastVideoTs) / (1000 * 60 * 60);
 const addedAnyVideo = newItems.some((i) => i.categories.includes("video"));
 if (!addedAnyVideo && hoursSince > 30) {

@@ -43,7 +43,7 @@ You write a draft. Scripts validate and merge. You do **NOT** edit
 4. **Draft.** Write `sweep-draft.json` at the repo root:
    ```json
    {
-     "newItems":   [ /* full ReleaseItem[] minus publishDate */ ],
+     "newItems":   [ /* full ReleaseItem[] */ ],
      "updates":    [ { "id": "...", "patch": { ... }, "note": "..." } ],
      "removals":   [ { "id": "...", "reason": "..." } ],
      "summary":    "1–2 sentence sweep summary",
@@ -65,7 +65,7 @@ You write a draft. Scripts validate and merge. You do **NOT** edit
    ```
    bun scripts/finalize-sweep.ts sweep-draft.json
    ```
-   Stamps `publishDate`, sorts the feed, dedups (id + normId + canonical
+   Sorts the feed by `date` DESC, dedups (id + normId + canonical
    URL), builds the `SweepReport`, appends to `sweeps.json`. Hard-fails
    on collision; soft-warns on coverage gaps.
    For non-cron runs override the source label:
@@ -198,8 +198,9 @@ reason to look, not as a quota.
 
 Every item conforms to `ReleaseItem` in `src/data/schema.ts`. Required:
 `id`, `categories`, `title`, `org`, `date`, `url`, `summary`, `tags`,
-`importance`, `explainer`, `image`, `links`. No `publishDate` —
-`finalize-sweep.ts` stamps it.
+`importance`, `explainer`, `image`, `links`. There is only ONE date
+field — `date` (the public release date, YYYY-MM-DD). It drives both
+ordering and what readers see.
 
 ### `id`
 
