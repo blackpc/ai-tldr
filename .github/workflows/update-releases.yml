@@ -65,11 +65,9 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Capture current timestamp
+      - name: Capture current date
         id: now
-        run: |
-          echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
-          echo "iso=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+        run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
 
       - name: Run release sweep with Claude Code (attempt 1)
         id: sweep1
@@ -90,105 +88,22 @@ jobs:
           # CLI JSON, display_report posts a Step Summary at the end.
           show_full_output: "true"
           display_report: "true"
-          # Short delegation prompt — the real prompt is the file in the
-          # repo, which Claude reads via its Read tool. Single source of
-          # truth: prompts/update-releases.md.
+          # The real prompt is `prompts/update-releases.md` — Claude
+          # reads it via its Read tool. Keep this shim minimal: anything
+          # added here drifts from the canonical prompt.
           prompt: |
-            You are running as the AI/TLDR scheduled release updater inside
-            a GitHub Actions workflow. The working directory is the repo
-            root.
+            You are the AI/TLDR scheduled release sweeper running in
+            GitHub Actions. Working dir is the repo root.
 
-            TODAY'S DATE IS ${{ steps.now.outputs.date }}. This is the
-            real, current UTC date from the GitHub runner's system clock.
-            It is NOT fictional, NOT a test fixture, NOT a placeholder.
-            Your training data predates this date, so releases you find
-            in the feed (e.g. "Gemma 4", "GPT-5.4") may be unfamiliar to
-            you — that is expected and correct. Do NOT spend thinking
-            tokens debating whether the date or the feed's past entries
-            are "real". Trust the system clock, trust the repo state, and
-            trust what WebFetch returns from live URLs. If WebFetch
-            reports a release date, USE THAT DATE VERBATIM — never
-            "adjust" a fetched date to match any other convention.
+            TODAY'S DATE IS ${{ steps.now.outputs.date }} (real UTC,
+            not a fixture). Trust the system clock and what WebFetch
+            returns even if releases look unfamiliar — your training
+            data predates today.
 
-            STEP 1. Read the file `prompts/update-releases.md` from the
-            repo. That file is the SINGLE SOURCE OF TRUTH for how to
-            refresh `src/data/releases.json`. Follow it exactly. Pay
-            particular attention to the ZERO-HALLUCINATION POLICY at the
-            top — every `url`, every entry in `links`, and every `image.url`
-            MUST be fetched in this run with WebFetch and confirmed to
-            return 200 + relevant content. No memory-based URLs.
-
-            STEP 2. Use ${{ steps.now.outputs.date }} for the `--since`
-            window (last 6 hours). Set `generatedAt` to EXACTLY
-            "${{ steps.now.outputs.iso }}" — this is the precise timestamp
-            of this sweep run; do NOT round it or pick a different time.
-            Set `source` to
-            `"github-actions-sweep"`.
-
-            STEP 3. Quality bar, NOT a quota. Only include releases
-            that are genuinely notable — trending repos with real
-            adoption, products with real launches, papers people are
-            actually discussing, models people will actually run.
-            Don't pad to hit a number, don't skip a hot week to stay
-            small. A typical 2-hour sweep is 0–5 items. If the window
-            genuinely has 25 hot releases, ship 25. If it has 2, ship
-            2. Zero filler, ever.
-
-            STEP 3B — CATEGORY COVERAGE (NEW, REQUIRED). Before
-            emitting, you MUST query at least one source per category
-            from the "Sources to sweep — category coverage map" section
-            of prompts/update-releases.md. All 15 categories: model,
-            repo, tool, article, video, rumor, security, paper,
-            dataset, benchmark, algorithm, tutorial, showcase,
-            resource, ecosystem. This is a SEARCH requirement, not an
-            inclusion requirement — emit zero items in any category
-            where nothing passes the bar, but do not skip the search.
-            The feed has historically under-populated video, article,
-            rumor, tutorial, showcase, resource, dataset, algorithm,
-            benchmark, ecosystem because fast sources (GitHub/HN/HF)
-            are repo/tool/model-biased. Fix this by actually checking
-            each category's sources every sweep.
-
-            STEP 4. Generate a sweep report. Read `src/data/sweeps.json`
-            and APPEND one new entry to the `sweeps` array describing
-            what this run changed. Do NOT rewrite existing entries.
-            The new entry must conform to `SweepReport` in
-            `src/data/schema.ts`. Required fields:
-              - `id`: "sweep-<generatedAt ISO, compacted>"
-              - `timestamp`: same as feed `generatedAt`
-              - `source`: "github-actions-sweep" (or "manual-<reason>"
-                for manual runs)
-              - `summary`: 1–2 sentences, friendly and direct tone.
-                Summarize the sweep as a whole. Same banned words as
-                explainer copy (no "revolutionary", "game-changing"…).
-              - `counts`: { added, updated, removed }
-              - `added`: array of { id, title, category (the primary
-                one), note } — `note` is ONE sentence explaining why
-                this item was included.
-              - `updated` / `removed`: fill in if you modified or
-                dropped items, otherwise `[]`.
-              - `coverage`: REQUIRED. Array of category ids you
-                actually searched this sweep (see STEP 3B). A zero-
-                result sweep with all 15 categories in `coverage` is
-                a valid sweep; a zero-result sweep with 3 categories
-                in `coverage` is a FAILED sweep — redo the missing
-                searches before writing the file.
-            Write the file back. The log page reads this file directly.
-
-            STEP 5. After writing both files, run `bun run build` to
-            confirm releases.json + sweeps.json still parse, the page
-            builds, AND the per-release + /log static HTML pages
-            generate without errors (scripts/prerender.ts runs as the
-            last build step). If any step fails, fix and re-run until
-            the full build passes.
-
-            STEP 6. Stop. Do NOT commit or push yourself — the next
-            workflow step handles the git ops. Just leave the modified
-            files in the working tree.
-
-            Return a short report (≤200 words) of what you changed.
+            Read `prompts/update-releases.md` and follow it exactly.
+            Do NOT commit or push — the next workflow step does that.
           claude_args: |
-            --model claude-sonnet-4-6
+            --model claude-opus-4-7
             --verbose
             --max-turns 60
             --permission-mode acceptEdits
@@ -219,104 +134,23 @@ jobs:
           show_full_output: "true"
           display_report: "true"
           prompt: |
-            You are running as the AI/TLDR scheduled release updater inside
-            a GitHub Actions workflow. The working directory is the repo
-            root. THIS IS A RETRY — the previous attempt in this same job
-            failed or hung. The working tree has been reset to HEAD, so
-            start fresh and do not assume any prior partial state.
+            You are the AI/TLDR scheduled release sweeper running in
+            GitHub Actions. Working dir is the repo root. THIS IS A
+            RETRY — the previous attempt in this job failed or hung.
+            The working tree was reset to HEAD; start fresh.
 
-            TODAY'S DATE IS ${{ steps.now.outputs.date }}. This is the
-            real, current UTC date from the GitHub runner's system clock.
-            It is NOT fictional, NOT a test fixture, NOT a placeholder.
-            Your training data predates this date, so releases you find
-            in the feed (e.g. "Gemma 4", "GPT-5.4") may be unfamiliar to
-            you — that is expected and correct. Do NOT spend thinking
-            tokens debating whether the date or the feed's past entries
-            are "real". Trust the system clock, trust the repo state, and
-            trust what WebFetch returns from live URLs. If WebFetch
-            reports a release date, USE THAT DATE VERBATIM — never
-            "adjust" a fetched date to match any other convention.
+            TODAY'S DATE IS ${{ steps.now.outputs.date }} (real UTC,
+            not a fixture). Trust the system clock and what WebFetch
+            returns even if releases look unfamiliar — your training
+            data predates today.
 
-            STEP 1. Read the file `prompts/update-releases.md` from the
-            repo. That file is the SINGLE SOURCE OF TRUTH for how to
-            refresh `src/data/releases.json`. Follow it exactly. Pay
-            particular attention to the ZERO-HALLUCINATION POLICY at the
-            top — every `url`, every entry in `links`, and every `image.url`
-            MUST be fetched in this run with WebFetch and confirmed to
-            return 200 + relevant content. No memory-based URLs.
-
-            STEP 2. Use ${{ steps.now.outputs.date }} for the `--since`
-            window (last 6 hours). Set `generatedAt` to EXACTLY
-            "${{ steps.now.outputs.iso }}" — this is the precise timestamp
-            of this sweep run; do NOT round it or pick a different time.
-            Set `source` to
-            `"github-actions-sweep"`.
-
-            STEP 3. Quality bar, NOT a quota. Only include releases
-            that are genuinely notable — trending repos with real
-            adoption, products with real launches, papers people are
-            actually discussing, models people will actually run.
-            Don't pad to hit a number, don't skip a hot week to stay
-            small. A typical 2-hour sweep is 0–5 items. If the window
-            genuinely has 25 hot releases, ship 25. If it has 2, ship
-            2. Zero filler, ever.
-
-            STEP 3B — CATEGORY COVERAGE (NEW, REQUIRED). Before
-            emitting, you MUST query at least one source per category
-            from the "Sources to sweep — category coverage map" section
-            of prompts/update-releases.md. All 15 categories: model,
-            repo, tool, article, video, rumor, security, paper,
-            dataset, benchmark, algorithm, tutorial, showcase,
-            resource, ecosystem. This is a SEARCH requirement, not an
-            inclusion requirement — emit zero items in any category
-            where nothing passes the bar, but do not skip the search.
-            The feed has historically under-populated video, article,
-            rumor, tutorial, showcase, resource, dataset, algorithm,
-            benchmark, ecosystem because fast sources (GitHub/HN/HF)
-            are repo/tool/model-biased. Fix this by actually checking
-            each category's sources every sweep.
-
-            STEP 4. Generate a sweep report. Read `src/data/sweeps.json`
-            and APPEND one new entry to the `sweeps` array describing
-            what this run changed. Do NOT rewrite existing entries.
-            The new entry must conform to `SweepReport` in
-            `src/data/schema.ts`. Required fields:
-              - `id`: "sweep-<generatedAt ISO, compacted>"
-              - `timestamp`: same as feed `generatedAt`
-              - `source`: "github-actions-sweep-retry" (because this is
-                the 2nd attempt in the job — helps us see retries in
-                the /log page)
-              - `summary`: 1–2 sentences, friendly and direct tone.
-                Summarize the sweep as a whole. Same banned words as
-                explainer copy (no "revolutionary", "game-changing"…).
-              - `counts`: { added, updated, removed }
-              - `added`: array of { id, title, category (the primary
-                one), note } — `note` is ONE sentence explaining why
-                this item was included.
-              - `updated` / `removed`: fill in if you modified or
-                dropped items, otherwise `[]`.
-              - `coverage`: REQUIRED. Array of category ids you
-                actually searched this sweep (see STEP 3B). A zero-
-                result sweep with all 15 categories in `coverage` is
-                a valid sweep; a zero-result sweep with 3 categories
-                in `coverage` is a FAILED sweep — redo the missing
-                searches before writing the file.
-            Write the file back. The log page reads this file directly.
-
-            STEP 5. After writing both files, run `bun run build` to
-            confirm releases.json + sweeps.json still parse, the page
-            builds, AND the per-release + /log static HTML pages
-            generate without errors (scripts/prerender.ts runs as the
-            last build step). If any step fails, fix and re-run until
-            the full build passes.
-
-            STEP 6. Stop. Do NOT commit or push yourself — the next
-            workflow step handles the git ops. Just leave the modified
-            files in the working tree.
-
-            Return a short report (≤200 words) of what you changed.
+            Read `prompts/update-releases.md` and follow it exactly.
+            When running `finalize-sweep.ts`, pass
+            `--source github-actions-sweep-retry` so retries show up
+            distinctly in /log. Do NOT commit or push — the next
+            workflow step does that.
           claude_args: |
-            --model claude-sonnet-4-6
+            --model claude-opus-4-7
             --verbose
             --max-turns 60
             --permission-mode acceptEdits
