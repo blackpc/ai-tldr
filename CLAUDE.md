@@ -85,6 +85,15 @@ All content lives in `src/data/releases.json`. The agent prompt is
 how the feed gets updated. The agent must use web search/fetch and verify
 every URL. No hallucination.
 
+**Before running OR modifying the sweep agent, read
+[SWEEP_MEMORY.md](SWEEP_MEMORY.md).** That file is the persistent history
+of sweep tunings — what we tried, what failed, what stuck, and why. If
+the user is unsatisfied with sweep output, append a new entry to
+`SWEEP_MEMORY.md` describing the trigger, root cause, change, and status
+**before** declaring the fix done. Do not re-introduce a pattern flagged
+as broken there. Do not re-fix something already solved unless you can
+explain why the previous fix didn't hold.
+
 ### Zero-hallucination policy
 
 Every URL, image, metric, and claim must be fetched and verified. If it

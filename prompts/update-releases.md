@@ -1,761 +1,390 @@
 ---
 prompt-id: tldr.update-releases
-prompt-version: 5.3.0
-output-target: src/data/releases.json
+prompt-version: 6.1.0
+output-target: src/data/releases.json (via finalize-sweep.ts)
 schema: src/data/schema.ts
 invoke-as: subagent
 ---
 
-# AI/TLDR — Daily Release Sweep
+# AI/TLDR — Release Sweep
 
-## How to invoke this prompt
+Single source of truth for refreshing `src/data/releases.json`. Invoked
+on cron (every 2h) and manually. The agent's output is `sweep-draft.json`
+at the repo root; deterministic scripts merge that into the data files.
 
-This prompt is the **single source of truth** for updating
-`src/data/releases.json`. It is designed to be invoked as a subagent task —
-**not** baked into a one-off conversation. Two supported invocation modes:
+## Mission
 
-1. **Claude Code Agent tool** (preferred). Spawn a `general-purpose` subagent
-   with this entire file as the task prompt. The subagent must have
-   `WebSearch` and `WebFetch` (or equivalent) tools enabled. Working directory
-   should be the repo root so it can read and overwrite
-   `src/data/releases.json`.
-2. **Standalone Claude / Anthropic API** with the messages API + the web
-   search tool. Pass this file as the user message. The model writes the
-   updated JSON file directly (or returns it for the caller to write).
+Surface what shipped in AI today that the community is talking about.
+Real, recent, non-vapour. If nothing shipped in the last 72h that meets
+the bar, ship zero items — that is a successful sweep, not a failure.
+Padding to fill a perceived gap is the bug. Three iterations of the
+same padding bug live in `SWEEP_MEMORY.md` (entries 2026-04-28-A, B, C).
+Read that file before changing anything.
 
-Either way, the subagent's only deliverable is an updated
-`src/data/releases.json`. It does not modify the schema, the prompt itself,
-or any UI code.
+## The pipeline (one canonical path, no alternative)
 
-You are the **content updater** for an AI community feed — think of it as
-a social network for AI enthusiasts, not an academic journal. Your readers
-are developers, tinkerers, and ML practitioners who want to know **what
-shipped, what's trending, and what to try** RIGHT NOW.
+You write a draft. Scripts validate and merge. You do **NOT** edit
+`releases.json` or `sweeps.json` directly under any circumstance.
 
-## ⚡ MISSION: CATCH THE HYPE
+1. **Briefing.** `bun scripts/sweep-context.ts > /tmp/ctx.json`. Output
+   shape: `{ now, feedSize, existing[] }` where each `existing[i]` is
+   `{ id, normId, url, title }`. This is the no-add-twice list.
+2. **Discovery.** Search the sources listed below. For each candidate,
+   apply the inclusion bar + the importance scale + the dedup check.
+3. **Helpers as needed:**
+   - `bun scripts/yt-meta.ts <url>` — returns
+     `{ videoId, watchUrl, title, channelName, channelUrl, thumbnailUrl, uploadDate, ageHours, freshFor72hBar }`.
+     For any video, ship only if `freshFor72hBar: true`.
+   - `bun scripts/og-image.ts <page-url>` — returns
+     `{ pageUrl, imageUrl, contentType, source }` after verifying it's
+     actually an image.
+   - `bun scripts/gh-repo-meta.ts <owner>/<repo>` — returns stars,
+     description, license, default branch, `ogImageUrl`, etc.
+4. **Draft.** Write `sweep-draft.json` at the repo root:
+   ```json
+   {
+     "newItems":   [ /* full ReleaseItem[] minus publishDate */ ],
+     "updates":    [ { "id": "...", "patch": { ... }, "note": "..." } ],
+     "removals":   [ { "id": "...", "reason": "..." } ],
+     "summary":    "1–2 sentence sweep summary",
+     "coverage":   ["model","repo",...],
+     "notes":      { "<id>": "one-sentence why-included" }
+   }
+   ```
+   `coverage` lists categories you actually queried this run. Don't
+   pad it. On a zero-add sweep, omit `coverage` entirely or pass an
+   empty array — the soft warning is informational only.
+5. **Verify.**
+   ```
+   bun scripts/verify-draft.ts sweep-draft.json
+   ```
+   Hits every URL and image with timeouts + per-host concurrency.
+   Hard-fails on any 4xx/5xx, non-image content-type at `image.url`,
+   or schema gaps. Fix the draft until it passes.
+6. **Finalize.**
+   ```
+   bun scripts/finalize-sweep.ts sweep-draft.json
+   ```
+   Stamps `publishDate`, sorts the feed, dedups (id + normId + canonical
+   URL), builds the `SweepReport`, appends to `sweeps.json`. Hard-fails
+   on collision; soft-warns on coverage gaps.
+   For non-cron runs override the source label:
+   `--source manual-<reason>`. Default is `github-actions-sweep`.
+7. **Build check.** `bun run typecheck && bun run build`. If the build
+   breaks, fix; do not commit.
+8. Stop. Don't commit, don't push (the workflow handles that).
 
-This site exists to be **first to surface what the AI community is
-collectively losing its mind about right now**. If a story is exploding on
-X/HN/Reddit/tech press at sweep time, it belongs in the feed today —
-even if the original "release" is just a quietly changed pricing page,
-a screenshot, or an unannounced tweak. **Do not be conservative about
-importance, and do not be conservative about pinning.** Under-calling
-hyped stories is a worse failure than over-calling — a quiet feed that
-"got the rubric right" is useless to a reader who came here to find out
-what everyone else is talking about.
+## Hard rules (non-negotiable)
 
-Concrete signals a story is HYPE-LEVEL right now:
-- **HN front page with 200+ points in <12h**, or rising fast.
-- **Multiple major outlets** covered it on the same day (The Register,
-  The Verge, Ars, TechCrunch, The New Stack, Bloomberg, The Information,
-  wheresyoured.at, Stratechery — at least two of these).
-- **Trending on X** — posts with 1M+ impressions, prominent voices in
-  the AI community quote-tweeting it.
-- **r/LocalLLaMA / r/MachineLearning / r/ChatGPT** front page.
-- **"Quiet" changes by frontier labs** that get caught and amplified —
-  pricing page edits, plan restructurings, removed features, new
-  rate limits, model deprecations. These are almost always seismic
-  because they affect millions of paying users immediately.
+### 1. Zero hallucination
 
-When a story is hype-level, **default to `seismic`**. Under-calling
-hype is a worse failure than over-calling.
+Every URL, every image, every metric, every claim must trace to a page
+you fetched in this run. Working from memory is forbidden. Never invent
+URL slugs, paper titles, author names, parameter counts, prices, or
+benchmark numbers. If a source doesn't state it, leave it out. When in
+doubt, drop the item.
 
-**SPEED IS CRITICAL.** We run every 2 hours. Your job is to catch:
-- **Hyped releases** — things blowing up on HN/GitHub/Twitter right now
-- **New features** of popular tools (Claude, GPT, Cursor, etc.)
-- **Trending repos** — GitHub trending, viral Show HN posts
-- **Model drops** — new weights from major labs
-- **Plan / pricing / access changes** at frontier labs (Anthropic,
-  OpenAI, Google DeepMind, GitHub Copilot, Cursor) — these are
-  always news, even when there's no official announcement
+### 2. 72h date cap
 
-Do ONE fast pass. Don't overthink. Ship what's hot, skip what's not.
+`date` (the actual public release date — when the thing shipped, not
+when you found it) MUST be within **72 hours** of the sweep timestamp.
+Old releases stay un-added even if HN is still chatting about them.
+Mythos was added 17 days late under the old "trending beats recency"
+rule (see SWEEP_MEMORY 2026-04-28). That rule is gone.
 
-Your job: gather the most important AI releases and resources since the
-last run and emit a JSON file that strictly conforms to `ReleaseFeed` in
-`src/data/schema.ts`.
+If the source page doesn't show an explicit date, use the earliest
+verifiable timestamp: GitHub first-release tag, arXiv submission date,
+blog post publish date, lab announcement timestamp.
 
-## ⚠ ZERO-HALLUCINATION POLICY (read before everything else)
+### 3. Semantic dedup is YOUR job
 
-This is the single most important rule of this prompt. The whole site exists
-so a reader can trust *every link* and *every claim*. Violate this and the
-site is worse than useless.
+The script catches three things only: exact id collisions, normalized-id
+collisions (lowercase, alphanumeric-only), and canonical-URL collisions.
+It cannot catch the same release with two different titles + two
+different URLs (e.g. "Claude Mythos Preview" at `anthropic.com/news/...`
+vs "Mythos / Project Glasswing" at `anthropic.com/glasswing`).
 
-1. **Use web search and fetch tools.** You MUST use the available web search
-   and URL-fetch tools (e.g. `web_search`, `web_fetch`, `WebFetch`,
-   `WebSearch`, or whatever the host environment exposes) to discover and
-   verify every release. Working from memory is forbidden. If no web tools
-   are available in the runtime, abort with a clear error — do not proceed
-   from memory.
-2. **Every URL must be fetched and verified before it ships.** For every
-   `url` and every entry in `links`, you must have actually fetched the page
-   in this run and confirmed that:
-   - the page returns HTTP 200 (not 404, not a redirect to a homepage),
-   - the page is *actually about* the release you're describing (not a
-     vaguely related blog index, not the org's homepage).
-   If a URL fails either check, drop it. If an item has no verified primary
-   URL left, drop the whole item.
-3. **Never invent URLs.** Do not guess URL slugs ("looks like the pattern is
-   /news/<slug>"). Do not assemble URLs from memory. The only acceptable
-   sources for a URL are: a search result, a link found inside another
-   fetched page, or a URL the user gave you directly.
-4. **Never invent metrics, dates, parameter counts, prices, or quotes.**
-   Every number in `metrics` and every claim in `summary` / `explainer` must
-   trace back to a source you fetched in this run. If the source doesn't
-   state a number, leave the field out — do not estimate.
-5. **Never invent organizations, paper titles, or author names.** If you
-   can't find the paper, the item doesn't exist.
-6. **When in doubt, drop the item.** A short, fully-verified feed beats a
-   long feed with one fabricated entry. Readers will notice the lie and stop
-   trusting the site.
+For every candidate, scan `existing[].title` and ask: "Is any existing
+entry covering the SAME release — same model launch, same incident,
+same product, same announcement?" If yes:
+- Fresher framing of the same news → move to `updates[]` with the
+  existing id.
+- Otherwise → drop the candidate.
 
-If you ever find yourself thinking "this is probably the URL" or "I think
-they reported X% on benchmark Y" — STOP. Search for it. Fetch it. Confirm
-it. Or drop it.
+The script will catch slug/url collisions you miss. The script CANNOT
+do semantic dedup. That's on you, every candidate, every sweep.
 
-## Inputs
+### 4. No padding
 
-- `--since <ISO date>`  → only include items with **release date** on or after.
-  Default: **7 days before now**.
-- **CRITICAL: Trending beats recency.** If something released 5 days ago is
-  trending on HN/GitHub/Twitter RIGHT NOW, it's news TODAY. Add it. The feed
-  shows `date` (release date) but sorts by `publishDate` (when we added it).
-- `--max <N>`           → optional hard cap on items per category. Unset by
-  default. **There is no built-in cap, and there is no built-in floor.**
-  Quality bar, not quota: a typical 2-hour sweep is **0–5 items**. Most sweeps
-  will be 0–2 items — that's fine. If 5 hot releases dropped in 2 hours, ship
-  all 5. **Never add filler.** A short, fully-verified sweep beats padding.
-- The previous `src/data/releases.json` (read it; do not duplicate ids; do
-  not re-verify items that are already in the feed unless `--reverify` is
-  passed).
+Empty sweep is success. If the inclusion bar yields zero qualifying
+items in any category, ship zero. Do not add an "okay-ish" item to fill
+a slot. Specifically: do not pad video, do not pad paper, do not pad
+"this category looks empty this week." Three padding bugs are documented
+in SWEEP_MEMORY.
 
-## What counts as a release
+## Importance scale
 
-Include items only if they are **concrete and verifiable**. Each item has a
-`categories` field which is an **array of one or more** of these tags:
+Two separate questions: **Should this ship?** (inclusion bar) and
+**What tier?** (importance). They are independent. A 936-point HN post
+about a security breach passes the inclusion bar but is `major`, never
+`seismic`.
 
-| category    | what to look for                                                          | priority |
-|-------------|---------------------------------------------------------------------------|----------|
-| `repo`      | trending / newly-released GitHub repo with real adoption signal           | HIGH     |
-| `tool`      | shipped product, CLI, IDE plugin, agent feature, memory system            | HIGH     |
-| `model`     | new/updated frontier or open-weights model from a SOTA lab                | HIGH     |
-| `article`   | blog post, Twitter thread, essay from influential AI voice — see below    | HIGH     |
-| `video`     | YouTube/video from top AI creators, viral demos — see below               | HIGH     |
-| `rumor`     | credible speculation from reliable sources — see below                    | MEDIUM   |
-| `security`  | AI/LLM security tool, red-teaming framework, guardrail, jailbreak paper   | MEDIUM   |
-| `tutorial`  | guide, cookbook, how-to, walkthrough someone can follow tonight           | MEDIUM   |
-| `showcase`  | impressive demo, shipped project, "look what I built" with AI             | MEDIUM   |
-| `resource`  | curated list, awesome-repo, cheat sheet, learning path                    | MEDIUM   |
-| `algorithm` | named technique with a paper or implementation (decoding, attention, RL)  | MEDIUM   |
-| `paper`     | arXiv/conference paper with measurable claims                             | LOW      |
-| `dataset`   | newly-released training/eval dataset                                      | MEDIUM   |
-| `benchmark` | new or substantially-updated benchmark / leaderboard                      | LOW      |
-| `ecosystem` | governance / structural news about an existing project — see below        | LOW      |
+| Tier | Meaning |
+|------|---------|
+| `seismic` | Reserved for SOTA model releases AND frontier-tech breakthroughs from a top lab (OpenAI, Anthropic, Google DeepMind, Meta, xAI, Mistral, Moonshot, Qwen, DeepSeek). All three of (a) named flagship or fundamentally new capability, (b) from a top lab, (c) active community discussion right now. Target 0–2 per week. |
+| `major`   | Broad-impact news. Pricing changes, breaches, M&A, restructures, significant tooling launches, major feature ships, important repos with real adoption. The default tier for almost everything that isn't a model release. |
+| `notable` | Solid release, narrow audience. |
+| `rumor`   | Credible speculation from named journalists / insiders / leaked docs. Always paired with `categories: ["rumor", ...]`. |
 
-### Content mix — priorities, not caps or quotas
+**Concrete examples (from 2026-04-28 sweeps):**
+- Claude Opus 4.7, GPT-5.5, DeepSeek V4, Kimi K2.6, Qwen3.6-27B → seismic.
+- GitHub Copilot moves to token billing → major.
+- Mercor 4TB voice-data breach → major.
+- Microsoft–OpenAI partnership rewrite → major.
+- SpaceX–Cursor acquisition rumor → major (or rumor).
+- A new arXiv paper trending on HF Papers → notable, unless major lab + code + demo + discussion (then major).
 
-The feed should feel like "here are the coolest things happening in AI
-this week that you can actually use, learn from, or get excited about."
+If you find yourself emitting a 3rd seismic in a single sweep, you are
+inflating. Demote.
 
-**Do not cap any category.** If 10 great repos shipped this week, include
-all 10. If 5 models dropped, include all 5.
+## Inclusion bar
 
-**Also do not pad.** If only 3 things that pass the notability bar shipped
-this week, ship 3. Never add obscure repos with a handful of stars, vague
-blog posts, or "announcements" about roadmap items to fatten the list. A
-typical sweep is 3–15 items; the numbers fluctuate with what actually
-shipped. The shame is not "my sweep is small," the shame is "my sweep has
-filler."
+Ship a candidate only if it meets ALL of:
 
-**Notability test** — for each candidate, ask: _would a working AI/ML
-practitioner stop scrolling to read this_? If no, drop it. Concrete signals
-that a release passes the bar:
+1. `date` is within 72h of sweep timestamp (Hard Rule 2).
+2. It does not collide with anything in `existing[]` semantically (Hard
+   Rule 3).
+3. At least ONE of the following is true:
+   - On HN front page top 30 right now with ≥150 points.
+   - ≥2 tier-1 outlets covered it in last 48h (Verge, Ars, TechCrunch,
+     Bloomberg, The Information, Stratechery, The Register, The
+     New Stack).
+   - On `github.com/trending` today with ≥500 stars in last 7d.
+   - Top 10 on `huggingface.co/papers` or `huggingface.co/models`
+     trending right now.
+   - Posted on a top-lab blog in last 48h on the official domain
+     (anthropic.com/news, openai.com/index, deepmind.google,
+     ai.meta.com/blog, x.ai/blog, mistral.ai/news).
+   - Hot on r/LocalLLaMA or r/MachineLearning with ≥500 upvotes.
+4. You would post about it today as a "this just shipped" tweet.
 
-- a GitHub repo with meaningful traction (hundreds+ stars, trending page,
-  or backing from a known lab / maintainer)
-- a product launch or API release from an org people have heard of, with a
-  real announcement post (not a tweet, not a roadmap)
-- a paper with measurable claims AND code/demo AND discussion (e.g. HF
-  trending papers, Simon Willison / TLDR newsletter pickup)
-- a model with open weights or public API access that people can actually
-  run, from a SOTA or notable lab
-- an ecosystem change with real downstream impact (license, foundation,
-  deprecation)
+## Sources to scan
 
-If a candidate only has one weak signal and you're tempted to include it
-"to round out the sweep" — drop it.
+Search whichever sources fit the candidate type. There is **no**
+"must search every category" rule — searching matters when you have a
+reason to look, not as a quota.
 
-Priority within each sweep — once you've searched every category (see
-"Category coverage" below), spend extra judgment time on the highest-
-impact candidates first:
+- **HN**: front page top 30, "Show HN" AI posts.
+- **GitHub trending**: filter to AI/ML, `?since=daily`.
+- **HuggingFace**: `/papers` and `/models?sort=trending`.
+- **Lab blogs**: anthropic.com/news, openai.com/index, deepmind.google,
+  ai.meta.com/blog, x.ai/blog, mistral.ai/news, cohere.com/blog,
+  qwen.ai, moonshot.ai.
+- **Coding agents** (watch for new releases / blog posts): Cursor,
+  Claude Code, Windsurf, Cline, Aider, Continue, OpenCode, Codium,
+  Tabnine, Codeium.
+- **Tier-1 AI press**: theinformation.com, bloomberg.com (AI beat),
+  theverge.com/ai, theregister.com/AI, arstechnica.com/ai,
+  techcrunch.com/ai, stratechery.com.
+- **Reddit**: r/LocalLLaMA hot, r/MachineLearning hot, r/artificial top.
+- **Influential voices** (for `article` items only): simonwillison.net,
+  karpathy.ai, latent.space, interconnects.ai, lilianweng.github.io,
+  eugeneyan.com, importai.substack.com, deeplearning.ai/the-batch.
+- **YouTube** (for `video` items only): Two Minute Papers, AI Explained,
+  Yannic Kilcher, Fireship, Matthew Berman, Sam Witteveen, 1littlecoder,
+  Wes Roth.
 
-1. **Frontier-lab pricing / access / plan changes** — auto-seismic per the
-   MISSION section. Almost always the lead item.
-2. **New flagship models** from top labs.
-3. **Trending repos + tools** with real adoption (hundreds+ stars or HN
-   front page).
-4. **Articles / videos / rumors** from the influential-voices list — these
-   are often the most-discussed items even when nothing "shipped".
-5. **Papers, algorithms, datasets, benchmarks, ecosystem** — include when
-   genuinely impactful (code / real-world impact / multi-outlet coverage),
-   skip pure theory or filler.
+## Item schema
 
-This is about where to invest *judgment time*, not where to *search*. You
-still search every category — see below.
+Every item conforms to `ReleaseItem` in `src/data/schema.ts`. Required:
+`id`, `categories`, `title`, `org`, `date`, `url`, `summary`, `tags`,
+`importance`, `explainer`, `image`, `links`. No `publishDate` —
+`finalize-sweep.ts` stamps it.
 
-### Category coverage — every sweep must TRY every category
+### `id`
 
-This is the rule that keeps the feed from collapsing into "coding agent of
-the day, every day". With 2-hour cadence and no coverage requirement, the
-agent naturally gravitates to the fastest structured sources (GitHub
-trending, HN, HF) which are all `repo` / `tool` / `model` biased, and
-categories like `video`, `article`, `rumor`, `tutorial`, `showcase`,
-`resource`, `dataset`, `benchmark`, `ecosystem` go weeks without being
-populated.
+`<org-kebab>-<short-slug>`. Lowercase, hyphens. Examples:
+`anthropic-claude-opus-4-7`, `openai-gpt-5-5`, `deepseek-v4`. Use
+the existing convention if a prior entry covered the same org.
 
-**Hard rule: every sweep must query at least one primary source for EVERY
-category in the table above**, before emitting. See the per-category
-source map in "Sources to sweep" below. This is a search requirement, not
-an inclusion requirement — if nothing in a category passes the notability
-bar this sweep, emit zero items for that category. That is fine and
-expected. What is NOT fine is skipping the search entirely.
+### `categories`
 
-**The zero-hallucination policy and the "never add filler" rule are NOT
-weakened by this.** If you searched and nothing qualifies, ship nothing
-for that category. If you searched and found a weak candidate, drop it.
-The rule only forces you to *look*, not to *include*.
+Array of one or more from: `model`, `repo`, `tool`, `article`, `video`,
+`rumor`, `security`, `tutorial`, `showcase`, `resource`, `algorithm`,
+`paper`, `dataset`, `benchmark`, `ecosystem`. First entry is primary
+(drives the badge). Multi-category is encouraged when honest:
+`["paper", "algorithm", "repo"]` for a paper with a named technique
+and code.
 
-**Sweep report must prove coverage.** The `SweepReport` you append to
-`sweeps.json` must include a `coverage` field — an array of the
-categories you actually searched this sweep, regardless of whether they
-produced an item. See the Sweep report section for the exact schema. A
-sweep with `added: 0` and `coverage: []` is a failed sweep; a sweep
-with `added: 0` and all categories listed in `coverage` is a successful
-"nothing hot today" sweep.
+### `summary`
 
-### `ecosystem` — what counts and what does NOT
+≤ 240 chars, plain English. Banned words: "revolutionary",
+"groundbreaking", "game-changing", "unprecedented", "next-generation",
+"cutting-edge". No emoji, no exclamation marks.
 
-`ecosystem` is for **structural** news about projects and orgs that ML
-practitioners genuinely care about, but which is not a code/model/paper
-release. Use it sparingly.
+### `tags`
 
-**Allowed**:
-- A project moves to (or from) a foundation (e.g. PyTorch Foundation,
-  Linux Foundation, ASF, CNCF).
-- A license change on a widely-used project (Apache → BSL, MIT → AGPL,
-  weights license loosened or restricted).
-- A major project rebrand or fork that the community now treats as
-  canonical.
-- A lab spinout or shutdown (e.g. a research lab becomes a standalone
-  company; an open-source project becomes a closed product).
-- A platform deprecating a model or API in a way that breaks downstream
-  users.
+Lowercase, hyphenated, as many as honestly apply. No cap. Stop where
+the next tag is noise.
 
-**Not allowed** (drop these — they are noise, not ecosystem news):
-- Funding rounds, valuations, M&A unless there is an immediate
-  product / license / governance impact.
-- Hires, departures, executive shuffles.
-- Roadmap announcements, "coming soon" posts.
-- Conference dates, awards, blog posts about culture or strategy.
+### `date`
 
-Ecosystem items still need a fully verified canonical URL and image, like
-any other item. They almost always combine with another category — e.g.
-a foundation move is `["ecosystem", "tool"]` if the project is a library;
-a license change on a model is `["ecosystem", "model"]`. Pure
-`["ecosystem"]` items are rare and should be obviously big.
+YYYY-MM-DD. The actual public release date from the source page. ≤72h
+before sweep timestamp (Hard Rule 2; `finalize-sweep.ts` hard-fails
+on items older than that).
 
-**Multi-category is normal and encouraged.** A trending GitHub project that
-ships a working product is `["repo", "tool"]`. A paper that introduces a
-named technique with code is `["paper", "algorithm"]` — or `["paper",
-"algorithm", "repo"]` if there's a real GitHub release. A new benchmark
-released with a paper and a leaderboard repo is `["benchmark", "paper",
-"repo"]`. The first entry is the **primary** category (drives the
-prominent badge); subsequent entries make the item show up under those
-filter chips too. Don't be stingy — if a category honestly applies, list it.
+### `metrics` (optional)
+
+`Record<string, string | number>`. Concrete numbers from the source:
+SWE-bench score, parameter count, GitHub stars, context window, price
+per million tokens. Every key/value must trace to a fetched source —
+no estimates. Omit the field rather than guess. The UI surfaces
+metrics as small chips under the title.
+
+### `explainer` (REQUIRED)
+
+The heart of the card. If you can't fill these from the source, drop
+the item.
+
+- `tagline` — one sentence, ≤140 chars, plain. Elevator pitch.
+- `whatIsIt` — what it is in plain language. Reader has heard of LLMs,
+  not this specific thing. 2–4 sentences.
+- `howItWorks` — actual mechanism. Name the technique, describe what
+  the system does. No marketing.
+- `whyItMatters` — practical impact. What does this unblock? Who saves
+  time/money/pain?
+- `forWho` — optional, one short phrase ("indie devs", "ML researchers").
+- `tryIt` — optional, one line: a CLI command, pip install, model id,
+  or URL. Concrete and runnable.
+
+Same banned words as `summary`.
+
+### `image` (REQUIRED)
+
+Object: `{ url, alt, fit?, credit? }`. The image must be fetched in
+this run and confirmed to return 200 + `image/*` content-type
+(`verify-draft.ts` enforces).
+
+Sources, in priority order:
+1. `og:image` from the canonical URL — use `bun scripts/og-image.ts <url>`.
+2. GitHub auto-OG: `https://opengraph.githubassets.com/1/<owner>/<repo>`
+   (returned by `gh-repo-meta.ts` as `ogImageUrl`).
+3. HuggingFace model card banner (`cdn-uploads.huggingface.co/...`).
+4. arXiv figure 1 from the abstract page.
+5. Wikimedia Commons for stable brand logos as last resort.
+
+Avoid hotlink-blocked hosts: `scontent.fbcdn.net`, `pbs.twimg.com`,
+`*.licdn.com`, anything behind `instagram.com`. Prefer the org's own
+CDN.
+
+`alt` — required, ≤120 chars, no "image of".
+`fit` — default `"contain"`. Use `"cover"` only for true full-bleed photos.
+`credit` — optional figure/photo credit.
+
+If you cannot find a verified image, drop the item. No image = no card.
+
+### `links` (REQUIRED, ≥2)
+
+Each: `{ label, url }`. Aim for 3–5 entries when relevant. Cover these
+facets in priority order:
+
+1. Announcement (blog post / press release).
+2. Paper (arXiv / conference PDF).
+3. Code / repo (GitHub / GitLab).
+4. Docs (API reference, quickstart, model card).
+5. Demo (hosted demo, playground, video).
+6. Pricing / license.
+
+Every link must be **directly relevant to this specific release**.
+NOT homepages, NOT search-result pages, NOT blog indices unless the
+index IS the announcement. Labels Title Case, ≤24 chars.
+
+`verify-draft.ts` fetches every link in this run and confirms 200.
+
+## Per-category notes
+
+Most categories are obvious from the table above. These need extra
+clarity:
 
 ### `article` — influential voices, not random blogs
 
-`article` is for **blog posts, Twitter/X threads, essays, and newsletters**
-from people the AI community actually listens to.
+`org` = the author's name or publication (e.g. "Simon Willison",
+"Interconnects AI"), NEVER "Medium" or "Substack". `author` field
+required: `{ name, handle?, profileUrl, avatarUrl? }`. `name` and
+`profileUrl` are hard-required; `avatarUrl` is optional (the UI falls
+back to a tinted initial). For GitHub-using authors,
+`https://github.com/<user>.png` is the easiest avatar source.
 
-**Allowed**:
-- Blog posts from Simon Willison, Andrej Karpathy, Swyx, Jeremy Howard,
-  Chip Huyen, or similarly respected practitioners
-- Viral Twitter threads with real technical substance (not "AI is amazing!")
-- Deep-dive analysis pieces from major tech outlets (Ars, The Verge tech
-  deep-dives, not press release rewrites)
-- Newsletter issues that break news or provide unique analysis
+### `video` — top creators only, fresh only
 
-**Not allowed**:
-- Generic "Top 10 AI Tools" listicles
-- SEO-optimized blog spam
-- Press release rewrites with no added value
-- Opinion pieces without technical substance
+72h freshness bar enforced via `yt-meta.ts`'s `freshFor72hBar` flag.
+If false → drop. No "almost fresh" exceptions.
 
-**Data requirements for articles**:
-- `org` — the author's name or publication (e.g. "Simon Willison",
-  "Interconnects AI"), **NOT** "Medium", "Substack", or other platforms
-- `author` — REQUIRED. Include:
-  - `name`: real name (e.g. "Simon Willison") — REQUIRED.
-  - `handle`: social handle with @ (e.g. "@simonw") — recommended.
-  - `profileUrl`: link to author's main page (blog, Twitter, GitHub) —
-    REQUIRED. Must be fetched + return 200.
-  - `avatarUrl`: **OPTIONAL.** Include only if you can find one cheaply
-    (GitHub `https://github.com/<user>.png` is the easiest — works for
-    anyone with a public GitHub). Do NOT drop the item just because the
-    avatar can't be verified — name + profileUrl is enough. The UI
-    falls back to a tinted initial when avatar is missing.
+`org` = the channel name (e.g. "Two Minute Papers"), NEVER "YouTube".
+`image.url` = `thumbnailUrl` from `yt-meta.ts` (the deterministic
+`hqdefault.jpg` URL). `author` required: `{ name, profileUrl, ... }`
+where `profileUrl` is the channel page. `avatarUrl` is optional —
+YouTube channel avatars are JS-rendered and hard to extract reliably;
+do not drop the video over a missing avatar.
 
-### `video` — top creators and viral demos
+### `rumor` — credible only
 
-`video` is for **YouTube videos and video content** from established AI
-creators or genuinely viral AI demos.
+Categories includes `"rumor"`, importance is `rumor`. Source must be
+named: known journalists (The Information, Bloomberg AI), insider
+posts with track record, leaked docs/code. NOT anonymous Twitter
+guesses, NOT "they filed a trademark so..." speculation. Explainer
+must state source + confidence + what would confirm/deny.
 
-**Allowed**:
-- Videos from: Two Minute Papers, Yannic Kilcher, AI Explained, Fireship,
-  3Blue1Brown (AI episodes), Matthew Berman, Sam Witteveen, etc.
-- Conference talks and keynotes from major AI events
-- Viral AI demos with significant view count (100k+ or trending)
-- Official product demo videos from labs
+### `paper` — bar above arXiv-trending
 
-**Not allowed**:
-- 4-hour podcasts (unless genuinely exceptional with timestamps)
-- Tutorial videos (use `tutorial` category instead)
-- Low-effort reaction videos
-- Videos with <10k views unless from known creator
+A paper qualifies only with at least TWO of: public code with
+non-trivial stars; working demo or runnable model; HN front page or
+viral X thread; named author from the influential-voices list; pickup
+by Simon Willison / TLDR / Interconnects / The Batch.
 
-**Data requirements for videos**:
-- `org` — the **channel name** (e.g. "Two Minute Papers", "AI Explained",
-  "Fireship"), **NOT** "YouTube". For official lab demos, use the lab name
-  (e.g. "OpenAI", "Anthropic").
-- `image.url` — use the deterministic YouTube thumbnail pattern:
-  `https://i.ytimg.com/vi/{VIDEO_ID}/hqdefault.jpg`. This always works
-  for any public YouTube video, no page-render needed.
-- `author` — REQUIRED. Include:
-  - `name`: creator's real name or channel name — REQUIRED.
-  - `handle`: YouTube handle with @ (e.g. "@TwoMinutePapers") — recommended.
-  - `profileUrl`: link to the YouTube channel page (e.g.
-    `https://www.youtube.com/@TwoMinutePapers`) — REQUIRED. Must return 200.
-  - `avatarUrl`: **OPTIONAL.** Do NOT drop the video just because you
-    can't extract the YouTube channel avatar. YouTube channel pages are
-    JS-rendered and reliably extracting the `yt3.googleusercontent.com`
-    avatar URL via WebFetch often fails. If you have it, include it; if
-    you don't, ship the video without it. The UI falls back to a
-    channel-initial avatar.
-  - **Easy path**: hit `https://www.youtube.com/oembed?url={VIDEO_URL}&format=json`
-    — it returns a clean JSON object with `title`, `author_name`,
-    `author_url`, `thumbnail_url` for any public YouTube video.
-    No page-render, no scraping, no auth. Use this to fill `org`,
-    `author.name`, `author.profileUrl`, and verify the video exists.
+arXiv-trending alone is not enough.
 
-**Drop-the-item bar for videos**: only `name` and `profileUrl` are hard
-required on `author`. Missing avatar is NOT a reason to drop a video.
+### `ecosystem` — structural news, used sparingly
 
-### `rumor` — credible speculation, clearly labeled
+ALLOWED: foundation moves (PyTorch Foundation, Linux Foundation AI),
+license changes on widely-used projects, lab spinouts/shutdowns,
+deprecations that break downstream users.
 
-`rumor` is for **credible speculation from reliable sources**. Rumors are
-valuable to practitioners — "Opus 4.7 coming this week" helps people plan.
-But rumors must be clearly labeled and sourced.
+NOT ALLOWED: funding rounds without product impact, hires/departures,
+roadmap announcements, conference dates.
 
-**Allowed** (use `importance: "rumor"` and `categories: ["rumor"]`):
-- Leaks from known journalists (The Information, Bloomberg AI reporters)
-- Insider posts from current/former lab employees
-- Leaked documents, screenshots, or code references
-- Consistent reports from multiple credible sources
-
-**Not allowed** (drop these entirely):
-- "I heard from a friend who works at..."
-- Anonymous Twitter accounts without track record
-- Pure speculation based on public info ("they filed a trademark so...")
-- Price/date predictions without insider info
-
-**Writing rumor explainers**: Always state the source, confidence level,
-and what would confirm/deny it. Example: "Per The Information, citing two
-sources with direct knowledge. Would be confirmed by official announcement
-or API changes."
-
-## Sources to sweep — category coverage map
-
-**Every sweep must query at least one source per category below.** Most
-categories take one search + a page fetch — total overhead per sweep is
-small, and the payoff is a feed that doesn't collapse into "coding agent
-of the day, every day".
-
-You may skip a category's sources only if you genuinely searched a
-reasonable substitute (e.g. if the YouTube channel list is down, a
-general `youtube.com` search for the same creators counts). You may NOT
-skip a category just because it "usually has nothing" — that's exactly
-how categories die.
-
-### `repo` — GitHub + Show HN
-- `github.com/trending?since=daily` filtered to AI/ML.
-- Hacker News "Show HN" posts tagged AI/LLM/agent.
-- Any HN front-page post that is a repo link with 100+ points.
-
-### `tool` — product launches, shipped features
-- Hacker News front page top 30 — AI tool/product posts with 100+ points.
-- Product Hunt today (`producthunt.com`), AI category.
-- Lab product blogs: openai.com/index, anthropic.com/news, cursor.com/blog,
-  windsurf.com/blog, github.blog (Copilot), vercel.com/blog (AI SDK).
-- Coding agents to watch: Cursor, Claude Code, Windsurf, Cline, Aider,
-  Continue, OpenCode, Kabnan, t3code, Codium, Tabnine, Codeium.
-
-### `model` — frontier + open-weights
-- HuggingFace trending: `huggingface.co/models?sort=trending`.
-- Lab blogs: openai.com/index, anthropic.com/news, deepmind.google,
-  mistral.ai/news, x.ai/blog, ai.meta.com/blog, cohere.com/blog,
-  qwenlm.github.io, moonshot.ai.
-- r/LocalLLaMA hot (open weights).
-
-### `paper` — arXiv + HF Papers
-- `huggingface.co/papers` front page — trending AI papers with discussion.
-- `arxiv.org/list/cs.LG/recent`, `cs.CL/recent`, `cs.AI/recent` — pick
-  items that *also* have code, a demo, or public discussion. Skip pure
-  theory with no implementation.
-
-### `dataset` — new training/eval corpora
-- `huggingface.co/datasets?sort=trending`.
-- Lab releases when a paper or model ships with a novel public dataset.
-
-### `benchmark` — leaderboards + evals
-- HF leaderboards (`huggingface.co/spaces` trending — filter to evals).
-- LMSys / ChatBot Arena updates.
-- New eval repos on GitHub trending tagged `benchmark` / `eval`.
-
-### `algorithm` — named techniques
-- arXiv papers AND HN/Twitter discussion threads that name a new
-  decoding / attention / training / RL method with a reference
-  implementation.
-
-### `article` — influential voices
-- simonwillison.net (Simon Willison), karpathy.ai, latent.space (Swyx),
-  interconnects.ai (Nathan Lambert), oxen.ai/blog, eugeneyan.com,
-  lilianweng.github.io, chiphuyen.com.
-- Substack: Stratechery (AI posts), Ahead of AI (Sebastian Raschka),
-  Import AI (Jack Clark), The Batch (Andrew Ng).
-- Twitter/X viral technical threads (1M+ impressions) with real substance.
-
-### `video` — YouTube + conference talks
-- YouTube channels (check new uploads within last 48h, even on 2-hour
-  cadence — videos don't drop every 2 hours):
-  Two Minute Papers, AI Explained, Yannic Kilcher, Fireship (AI episodes),
-  Matthew Berman, Sam Witteveen, 1littlecoder, Wes Roth, AICodeKing,
-  David Ondrej, Riley Brown.
-- Official lab demo videos (OpenAI, Anthropic, DeepMind, Google AI channels).
-- Conference keynotes / talks (NeurIPS, ICML, ICLR, KDD, YC AI Startup
-  School) when clips drop.
-
-### `rumor` — credible speculation
-- theinformation.com (AI coverage), bloomberg.com/technology (AI beat
-  reporters), theverge.com/ai, theregister.com/AI.
-- Substack rumors from credible insiders (only those with track record).
-- Twitter leaks with screenshots / code references from known sources.
-- See the `rumor` category rules above — no anonymous speculation.
-
-### `security` — AI/LLM safety, red-teaming, guardrails
-- github.com/trending filtered to security-tagged AI/LLM projects.
-- HN posts on LLM jailbreaks, prompt-injection attacks, model extraction.
-- arXiv `cs.CR` recent, filtered to AI/ML.
-- Lab safety posts: anthropic.com/news (alignment), openai.com/research
-  (safety), deepmind.google/research/safety.
-- Security-focused newsletters (Simon Willison's prompt-injection
-  coverage is the canonical source).
-
-### `tutorial` — guides, cookbooks
-- Anthropic/OpenAI/Google cookbooks (new entries).
-- Hugging Face blog tutorials.
-- github.com/anthropics/anthropic-cookbook,
-  github.com/openai/openai-cookbook — new commits / new notebooks.
-- DeepLearning.AI short courses (new launches).
-
-### `showcase` — "look what I built"
-- Hacker News "Show HN" AI projects with 100+ points.
-- r/LocalLLaMA / r/MachineLearning "I built X" threads trending.
-- Twitter viral demos with working link (not just a video).
-
-### `resource` — curated lists, learning paths
-- New / newly-trending `awesome-*` repos on GitHub trending.
-- HN posts about comprehensive learning paths / cheat sheets with traction.
-- New issues of major newsletters (TLDR AI, The Batch, Ben's Bites) when
-  they publish a genuinely novel guide (not the daily news roundup).
-
-### `ecosystem` — structural news
-- PyTorch Foundation, Linux Foundation AI, LF & Data announcements.
-- License changes on widely-used projects (HN front page usually flags these).
-- Lab spinouts / shutdowns covered by multiple outlets.
-- Major deprecations announced by labs (see lab blogs above).
-
-### Social signal sources — cross-reference for hype
-Check these every sweep to verify "is this actually trending":
-- Hacker News front page top 30.
-- r/LocalLLaMA hot, r/MachineLearning top/week, r/artificial top.
-- Twitter/X AI search: "AI release", "just shipped", "launching today".
-  Check: @simonw, @swyx, @karpathy, @DrJimFan, @sama, @ylecun,
-  @AnthropicAI, @OpenAI, @GoogleDeepMind.
-
-### What to do when a category is empty
-If after genuinely searching a category's sources you find no item that
-passes the notability bar, **include it in `coverage` but emit zero items
-for it**. This is the normal case for half the categories on any given
-sweep. The goal is to *look*, not to inflate numbers.
-
-## Hard rules
-
-- **Rumors are ALLOWED** when from credible sources (journalists, insiders,
-  leaked docs) — use `categories: ["rumor"]` and `importance: "rumor"`. See
-  the `rumor` category section below.
-- **No unsourced speculation.** Random Twitter guesses without insider info
-  are not rumors — drop them.
-- **No roadmap items.** "Coming soon" without a ship date is not news.
-- **Deduplicate** against the existing feed by `id` (kebab-case
-  `<org>-<short-slug>`).
-- **`importance`** scale (judge each release on its own merits — there is
-  **no per-week quota** on any tier):
-  - `rumor`   → credible speculation from reliable sources (ALLOWED)
-  - `notable` → solid release, narrow or specialist audience
-  - `major`   → broad impact across the field; multiple downstream teams
-                will care this week
-  - `seismic` → frontier-defining OR hype-level: the field is talking
-                about this right now. See "MISSION: CATCH THE HYPE" at
-                the top of this prompt — under-calling hype is a worse
-                failure than over-calling.
-  - If three seismic things ship in one week, all three are seismic. Do not
-    artificially demote real frontier releases to fit a quota.
-
-  **Auto-`seismic` triggers** (no judgment call needed — if any of these
-  apply, the item IS seismic):
-  - Any pricing / plan / access change from a frontier lab (Anthropic,
-    OpenAI, Google DeepMind, GitHub Copilot, Cursor, Perplexity) that
-    affects existing or new paying users — even if it's framed as a
-    "test" or "experiment". Example: Anthropic A/B-testing Claude Code
-    out of the Pro plan = seismic, regardless of test scope.
-  - A new flagship model from a top-5 lab (OpenAI, Anthropic, Google
-    DeepMind, Meta, xAI, Mistral, Moonshot, Qwen) — including image,
-    video, and voice models, not just text. A new "GPT-X.Y", "Claude
-    X.Y", "Gemini X.Y", or equivalent named flagship is seismic by
-    default.
-  - A frontier model adds a new modality or fundamental capability
-    (reasoning, vision, web access, agentic tool use, real-time voice).
-    A "regular image model" → "reasoning image model" jump is seismic.
-  - HN front page #1 OR 500+ HN points OR multi-outlet coverage on
-    the same day = seismic regardless of the underlying topic.
-- **`summary`** ≤ 240 chars, plain English, no hype words ("revolutionary",
-  "groundbreaking", "game-changing" — banned). Length is the only constraint;
-  sentence count is up to you.
-- **`explainer`** is REQUIRED on every item. It is the heart of the page —
-  the whole point of this site is "I can read one card and actually
-  understand what this release is and why I should care." Fields:
-  - `tagline`     — one sentence, ≤ 140 chars, plain. The 'elevator pitch'.
-  - `whatIsIt`    — what it is, in plain language. Pretend the reader has
-                    heard of LLMs but not of *this specific thing*. No jargon
-                    without a gloss. Length: as long as you need, as short
-                    as you can — typically 2–4 sentences. Quality > quota.
-  - `howItWorks`  — the actual mechanism. Be concrete: name the technique,
-                    describe what the model/system actually does. If you'd
-                    be embarrassed to read it to an ML researcher, rewrite
-                    it. No prescribed length — say what's needed.
-  - `whyItMatters`— practical impact. What does this unblock? Who saves
-                    time, money, or pain? No prescribed length.
-  - `forWho`      — optional. One short phrase: "indie devs", "ML
-                    researchers", "self-hosters", etc.
-  - `tryIt`       — optional. One line: a CLI command, a pip install,
-                    a model id, or a URL. Concrete, runnable.
-  Banned in explainers: "revolutionary", "game-changing", "unprecedented",
-  "next-generation", "cutting-edge", emoji, exclamation marks. If you can't
-  fill an explainer field with real substance from a fetched source, drop
-  the whole item.
-- **`tags`** lowercase, hyphenated. Use as many as honestly apply — there
-  is **no cap**. The UI will lay them out. Stop at the point where the next
-  tag is just noise.
-- **`date`** is the **real public release date** as stated by the source
-  (YYYY-MM-DD), **NOT** the day the agent discovered it. Always verify the
-  release date from the primary source. If the source doesn't state an
-  explicit date, use the earliest verifiable publication date (e.g. GitHub
-  first release tag, arXiv submission date, blog post publish date).
-- **`publishDate`** is when YOU (the agent) added this item, written as
-  a **full ISO 8601 timestamp** (e.g. `"2026-04-22T14:33:00Z"`) — NOT
-  just a date. Use the same timestamp as the run's `generatedAt`. **The
-  feed is sorted by `publishDate` DESC so new additions appear at top**,
-  and the UI displays `YYYY-MM-DD HH:MM UTC` on cards so readers can see
-  exactly when each item landed in the feed. A YYYY-MM-DD-only value is
-  accepted as a backwards-compat fallback for pre-2026-04-22 items but
-  should never be emitted by new sweeps. This means a tool released 5
-  days ago that's trending NOW appears at the top of the feed today, with
-  "Released: April 15" shown to readers.
-
-## Image — required, verified, hotlinkable
-
-Every item MUST have an `image` object: `{ url, alt, fit?, credit? }`.
-
-- **`url`** — direct image URL, HTTPS only. Must be **fetched in this run**
-  and confirmed to return a 200 with a valid image content-type. URLs that
-  return HTML (e.g. login walls) or 403 cross-origin are invalid — drop and
-  pick another.
-- **Where to find a good image** (in priority order):
-  1. **`og:image`** meta tag on the canonical URL. Fetch the page, find
-     `<meta property="og:image">` or `<meta name="twitter:image">`, use that
-     URL exactly. This is almost always the right answer for blog posts and
-     product launches.
-  2. **GitHub auto-OG image** for repos:
-     `https://opengraph.githubassets.com/1/{owner}/{repo}` — works for any
-     public repo, no auth.
-  3. **Hugging Face model card banner** — usually the first image in the
-     model card README (`cdn-uploads.huggingface.co/...`).
-  4. **arXiv paper figure 1** — usually accessible at predictable URLs;
-     fetch the abstract page, find the figure URL, verify it.
-  5. **Wikimedia Commons** for stable brand logos as a last resort
-     (e.g. `https://upload.wikimedia.org/wikipedia/commons/...`).
-- **Avoid hotlink-protected hosts**. Specifically known to block hotlinking:
-  `scontent.fbcdn.net`, `pbs.twimg.com`, anything behind `instagram.com`,
-  most LinkedIn CDNs. Prefer the org's own CMS (`about.fb.com/wp-content/`,
-  `cdn.sanity.io`, `microsoft.ai/wp-content/`, `cdn-uploads.huggingface.co`).
-- **`alt`** — required. Descriptive, ≤ 120 chars, no "image of".
-- **`fit`** — `"contain"` is the **default** and the safe choice for almost
-  every release: most release images are 1.91:1 OG social cards, GitHub
-  social cards, model card banners, or logos — all of which contain text,
-  stats, or branding at the edges that get destroyed by cropping. Only use
-  `"cover"` for true full-bleed photographic heroes where every region of
-  the image is equally interesting.
-- **`credit`** — optional. Photo / figure credit if the source asks for one.
-- If after good-faith searching you cannot find a verified image for an
-  item, **drop the item**. The page is image-first; a card without an image
-  is a hole.
-
-## Links — required, verified, useful
-
-- **`url`** is the canonical primary source. It MUST be one of:
-  - the official announcement / blog post for the release,
-  - the arXiv abstract page (`https://arxiv.org/abs/...`) for a paper,
-  - the GitHub repo README for a code release,
-  - the model card (HuggingFace / docs page) for an open-weights model.
-  - **NOT** a homepage. **NOT** a search results page. **NOT** a vague index.
-- **`links`** is REQUIRED on every item, with **at least 2** entries. Each
-  entry has `{label, url}`. Aim for 3–5 entries when relevant. Cover as many
-  of these facets as the release actually has, in this priority order:
-  1. **Announcement** (blog post / press release / launch post)
-  2. **Paper** (arXiv / conference PDF)
-  3. **Code / repo** (GitHub / GitLab)
-  4. **Docs** (API reference / quickstart / model card)
-  5. **Demo** (hosted demo, playground, video)
-  6. **Pricing / license**
-- Every link must be **directly relevant** to *this specific release*. A
-  link to the org's homepage is not allowed. A link to a blog index is not
-  allowed unless that index *is* the announcement.
-- Labels are short (≤ 24 chars), Title Case, e.g. "Announcement", "Paper",
-  "Repo", "Docs", "Quickstart", "Model card", "Pricing", "Demo".
-- Before writing each link, fetch it and confirm 200 + relevance. Yes, every
-  link, every run. If the host environment caches fetches, use the cache —
-  but the verification step is non-negotiable.
-
-## Sweep report — append to sweeps.json
-
-After you've written `src/data/releases.json`, you MUST also append one
-entry to `src/data/sweeps.json`. This is the feed that powers the `/log`
-page — it is how users (and you, next run) can see what changed.
-
-1. Read `src/data/sweeps.json`. It has shape `{ sweeps: SweepReport[] }`
-   where `SweepReport` is defined in `src/data/schema.ts`.
-2. Compute the diff vs. the previous `releases.json` (the file you just
-   overwrote): which items did you ADD, UPDATE (same id, changed content),
-   and REMOVE?
-3. Build ONE new `SweepReport`:
-   - `id` — kebab slug from the timestamp, e.g. `sweep-2026-04-12t1642z`
-   - `timestamp` — same ISO as the feed's `generatedAt`
-   - `source` — `"github-actions-sweep"` for cron runs;
-     `"manual-<reason>"` for human-kicked runs (e.g. `manual-backfill`)
-   - `summary` — ONE or TWO sentences, friendly and direct. Describe the
-     sweep as a whole, not each item. Examples:
-     - "Quiet morning — three hot drops led by the Gemma 4 family on
-       HuggingFace."
-     - "Busy week across models and agent repos; 18 items including
-       three frontier-lab releases."
-     Same banned words as explainers (no "revolutionary", "game-changing",
-     "unprecedented", etc).
-   - `counts` — `{ added: N, updated: N, removed: N }`
-   - `added[]` — one entry per added item: `{ id, title, category, note }`
-     where `category` is the item's FIRST (primary) category and `note`
-     is one short sentence explaining why this item was picked.
-   - `updated[]` — one entry per item whose existing content changed:
-     `{ id, title, note }`. Most sweeps will have zero of these.
-   - `removed[]` — if you dropped a previously-shipped item, list it as
-     `{ id, title, reason }`. Also usually zero.
-   - `coverage[]` — **REQUIRED.** Array of category ids you actually
-     queried this sweep per the category coverage map above, regardless
-     of whether any item was added for them. This is the proof that a
-     zero-result sweep still *looked* everywhere. Example for a typical
-     sweep (all 15 categories): `["model", "repo", "tool", "article",
-     "video", "rumor", "security", "paper", "dataset", "benchmark",
-     "algorithm", "tutorial", "showcase", "resource", "ecosystem"]`.
-     If you legitimately could not reach a category's sources this run
-     (e.g. persistent fetch failure), leave it out AND note the reason
-     in `summary`. Do NOT pad this list with categories you did not
-     actually search — it is the audit trail.
-4. APPEND (do not prepend, do not rewrite old entries) this new
-   SweepReport to the `sweeps` array and write the file back.
-5. If `sweeps.json` doesn't exist yet, create it as
-   `{ "sweeps": [<your report>] }`. Normally it exists.
-
-**The sweep report is NOT optional.** A run without a report is an
-incomplete run. Generate it even if you added zero items — a "no new
-releases that pass the bar" sweep is still a valuable entry in the log.
-
-## Output
-
-Write the full updated feed (existing items + new items, sorted by
-**`publishDate` descending, then `date` descending**) to
-`src/data/releases.json`. New items you add today go to the TOP of the feed
-regardless of their release date. For new items, set `publishDate` to today.
-Existing items without `publishDate` use their `date` as fallback.
-
-The UI renders items in this exact order as a single continuous feed (no
-grouping by importance). Card size is driven by `importance`, so a `seismic`
-item gets a large card and a `notable` item gets a small card, but they all
-live in one chronological stream. Set:
-
-- `generatedAt`   → current ISO timestamp
-- `promptVersion` → frontmatter `prompt-version` above
-- `source`        → short label of the run (e.g. `daily-sweep`,
-  `manual-backfill`)
-
-After writing, validate against `src/data/schema.ts` (run `bun run typecheck`
-or instantiate the parsed JSON as `ReleaseFeed`). If validation fails, fix
-and re-emit. Do **not** ship a partial file.
+Almost always combines with another category (e.g. license change on
+a model = `["ecosystem", "model"]`).
 
 ## Self-check before emitting
 
-For every item in the file you are about to write, answer YES to all of:
+For every item, answer YES to all of:
 
-1. Did I fetch the primary `url` in this run and get HTTP 200?
-2. Is the page at `url` actually about *this specific release*, not a generic
-   homepage or blog index?
-3. Did I fetch every URL in `links` in this run and get HTTP 200?
-4. Did I fetch `image.url` in this run and confirm it returns a real image?
-5. Is `image.alt` non-empty and descriptive?
-6. Does every number in `metrics` appear, with the same units, in a source
-   I fetched?
-7. Does every claim in `summary` and `explainer` trace to a fetched source?
-8. Does the item have ≥ 2 entries in `links` covering distinct facets?
+1. Did I fetch `url` in this run with 200 + relevance to THIS specific
+   release (not a homepage)?
+2. Did I fetch every `links[].url` and `image.url` in this run?
+3. Is `image.alt` non-empty and descriptive?
+4. Is every claim in `summary` and `explainer` grounded in a fetched
+   source? Every metric in `metrics`?
+5. Does the item have ≥2 entries in `links` covering distinct facets?
+6. Is `date` within 72h of the sweep timestamp?
+7. Did I scan `existing[].title` for semantic collisions and confirm
+   none?
+8. Would I tweet about this today as "this just shipped"?
 
-And at the sweep level, answer YES to:
+For seismic items specifically:
+9. Is this a NEW SOTA model OR a fundamentally new capability from a
+   top lab (OpenAI, Anthropic, Google DeepMind, Meta, xAI, Mistral,
+   Moonshot, Qwen, DeepSeek)? If no → demote to `major`.
 
-9. Did I query at least one primary source for EVERY category in the
-   coverage map? Count them — there are 15 categories (model, repo, tool,
-   article, video, rumor, security, paper, dataset, benchmark, algorithm,
-   tutorial, showcase, resource, ecosystem). If my `coverage[]` array
-   has fewer than 15 entries, I either skipped categories (fix: actually
-   search them) or I'm about to pad the array with categories I didn't
-   check (fix: don't — truncate to what I actually searched and explain
-   in `summary`).
-10. For each category where I searched and found nothing, am I confident
-    that's because nothing qualified, NOT because I bounced off the first
-    page of the first source? A 2-minute check of 2-3 sources per
-    category is the minimum.
+If any answer is NO → fix or drop.
 
-If any answer is NO → fix or drop the item, and re-search the missing
-categories. Then re-run the self-check.
+## Output
 
-## Cadence
+Write `sweep-draft.json` at the repo root. The pipeline scripts (`verify-draft.ts` and `finalize-sweep.ts`) produce the actual `releases.json`
+and `sweeps.json` updates from your draft. Do NOT edit those files
+directly.
 
-This prompt is safe to re-run on any cadence (hourly, daily, manual). It is
-idempotent: re-running with no new releases must produce a feed equivalent
-to the input (only `generatedAt` may change).
+This prompt is idempotent: re-running with no new qualifying releases
+must produce a draft with `newItems: []` (and a `summary` describing
+what you searched). Empty sweep is success.
