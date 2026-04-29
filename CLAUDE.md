@@ -57,22 +57,25 @@ To override the base URL used in canonical tags + sitemap, set the
 
 ### Feed ordering
 
-Single sort: `date` DESC — the original public release date. There is
-NO grouping by importance and NO user-facing sort switcher. What you
-see on the card is what the feed sorts by. Card size (grid span) is
-driven by the `importance` field (seismic = large, major = medium,
-notable = small), but all items flow together in one date-ordered list.
+Single sort: `publishDate` DESC — the moment finalize-sweep ingested
+the item. Newly-swept items always float to the top. There is NO
+grouping by importance and NO user-facing sort switcher. Card size
+(grid span) is driven by the `importance` field (seismic = large,
+major = medium, notable = small), but all items flow together in
+one publishDate-ordered list.
 
-### Dates: ONE field
+### Two date fields
 
-Each item has exactly one date field:
+Each item has two dates, with separate jobs:
 
-- `date` — the public release date (YYYY-MM-DD). Drives ordering AND
-  what readers see on cards / meta tags / Article JSON-LD.
+- `date` (YYYY-MM-DD) — the public release date. Shown on cards,
+  meta tags, Article JSON-LD. The agent sets this from WebFetch.
+- `publishDate` (ISO timestamp) — when finalize-sweep ingested the
+  item. Drives sort order. **Stamped automatically by
+  `finalize-sweep.ts` — the agent must NOT set it.**
 
-There is no separate `publishDate`. If something is too old to belong
-at the top of the feed, don't add it — the 72h hard cap in
-`finalize-sweep.ts` enforces this.
+The 72h hard cap in `finalize-sweep.ts` is on `date`, not
+`publishDate`: items with a `date` older than 72h are rejected.
 
 ### Content updates
 

@@ -106,10 +106,15 @@ export interface ReleaseItem {
   title: string;
   org: string;
   /**
-   * The single canonical date (YYYY-MM-DD) — when the thing was
-   * publicly released. Drives ordering AND is what readers see.
+   * Public release date (YYYY-MM-DD). Shown on the card.
    */
   date: string;
+  /**
+   * ISO timestamp of when finalize-sweep.ts ingested this item into the
+   * feed. Drives sort order so newly-swept items float to the top
+   * regardless of their `date`. Stamped automatically.
+   */
+  publishDate: string;
   url: string;
   /** Short summary — the headline blurb. ≤240 chars. */
   summary: string;

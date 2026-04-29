@@ -157,8 +157,11 @@ if (minSchemaErrors.length > 0) {
   process.exit(1);
 }
 
-// 3) Stamp generatedAt
+// 3) Stamp generatedAt + publishDate on every new item
 const generatedAt = new Date().toISOString();
+for (const item of newItems) {
+  item.publishDate = generatedAt;
+}
 
 // 4) Apply updates in place
 const updatedReports: { id: string; title: string; note: string }[] = [];
@@ -195,7 +198,7 @@ if (feed.items.length !== beforeRemoval - removalIds.size) {
 
 // 6) Merge new items + sort
 feed.items = [...feed.items, ...newItems];
-feed.items.sort((a, b) => b.date.localeCompare(a.date));
+feed.items.sort((a, b) => b.publishDate.localeCompare(a.publishDate));
 feed.generatedAt = generatedAt;
 feed.source = sourceLabel;
 

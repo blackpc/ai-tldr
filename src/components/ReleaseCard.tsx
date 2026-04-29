@@ -69,7 +69,16 @@ export function ReleaseCard({
         <span className={`badge badge-imp imp-${item.importance}`}>
           {importanceLabel[item.importance]}
         </span>
-        <span className="card-date" title="Release date">{item.date}</span>
+        <span
+          className="card-date"
+          title={`Released ${item.date} · Ingested ${new Date(item.publishDate).toISOString()}`}
+        >
+          {(() => {
+            const d = new Date(item.publishDate);
+            const pad = (n: number) => String(n).padStart(2, "0");
+            return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+          })()}
+        </span>
       </div>
 
       <h2 className="card-title">{item.title}</h2>

@@ -4,17 +4,17 @@ import type { Category, ReleaseFeed, ReleaseItem } from "./schema";
 export const feed = raw as ReleaseFeed;
 
 /**
- * Items are always ordered by `date` DESC — the original public release
- * date. Single source of truth: what readers see on the card is what
- * the feed sorts by.
+ * Items are ordered by `publishDate` DESC — the moment finalize-sweep
+ * ingested them — so newly-swept items float to the top regardless of
+ * their real-world `date`. Cards still display `date` to readers.
  */
 export const allItems = (): ReleaseItem[] =>
-  [...feed.items].sort((a, b) => (a.date < b.date ? 1 : -1));
+  [...feed.items].sort((a, b) => (a.publishDate < b.publishDate ? 1 : -1));
 
 export const itemsByCategory = (cat: Category): ReleaseItem[] =>
   feed.items
     .filter((i) => i.categories.includes(cat))
-    .sort((a, b) => (a.date < b.date ? 1 : -1));
+    .sort((a, b) => (a.publishDate < b.publishDate ? 1 : -1));
 
 export const filterItems = (
   items: ReleaseItem[],

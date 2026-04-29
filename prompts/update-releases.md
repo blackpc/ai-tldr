@@ -43,7 +43,7 @@ You write a draft. Scripts validate and merge. You do **NOT** edit
 4. **Draft.** Write `sweep-draft.json` at the repo root:
    ```json
    {
-     "newItems":   [ /* full ReleaseItem[] */ ],
+     "newItems":   [ /* full ReleaseItem[] minus publishDate — stamped by finalize-sweep */ ],
      "updates":    [ { "id": "...", "patch": { ... }, "note": "..." } ],
      "removals":   [ { "id": "...", "reason": "..." } ],
      "summary":    "1–2 sentence sweep summary",
@@ -198,9 +198,11 @@ reason to look, not as a quota.
 
 Every item conforms to `ReleaseItem` in `src/data/schema.ts`. Required:
 `id`, `categories`, `title`, `org`, `date`, `url`, `summary`, `tags`,
-`importance`, `explainer`, `image`, `links`. There is only ONE date
-field — `date` (the public release date, YYYY-MM-DD). It drives both
-ordering and what readers see.
+`importance`, `explainer`, `image`, `links`. Two date fields:
+- `date` (YYYY-MM-DD) — the public release date. Shown on cards.
+  YOU set this from WebFetch.
+- `publishDate` (ISO timestamp) — when we ingested the item. Drives
+  sort order. **DO NOT set this — `finalize-sweep.ts` stamps it.**
 
 ### `id`
 
