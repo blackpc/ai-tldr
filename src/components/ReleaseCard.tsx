@@ -4,7 +4,6 @@ import { ReleaseImage } from "./ReleaseImage";
 import { CardShareButton } from "./CardShareButton";
 import { CardAskAIButton } from "./CardAskAIButton";
 import { track } from "../lib/analytics";
-import { formatReleaseDate } from "../lib/formatDate";
 
 const importanceLabel: Record<ReleaseItem["importance"], string> = {
   rumor: "RUMOR",
@@ -70,7 +69,7 @@ export function ReleaseCard({
         <span className={`badge badge-imp imp-${item.importance}`}>
           {importanceLabel[item.importance]}
         </span>
-        <span className="card-date" title="Release date (local time)">{formatReleaseDate(item.date)}</span>
+        <span className="card-date" title="Release date">{item.date}</span>
       </div>
 
       <h2 className="card-title">{item.title}</h2>
