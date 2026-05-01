@@ -83,6 +83,15 @@ jobs:
 
             USER REQUEST: Read /tmp/request.txt for the full request.
 
+            HARD RULE: do NOT edit anything under .github/workflows/.
+            The workflow's GITHUB_TOKEN cannot push workflow file
+            changes (GitHub blocks it without the `workflow` OAuth
+            scope, which GITHUB_TOKEN never has). The push will be
+            rejected and the run will fail. If the user's request
+            requires a workflow change, write the proposed change into
+            /tmp/agent-report.txt as a code block and explain that the
+            user must apply it manually — do not edit the file.
+
             STEP 1. Read CLAUDE.md and any files relevant to the
             request to understand the existing code.
 
@@ -123,6 +132,29 @@ jobs:
       - name: Push branch and open PR
         run: |
           set -euo pipefail
+
+          # Strip any agent edits to .github/workflows/* — GITHUB_TOKEN
+          # cannot push workflow file changes and the remote will
+          # reject the push. Surface them in the step summary so the
+          # user can apply them by hand if intended.
+          WORKFLOW_CHANGES=$(git status --porcelain -- '.github/workflows/' || true)
+          if [[ -n "${WORKFLOW_CHANGES}" ]]; then
+            echo "::warning::Agent modified .github/workflows/* — reverting (GITHUB_TOKEN can't push these)."
+            {
+              echo "## Workflow file changes were dropped"
+              echo ""
+              echo "The agent edited files under \`.github/workflows/\`."
+              echo "GITHUB_TOKEN cannot push workflow changes, so they"
+              echo "were reverted. Apply them manually if intended."
+              echo ""
+              echo '```'
+              echo "${WORKFLOW_CHANGES}"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            git checkout -- .github/workflows/ || true
+            # Also drop any newly-added (untracked) workflow files.
+            git clean -fd -- .github/workflows/ || true
+          fi
 
           if [[ -z "$(git status --porcelain)" ]]; then
             echo "Agent made no changes - nothing to open a PR for."
