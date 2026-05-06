@@ -43,6 +43,13 @@ if (sourceIdx >= 0) {
   consumed.add(sourceIdx);
   consumed.add(sourceIdx + 1);
 }
+const maxAgeIdx = args.indexOf("--max-age-hours");
+const MAX_DATE_AGE_HOURS_OVERRIDE =
+  maxAgeIdx >= 0 ? parseInt(args[maxAgeIdx + 1], 10) : null;
+if (maxAgeIdx >= 0) {
+  consumed.add(maxAgeIdx);
+  consumed.add(maxAgeIdx + 1);
+}
 const draftPath =
   args.find(
     (a, i) => !a.startsWith("--") && !consumed.has(i),
@@ -128,7 +135,7 @@ if (collisions.length > 0) {
 // 2) Schema-ish minimum: every new item has id, url, image.url, ≥2 links
 const minSchemaErrors: string[] = [];
 const sweepNow = Date.now();
-const MAX_DATE_AGE_HOURS = 72;
+const MAX_DATE_AGE_HOURS = MAX_DATE_AGE_HOURS_OVERRIDE ?? 72;
 for (const item of newItems) {
   if (!item.id) minSchemaErrors.push("(missing id)");
   if (!item.url) minSchemaErrors.push(`${item.id}: missing url`);
