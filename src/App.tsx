@@ -554,6 +554,10 @@ function App() {
         </div>
       </header>
 
+      <div className="subscribe-bar-mobile">
+        <Subscribe />
+      </div>
+
       {page === "feed" ? (
         <>
           <FilterBar
