@@ -445,18 +445,23 @@ function injectMeta(
   // commented out in the source template (`<!-- -->`).
   html = html.replace(/<!--\s*-->\s*/g, "");
 
-  // Inject our block right after <meta name="viewport" ...>
+  // Inject our block right after <meta name="viewport" ...>. Use a
+  // function replacement, NOT a string replacement, because `block`
+  // contains user-supplied content (titles, taglines, descriptions)
+  // that may include `$` — `String.replace` interprets `$&`, `$1`,
+  // `$'`, `$\`` etc. in the replacement string and would otherwise
+  // splice the wrong text into the page.
   const block = renderMetaBlock(meta);
   html = html.replace(
-    /(<meta\s+name="viewport"[^>]*?>)/,
-    `$1\n    ${block}`,
+    /<meta\s+name="viewport"[^>]*?>/,
+    (m) => `${m}\n    ${block}`,
   );
 
-  // Inject the page-specific JSON-LD stack just before </head>. Callers
-  // pass exactly the schema that matches the page — Article+Breadcrumb
-  // for a release, WebSite+Org for home, CollectionPage for index pages.
+  // Inject the page-specific JSON-LD stack just before </head>. Same
+  // `$`-escaping pitfall — use a function replacement so user content
+  // in the JSON-LD body can't hijack the result.
   if (extraJsonLd) {
-    html = html.replace("</head>", `  ${extraJsonLd}\n  </head>`);
+    html = html.replace("</head>", () => `  ${extraJsonLd}\n  </head>`);
   }
 
   return html;
