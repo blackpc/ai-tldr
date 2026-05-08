@@ -121,7 +121,100 @@ const WEBSITE_REF = {
     "Every new AI model, repo, tool, and paper worth knowing — refreshed every 8 hours and explained in plain English.",
   inLanguage: "en-US",
   publisher: { "@id": `${SITE_URL}/#org` },
+  // Sitelinks SearchBox — Google deprecated this rich result Nov 2024
+  // but the markup is still valid schema.org and is shipped here for
+  // completeness (other crawlers + voice surfaces may still use it).
+  potentialAction: {
+    "@type": "SearchAction",
+    target: {
+      "@type": "EntryPoint",
+      urlTemplate: `${SITE_URL}/?q={search_term_string}`,
+    },
+    "query-input": "required name=search_term_string",
+  },
 };
+
+/**
+ * FAQPage JSON-LD — Google sunset the rich result May 7 2026, but
+ * shipping the markup is harmless and other surfaces (Bing, voice
+ * assistants, AI chatbots) still use it. Mirrors the visible FAQ
+ * accordion rendered by <Faq /> on the homepage.
+ */
+const HOME_FAQ = [
+  {
+    q: "What is AI/TLDR?",
+    a: "AI/TLDR is a high-volume tracker of new AI releases — models, open-source repos, developer tools, papers, datasets, benchmarks and security findings — refreshed every 8 hours and explained in plain English.",
+  },
+  {
+    q: "How often is the feed updated?",
+    a: "An automated agent sweeps every 2 hours and publishes a fresh build to the site. Items are sorted by ingest time so the newest releases always float to the top.",
+  },
+  {
+    q: "Is AI/TLDR free?",
+    a: "Yes — the site is free to read with no signup. There is an optional newsletter and a Buy-Me-a-Coffee tip jar if you want to support it.",
+  },
+  {
+    q: "Where does the data come from?",
+    a: "Every item is fetched and verified from a primary source — vendor blog post, GitHub release, arXiv paper, official announcement. Nothing is hallucinated; if a URL or claim cannot be verified, the item is dropped.",
+  },
+  {
+    q: "How do you decide what's worth covering?",
+    a: "We catch the hype: frontier-lab releases, hyped open-source drops, multi-outlet stories, pricing or capability shifts. Items are tagged seismic, major or notable based on impact.",
+  },
+  {
+    q: "Can I subscribe to a newsletter?",
+    a: "Yes — there is a daily digest delivered via Buttondown. Subscribe from the homepage banner.",
+  },
+];
+
+/**
+ * Injects a static, crawler-visible FAQ section into the homepage HTML
+ * just before `</body>`. Google requires FAQPage markup to match
+ * content actually visible on the page — this is the visible content.
+ * The React app doesn't touch it (it lives outside `#root`), so it
+ * survives hydration.
+ */
+function injectVisibleFaq(html: string): string {
+  const items = HOME_FAQ.map(
+    (f) =>
+      `      <details class="static-faq-item"><summary>${escapeText(f.q)}</summary><p>${escapeText(f.a)}</p></details>`,
+  ).join("\n");
+  // FAQ must be user-visible for the FAQPage rich-result match. This
+  // section is rendered AFTER #root, so React's SPA mount doesn't
+  // touch it. Inline styles keep it legible without depending on the
+  // bundled CSS load order.
+  const style = `<style>
+      .static-faq{max-width:760px;margin:64px auto 96px;padding:0 24px;color:#cfcfcf;font-family:Inter,system-ui,sans-serif}
+      .static-faq h2{font-size:24px;font-weight:700;color:#fff;margin:0 0 24px}
+      .static-faq-item{border-top:1px solid #222;padding:16px 0}
+      .static-faq-item summary{cursor:pointer;font-weight:600;color:#fff;list-style:none}
+      .static-faq-item summary::-webkit-details-marker{display:none}
+      .static-faq-item summary::after{content:"+";float:right;font-weight:300;color:#888}
+      .static-faq-item[open] summary::after{content:"−"}
+      .static-faq-item p{margin:12px 0 0;line-height:1.6;color:#bbb}
+    </style>`;
+  const section = `    ${style}
+    <section class="static-faq" aria-label="Frequently asked questions">
+      <h2>Frequently asked questions</h2>
+${items}
+    </section>`;
+  return html.replace("</body>", () => `${section}\n  </body>`);
+}
+
+function renderJsonLdFaq(): string {
+  return wrapJsonLd({
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    mainEntity: HOME_FAQ.map((f) => ({
+      "@type": "Question",
+      name: f.q,
+      acceptedAnswer: {
+        "@type": "Answer",
+        text: f.a,
+      },
+    })),
+  });
+}
 
 /**
  * Homepage JSON-LD: WebSite + Organization as a @graph so Google can
@@ -278,6 +371,163 @@ function renderJsonLdSoftware(item: ReleaseItem): string | null {
       priceCurrency: "USD",
     },
     keywords: item.tags.join(", "),
+  });
+}
+
+/**
+ * Dataset JSON-LD — for release items in the `dataset` category.
+ */
+function renderJsonLdDataset(item: ReleaseItem): string | null {
+  if (!item.categories.includes("dataset")) return null;
+  return wrapJsonLd({
+    "@context": "https://schema.org",
+    "@type": "Dataset",
+    name: item.title,
+    description: item.explainer?.tagline ?? item.summary,
+    url: `${SITE_URL}/releases/${item.id}`,
+    creator: { "@type": "Organization", name: item.org },
+    datePublished: item.date,
+    keywords: item.tags.join(", "),
+    distribution: {
+      "@type": "DataDownload",
+      contentUrl: item.url,
+    },
+    license: "https://creativecommons.org/licenses/by/4.0/",
+  });
+}
+
+/**
+ * TechArticle JSON-LD — for paper / algorithm / benchmark items
+ * (research-y categories where TechArticle is more accurate than
+ * NewsArticle for non-news surfaces).
+ */
+function renderJsonLdTechArticle(item: ReleaseItem): string | null {
+  const techCats: string[] = ["paper", "algorithm", "benchmark", "tutorial"];
+  if (!item.categories.some((c) => techCats.includes(c))) return null;
+  const url = `${SITE_URL}/releases/${item.id}`;
+  return wrapJsonLd({
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    headline: item.title,
+    description: item.explainer?.tagline ?? item.summary,
+    url,
+    datePublished: item.date,
+    author: { "@type": "Organization", name: item.org },
+    publisher: { "@id": `${SITE_URL}/#org` },
+    proficiencyLevel: "Expert",
+    dependencies: item.tags.join(", "),
+  });
+}
+
+/**
+ * Course / LearningResource JSON-LD — emitted for `tutorial` items so
+ * Google Education surfaces can pick them up.
+ */
+function renderJsonLdCourse(item: ReleaseItem): string | null {
+  if (!item.categories.includes("tutorial")) return null;
+  const url = `${SITE_URL}/releases/${item.id}`;
+  return wrapJsonLd({
+    "@context": "https://schema.org",
+    "@type": ["Course", "LearningResource"],
+    name: item.title,
+    description: item.explainer?.tagline ?? item.summary,
+    url,
+    provider: { "@type": "Organization", name: item.org },
+    educationalLevel: "Advanced",
+    learningResourceType: "Tutorial",
+    inLanguage: "en",
+    hasCourseInstance: {
+      "@type": "CourseInstance",
+      courseMode: "Online",
+      courseWorkload: "PT1H",
+    },
+    offers: { "@type": "Offer", price: 0, priceCurrency: "USD" },
+  });
+}
+
+/**
+ * HowTo JSON-LD — Google removed the rich result Sept 2023 but the
+ * markup remains valid schema.org. Emitted for tutorial items that
+ * include an explicit `tryIt` snippet (a single concrete step).
+ */
+function renderJsonLdHowTo(item: ReleaseItem): string | null {
+  if (!item.categories.includes("tutorial")) return null;
+  const tryIt = item.explainer?.tryIt;
+  if (!tryIt) return null;
+  return wrapJsonLd({
+    "@context": "https://schema.org",
+    "@type": "HowTo",
+    name: item.title,
+    description: item.explainer?.tagline ?? item.summary,
+    step: [
+      {
+        "@type": "HowToStep",
+        name: "Try it",
+        text: tryIt,
+      },
+    ],
+  });
+}
+
+/**
+ * Review JSON-LD — every release IS an editorial review (the explainer
+ * block IS the review body). Google's review-snippet rich result
+ * supports a fixed list of `itemReviewed` types. We only emit a
+ * Review when the item maps cleanly to SoftwareApplication
+ * (tool/model) or VideoObject (video) — otherwise the markup
+ * produces no rich result and risks being flagged as spam.
+ *
+ * Rating is derived from editorial `importance`: seismic=5, major=4,
+ * notable=3, rumor=2. This is a real editorial signal, not a fake user
+ * rating.
+ */
+function renderJsonLdReview(item: ReleaseItem): string | null {
+  const ratings: Record<string, number> = {
+    seismic: 5,
+    major: 4,
+    notable: 3,
+    rumor: 2,
+  };
+  const rating = ratings[item.importance];
+  if (!rating) return null;
+  const ex = item.explainer;
+  if (!ex) return null;
+
+  const primary = item.categories[0];
+  const isSoftware = ["tool", "model"].includes(primary) || item.categories.includes("tool");
+  const isVideo = item.categories.includes("video");
+  if (!isSoftware && !isVideo) return null;
+
+  const itemReviewed = isSoftware
+    ? {
+        "@type": "SoftwareApplication",
+        name: item.title,
+        applicationCategory: "DeveloperApplication",
+        operatingSystem: "Any",
+        offers: { "@type": "Offer", price: 0, priceCurrency: "USD" },
+      }
+    : {
+        "@type": "VideoObject",
+        name: item.title,
+        description: ex.tagline,
+        thumbnailUrl: item.image?.url ?? DEFAULT_OG_IMAGE,
+        uploadDate: item.date,
+      };
+
+  return wrapJsonLd({
+    "@context": "https://schema.org",
+    "@type": "Review",
+    itemReviewed,
+    author: { "@type": "Organization", name: "AI/TLDR" },
+    publisher: { "@id": `${SITE_URL}/#org` },
+    datePublished: item.date,
+    reviewBody: `${ex.whatIsIt} ${ex.howItWorks} ${ex.whyItMatters}`.slice(0, 5000),
+    reviewRating: {
+      "@type": "Rating",
+      ratingValue: rating,
+      bestRating: 5,
+      worstRating: 1,
+    },
   });
 }
 
@@ -688,12 +938,19 @@ async function main() {
 
   const items = feed.items as ReleaseItem[];
 
-  // 1. Homepage — WebSite + Organization graph + ItemList of latest releases
-  const homeJsonLd = `${renderJsonLdHome()}\n    ${renderJsonLdHomeItemList(items)}`;
-  await writeHtml(
-    "index.html",
-    injectMeta(template, HOME_META, homeJsonLd),
-  );
+  // 1. Homepage — WebSite + Organization graph + ItemList of latest
+  //    releases + FAQPage. Also injects a visible FAQ section into the
+  //    static HTML so Google can match the FAQPage markup against
+  //    rendered content (FAQ rich-result requirement, even post-2026
+  //    sunset — for Bing/voice surfaces).
+  const homeJsonLd = [
+    renderJsonLdHome(),
+    renderJsonLdHomeItemList(items),
+    renderJsonLdFaq(),
+  ].join("\n    ");
+  let homeHtml = injectMeta(template, HOME_META, homeJsonLd);
+  homeHtml = injectVisibleFaq(homeHtml);
+  await writeHtml("index.html", homeHtml);
 
   // 2. Influencers page — ProfilePage + ItemList of Person entries
   await writeHtml(
@@ -719,15 +976,21 @@ async function main() {
     ),
   );
 
-  // 4. One page per release — NewsArticle + BreadcrumbList + optional
-  // VideoObject + optional SoftwareApplication / SoftwareSourceCode.
+  // 4. One page per release — full structured-data stack. Most blocks
+  // are conditional on category/importance; releases that don't match
+  // a condition simply skip those types.
   let count = 0;
   for (const item of items) {
     const blocks = [
-      renderJsonLdArticle(item),
-      renderJsonLdBreadcrumb(item),
-      renderJsonLdVideo(item),
-      renderJsonLdSoftware(item),
+      renderJsonLdArticle(item),       // NewsArticle (always)
+      renderJsonLdBreadcrumb(item),    // BreadcrumbList (always)
+      renderJsonLdReview(item),        // Review (when itemReviewed is supported)
+      renderJsonLdVideo(item),         // VideoObject (video category)
+      renderJsonLdSoftware(item),      // SoftwareApplication / SoftwareSourceCode
+      renderJsonLdDataset(item),       // Dataset (dataset category)
+      renderJsonLdTechArticle(item),   // TechArticle (paper/algorithm/benchmark/tutorial)
+      renderJsonLdCourse(item),        // Course + LearningResource (tutorial)
+      renderJsonLdHowTo(item),         // HowTo (tutorial w/ tryIt)
     ].filter((b): b is string => !!b);
     const jsonLd = blocks.join("\n    ");
     const html = injectMeta(template, releaseMeta(item), jsonLd);
