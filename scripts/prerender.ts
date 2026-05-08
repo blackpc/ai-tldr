@@ -33,6 +33,7 @@ import { fileURLToPath } from "node:url";
 
 import feed from "../src/data/releases.json" with { type: "json" };
 import type { ReleaseItem } from "../src/data/schema";
+import { influencers } from "../src/data/influencers";
 
 // -----------------------------------------------------------------------
 // Config
@@ -44,7 +45,13 @@ const SITE_URL =
 const DEFAULT_OG_IMAGE = `${SITE_URL}/og-image.png`;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DIST = join(__dirname, "..", "dist");
+// `@cloudflare/vite-plugin` splits the build into:
+//   dist/client/   ← static assets (the SPA) — what we post-process
+//   dist/ai_tldr/  ← compiled Worker + a wrangler.json that points
+//                    `assets.directory` at `../client`
+// Everything we generate (HTML, sitemap, robots.txt, feed.json) MUST
+// land in dist/client/ — files written to dist/ alone are NOT served.
+const DIST = join(__dirname, "..", "dist", "client");
 const TEMPLATE_PATH = join(DIST, "index.html");
 
 // -----------------------------------------------------------------------
@@ -154,7 +161,10 @@ function renderJsonLdArticle(item: ReleaseItem): string {
   const description = item.explainer?.tagline ?? item.summary;
   const data = {
     "@context": "https://schema.org",
-    "@type": "Article",
+    // NewsArticle is the right subtype: AI/TLDR is a release-tracking news
+    // feed, every item has a real publication date, and Google's News
+    // surfaces (Top Stories, News tab, Discover) require NewsArticle.
+    "@type": "NewsArticle",
     headline: item.title,
     description,
     url,
@@ -181,8 +191,162 @@ function renderJsonLdArticle(item: ReleaseItem): string {
     isPartOf: { "@id": `${SITE_URL}/#website` },
     articleSection: item.categories[0],
     keywords: item.tags.join(", "),
+    // Speakable: tells Google Assistant / voice surfaces which parts of
+    // the page are read out loud. Still a beta feature limited to
+    // US-English news sites, which is exactly what we are.
+    speakable: {
+      "@type": "SpeakableSpecification",
+      cssSelector: ["title", "meta[name=description]"],
+    },
   };
   return wrapJsonLd(data);
+}
+
+/**
+ * VideoObject JSON-LD — emitted on release pages whose primary category
+ * is `video`. Promotes the page into Google's video carousel + Watch tab.
+ */
+function renderJsonLdVideo(item: ReleaseItem): string | null {
+  if (!item.categories.includes("video")) return null;
+  const url = `${SITE_URL}/releases/${item.id}`;
+  return wrapJsonLd({
+    "@context": "https://schema.org",
+    "@type": "VideoObject",
+    name: item.title,
+    description: item.explainer?.tagline ?? item.summary,
+    thumbnailUrl: item.image?.url ?? DEFAULT_OG_IMAGE,
+    uploadDate: item.date,
+    contentUrl: item.url,
+    embedUrl: item.url,
+    publisher: { "@id": `${SITE_URL}/#org` },
+    ...(item.author && {
+      creator: {
+        "@type": "Person",
+        name: item.author.name,
+        ...(item.author.profileUrl && { url: item.author.profileUrl }),
+      },
+    }),
+  });
+}
+
+/**
+ * SoftwareApplication / SoftwareSourceCode JSON-LD — emitted for items
+ * whose primary category is `tool`, `repo`, or `model`. Lets Google
+ * render software-specific rich results (name, category, free pricing).
+ */
+function renderJsonLdSoftware(item: ReleaseItem): string | null {
+  const primary = item.categories[0];
+  const isRepo = item.categories.includes("repo");
+  const isTool = item.categories.includes("tool") || primary === "tool";
+  const isModel = primary === "model";
+  if (!isRepo && !isTool && !isModel) return null;
+
+  const url = `${SITE_URL}/releases/${item.id}`;
+  if (isRepo) {
+    return wrapJsonLd({
+      "@context": "https://schema.org",
+      "@type": "SoftwareSourceCode",
+      name: item.title,
+      description: item.explainer?.tagline ?? item.summary,
+      codeRepository: item.url,
+      url,
+      author: { "@type": "Organization", name: item.org },
+      programmingLanguage: item.tags.find((t) =>
+        ["python", "typescript", "javascript", "rust", "go", "c++", "cuda"].includes(
+          t.toLowerCase(),
+        ),
+      ),
+      keywords: item.tags.join(", "),
+    });
+  }
+  return wrapJsonLd({
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    name: item.title,
+    description: item.explainer?.tagline ?? item.summary,
+    url,
+    applicationCategory: isModel ? "DeveloperApplication" : "DeveloperApplication",
+    operatingSystem: "Any",
+    author: { "@type": "Organization", name: item.org },
+    image: item.image?.url ?? DEFAULT_OG_IMAGE,
+    // Most items we track are free / open-weight; the rare paid model
+    // still benefits from being listed as $0 because the offer block
+    // unlocks the SoftwareApplication rich result.
+    offers: {
+      "@type": "Offer",
+      price: 0,
+      priceCurrency: "USD",
+    },
+    keywords: item.tags.join(", "),
+  });
+}
+
+/**
+ * ItemList JSON-LD for the homepage — top N most recent releases. Even
+ * though the carousel rich result is restricted to specific verticals,
+ * Google still uses ItemList markup to understand list structure and it
+ * can surface in "List of …" SERPs.
+ */
+function renderJsonLdHomeItemList(items: ReleaseItem[]): string {
+  return wrapJsonLd({
+    "@context": "https://schema.org",
+    "@type": "ItemList",
+    name: "Latest AI Releases",
+    description: "Most recent AI model, tool, repo, paper and benchmark releases.",
+    itemListOrder: "https://schema.org/ItemListOrderDescending",
+    numberOfItems: items.length,
+    itemListElement: items.slice(0, 30).map((item, i) => ({
+      "@type": "ListItem",
+      position: i + 1,
+      url: `${SITE_URL}/releases/${item.id}`,
+      name: item.title,
+    })),
+  });
+}
+
+/**
+ * ProfilePage + ItemList JSON-LD for the influencers index page. Each
+ * influencer is marked up as a Person with handle, image, sameAs links,
+ * and follower count via interactionStatistic.
+ */
+function renderJsonLdInfluencers(
+  list: { id: string; name: string; realName?: string; handle: string; bio: string; image: string; url: string; followersRaw: number; platform: string; links?: { url: string }[] }[],
+): string {
+  return wrapJsonLd({
+    "@context": "https://schema.org",
+    "@type": "ProfilePage",
+    "@id": `${SITE_URL}/influencers#webpage`,
+    url: `${SITE_URL}/influencers`,
+    name: "Top AI Influencers to Follow",
+    isPartOf: { "@id": `${SITE_URL}/#website` },
+    publisher: { "@id": `${SITE_URL}/#org` },
+    mainEntity: {
+      "@type": "ItemList",
+      itemListOrder: "https://schema.org/ItemListOrderDescending",
+      numberOfItems: list.length,
+      itemListElement: list.map((p, i) => ({
+        "@type": "ListItem",
+        position: i + 1,
+        item: {
+          "@type": "Person",
+          name: p.realName ?? p.name,
+          alternateName: p.name,
+          identifier: p.handle,
+          description: p.bio,
+          image: p.image.startsWith("http")
+            ? p.image
+            : `${SITE_URL}${p.image}`,
+          url: p.url,
+          sameAs: [p.url, ...(p.links?.map((l) => l.url) ?? [])],
+          interactionStatistic: {
+            "@type": "InteractionCounter",
+            interactionType: "https://schema.org/FollowAction",
+            userInteractionCount: p.followersRaw,
+          },
+        },
+      })),
+    },
+  });
 }
 
 /**
@@ -376,9 +540,25 @@ const LOG_META: PageMeta = {
 // Sitemap
 // -----------------------------------------------------------------------
 
-function buildSitemap(
-  urls: { loc: string; lastmod?: string; changefreq?: string; priority?: number }[],
-): string {
+interface SitemapUrl {
+  loc: string;
+  lastmod?: string;
+  changefreq?: string;
+  priority?: number;
+  /** Image URL(s) attached to this page — emits <image:image> entries. */
+  images?: { loc: string; caption?: string; title?: string }[];
+  /** Video metadata — emits a single <video:video> entry per URL. */
+  video?: {
+    thumbnail_loc: string;
+    title: string;
+    description: string;
+    content_loc?: string;
+    player_loc?: string;
+    publication_date?: string;
+  };
+}
+
+function buildSitemap(urls: SitemapUrl[]): string {
   const body = urls
     .map((u) => {
       const parts = [`    <loc>${escapeText(u.loc)}</loc>`];
@@ -386,13 +566,104 @@ function buildSitemap(
       if (u.changefreq) parts.push(`    <changefreq>${u.changefreq}</changefreq>`);
       if (u.priority !== undefined)
         parts.push(`    <priority>${u.priority.toFixed(1)}</priority>`);
+      for (const img of u.images ?? []) {
+        const inner = [`      <image:loc>${escapeText(img.loc)}</image:loc>`];
+        if (img.caption)
+          inner.push(`      <image:caption>${escapeText(img.caption)}</image:caption>`);
+        if (img.title)
+          inner.push(`      <image:title>${escapeText(img.title)}</image:title>`);
+        parts.push(`    <image:image>\n${inner.join("\n")}\n    </image:image>`);
+      }
+      if (u.video) {
+        const v = u.video;
+        const inner = [
+          `      <video:thumbnail_loc>${escapeText(v.thumbnail_loc)}</video:thumbnail_loc>`,
+          `      <video:title>${escapeText(v.title)}</video:title>`,
+          `      <video:description>${escapeText(v.description)}</video:description>`,
+        ];
+        if (v.content_loc)
+          inner.push(`      <video:content_loc>${escapeText(v.content_loc)}</video:content_loc>`);
+        if (v.player_loc)
+          inner.push(`      <video:player_loc>${escapeText(v.player_loc)}</video:player_loc>`);
+        if (v.publication_date)
+          inner.push(`      <video:publication_date>${v.publication_date}</video:publication_date>`);
+        parts.push(`    <video:video>\n${inner.join("\n")}\n    </video:video>`);
+      }
       return `  <url>\n${parts.join("\n")}\n  </url>`;
     })
     .join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+        xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"
+        xmlns:video="http://www.google.com/schemas/sitemap-video/1.1">
 ${body}
 </urlset>
+`;
+}
+
+/**
+ * News sitemap — Google's separate index for news content. Strict spec:
+ *  - last 2 days only
+ *  - max 1000 entries
+ *  - <news:publication> with name + language required
+ *  - <news:publication_date> in W3C format, <news:title> required
+ *
+ * This file is regenerated on every build (every 8h) AND served live by
+ * a Cloudflare Pages Function (functions/sitemap-news.xml.ts) that
+ * filters against the request-time clock so stale items vanish from the
+ * news feed even between deploys.
+ */
+function buildNewsSitemap(items: ReleaseItem[]): string {
+  const cutoff = Date.now() - 48 * 60 * 60 * 1000;
+  const recent = items
+    .filter((it) => {
+      const t = Date.parse(it.publishDate ?? it.date);
+      return Number.isFinite(t) && t >= cutoff;
+    })
+    .slice(0, 1000);
+  const body = recent
+    .map((it) => {
+      const url = `${SITE_URL}/releases/${it.id}`;
+      const pubDate = it.publishDate ?? new Date(it.date).toISOString();
+      return `  <url>
+    <loc>${escapeText(url)}</loc>
+    <news:news>
+      <news:publication>
+        <news:name>AI/TLDR</news:name>
+        <news:language>en</news:language>
+      </news:publication>
+      <news:publication_date>${pubDate}</news:publication_date>
+      <news:title>${escapeText(it.title)}</news:title>
+    </news:news>
+  </url>`;
+    })
+    .join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+        xmlns:news="http://www.google.com/schemas/sitemap-news/0.9">
+${body}
+</urlset>
+`;
+}
+
+/**
+ * Sitemap index — points at the main sitemap + news sitemap. Lets us
+ * split concerns (and lets the news sitemap be served by a live CF
+ * function while the main sitemap stays static).
+ */
+function buildSitemapIndex(entries: { loc: string; lastmod: string }[]): string {
+  const body = entries
+    .map(
+      (e) => `  <sitemap>
+    <loc>${escapeText(e.loc)}</loc>
+    <lastmod>${e.lastmod}</lastmod>
+  </sitemap>`,
+    )
+    .join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+${body}
+</sitemapindex>
 `;
 }
 
@@ -410,23 +681,22 @@ async function main() {
   console.log(`[prerender] SITE_URL = ${SITE_URL}`);
   const template = await readFile(TEMPLATE_PATH, "utf8");
 
-  // 1. Homepage — WebSite + Organization JSON-LD graph
+  const items = feed.items as ReleaseItem[];
+
+  // 1. Homepage — WebSite + Organization graph + ItemList of latest releases
+  const homeJsonLd = `${renderJsonLdHome()}\n    ${renderJsonLdHomeItemList(items)}`;
   await writeHtml(
     "index.html",
-    injectMeta(template, HOME_META, renderJsonLdHome()),
+    injectMeta(template, HOME_META, homeJsonLd),
   );
 
-  // 2. Influencers page — CollectionPage JSON-LD
+  // 2. Influencers page — ProfilePage + ItemList of Person entries
   await writeHtml(
     "influencers/index.html",
     injectMeta(
       template,
       INFLUENCERS_META,
-      renderJsonLdCollectionPage({
-        url: `${SITE_URL}/influencers`,
-        name: "Top AI Influencers to Follow",
-        description: INFLUENCERS_META.description,
-      }),
+      renderJsonLdInfluencers(influencers),
     ),
   );
 
@@ -444,20 +714,33 @@ async function main() {
     ),
   );
 
-  // 4. One page per release — Article + BreadcrumbList JSON-LD
+  // 4. One page per release — NewsArticle + BreadcrumbList + optional
+  // VideoObject + optional SoftwareApplication / SoftwareSourceCode.
   let count = 0;
-  const items = feed.items as ReleaseItem[];
   for (const item of items) {
-    const jsonLd = `${renderJsonLdArticle(item)}\n    ${renderJsonLdBreadcrumb(item)}`;
+    const blocks = [
+      renderJsonLdArticle(item),
+      renderJsonLdBreadcrumb(item),
+      renderJsonLdVideo(item),
+      renderJsonLdSoftware(item),
+    ].filter((b): b is string => !!b);
+    const jsonLd = blocks.join("\n    ");
     const html = injectMeta(template, releaseMeta(item), jsonLd);
     await writeHtml(`releases/${item.id}/index.html`, html);
     count++;
   }
 
-  // 5. Sitemap
+  // 5. Main sitemap — every URL, with image + video extensions on
+  // release pages so Google Images / Video also picks them up.
   const today = new Date().toISOString().slice(0, 10);
-  const sitemap = buildSitemap([
-    { loc: `${SITE_URL}/`, lastmod: today, changefreq: "daily", priority: 1.0 },
+  const mainSitemap = buildSitemap([
+    {
+      loc: `${SITE_URL}/`,
+      lastmod: today,
+      changefreq: "hourly",
+      priority: 1.0,
+      images: [{ loc: DEFAULT_OG_IMAGE, title: "AI/TLDR — daily AI release tracker" }],
+    },
     {
       loc: `${SITE_URL}/influencers`,
       lastmod: today,
@@ -470,21 +753,72 @@ async function main() {
       changefreq: "daily",
       priority: 0.7,
     },
-    ...items.map((i) => ({
-      loc: `${SITE_URL}/releases/${i.id}`,
-      lastmod: i.date,
-      changefreq: "monthly" as const,
-      priority: 0.6,
-    })),
+    ...items.map((i): SitemapUrl => {
+      const loc = `${SITE_URL}/releases/${i.id}`;
+      const url: SitemapUrl = {
+        loc,
+        lastmod: i.date,
+        changefreq: "weekly",
+        priority: 0.7,
+      };
+      if (i.image?.url) {
+        url.images = [
+          {
+            loc: i.image.url,
+            caption: i.explainer?.tagline ?? i.summary,
+            title: i.title,
+          },
+        ];
+      }
+      if (i.categories.includes("video")) {
+        url.video = {
+          thumbnail_loc: i.image?.url ?? DEFAULT_OG_IMAGE,
+          title: i.title.slice(0, 100),
+          description: (i.explainer?.tagline ?? i.summary).slice(0, 2048),
+          content_loc: i.url,
+          player_loc: i.url,
+          publication_date: i.publishDate ?? new Date(i.date).toISOString(),
+        };
+      }
+      return url;
+    }),
   ]);
-  await writeFile(join(DIST, "sitemap.xml"), sitemap, "utf8");
+  await writeFile(join(DIST, "sitemap-main.xml"), mainSitemap, "utf8");
 
-  // 6. robots.txt
-  const robots = `User-agent: *\nAllow: /\nSitemap: ${SITE_URL}/sitemap.xml\n`;
+  // 6. News sitemap — last-48h items only. Static fallback; the live
+  // version is served by functions/sitemap-news.xml.ts (Cloudflare
+  // Pages Function) which re-filters on every request.
+  const newsSitemap = buildNewsSitemap(items);
+  await writeFile(join(DIST, "sitemap-news-static.xml"), newsSitemap, "utf8");
+
+  // 7. Sitemap index — what robots.txt points at. Splits the load across
+  // a static main sitemap and the live CF-function-served news sitemap.
+  const sitemapIndex = buildSitemapIndex([
+    { loc: `${SITE_URL}/sitemap-main.xml`, lastmod: today },
+    { loc: `${SITE_URL}/sitemap-news.xml`, lastmod: today },
+  ]);
+  await writeFile(join(DIST, "sitemap.xml"), sitemapIndex, "utf8");
+
+  // 7b. Expose the feed at /feed.json so the live news-sitemap Worker
+  // can fetch it via the ASSETS binding without inlining the JSON.
+  await writeFile(
+    join(DIST, "feed.json"),
+    JSON.stringify(feed),
+    "utf8",
+  );
+
+  // 8. robots.txt — point at the index AND the news sitemap directly so
+  // Google News surfaces it explicitly.
+  const robots = `User-agent: *
+Allow: /
+
+Sitemap: ${SITE_URL}/sitemap.xml
+Sitemap: ${SITE_URL}/sitemap-news.xml
+`;
   await writeFile(join(DIST, "robots.txt"), robots, "utf8");
 
   console.log(
-    `[prerender] wrote ${count} release pages + influencers + /log + sitemap.xml + robots.txt`,
+    `[prerender] wrote ${count} release pages + influencers + /log + sitemap index + main + news + robots.txt`,
   );
 }
 
