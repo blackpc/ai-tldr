@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { track } from "../lib/analytics";
 
-const BUTTONDOWN_USERNAME = "blackpcme";
+const BUTTONDOWN_USERNAME = "ai-tldr";
 
 export function Subscribe() {
   const [email, setEmail] = useState("");
