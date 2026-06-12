@@ -1,0 +1,352 @@
+{
+  "slug": "vllm-explained",
+  "title": "What Is vLLM?",
+  "seoTitle": "What Is vLLM? PagedAttention & LLM Serving Explained",
+  "metaDescription": "vLLM is the open-source LLM inference engine that introduced PagedAttention. Learn how it manages GPU memory and delivers high-throughput serving.",
+  "keywords": [
+    "what is vllm",
+    "vllm pagedattention explained",
+    "vllm openai compatible server",
+    "llm inference throughput vs latency",
+    "vllm continuous batching",
+    "vllm tutorial 2025"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You will understand how vLLM's PagedAttention and continuous batching squeeze dramatically more throughput from a single GPU than naive serving.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**vLLM** is an open-source [inference server](/learn/local-open-models/inference-and-serving/what-is-inference-server) built at UC Berkeley that became the de-facto standard for high-throughput LLM serving. If you run an open model and need to serve real traffic — not just test it yourself — vLLM is almost certainly part of the answer. It achieves up to **24× the throughput of a naive HuggingFace Transformers setup** by rethinking how a GPU's memory is managed and how requests are scheduled through the model."
+        },
+        {
+          "type": "p",
+          "md": "The core problem vLLM solves is this: every request needs its own *KV cache* — a growing scratchpad that stores the model's intermediate attention results for every token generated so far. Without a smart memory manager, you waste 60–80% of GPU memory on KV caches that are reserved but mostly empty, limiting how many users you can serve at once. vLLM introduced **PagedAttention**, an attention algorithm that manages KV cache memory like an operating system manages RAM, slashing that waste to under 4%."
+        },
+        {
+          "type": "p",
+          "md": "Think of PagedAttention the way a hotel manages rooms. A traditional system reserves an entire floor for each guest — just in case they need it — even when they only occupy one room. PagedAttention rents out individual rooms on demand and reassigns them the moment a guest checks out. Same building, many more guests served."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "vLLM exposes an **OpenAI-compatible REST API** out of the box, so any app that already talks to OpenAI or Claude via the standard `/v1/chat/completions` endpoint can switch to a self-hosted model by changing one line: the `base_url`. No client-side rewrite needed."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "vLLM matters because GPU time is expensive and LLM generation is slow. A server-grade H100 GPU can cost several dollars per hour in the cloud. The difference between a well-tuned vLLM deployment and a naive one can be 10× in total tokens served per dollar — that gap translates directly into whether a product is economically viable."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Throughput** — total tokens served per second across all users. More throughput = lower cost per answer. vLLM's batching and paging are designed to push this number up.",
+            "**Latency** — how long one user waits. Two sub-metrics matter: *time to first token* (TTFT), the wait before any text appears, and *inter-token latency* (ITL), how fast tokens stream after that. Larger batches improve throughput but slightly increase TTFT.",
+            "**Memory efficiency** — the fraction of GPU VRAM actually used for live token state versus wasted on empty reservations. Higher efficiency = more concurrent users per card.",
+            "**OpenAI-compatibility** — because vLLM mirrors the OpenAI API exactly, you can use the standard Python `openai` SDK, LangChain, LlamaIndex, or any other tool without modification."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "By mid-2025 vLLM had grown to nearly 50 000 GitHub stars and reached a v1.0 release. Major cloud providers including Google Cloud and Red Hat ship it as a supported serving backend. It is the most widely deployed open-source LLM serving engine in production."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "If you only have one user, vLLM's advantages are invisible. Its power emerges under concurrency: 10, 100, or 1000 simultaneous requests handled by a single process on a single (or multi-) GPU. That is when the paging and batching mechanics kick in and throughput compounds."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works: PagedAttention and continuous batching",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "vLLM has two signature mechanisms. They solve different problems but work together to achieve its performance."
+        },
+        {
+          "type": "h3",
+          "text": "PagedAttention: virtual memory for the KV cache"
+        },
+        {
+          "type": "p",
+          "md": "Every [transformer](/learn/llm-fundamentals/transformers-and-attention/what-is-a-transformer) layer's [attention mechanism](/learn/llm-fundamentals/transformers-and-attention/how-attention-works) computes keys and values for every token and must revisit them on subsequent steps. The collection of these results is the **KV cache**. It grows one entry per token per layer, so a 70-billion-parameter model answering a 2 000-token request accumulates gigabytes of KV data — and you might have 100 such requests in flight simultaneously."
+        },
+        {
+          "type": "p",
+          "md": "Before PagedAttention, servers pre-allocated a *contiguous* chunk of memory for each request sized to the maximum allowed output length. If a request finished early, that memory sat idle until the whole slot was released. Fragmentation and padding meant the majority of VRAM was wasted at any given moment."
+        },
+        {
+          "type": "p",
+          "md": "PagedAttention splits each request's KV cache into **fixed-size pages** (typically 16 tokens each). A **block table** — a per-request mapping, analogous to a CPU's page table — records which physical memory pages hold which logical token positions. The GPU's attention kernel is rewritten to consult this table and gather non-contiguous pages, assembling the right keys and values on the fly. The result: memory is handed out only when a new page is actually needed, and freed the instant a request finishes."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "How PagedAttention manages KV cache memory",
+            "steps": [
+              { "label": "New request arrives", "sub": "no memory allocated yet" },
+              { "label": "First 16 tokens generated", "sub": "one physical page allocated" },
+              { "label": "Next 16 tokens generated", "sub": "second page allocated, block table updated" },
+              { "label": "Request finishes", "sub": "all pages freed immediately" },
+              { "label": "New request reuses pages", "sub": "fragmentation near zero", "accent": true }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "A bonus feature follows naturally: **copy-on-write sharing**. Two requests with identical prefixes (a shared system prompt, for example) can point their block tables at the *same* physical pages for those early tokens. Only when a request diverges does vLLM allocate a private copy. This is the mechanism behind **prefix caching**, discussed below."
+        },
+        {
+          "type": "h3",
+          "text": "Continuous batching: keeping the GPU saturated"
+        },
+        {
+          "type": "p",
+          "md": "PagedAttention solves memory; continuous batching solves GPU utilization. In a static batch, the server collects N requests, runs them all together until every single one finishes, then accepts new requests. The GPU stalls waiting for the slowest member, and newly-arriving requests queue outside regardless of how much capacity is available."
+        },
+        {
+          "type": "p",
+          "md": "vLLM's scheduler runs on every **token step** (every forward pass of the model). After each step it checks: which requests finished? Which are waiting? It evicts the finished ones and admits new ones immediately, so the batch is always as full as memory allows. This means a short request finishing mid-batch frees its KV pages and a new request slots in on the very next token step — the GPU never sees an idle cycle from finished work."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Static batching vs. continuous batching",
+            "columns": [
+              {
+                "title": "Static batching",
+                "items": [
+                  "Collect N requests, then start",
+                  "All run together until all done",
+                  "GPU waits on the slowest request",
+                  "New arrivals queue outside",
+                  "Burst throughput only"
+                ]
+              },
+              {
+                "title": "Continuous batching (vLLM)",
+                "items": [
+                  "Start immediately, join every step",
+                  "Finished requests evicted instantly",
+                  "Their pages freed and reused",
+                  "New requests admitted next step",
+                  "GPU stays saturated continuously"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "The prefill / decode split"
+        },
+        {
+          "type": "p",
+          "md": "Every request has two distinct phases. **Prefill** processes the full input prompt in one big parallel pass — it is *compute-bound*, using the GPU's arithmetic units intensively. **Decode** generates tokens one at a time — it is *memory-bandwidth-bound*, dominated by reading the KV cache. vLLM v1.0 introduced **chunked prefill**: breaking large prompts into chunks and interleaving them with decode steps. This prevents one long-prompt request from stalling the decode steps of all other requests, reducing TTFT for concurrent users."
+        }
+      ]
+    },
+    {
+      "id": "modern-features",
+      "title": "2025 features: prefix caching, speculative decoding, and more",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The v1.0 release and subsequent updates in 2025 added several features that are now standard in production deployments."
+        },
+        {
+          "type": "h3",
+          "text": "Prefix caching (automatic KV cache reuse)"
+        },
+        {
+          "type": "p",
+          "md": "When many requests share a common prefix — a system prompt, a large retrieved document, a few-shot example block — vLLM computes that prefix's KV pages *once* and reuses them across every request that shares it. Subsequent calls with the same prefix skip prefill entirely for those tokens, reducing TTFT from seconds to milliseconds for [RAG](/learn/rag/rag-fundamentals/what-is-rag) workloads and agent loops that resend the same context repeatedly."
+        },
+        {
+          "type": "h3",
+          "text": "FlashAttention-3 kernels"
+        },
+        {
+          "type": "p",
+          "md": "vLLM integrates [FlashAttention](/learn/llm-fundamentals/transformers-and-attention/flash-attention-explained) — optimized GPU kernels that fuse attention computation to reduce memory reads and writes — as its default attention backend. FlashAttention-3, available on Hopper-generation GPUs (H100), adds asynchronous pipelining and FP8 support for further speed gains. You get this automatically; no configuration required."
+        },
+        {
+          "type": "h3",
+          "text": "Speculative decoding"
+        },
+        {
+          "type": "p",
+          "md": "Decode is slow because each token requires a full forward pass of a large model. Speculative decoding uses a tiny *draft model* to guess several tokens ahead, then the large model verifies all guesses in a single pass. When the guesses are correct (they typically are for predictable tokens), you produce multiple tokens for the cost of one forward pass — same output quality, meaningfully lower latency."
+        },
+        {
+          "type": "h3",
+          "text": "Multi-GPU tensor parallelism"
+        },
+        {
+          "type": "p",
+          "md": "Models too large for one GPU can be sharded across several using tensor parallelism: each GPU holds a slice of every weight matrix and they cooperate on every forward pass. vLLM exposes this via the `--tensor-parallel-size` flag. A single `vllm serve` command can coordinate an 8-GPU node and present it as one API endpoint."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Prefix caching gives the biggest latency win for the least effort in [RAG](/learn/rag/rag-fundamentals/what-is-rag) and agent workloads. Structure your prompts so the system prompt and retrieved context come *before* the user message — vLLM caches from the beginning of the sequence, so a stable prefix is the condition for cache hits."
+        }
+      ]
+    },
+    {
+      "id": "deploying-vllm",
+      "title": "Deploying vLLM as an OpenAI-compatible server",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "vLLM's practical appeal is that it drops in as a local replacement for any OpenAI-compatible client. Install it, run one command, and any application using the standard OpenAI SDK works unchanged."
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "code": "# Install vLLM (requires Python 3.9+, CUDA GPU)\npip install vllm\n\n# Serve a model — downloads from Hugging Face on first run\nvllm serve meta-llama/Llama-3.1-8B-Instruct \\\n  --max-model-len 8192 \\\n  --gpu-memory-utilization 0.90\n\n# The server now listens on http://localhost:8000/v1"
+        },
+        {
+          "type": "p",
+          "md": "The `--gpu-memory-utilization` flag (default `0.90`) tells vLLM what fraction of VRAM to pre-allocate for the KV cache pool. The rest is reserved for the model weights. Tuning this value is the primary lever for balancing max concurrent users against leaving headroom for the weights."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "from openai import OpenAI\n\n# Point the standard OpenAI client at your local vLLM server.\nclient = OpenAI(\n    base_url=\"http://localhost:8000/v1\",\n    api_key=\"not-required\",  # vLLM ignores this by default\n)\n\nresponse = client.chat.completions.create(\n    model=\"meta-llama/Llama-3.1-8B-Instruct\",\n    messages=[\n        {\"role\": \"system\", \"content\": \"You are a concise assistant.\"},\n        {\"role\": \"user\", \"content\": \"What is PagedAttention?\"},\n    ],\n    temperature=0.7,\n    stream=True,\n)\n\nfor chunk in response:\n    delta = chunk.choices[0].delta.content\n    if delta:\n        print(delta, end=\"\", flush=True)"
+        },
+        {
+          "type": "p",
+          "md": "Send ten copies of this script simultaneously and vLLM batches all ten through the GPU together — PagedAttention allocates KV pages for each independently, continuous batching keeps every slot filled, and streaming tokens flow back to each client as they're generated. You wrote zero batching code; vLLM handles it entirely."
+        },
+        {
+          "type": "h3",
+          "text": "Useful launch flags"
+        },
+        {
+          "type": "list",
+          "items": [
+            "`--tensor-parallel-size N` — split the model across N GPUs on one node",
+            "`--max-model-len 4096` — cap the KV cache per request; shorter = more concurrent users",
+            "`--quantization awq` (or `gptq`, `fp8`) — load a [quantized](/learn/local-open-models/quantization-and-formats/what-is-quantization) checkpoint to halve VRAM usage",
+            "`--enable-prefix-caching` — turn on automatic KV page reuse for shared prefixes",
+            "`--max-num-seqs 256` — limit concurrent sequences; prevents OOM under traffic spikes",
+            "`--served-model-name my-llm` — override the model name returned in API responses (useful behind a proxy)"
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "**VRAM math before you launch.** `Model weights (GB) + KV cache pool (GB) must fit in VRAM`. For a 8B model in BF16 that is ~16 GB for weights alone. On a 24 GB card, `--gpu-memory-utilization 0.90` leaves ~5.6 GB for KV cache. That is enough for moderate concurrency, but if requests are long or many, you'll see OOM. Use `--quantization awq` or a smaller `--max-model-len` to reclaim space."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you have vLLM running, there are several directions to explore depending on your workload."
+        },
+        {
+          "type": "h3",
+          "text": "Throughput vs. latency: the fundamental trade-off"
+        },
+        {
+          "type": "p",
+          "md": "Larger batches improve throughput (more total tokens per second) but increase time to first token for individual requests, because the prefill step of a new arrival has to wait its turn in a crowded batch. The right operating point depends on your use case: a chatbot needs low TTFT; an offline document-processing pipeline wants maximum throughput. vLLM exposes `--max-num-batched-tokens` and scheduling knobs to tune this. There is no universal answer — benchmark with your actual traffic shape."
+        },
+        {
+          "type": "h3",
+          "text": "KV cache as the new bottleneck"
+        },
+        {
+          "type": "p",
+          "md": "As [context windows](/learn/llm-fundamentals/context-windows/what-is-a-context-window) grow toward millions of tokens, the KV cache — not the model weights — becomes the dominant VRAM consumer. A 128K-token context at a 70B model easily exceeds 80 GB per request. This is why KV-cache compression, quantizing the KV cache to INT8 or FP8, and offloading cold pages to CPU memory are active research areas, and why vLLM has first-class support for FP8 KV cache quantization on H100s."
+        },
+        {
+          "type": "h3",
+          "text": "vLLM vs. SGLang vs. TensorRT-LLM"
+        },
+        {
+          "type": "p",
+          "md": "vLLM is not the only option. **SGLang** (also from Berkeley) optimizes specifically for structured generation and multi-call agent programs, often outperforming vLLM for complex prompt flows. **TensorRT-LLM** (NVIDIA) applies aggressive CUDA kernel fusion and INT8/INT4 quantization and is fastest on NVIDIA hardware with a supported model — but requires more setup. **TGI** (Hugging Face) is simpler and integrates tightly with HF model cards. The honest answer: run a benchmark with your model, your traffic shape, and your GPU before committing. vLLM is the default because it is the most flexible and widely documented, not because it wins every microbenchmark."
+        },
+        {
+          "type": "h3",
+          "text": "Production realities"
+        },
+        {
+          "type": "p",
+          "md": "A single vLLM process is an *engine*, not a *system*. Real deployments layer on autoscaling (spinning GPU replicas up with traffic and down when idle), a load balancer that routes requests across replicas, request queuing to absorb spikes, and observability tooling to track TTFT, throughput, and error rates. That operational layer is what [LLMOps](/learn/production-llmops/llmops-fundamentals/what-is-llmops) covers. vLLM's OpenAI-compatible API makes this straightforward: put any HTTP proxy in front of it and replicas are transparent to clients."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "vLLM's GitHub repository is one of the most actively developed open-source AI projects — major new features land monthly. Check the [vLLM blog](https://blog.vllm.ai) and the [changelog](https://github.com/vllm-project/vllm/releases) before making architectural decisions; something you read six months ago may already be superseded."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is vLLM and what is it used for?",
+      "a": "vLLM is an open-source LLM inference and serving engine created at UC Berkeley. It is used to run open-weights language models in production, serving many concurrent users from a single GPU process. It is most commonly deployed as an OpenAI-compatible HTTP server, so existing applications can switch from a hosted API to a self-hosted model by changing one URL."
+    },
+    {
+      "q": "What is PagedAttention in vLLM?",
+      "a": "PagedAttention is vLLM's memory management algorithm for the KV cache. Instead of reserving a large contiguous block of GPU memory per request, it breaks each request's KV cache into small fixed-size pages (typically 16 tokens) and allocates them on demand, like virtual memory in an OS. This reduces wasted GPU memory from 60–80% to under 4%, allowing far more concurrent requests on the same hardware."
+    },
+    {
+      "q": "How much faster is vLLM than HuggingFace Transformers?",
+      "a": "In the benchmarks from the original vLLM paper and subsequent evaluations, vLLM achieves up to 24× the throughput of a naive HuggingFace Transformers setup and up to 3.5× the throughput of HuggingFace's own Text Generation Inference server. Real-world gains depend heavily on your traffic pattern, model, and hardware, but 4–10× improvements under realistic concurrent load are common."
+    },
+    {
+      "q": "Does vLLM work with any model?",
+      "a": "vLLM supports most major open-weight model architectures available on Hugging Face, including Llama, Mistral, Qwen, Falcon, Gemma, Phi, and many others. It does not support every model automatically — check the vLLM documentation's list of supported models before choosing. Very new model architectures typically gain support within a few weeks of release."
+    },
+    {
+      "q": "What is the difference between vLLM and Ollama?",
+      "a": "Ollama is optimized for a single user running a model easily on their own machine, including laptops and CPUs. vLLM is a production inference server optimized for high concurrency on server-grade GPUs. Ollama is easier to set up and handles one or two users well; vLLM is harder to configure but serves hundreds of concurrent users efficiently from the same hardware via continuous batching and PagedAttention."
+    },
+    {
+      "q": "What GPU do I need to run vLLM?",
+      "a": "vLLM requires an NVIDIA GPU with CUDA support (CUDA 11.8+). It works on any modern NVIDIA card, but practically: a 7–8B model needs at least 16 GB VRAM in BF16 (e.g. a single A10G or 3090). Larger models require more VRAM — vLLM's tensor parallelism lets you spread a model across multiple GPUs. Apple Silicon (MPS) and AMD ROCm support exists but is less mature."
+    }
+  ],
+  "related": [
+    "what-is-inference-server",
+    "flash-attention-explained",
+    "what-is-quantization",
+    "why-llms-need-gpus",
+    "what-is-a-context-window"
+  ],
+  "furtherReading": [
+    {
+      "title": "Efficient Memory Management for LLM Serving with PagedAttention (arXiv paper)",
+      "url": "https://arxiv.org/abs/2309.06180"
+    },
+    {
+      "title": "Inside vLLM: Anatomy of a High-Throughput LLM Inference System (vLLM Blog)",
+      "url": "https://blog.vllm.ai/2025/09/05/anatomy-of-vllm.html"
+    },
+    {
+      "title": "vLLM official documentation",
+      "url": "https://docs.vllm.ai/en/latest/"
+    }
+  ]
+}

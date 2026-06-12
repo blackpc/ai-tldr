@@ -1,0 +1,305 @@
+{
+  "slug": "how-embeddings-are-trained",
+  "title": "How Embedding Models Are Trained",
+  "seoTitle": "How Embedding Models Are Trained: Contrastive Learning",
+  "metaDescription": "Discover how embedding models learn meaning through contrastive learning, SBERT, bi-encoders vs cross-encoders, and fine-tuning on your own data.",
+  "keywords": [
+    "how embedding models are trained",
+    "contrastive learning embeddings",
+    "sentence transformers training",
+    "bi-encoder vs cross-encoder",
+    "fine-tuning embedding models",
+    "SBERT training explained"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Understand the training recipes — contrastive loss, Siamese networks, and fine-tuning pipelines — that teach embedding models to place similar meanings close together.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "An [embedding model](/learn/embeddings-vector-databases/embeddings-explained/what-are-embeddings) learns to place similar meanings close together in a high-dimensional space. But *how* does a neural network develop that instinct? The secret is not labels — nobody sat down and wrote 'coffee is similar to espresso'. Instead the model learns from **pairs**: show it millions of examples that *should* be close (a question and its answer, a tweet and its paraphrase), and millions of pairs that *should be far apart* (a cooking recipe paired with a legal clause). The training loss rewards tight clusters for the 'same' examples and penalizes them for the 'different' ones. Do this enough, and the model generalises: any new sentence lands at a position consistent with everything it absorbed."
+        },
+        {
+          "type": "p",
+          "md": "This family of training techniques is called **contrastive learning** — you teach by contrast, not by direct labelling. The model never sees a ground-truth meaning; it only sees relationships. The key question is where those pairs come from and how the math turns 'closer/farther' feedback into weight updates. That is what this article walks through."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "You don't need to train your own embedding model from scratch. Pre-trained models like `all-MiniLM-L6-v2` or `text-embedding-3-small` already encode general English meaning. Training from scratch matters for researchers; **fine-tuning** on your domain matters for most practitioners."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Knowing *how* embedding models are trained tells you why they fail and how to fix them. A general-purpose model trained on web text may handle casual English well but fumble on medical jargon, legal citations, or code. That is not a bug — it is a direct consequence of what training pairs it saw. The remedy is fine-tuning on domain-specific pairs, which is inexpensive and routinely doubles retrieval quality in production [RAG](/learn/rag/rag-fundamentals/what-is-rag) systems."
+        },
+        {
+          "type": "p",
+          "md": "It also explains the **bi-encoder vs cross-encoder trade-off** that trips up almost every team building search. The fast path (bi-encoder) and the accurate path (cross-encoder) use fundamentally different architectures rooted in how they were trained — choosing the wrong one for the wrong stage wastes either latency or accuracy."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**RAG retrieval quality** — the embedding model is the single biggest lever in retrieval accuracy. Understanding its training tells you when to swap, fine-tune, or rerank.",
+            "**Semantic search relevance** — general models can miss industry-specific synonyms your users rely on; fine-tuning on your query logs fixes that.",
+            "**Cost control** — smaller fine-tuned models often beat larger general ones on a specific task, letting you cut API spend while improving accuracy.",
+            "**Debugging failures** — if embeddings cluster things that shouldn't be similar, the root cause is usually training-data distribution, not model size."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works: contrastive learning",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Embedding training is built around a **contrastive objective**: bring positive pairs close, push negative pairs apart. The most widely-used formulation is **InfoNCE / NT-Xent loss** (also called in-batch negatives). During a single training step, you sample a batch of N anchor sentences, each with one positive partner. All other sentences in the batch become *implicit negatives*. The loss rewards the model for scoring the true positive higher than every in-batch negative."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Contrastive training loop",
+            "steps": [
+              { "label": "Training pairs", "sub": "(anchor, positive) + negatives" },
+              { "label": "Encoder", "sub": "produces vectors for each", "accent": true },
+              { "label": "Similarity matrix", "sub": "cosine score for every pair" },
+              { "label": "Contrastive loss", "sub": "positive score > all negative scores" },
+              { "label": "Backpropagation", "sub": "update encoder weights" }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Where training pairs come from"
+        },
+        {
+          "type": "p",
+          "md": "The quality of training data has more impact on the final model than architecture choices. Common sources:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Natural Language Inference (NLI) datasets** — pairs labelled as *entailment* (positive) or *contradiction* (negative). SNLI and MultiNLI are the classic sources, and SBERT was originally trained on them.",
+            "**Semantic Textual Similarity (STS) benchmarks** — sentence pairs with human-assigned similarity scores 0–5. Used for evaluation and sometimes fine-tuning.",
+            "**Question–answer pairs** — forum data (Stack Exchange, Reddit QA), FAQ dumps, and MS MARCO (a 8.8M passage retrieval dataset widely used to train retrieval models).",
+            "**Paraphrase databases** — Quora Question Pairs, Wikipedia introductions paired with their corresponding abstracts.",
+            "**Synthetically generated pairs** — newer models like E5-large and GTE use an LLM (GPT-4, Claude) to generate diverse (query, passage) pairs across 93+ languages without human annotation, covering tasks the web doesn't cover well."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Three loss functions you'll actually encounter"
+        },
+        {
+          "type": "table",
+          "headers": ["Loss function", "Input shape", "Best for"],
+          "rows": [
+            ["**Contrastive loss**", "(anchor, pos/neg) + 0/1 label", "Binary similar/dissimilar pairs; simple but needs hard negatives"],
+            ["**Triplet loss**", "(anchor, positive, negative)", "Relative ordering; margin-based; classic for face recognition"],
+            ["**Multiple Negatives Ranking (MNR)**", "Batch of (query, passage) pairs", "Retrieval fine-tuning; in-batch negatives; most popular today"],
+            ["**CoSENT / AnglE loss**", "(sentence1, sentence2, score)", "Regression on similarity scores; good when you have continuous labels"]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "**Multiple Negatives Ranking (MNR) loss** is the current default for fine-tuning retrieval models. It is efficient: a batch of 64 pairs implicitly creates 64 × 63 = 4,032 negative examples from the same batch, requiring no extra negative mining."
+        }
+      ]
+    },
+    {
+      "id": "bi-encoder-vs-cross-encoder",
+      "title": "Bi-encoders vs cross-encoders",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The **Sentence-BERT (SBERT)** paper (Reimers & Gurevych, 2019) introduced the architectural vocabulary that the field still uses. It distinguished two encoding strategies that have very different training regimes and trade-off profiles."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Bi-encoder vs Cross-encoder",
+            "columns": [
+              {
+                "title": "Bi-encoder",
+                "accent": true,
+                "items": [
+                  "Encodes each text independently",
+                  "Produces a single fixed vector per input",
+                  "Similarity = cosine of two stored vectors",
+                  "Encode once, search millions at query time",
+                  "Slightly less accurate on subtle distinctions",
+                  "Used for: retrieval, semantic search, RAG first-stage"
+                ]
+              },
+              {
+                "title": "Cross-encoder",
+                "items": [
+                  "Encodes both texts together in one pass",
+                  "Produces a single relevance score for the pair",
+                  "No reusable vector — must re-run for every pair",
+                  "Cannot pre-compute; scales as O(docs) at query time",
+                  "Higher accuracy on nuanced relevance judgments",
+                  "Used for: reranking top-K results after retrieval"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "**How bi-encoders are trained:** Two copies of the same encoder (a Siamese network) each process one sentence from a training pair. Their pooled output vectors are compared with cosine similarity, and contrastive loss pushes positives together and negatives apart. The key insight is that the two towers share weights — any update from one sentence's pass affects how the other sentence is encoded, forcing the model to build a shared geometry for meaning."
+        },
+        {
+          "type": "p",
+          "md": "**How cross-encoders are trained:** The two texts are concatenated with a separator token (`[SEP]`) and fed through a single BERT-style encoder. A classification head on top of the `[CLS]` token predicts a relevance score. Training uses labelled (query, relevant passage) pairs, often from MSMARCO or human-annotated search logs. The model can attend freely across both texts simultaneously — this joint attention is what makes cross-encoders more accurate but also more expensive: you cannot pre-compute document embeddings."
+        },
+        {
+          "type": "h3",
+          "text": "The production pattern: retrieve then rerank"
+        },
+        {
+          "type": "p",
+          "md": "Because bi-encoders are fast (pre-computed vectors, ANN lookup) and cross-encoders are accurate (full joint attention), production systems combine them. The bi-encoder retrieves the top 50–200 candidates from millions of documents in milliseconds. The cross-encoder then reranks only those candidates, scoring each (query, passage) pair carefully. You get near-cross-encoder accuracy at bi-encoder throughput. This two-stage design is standard in serious [RAG](/learn/rag/rag-fundamentals/what-is-rag) and search pipelines."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Models like `cross-encoder/ms-marco-MiniLM-L-6-v2` (from the Sentence Transformers library) are ready-made rerankers you can drop into this pattern. They score about 15–20% better on MSMARCO relevance than the bi-encoder that retrieved the candidates."
+        }
+      ]
+    },
+    {
+      "id": "fine-tuning-your-embedding-model",
+      "title": "Fine-tuning an embedding model",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Fine-tuning starts from a pre-trained checkpoint (e.g., `BAAI/bge-base-en-v1.5` or `intfloat/e5-base-v2`) and continues training on your own (query, passage) pairs. You need far fewer examples than pre-training — 1,000 to 50,000 high-quality pairs typically suffice to meaningfully shift the model toward your domain."
+        },
+        {
+          "type": "h3",
+          "text": "Step 1 — Build your training pairs"
+        },
+        {
+          "type": "p",
+          "md": "The most reliable source is your own logs: queries users typed + the passages they clicked. If you don't have logs, generate synthetic pairs with an LLM: feed each paragraph of your corpus to a model and ask it to produce three realistic questions that the paragraph answers. This approach, popularised by the E5 training recipe, produces sufficient quality for domain adaptation without human annotation."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "generate_pairs.py",
+          "code": "# Generate synthetic (query, passage) training pairs with an LLM\n# pip install anthropic\nimport anthropic\n\nclient = anthropic.Anthropic()\n\ndef generate_queries(passage: str, n: int = 3) -> list[str]:\n    response = client.messages.create(\n        model=\"claude-haiku-4-5\",\n        max_tokens=300,\n        messages=[{\n            \"role\": \"user\",\n            \"content\": (\n                f\"Generate {n} short, realistic search queries that this passage answers.\\n\"\n                f\"Output one query per line, no numbering.\\n\\nPassage:\\n{passage}\"\n            )\n        }]\n    )\n    return [q.strip() for q in response.content[0].text.strip().split(\"\\n\") if q.strip()]\n\npassage = \"Contrastive learning trains embedding models by pulling positive pairs together and pushing negative pairs apart in vector space.\"\nfor q in generate_queries(passage):\n    print(repr(q))"
+        },
+        {
+          "type": "h3",
+          "text": "Step 2 — Fine-tune with Sentence Transformers"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "finetune_embedding.py",
+          "code": "# pip install sentence-transformers datasets\nfrom sentence_transformers import SentenceTransformer, SentenceTransformerTrainer\nfrom sentence_transformers.losses import MultipleNegativesRankingLoss\nfrom datasets import Dataset\n\n# Start from a strong open-source base model\nmodel = SentenceTransformer(\"BAAI/bge-base-en-v1.5\")\n\n# Your domain pairs: (anchor/query, positive/passage)\ntrain_data = [\n    {\"anchor\": \"how to reset user password\", \"positive\": \"Navigate to Settings > Users, select the account, click Reset Password...\"},\n    {\"anchor\": \"invoice payment terms\",       \"positive\": \"Payment is due within 30 days of the invoice date unless otherwise agreed...\"},\n    # ... add hundreds or thousands more\n]\n\ntrain_dataset = Dataset.from_list(train_data)\n\n# MNR loss: treats all other batch positives as negatives — efficient\nloss = MultipleNegativesRankingLoss(model)\n\ntrainer = SentenceTransformerTrainer(\n    model=model,\n    train_dataset=train_dataset,\n    loss=loss,\n)\ntrainer.train()\nmodel.save_pretrained(\"my-domain-embedding-model\")"
+        },
+        {
+          "type": "h3",
+          "text": "Hard negatives: the quality multiplier"
+        },
+        {
+          "type": "p",
+          "md": "Random in-batch negatives are easy — the model quickly learns to separate totally unrelated sentences. To push quality further, add **hard negatives**: passages that are superficially relevant to the query but actually wrong. For example, for the query 'how to cancel a subscription', a hard negative is a passage about *pausing* a subscription. Hard negatives force the model to learn fine-grained distinctions. Tools like `sentence-transformers mine-hard-negatives` can generate them automatically using a weaker retriever."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Do not mix training and evaluation data. Set aside 10–15% of your pairs as a held-out evaluation set and report NDCG@10 or MRR on it. Without held-out evaluation, you cannot tell whether fine-tuning helped or overfit to your training distribution."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**SimCSE and self-supervised contrastive learning.** A breakthrough from 2021, SimCSE (Gao et al.) showed you can train strong embeddings with *no labelled pairs at all*. Pass the same sentence through the encoder twice with different dropout masks — each pass produces a slightly different vector, and those two vectors form the positive pair. All other sentences in the batch are negatives. The noise from dropout acts as data augmentation. This unsupervised SimCSE approach is surprisingly competitive with NLI-supervised models and is the basis for modern self-supervised embedding recipes."
+        },
+        {
+          "type": "p",
+          "md": "**LLM-based embedding models.** A newer wave of top-ranked models (E5-Mistral, GTE-Qwen2, NV-Embed) adapts decoder-only LLMs (Mistral, Qwen, Llama) into embedding models. The last-token representation (or a pooled representation) is projected into an embedding space and then trained with contrastive loss on synthetic LLM-generated pair datasets. Because the backbone has already absorbed enormous language knowledge from pre-training, these models reach state-of-the-art results on the MTEB benchmark with relatively modest contrastive fine-tuning. The trade-off is cost: inference is slower than smaller encoders like MiniLM."
+        },
+        {
+          "type": "p",
+          "md": "**Matryoshka Representation Learning (MRL).** Modern training recipes add an MRL objective: the model is simultaneously trained to produce good embeddings at full dimensionality *and* at smaller truncated sizes (e.g., 768 → 512 → 256 → 128 dimensions). The first N dimensions of a full vector are themselves a valid embedding. This means you can store the full vector and truncate at query time to trade a small accuracy penalty for dramatically lower storage and faster ANN search — especially useful at the scale of hundreds of millions of vectors."
+        },
+        {
+          "type": "p",
+          "md": "**Instruction-tuned embeddings.** E5-instruct and similar models condition the encoder on a natural-language task description: `\"Represent this sentence for retrieving relevant passages: <sentence>\"`. Prefixing queries and documents with different instructions lets one model handle multiple task types (retrieval, classification, clustering) without separate fine-tuning per task. This is now mainstream: Cohere's `embed-v4.0`, Voyage, and OpenAI's `text-embedding-3` all support input-type flags that select the correct internal representation."
+        },
+        {
+          "type": "p",
+          "md": "**When to fine-tune vs when to switch models.** Before spending engineering time fine-tuning, check the [MTEB leaderboard](https://huggingface.co/spaces/mteb/leaderboard) to see if a recently released general model already outperforms your current one on the task class you care about (retrieval, reranking, clustering). The field moves fast: a model released six months ago may already have a better successor that requires zero tuning. Fine-tune only when you have identified a genuine domain gap that a general model cannot close — verify with [RAG evaluation](/learn/rag/rag-evaluation/how-to-evaluate-rag) metrics before committing."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is contrastive learning for embeddings?",
+      "a": "Contrastive learning trains the model by showing it pairs of examples: similar pairs (positive) should produce nearby vectors, and dissimilar pairs (negative) should produce distant vectors. The loss function rewards the model for scoring positives higher than negatives, without needing explicit meaning labels."
+    },
+    {
+      "q": "What is the difference between a bi-encoder and a cross-encoder?",
+      "a": "A bi-encoder encodes each text independently into a reusable vector; similarity is a cosine comparison of two stored vectors. A cross-encoder concatenates both texts and scores them in a single pass — more accurate but cannot pre-compute document vectors, so it only scales to reranking a small candidate set."
+    },
+    {
+      "q": "How much data do I need to fine-tune an embedding model?",
+      "a": "Between 1,000 and 50,000 high-quality (query, relevant passage) pairs is usually enough for domain adaptation. If you lack human-labelled pairs, use an LLM to generate synthetic questions for each passage in your corpus — this approach consistently improves retrieval quality without annotation cost."
+    },
+    {
+      "q": "What is Multiple Negatives Ranking loss?",
+      "a": "MNR loss treats every other positive passage in the training batch as a negative example for the current query. A batch of 64 pairs implicitly creates thousands of negatives with no extra mining step. It is the most common loss function for fine-tuning retrieval embedding models today."
+    },
+    {
+      "q": "What are hard negatives and why do they matter for embedding training?",
+      "a": "Hard negatives are passages that look superficially similar to a query but are actually irrelevant — for example, a passage about pausing a subscription when the query asks about cancelling one. Training on hard negatives forces the model to learn fine-grained distinctions and produces much better real-world retrieval accuracy than random negatives alone."
+    },
+    {
+      "q": "Do I need to train from scratch or can I fine-tune an existing model?",
+      "a": "Almost always fine-tune. Pre-training an embedding model from scratch requires billions of pairs, months of GPU compute, and large research teams. Starting from a strong open checkpoint like BAAI/bge-base-en-v1.5 or intfloat/e5-base-v2 and fine-tuning on your domain data for a few hours on a single GPU delivers most of the benefit at a tiny fraction of the cost."
+    }
+  ],
+  "related": [
+    "what-are-embeddings",
+    "what-is-semantic-search",
+    "what-is-rag",
+    "what-is-fine-tuning",
+    "how-to-evaluate-rag"
+  ],
+  "furtherReading": [
+    {
+      "title": "Training and Finetuning Embedding Models with Sentence Transformers — Hugging Face blog",
+      "url": "https://huggingface.co/blog/train-sentence-transformers"
+    },
+    {
+      "title": "A Practical Guide to Fine-Tuning Embedding Models — LanceDB blog",
+      "url": "https://www.lancedb.com/blog/a-practical-guide-to-fine-tuning-embedding-models"
+    },
+    {
+      "title": "Sentence Transformers documentation — sbert.net",
+      "url": "https://www.sbert.net/"
+    }
+  ]
+}

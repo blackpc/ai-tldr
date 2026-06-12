@@ -1,0 +1,342 @@
+{
+  "slug": "what-is-langgraph",
+  "title": "What Is LangGraph?",
+  "seoTitle": "What Is LangGraph? Stateful Agent Workflows Explained",
+  "metaDescription": "LangGraph turns an agent into an explicit state machine — nodes, edges, and shared state you can read, debug, and pause. Learn when to reach for it.",
+  "keywords": [
+    "what is langgraph",
+    "langgraph explained",
+    "langgraph vs langchain",
+    "langgraph stateful agents tutorial",
+    "langgraph nodes edges state",
+    "human in the loop agents langgraph"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Understand how LangGraph models an agent as a graph of nodes and shared state — and why that explicitness matters for loops, branching, checkpointing, and human oversight.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**LangGraph** is a low-level orchestration library from the LangChain team that lets you build agents as explicit **graphs**. Instead of hiding the agent loop inside a black box, you draw out every step as a **node** (a Python or TypeScript function), every possible transition as an **edge**, and every piece of information the agent carries as a typed **state** object. The framework runs that graph for you — routing, looping, pausing for human input, and saving progress to disk along the way."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like a flowchart that actually executes. Each box in the flowchart is a node; each arrow is an edge. When you need to loop (call a tool, read the result, decide whether to call another tool or finish), you simply draw an edge that points back to an earlier node. When you need to branch (\"if the tool raised an error, go to the retry node; otherwise go to the answer node\"), you write a **conditional edge** — a function that returns the name of the next node to run."
+        },
+        {
+          "type": "p",
+          "md": "LangGraph sits inside the [LangChain](/learn/agent-frameworks/langchain-ecosystem/what-is-langchain) ecosystem but is fully standalone: you can use it without any other LangChain package, and you can drop any LLM, tool, or retriever into a node — not just LangChain components. It's MIT-licensed and free to use."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The one thing to remember: LangGraph makes the agent loop **explicit and inspectable**. Every decision point is code you wrote, not something hidden in a framework method. That is its biggest selling point — and its biggest learning curve."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Early LLM agent frameworks (including LangChain's own `AgentExecutor`) wrapped the reason-act loop inside a single method call. That worked for demos, but production agents hit real walls fast: the loop was a black box you couldn't easily inspect, you couldn't pause it mid-run to get a human's approval, you couldn't resume it after a crash, and branching logic required increasingly tortured workarounds."
+        },
+        {
+          "type": "p",
+          "md": "LangGraph was built specifically to fix those walls. Its graph model turns every one of those pain points into a first-class feature:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Visibility**: every node, its input state, and its output state are individually observable. LangSmith can trace them one by one.",
+            "**Loops and cycles**: unlike a chain (which is a directed *acyclic* graph — no loops allowed), LangGraph's state machine can revisit earlier nodes as many times as the logic requires.",
+            "**Persistence and fault tolerance**: LangGraph's built-in **checkpointer** saves the state after every node. If a run crashes, you resume from the last checkpoint rather than starting over.",
+            "**Human-in-the-loop**: the graph can pause at a designated node, surface a question or approval request to a human, and then continue once a response arrives — even hours later.",
+            "**Multi-agent composition**: entire subgraphs can be nested as a single node in a parent graph, so a team of specialized agents becomes one composable unit."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "These aren't niche requirements. Any agent handling real tasks — filling out a form, writing and executing code, researching a topic across many tool calls — will encounter loops, failures, and moments where a human *should* review before the agent continues. LangGraph gives you the infrastructure to handle those situations without hacking around the framework."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "LangGraph is used in production by companies including Klarna, Uber, and J.P. Morgan for long-running agentic workflows. It's also the runtime under LangChain's hosted **LangGraph Platform** (formerly LangServe), which adds deployment, scheduling, and a Studio UI on top."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works: nodes, edges, and state",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every LangGraph program is a `StateGraph`. You define it by answering three questions: what shared **state** flows through the graph, what **nodes** process that state, and what **edges** connect them. Once built, you compile the graph and call `.invoke()` (or `.stream()`) to run it."
+        },
+        {
+          "type": "h3",
+          "text": "State"
+        },
+        {
+          "type": "p",
+          "md": "State is a typed dictionary (or Pydantic model) that every node can read from and write to. A simple chatbot agent might carry just `messages: list`. A research agent might carry `query`, `search_results`, `drafted_answer`, and `revision_count`. Each node receives the full current state and returns a partial update — only the keys it changed."
+        },
+        {
+          "type": "h3",
+          "text": "Nodes"
+        },
+        {
+          "type": "p",
+          "md": "A node is any Python (or TypeScript) function that takes the current state and returns a dictionary of state updates. That's it. The function can call an LLM, run a tool, query a database, or do pure logic. Nodes are completely ordinary code — no magic base classes required."
+        },
+        {
+          "type": "h3",
+          "text": "Edges"
+        },
+        {
+          "type": "p",
+          "md": "Edges tell the runtime which node to run next. There are two kinds: **fixed edges** (`graph.add_edge(\"a\", \"b\")` — always go from A to B) and **conditional edges** (`graph.add_conditional_edges(\"a\", routing_fn)` — call a function on the current state and follow the returned node name). The special node name `END` terminates the run."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "The LangGraph agent loop",
+            "steps": [
+              { "label": "START", "sub": "initial state injected" },
+              { "label": "agent node", "sub": "LLM decides: tool call or final answer?", "accent": true },
+              { "label": "conditional edge", "sub": "if tool call → tools node; if done → END" },
+              { "label": "tools node", "sub": "execute requested tool, update state" }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The loop above is the canonical **ReAct** (Reason + Act) pattern made explicit. The agent node calls the LLM; the LLM emits either a tool call or a final answer. The conditional edge routes to the tools node for tool calls (which updates the messages list with the tool result and loops back) or to `END` for a final answer. You can read every line of this logic — nothing is hidden."
+        },
+        {
+          "type": "h3",
+          "text": "A minimal example"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "simple_agent.py",
+          "code": "# pip install langgraph langchain-anthropic\nfrom typing import Annotated\nfrom langgraph.graph import StateGraph, END\nfrom langgraph.graph.message import add_messages\nfrom langchain_anthropic import ChatAnthropic\nfrom langchain_core.tools import tool\nfrom langchain_core.messages import ToolMessage\nfrom typing_extensions import TypedDict\n\n# 1. Define the shared state.\nclass State(TypedDict):\n    messages: Annotated[list, add_messages]  # add_messages appends, not overwrites\n\n# 2. Bind a tool to the model.\n@tool\ndef get_word_count(text: str) -> int:\n    \"\"\"Count the words in a text string.\"\"\"\n    return len(text.split())\n\nllm = ChatAnthropic(model=\"claude-sonnet-4-5\").bind_tools([get_word_count])\n\n# 3. Define nodes.\ndef agent(state: State) -> dict:\n    response = llm.invoke(state[\"messages\"])\n    return {\"messages\": [response]}\n\ndef run_tools(state: State) -> dict:\n    last = state[\"messages\"][-1]\n    results = []\n    for call in last.tool_calls:\n        fn = {\"get_word_count\": get_word_count}[call[\"name\"]]\n        results.append(ToolMessage(content=str(fn.invoke(call[\"args\"])), tool_call_id=call[\"id\"]))\n    return {\"messages\": results}\n\ndef should_continue(state: State) -> str:\n    last = state[\"messages\"][-1]\n    return \"tools\" if last.tool_calls else END\n\n# 4. Build and compile the graph.\ngraph = StateGraph(State)\ngraph.add_node(\"agent\", agent)\ngraph.add_node(\"tools\", run_tools)\ngraph.set_entry_point(\"agent\")\ngraph.add_conditional_edges(\"agent\", should_continue)\ngraph.add_edge(\"tools\", \"agent\")   # loop back after every tool run\napp = graph.compile()\n\n# 5. Run it.\nfor chunk in app.stream({\"messages\": [{\"role\": \"user\", \"content\": \"How many words are in 'the quick brown fox'?\"}]}):\n    print(chunk)"
+        },
+        {
+          "type": "p",
+          "md": "Notice line 4: `graph.add_edge(\"tools\", \"agent\")` is the loop. After each tool execution the graph returns to the agent node to let the LLM reason about the result. The loop can run as many times as the LLM needs before routing to `END`. This is impossible with a plain linear chain."
+        }
+      ]
+    },
+    {
+      "id": "persistence-and-human-in-the-loop",
+      "title": "Persistence and human-in-the-loop",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Two of LangGraph's most powerful features go hand-in-hand: **checkpointing** saves state at each step, and **human-in-the-loop** (HITL) exploits that saved state to pause for input."
+        },
+        {
+          "type": "h3",
+          "text": "Checkpointing"
+        },
+        {
+          "type": "p",
+          "md": "Pass a checkpointer (LangGraph ships with `MemorySaver` for in-process storage, and a `SqliteSaver` / Postgres-backed saver for production) to `graph.compile()`. From that point on, after every node the runtime serializes the full state to the store. If the run fails, calling `.invoke()` again with the same `thread_id` resumes from where it left off. For long-running workflows that span minutes or hours, this is non-negotiable."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "persistence.py",
+          "code": "from langgraph.checkpoint.memory import MemorySaver\n\n# Compile with checkpointing enabled.\napp = graph.compile(checkpointer=MemorySaver())\n\n# Each call with the same thread_id continues the same conversation.\nconfig = {\"configurable\": {\"thread_id\": \"user-42\"}}\napp.invoke({\"messages\": [{\"role\": \"user\", \"content\": \"Hi\"}]}, config=config)\napp.invoke({\"messages\": [{\"role\": \"user\", \"content\": \"What did I just say?\"}]}, config=config)"
+        },
+        {
+          "type": "h3",
+          "text": "Human-in-the-loop"
+        },
+        {
+          "type": "p",
+          "md": "Sometimes you need a human to review or approve before the agent continues — for example, before sending an email, executing a database write, or taking an action above a cost threshold. LangGraph handles this with **interrupt**: you compile the graph with `interrupt_before=[\"node_name\"]`. When the runner reaches that node, it pauses and surfaces the current state. A human can inspect it, optionally edit the state, then call `.invoke()` again to resume — picking up exactly where it stopped."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Human-in-the-loop pause pattern",
+            "steps": [
+              { "label": "agent drafts action", "sub": "e.g. \"send this email\"" },
+              { "label": "INTERRUPT", "sub": "graph pauses, state saved to checkpointer", "accent": true },
+              { "label": "human reviews", "sub": "approve, edit, or reject via UI or CLI" },
+              { "label": "resume", "sub": ".invoke() called again with same thread_id" },
+              { "label": "action executed", "sub": "only runs after approval" }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "This pattern is what separates a toy agent from a trustworthy one. For anything that touches money, external systems, or sensitive data, requiring human sign-off before irreversible actions is a best practice the LangGraph model makes genuinely easy to implement."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "LangGraph's **time travel** feature lets you replay a run from any past checkpoint, or fork a thread at a specific point to try a different path. It's invaluable for debugging a run that went wrong three steps in."
+        }
+      ]
+    },
+    {
+      "id": "when-to-use-langgraph",
+      "title": "When to use LangGraph (vs. plain LangChain)",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "LangGraph is not always the right tool. The explicit graph model adds real cognitive overhead — you're writing boilerplate (state class, individual nodes, edges) that a higher-level helper would hide. That overhead pays off quickly when your agent needs any of the following, but it's overkill for simple pipelines."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "LangGraph vs. plain LangChain chain / create_agent",
+            "columns": [
+              {
+                "title": "Use LangGraph",
+                "accent": true,
+                "items": [
+                  "Agent needs to loop (tool → reason → tool → …)",
+                  "You need to pause for human approval",
+                  "Long-running: must survive crashes and resume",
+                  "Multi-agent: route between specialized sub-agents",
+                  "Need to inspect or modify state mid-run",
+                  "Custom branching logic at every step"
+                ]
+              },
+              {
+                "title": "Plain chain or create_agent is enough",
+                "items": [
+                  "Single-pass pipeline (prompt → model → parse)",
+                  "Simple RAG: retrieve → generate → return",
+                  "Script that runs once and exits immediately",
+                  "Prototyping: want minimal boilerplate",
+                  "Loop is simple enough for create_agent defaults"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "A practical rule of thumb: start with `create_agent` from plain LangChain, which gives you the tool-use loop with one line of code. Graduate to LangGraph the moment you hit something `create_agent` can't express — usually the first time you need checkpointing, a human pause, or a branch that depends on state."
+        },
+        {
+          "type": "h3",
+          "text": "Multi-agent systems"
+        },
+        {
+          "type": "p",
+          "md": "LangGraph is the recommended foundation for [multi-agent systems](/learn/ai-agents/multi-agent-computer-use/what-is-multi-agent-system) in the LangChain ecosystem. The pattern is simple: compile a subgraph for each specialist agent (researcher, coder, editor), then add each subgraph as a single node in a supervisor graph. The supervisor node uses a conditional edge to decide which specialist to call next, and each specialist returns its result to the supervisor's state. The entire team is still one graph with one shared state — checkpointing, HITL, and time travel all work as normal."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the core graph model clicks, a few more LangGraph concepts separate basic usage from production-grade agents."
+        },
+        {
+          "type": "h3",
+          "text": "State reducers"
+        },
+        {
+          "type": "p",
+          "md": "By default, a node's returned dict *overwrites* the matching keys in state. For lists (like `messages`), you almost always want to *append* instead. LangGraph handles this with **reducers**: annotate a field with `Annotated[list, add_messages]` (or any custom merge function) and the runtime will call the reducer when it applies an update. This is how multi-turn memory works without any manual bookkeeping."
+        },
+        {
+          "type": "h3",
+          "text": "Streaming"
+        },
+        {
+          "type": "p",
+          "md": "Call `.stream()` instead of `.invoke()` to receive updates as they happen. The `stream_mode` parameter controls granularity: `\"values\"` emits the full state after each node; `\"updates\"` emits just the dict the node returned; `\"messages\"` emits individual LLM token chunks for live streaming to a UI. This is how you build a chatbot that shows the model \"thinking\" in real time, like Claude's extended thinking display."
+        },
+        {
+          "type": "h3",
+          "text": "LangGraph Platform"
+        },
+        {
+          "type": "p",
+          "md": "The open-source library handles the runtime logic, but deploying a persistent, multi-tenant agent to production still requires infrastructure: a database for checkpoints, a task queue for async runs, a way to expose the graph over HTTP, and monitoring. **LangGraph Platform** (a managed service from LangChain) packages all of that with a drag-and-drop Studio UI for visualizing and debugging graphs live. It's optional — you can deploy the library on your own infra — but it removes significant ops work."
+        },
+        {
+          "type": "h3",
+          "text": "Honest limitations"
+        },
+        {
+          "type": "p",
+          "md": "LangGraph does not make your agent smart — that's still the LLM's job. It also doesn't prevent the agent from getting stuck in infinite loops (you're responsible for loop termination conditions, or use a `recursion_limit`). The graph model adds boilerplate that smaller or simpler workflows don't need. And like all deep orchestration frameworks, a wrong state shape can produce cryptic errors far from the source. Use [LLM observability](/learn/production-llmops/observability-monitoring/what-is-llm-observability) tooling — LangSmith or equivalent — from day one, not as an afterthought."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Set `recursion_limit` when you compile (`graph.compile(recursion_limit=25)`). Without it, a bug in your conditional edge can spin the graph indefinitely — you want an explicit error, not a runaway loop consuming tokens."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is LangGraph and how is it different from LangChain?",
+      "a": "LangGraph is LangChain's low-level orchestration library for building agents as explicit state machines — graphs of nodes, edges, and shared state. Plain LangChain provides high-level helpers (chains, create_agent) that hide the loop. LangGraph exposes it: you define every step and every routing decision yourself, gaining visibility, checkpointing, and human-in-the-loop support that the higher-level helpers can't easily provide."
+    },
+    {
+      "q": "Do I need LangChain to use LangGraph?",
+      "a": "No. LangGraph is a standalone package (`pip install langgraph`). You can use any LLM provider — Anthropic, OpenAI, a local model — directly inside nodes without importing anything from langchain or langchain-core. The two libraries integrate well but neither requires the other."
+    },
+    {
+      "q": "How does human-in-the-loop work in LangGraph?",
+      "a": "Compile the graph with `interrupt_before=[\"node_name\"]`. When the runner reaches that node, it saves the current state to the checkpointer and pauses. A human can inspect the state (and optionally edit it), then call `.invoke()` again with the same thread_id to resume. The agent continues from exactly where it stopped, with any human edits already applied to the state."
+    },
+    {
+      "q": "What is a LangGraph checkpointer?",
+      "a": "A checkpointer is a storage backend that LangGraph uses to save the full graph state after every node. Built-in options include MemorySaver (in-process, useful for testing), SqliteSaver, and a Postgres-backed saver. Checkpointing enables fault-tolerant long-running agents (resume after crashes), multi-turn memory (same thread_id across calls), and human-in-the-loop pauses."
+    },
+    {
+      "q": "When should I use LangGraph instead of a simple agent loop?",
+      "a": "Use LangGraph when your agent needs to loop over tools, survive crashes and resume, pause for human approval, branch on complex conditions, or compose multiple specialist agents. For a single prompt-and-response or a simple one-pass pipeline, the overhead isn't worth it — use create_agent or call the LLM directly."
+    },
+    {
+      "q": "Is LangGraph free and open source?",
+      "a": "Yes, the core LangGraph library is MIT-licensed and free to use. LangGraph Platform (the managed deployment service with Studio UI, async task queue, and hosted checkpointing) is a separate commercial product. You can deploy the open-source library on your own infrastructure without any paid tier."
+    }
+  ],
+  "related": [
+    "what-is-langchain",
+    "what-is-an-ai-agent",
+    "what-is-multi-agent-system",
+    "what-is-agent-planning",
+    "what-is-tool-use"
+  ],
+  "furtherReading": [
+    {
+      "title": "LangGraph — official documentation",
+      "url": "https://langchain-ai.github.io/langgraph/"
+    },
+    {
+      "title": "LangGraph: Agent Orchestration Framework — LangChain blog",
+      "url": "https://www.langchain.com/langgraph"
+    },
+    {
+      "title": "What is LangGraph? — IBM Think",
+      "url": "https://www.ibm.com/think/topics/langgraph"
+    }
+  ]
+}

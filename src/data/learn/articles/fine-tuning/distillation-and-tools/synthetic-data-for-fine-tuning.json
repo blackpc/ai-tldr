@@ -1,0 +1,324 @@
+{
+  "slug": "synthetic-data-for-fine-tuning",
+  "title": "How to Create Synthetic Training Data",
+  "seoTitle": "Synthetic Training Data for LLM Fine-Tuning",
+  "metaDescription": "Learn how to use LLMs to generate synthetic training data: dataset generation prompts, diversity tricks, quality filtering, and when synthetic beats human labels.",
+  "keywords": [
+    "synthetic data generation fine-tuning",
+    "how to create synthetic training data",
+    "LLM generated training data",
+    "dataset generation prompts",
+    "synthetic data quality filtering",
+    "when to use synthetic data"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn how to use a strong LLM to generate, diversify, and filter your own training dataset — and when that beats collecting human-labeled examples.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**Synthetic training data** is training data written by a model instead of a human. You give a strong LLM a prompt that describes the task — \"write a customer support question about billing, then write a perfect answer\" — and it produces an example. Do that thousands of times and you have a dataset you can use to [fine-tune](/learn/fine-tuning/fine-tuning-basics/what-is-fine-tuning) a smaller model on that exact task."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like hiring a tireless contractor. A senior employee knows exactly what a great support reply looks like. Instead of asking them to manually label 10,000 tickets, you ask them to *write* 10,000 example tickets and ideal replies from scratch. The contractor never gets bored, never calls in sick, and can produce consistent output at whatever volume you need. The catch: you need to spot-check their work, because they can make up facts or repeat the same pattern until the whole dataset feels monotonous."
+        },
+        {
+          "type": "p",
+          "md": "This article is a practical guide to doing that well: how to write the generation prompts, how to push for variety so your model learns robustly, how to filter out low-quality examples, and when synthetic data is actually the *better* choice over paying human annotators."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This is not the same as [model distillation](/learn/fine-tuning/distillation-and-tools/what-is-model-distillation), though they are related. Distillation focuses on shrinking a big model into a smaller one. Synthetic data generation is about *building a training dataset* — the output might feed distillation, supervised fine-tuning, RLHF, or anything else that needs labeled examples."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The biggest reason most fine-tuning projects fail is the dataset, not the training run. Real labeled data is expensive, slow to collect, legally restricted, or simply nonexistent for the exact task you need. Synthetic generation sidesteps those problems."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Speed.** A strong LLM can generate thousands of examples in minutes. Human labeling of the same volume can take weeks or months.",
+            "**Cost.** API calls to generate data cost a fraction of what a professional annotation firm charges per example.",
+            "**Privacy.** You never expose sensitive user data to labelers — the model generates fictional but representative inputs from scratch.",
+            "**Coverage of rare cases.** You can explicitly prompt for edge cases, uncommon dialects, or low-frequency topics that would be badly underrepresented in any data you could collect naturally.",
+            "**Consistency.** A well-prompted model applies the same rubric to every example. Human labelers introduce subjective disagreements that can add noise to the training signal."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The technique is now mainstream. The **Magpie** paper (ICLR 2025) showed that a single aligned model like Llama-3-Instruct could generate 4 million instruction–response pairs autonomously, and after filtering to 300,000 high-quality examples, the resulting fine-tuned model outperformed datasets built from human curation (ShareGPT, WildChat, UltraChat) on several benchmarks. Synthetic data is no longer a fallback — for many tasks it is the default starting point."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "**Rule of thumb:** if you have fewer than ~500 high-quality human examples, start by generating synthetic data to bootstrap the dataset, then use a human review pass to validate a random sample. Don't wait for perfect human-labeled data before you start training."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The full pipeline has four stages: write a generation prompt, call the model to produce examples, filter and score the output, then format it for training. The diagram below shows the flow."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Synthetic dataset generation pipeline",
+            "steps": [
+              { "label": "Write generation prompt", "sub": "task description + format spec" },
+              { "label": "LLM generates examples", "sub": "teacher model, varied seeds" },
+              { "label": "Filter & score", "sub": "quality, diversity, correctness", "accent": true },
+              { "label": "Format for training", "sub": "JSONL chat format" },
+              { "label": "Fine-tune target model", "sub": "supervised or RLHF" }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Stage 1: the generation prompt"
+        },
+        {
+          "type": "p",
+          "md": "The generation prompt is the most important part. A weak prompt produces a narrow, repetitive dataset; a good prompt produces varied, realistic examples. The prompt should specify: the *task type* (question answering, classification, summarization…), the *format* you want the output in (usually a JSON object with `input` and `output` fields), and crucially, a **diversity instruction** — an explicit request to vary the topic, difficulty, style, or domain with each call."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "generation_prompt.py",
+          "code": "import json, random\nfrom openai import OpenAI\n\nclient = OpenAI()\nTEACHER = \"gpt-4o\"  # or any strong model you have access to\n\n# A seed list forces variety — each call picks a different domain.\nDOMAINS = [\n    \"e-commerce returns\", \"SaaS billing\", \"travel booking\",\n    \"food delivery\", \"streaming subscriptions\", \"online banking\",\n]\n\nGEN_PROMPT = \"\"\"\nYou are generating training data for a customer support classifier.\nTask: produce ONE realistic support ticket (the 'input') and its\ncorrect intent label (the 'output').\n\nDomain: {domain}\nDifficulty: {difficulty}\n\nIMPORTANT: vary the customer's tone, vocabulary, and specific\nproblem — avoid repeating patterns from previous examples.\n\nRespond with ONLY a JSON object:\n{{\"input\": \"<customer message>\", \"output\": \"<intent label>\"}}\n\"\"\"\n\nexamples = []\nfor _ in range(1000):\n    domain = random.choice(DOMAINS)\n    difficulty = random.choice([\"easy\", \"medium\", \"hard\"])\n    resp = client.chat.completions.create(\n        model=TEACHER,\n        messages=[{\n            \"role\": \"user\",\n            \"content\": GEN_PROMPT.format(domain=domain, difficulty=difficulty)\n        }],\n        temperature=0.9,  # higher temp = more diversity in outputs\n        response_format={\"type\": \"json_object\"},\n    )\n    try:\n        obj = json.loads(resp.choices[0].message.content)\n        if \"input\" in obj and \"output\" in obj:\n            examples.append(obj)\n    except json.JSONDecodeError:\n        pass  # discard malformed outputs\n\nwith open(\"raw_dataset.jsonl\", \"w\") as f:\n    for ex in examples:\n        f.write(json.dumps(ex) + \"\\n\")"
+        },
+        {
+          "type": "h3",
+          "text": "Stage 2: diversity tricks"
+        },
+        {
+          "type": "p",
+          "md": "A dataset where every example feels like a slight rephrasing of the same thing is called **distribution collapse** — and it is the most common failure mode of naive synthetic generation. The model fine-tuned on it learns to produce monotone, formulaic outputs. There are several techniques to prevent this."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Seed rotation.** Maintain a list of topics, domains, personas, or difficulty levels and sample from them on each call, as shown above. This guarantees that the model must exercise different vocabulary and reasoning for each example.",
+            "**High temperature.** Set `temperature` to 0.8–1.0 during generation. This increases lexical variety. Do not use temperature 0 — you will get near-identical outputs.",
+            "**Multiple teacher models.** Generating half your data with one model and half with another prevents any single model's stylistic habits from dominating the dataset. Research confirms that synthetic data from *diverse sources* measurably reduces distribution collapse and preserves output breadth.",
+            "**Self-Instruct expansion.** Start with 20–50 human-written seed examples, then prompt the teacher to generate *new, different* examples that are not similar to any in the seed set. This bootstraps coverage far beyond what humans drafted.",
+            "**Adversarial inputs.** Explicitly prompt for inputs that should trigger edge-case or failure behaviors — ambiguous phrasing, conflicting constraints, or topics outside the main distribution. These are the examples most fine-tunes miss."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Stage 3: quality filtering"
+        },
+        {
+          "type": "p",
+          "md": "Raw generated examples contain noise: the model sometimes ignores the format, hallucinates incorrect labels, produces near-duplicate outputs, or generates off-topic content. Filtering before training is not optional — even a small fraction of bad examples can degrade model quality significantly. Quality filtering delivers more value than raw data volume."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "filter_dataset.py",
+          "code": "import json\nfrom openai import OpenAI\n\nclient = OpenAI()\nJUDGE = \"gpt-4o-mini\"  # a cheaper model is fine for judging\n\nJUDGE_PROMPT = \"\"\"\nYou are a data quality judge. Rate this training example on a 1-5 scale.\n\nInput: {input}\nOutput: {output}\nTask: intent classification for customer support\n\nScore on:\n- Correctness (output is the right label for the input)\n- Clarity (input is natural, realistic customer language)\n- Uniqueness (not a generic, repetitive phrasing)\n\nRespond with ONLY a JSON object: {{\"score\": <1-5>, \"reason\": \"...\"}}\n\"\"\"\n\ndef score_example(ex: dict) -> float:\n    resp = client.chat.completions.create(\n        model=JUDGE,\n        messages=[{\n            \"role\": \"user\",\n            \"content\": JUDGE_PROMPT.format(**ex)\n        }],\n        response_format={\"type\": \"json_object\"},\n        temperature=0,\n    )\n    result = json.loads(resp.choices[0].message.content)\n    return float(result.get(\"score\", 0))\n\nwith open(\"raw_dataset.jsonl\") as f:\n    raw = [json.loads(line) for line in f]\n\n# Keep only examples with a quality score >= 4\nfiltered = [ex for ex in raw if score_example(ex) >= 4]\n\nwith open(\"filtered_dataset.jsonl\", \"w\") as f:\n    for ex in filtered:\n        f.write(json.dumps(ex) + \"\\n\")\n\nprint(f\"Kept {len(filtered)}/{len(raw)} examples ({100*len(filtered)/len(raw):.0f}%)\")"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "You do not need to score every example with an expensive model. Score a random 10–20% sample and use the insights to refine your generation prompt instead. Fixing the prompt upstream is far more efficient than filtering bad output downstream."
+        }
+      ]
+    },
+    {
+      "id": "synthetic-vs-human-data",
+      "title": "When synthetic beats human data",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Synthetic data is not always better — but there are clear conditions where it reliably outperforms human-labeled examples."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Synthetic vs. human-labeled data",
+            "columns": [
+              {
+                "title": "Synthetic wins",
+                "accent": true,
+                "items": [
+                  "You need >1,000 examples fast",
+                  "Task is well-defined with clear right/wrong answers",
+                  "Data is sensitive or legally restricted",
+                  "Edge cases are rare in natural data",
+                  "You need consistent labeling rubrics",
+                  "Budget for human annotation is tight"
+                ]
+              },
+              {
+                "title": "Human wins",
+                "items": [
+                  "Task requires genuine lived experience",
+                  "Cultural nuance matters deeply",
+                  "High-stakes outputs (medical, legal)",
+                  "Catching model blind spots and biases",
+                  "Final eval and red-teaming data",
+                  "Open-ended creative or preference tasks"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Research comparing the two reveals an interesting pattern: for small datasets (under ~100 examples) performance is similar. As dataset size grows, human-labeled data tends to improve more steadily, while purely synthetic data plateaus sooner for subjective or nuanced tasks. The **best practical approach** is a hybrid: generate a large synthetic corpus for coverage, then sprinkle in a smaller set of human-verified examples to anchor quality and catch model blind spots."
+        },
+        {
+          "type": "p",
+          "md": "There is one domain where synthetic data consistently wins outright: **code**. Correct code can be verified mechanically by running it. This means synthetic code examples can be filtered for correctness automatically — no human judgment needed. Models like DeepSeek-Coder and StarCoder2 were trained heavily on synthetically generated code problems and verified solutions, and they match or exceed models trained on far larger unfiltered human corpora."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "**Never use synthetic data as your evaluation set.** Always hold out a sample of real human-written inputs for evaluation. A model that scores well on synthetic evals but poorly on real user traffic has an optimistic gap that will surprise you in production. Keep synthetic data in the training split only."
+        }
+      ]
+    },
+    {
+      "id": "full-pipeline-example",
+      "title": "Putting it all together",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Below is the complete minimal pipeline: generate with diversity, filter with an LLM judge, format for supervised fine-tuning, then run the training step. This pattern works with any chat-format model that accepts a JSONL fine-tuning file."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "prepare_training_file.py",
+          "code": "import json\n\ndef to_chat_format(ex: dict) -> dict:\n    \"\"\"\n    Convert a {input, output} example to the JSONL chat format\n    expected by most fine-tuning APIs (OpenAI, Together, etc.).\n    \"\"\"\n    return {\n        \"messages\": [\n            {\"role\": \"system\",  \"content\": \"Classify the intent of the customer message.\"},\n            {\"role\": \"user\",    \"content\": ex[\"input\"]},\n            {\"role\": \"assistant\", \"content\": ex[\"output\"]},\n        ]\n    }\n\nwith open(\"filtered_dataset.jsonl\") as f:\n    filtered = [json.loads(line) for line in f]\n\n# Shuffle and split 90/10 train/validation\nimport random\nrandom.shuffle(filtered)\nsplit = int(len(filtered) * 0.9)\ntrain, val = filtered[:split], filtered[split:]\n\nfor name, data in [(\"train.jsonl\", train), (\"val.jsonl\", val)]:\n    with open(name, \"w\") as f:\n        for ex in data:\n            f.write(json.dumps(to_chat_format(ex)) + \"\\n\")\n\nprint(f\"Train: {len(train)} examples | Val: {len(val)} examples\")"
+        },
+        {
+          "type": "p",
+          "md": "With `train.jsonl` ready you can call the fine-tuning endpoint of any provider that supports supervised fine-tuning (OpenAI, Together AI, Fireworks, or a local Hugging Face training loop with [LoRA](/learn/fine-tuning/lora-and-peft/what-is-lora)). The validation split is critical: it lets you watch the loss on real-distribution examples and stop training before the model overfits to the synthetic patterns."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "A typical workflow produces 2,000–10,000 filtered training examples for a narrow task. Bigger is not always better: research consistently shows that a **smaller, high-quality** filtered set outperforms a larger, unfiltered one. Aim for quality over raw volume, and always validate on real data."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The pipeline above covers supervised fine-tuning. Here is what the frontier looks like and where synthetic data goes from here."
+        },
+        {
+          "type": "h3",
+          "text": "Self-Instruct and Magpie"
+        },
+        {
+          "type": "p",
+          "md": "**Self-Instruct** (Wang et al., 2023) is the formalization of the bootstrap approach: start with a small set of seed tasks, prompt the model to generate new tasks that are *different* from the seeds, filter for diversity and quality, then add surviving examples back to the seed pool and repeat. This compound loop produced the original Alpaca and Vicuna training sets and remains the foundation of most open fine-tuning datasets."
+        },
+        {
+          "type": "p",
+          "md": "**Magpie** (ICLR 2025) pushed further: it discovered that instruction-tuned models can generate training data *spontaneously* when you supply only the pre-query template and let the model complete it. No seed tasks required. A single Llama-3-Instruct model produced 4 million diverse instruction–response pairs this way; 300,000 filtered examples from that set outperformed every human-curated open dataset on standard benchmarks."
+        },
+        {
+          "type": "h3",
+          "text": "Active learning: not all synthetic examples are equal"
+        },
+        {
+          "type": "p",
+          "md": "The most efficient fine-tuning pipelines do not generate a large static dataset and filter it once. They use **active learning**: after an initial training pass, run the current model on a diverse validation set, identify the examples it gets wrong, generate *more* synthetic data specifically targeting those failure modes, and retrain. This iterative loop dramatically reduces the number of total examples needed to reach a quality target."
+        },
+        {
+          "type": "h3",
+          "text": "Synthetic reasoning traces"
+        },
+        {
+          "type": "p",
+          "md": "For tasks that benefit from [chain-of-thought prompting](/learn/prompt-engineering/reasoning-techniques/chain-of-thought-prompting), you can generate synthetic *reasoning traces*, not just final answers. A strong reasoning model works through the problem step by step; the full trace (with the final answer) becomes the training target. The student model learns to reason through problems the same way — this is why small open models have become surprisingly competent at math, science, and code: they were trained on the worked solutions of much larger reasoning models."
+        },
+        {
+          "type": "h3",
+          "text": "Verifiable rewards: the code special case"
+        },
+        {
+          "type": "p",
+          "md": "The cleanest form of synthetic data quality filtering applies to **code and math**: generated outputs can be automatically verified by running a test suite or checking an equation. This removes the need for an LLM judge entirely and eliminates the risk of the judge being fooled by plausible-sounding wrong answers. If your task has a computable ground truth — SQL queries with expected outputs, regex patterns, numerical answers — exploit that and use execution-based filtering instead of model-based scoring."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The best mental model for synthetic data: **it is a force multiplier, not a free lunch.** The quality of generated data is bounded by the quality of your generation prompt and the capability of the teacher model. A weak prompt or a weak teacher produces data that trains a weak student. Invest most of your time in the prompt, the seed list, and the filtering step — those three levers determine everything."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Can I use synthetic data to fine-tune a model without any human-labeled examples?",
+      "a": "Yes, but you should still use real human-written inputs for your *evaluation* set, even if the training data is fully synthetic. This is essential — a model that looks good on synthetic evals often has an unexpected gap when it meets real user traffic. Human examples in your val split catch that gap before it reaches production."
+    },
+    {
+      "q": "How many synthetic examples do I need to fine-tune a model?",
+      "a": "For a narrow, well-defined task (e.g., intent classification, format conversion, structured extraction), 1,000–5,000 high-quality filtered examples are often enough to produce a strong fine-tune. More is not always better — a smaller, carefully filtered set consistently outperforms a larger unfiltered one. Start with 1,000, evaluate, and generate more only if the model still struggles on specific failure modes."
+    },
+    {
+      "q": "What is the difference between synthetic data generation and model distillation?",
+      "a": "They overlap but serve different goals. Synthetic data generation is about *building a labeled training dataset* using an LLM. Model distillation is a specific strategy for compressing a large model into a smaller one, which often uses synthetic data as its training set. Distillation is one downstream use case for synthetic data; other use cases include supervised fine-tuning, RLHF preference data, and evaluation set augmentation."
+    },
+    {
+      "q": "How do I avoid repetition and distribution collapse in synthetic datasets?",
+      "a": "Use a high sampling temperature (0.8–1.0), rotate through a diverse seed list of domains or topics, prompt explicitly for variety (\"generate an example that is different from all previous ones\"), and use multiple teacher models if possible. After generation, run a semantic deduplication step — embedding the examples and removing near-duplicates with cosine similarity — to clean up any remaining repetition."
+    },
+    {
+      "q": "Is it legal to use commercial LLM outputs as training data?",
+      "a": "It depends on the provider's terms of service. Several major commercial providers explicitly forbid using their model outputs to train competing models. Always check the terms before running a generation pipeline at scale. Using a permissively licensed open model (e.g., Llama 3, Mistral, Qwen) as the teacher sidesteps the legal issue entirely and is the safe default for experimentation."
+    },
+    {
+      "q": "What is an LLM judge and how is it used in quality filtering?",
+      "a": "An LLM judge is a second model (often a cheaper one) that rates each generated example on dimensions like correctness, clarity, and uniqueness, returning a numeric score. You discard examples below a threshold (typically 3 or 4 out of 5) before training. The judge does not need to be the same model that generated the data — a smaller, cheaper model can score examples faster and at lower cost, provided the task rubric is well-specified in the judging prompt."
+    }
+  ],
+  "related": [
+    "what-is-fine-tuning",
+    "what-is-model-distillation",
+    "what-is-lora",
+    "what-is-rlhf",
+    "llm-as-a-judge-explained"
+  ],
+  "furtherReading": [
+    {
+      "title": "Magpie: Alignment Data Synthesis from Scratch (arXiv)",
+      "url": "https://arxiv.org/abs/2406.08464"
+    },
+    {
+      "title": "Synthetic Data: Benefits and Techniques for LLM Fine-Tuning — Label Your Data",
+      "url": "https://labelyourdata.com/articles/llm-fine-tuning/synthetic-data"
+    },
+    {
+      "title": "The Definitive Guide to Synthetic Data Generation Using LLMs — Confident AI",
+      "url": "https://www.confident-ai.com/blog/the-definitive-guide-to-synthetic-data-generation-using-llms"
+    }
+  ]
+}

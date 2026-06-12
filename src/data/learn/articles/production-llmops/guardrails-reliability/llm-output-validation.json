@@ -1,0 +1,367 @@
+{
+  "slug": "llm-output-validation",
+  "title": "How to Validate and Sanitize LLM Outputs",
+  "seoTitle": "LLM Output Validation: Parsing, Schema & Retries",
+  "metaDescription": "Learn how to validate and sanitize LLM outputs using structured parsing, JSON schema enforcement, retry loops, content filters, and fallback strategies.",
+  "keywords": [
+    "llm output validation",
+    "validate llm json output",
+    "structured output llm python",
+    "llm retry on invalid json",
+    "sanitize llm output",
+    "pydantic llm output validation"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn the concrete techniques — structured parsing, schema validation, retry loops, content filters, and fallbacks — that turn unpredictable model text into safe, typed data your app can rely on.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "An LLM is a text-completion engine. It produces a string. Your application needs *data* — a structured object, a verified sentiment label, a safe HTML snippet, a valid SQL query. The gap between \"some text\" and \"data my app can use\" is exactly what output validation fills."
+        },
+        {
+          "type": "p",
+          "md": "**Output validation** is the set of checks and transformations you run *after* the model responds and *before* your app acts on the response. It answers three questions: (1) Is this the right *shape*? (2) Is this safe to pass downstream? (3) If neither, what do I do instead?"
+        },
+        {
+          "type": "p",
+          "md": "The everyday analogy: imagine you ordered a pizza by phone and the restaurant read your order back to you. Validation is you checking, before you hang up, that they got the size, toppings, and delivery address right — and asking them to repeat it if they didn't. You're not redoing the whole order; you're just confirming the contract before committing."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This article is about **output validation mechanics** — the code patterns you use after a model call. The upstream concept (what guardrails are and why you need them) is covered in [What Are LLM Guardrails?](/learn/production-llmops/guardrails-reliability/what-are-llm-guardrails)."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Models fail in predictable ways. They return prose when you asked for JSON. They include a markdown code fence around the JSON you asked for, breaking `JSON.parse`. They truncate a list mid-item when a response is long. They put a field in the wrong type — a number as a string, a date as a Unix timestamp when you expected ISO 8601. They occasionally hallucinate fields that don't exist in your schema."
+        },
+        {
+          "type": "p",
+          "md": "Each failure mode is harmless if you catch it before your app acts on it. It becomes a production incident if you don't. An unparseable JSON string passed to a downstream function raises an unhandled exception. A hallucinated SQL column becomes a database error. An unsanitized HTML string from a model, rendered directly in a browser, is an XSS vector — listed as a top-10 LLM vulnerability by OWASP."
+        },
+        {
+          "type": "h3",
+          "text": "The cost of skipping validation"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Runtime crashes** — downstream code assumes a typed field and gets `undefined` or a malformed string.",
+            "**Silent data corruption** — the value parses but is semantically wrong (e.g., confidence score stored as a string instead of a float).",
+            "**Security vulnerabilities** — model output passed to a shell, SQL query, or web page without sanitization creates injection attack surfaces.",
+            "**Bad user experience** — the model apology message (\"I'm sorry, I can't…\") displayed raw instead of a graceful fallback."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "The model's output *looks* finished. That is exactly the trap. Treat every model response like you'd treat user input from an untrusted form — validate before use, always."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A production output-validation pipeline has three stages that run in order after every model call: **parse**, **validate**, and **act on failure**. The diagram below shows the full flow."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Output validation pipeline",
+            "steps": [
+              { "label": "Model call", "sub": "raw text response" },
+              { "label": "Parse", "sub": "extract JSON / structured data" },
+              { "label": "Schema validate", "sub": "types, required fields, ranges" },
+              { "label": "Content filter", "sub": "PII, toxicity, policy rules" },
+              { "label": "Pass to app", "sub": "typed, safe data" }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Stage 1 — Parse: extracting structure from text"
+        },
+        {
+          "type": "p",
+          "md": "The first job is getting from raw text to a Python dict (or equivalent). Three common approaches, in order of reliability:"
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Constrained decoding** (most reliable, local models only): libraries like [Outlines](https://github.com/dottxt-ai/outlines) use a finite-state machine to mask invalid tokens *during* generation, so the model literally cannot produce output that violates the schema. Zero retries needed, but requires self-hosting.",
+            "**Native structured output** (reliable for hosted APIs): OpenAI, Anthropic, and Gemini all support a `response_format` or tool-call mode that constrains the model server-side. The API will not return until the output matches your schema. Use this when available.",
+            "**Post-hoc JSON extraction** (fallback): strip markdown fences with a regex, then call `JSON.parse` / `json.loads`. This is the least reliable approach — it works most of the time but needs a retry strategy for the failures."
+          ]
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Post-hoc JSON extraction with fence stripping",
+          "code": "import json, re\n\ndef extract_json(raw: str) -> dict:\n    \"\"\"Strip markdown fences, then parse JSON.\"\"\"\n    # Remove ```json ... ``` or ``` ... ``` wrappers\n    cleaned = re.sub(r\"^```[\\w]*\\n?\", \"\", raw.strip(), flags=re.MULTILINE)\n    cleaned = re.sub(r\"```$\", \"\", cleaned.strip())\n    return json.loads(cleaned)"
+        },
+        {
+          "type": "h3",
+          "text": "Stage 2 — Schema validation: enforcing types and constraints"
+        },
+        {
+          "type": "p",
+          "md": "Once you have a Python dict, you need to confirm it matches your contract — all required fields present, correct types, values within acceptable ranges. **Pydantic** is the standard tool for this in Python. Define a model that describes the expected output; Pydantic raises a `ValidationError` with field-level detail when anything is wrong."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Pydantic schema validation",
+          "code": "from pydantic import BaseModel, Field, ValidationError\nfrom typing import Literal\n\nclass SentimentResult(BaseModel):\n    label: Literal[\"positive\", \"negative\", \"neutral\"]\n    confidence: float = Field(ge=0.0, le=1.0)\n    reasoning: str = Field(min_length=10)\n\ndef validate_output(raw_dict: dict) -> SentimentResult | None:\n    try:\n        return SentimentResult(**raw_dict)\n    except ValidationError as e:\n        # e.errors() gives field-level detail — useful in retry prompts\n        print(f\"Validation failed: {e.errors()}\")\n        return None"
+        },
+        {
+          "type": "h3",
+          "text": "Stage 3 — Act on failure: retries, fallbacks, and escalation"
+        },
+        {
+          "type": "p",
+          "md": "When parsing or validation fails, you have three choices: retry with error feedback, use a fallback value, or escalate to a human. Most production systems use all three in sequence."
+        }
+      ]
+    },
+    {
+      "id": "retry-and-fallback",
+      "title": "Retry loops and fallback strategies",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The standard pattern for handling a validation failure is to re-prompt the model, this time including the error message, so the model can self-correct. Research on production chatbots shows about 8% of responses fail first-pass validation; including the specific Pydantic error in the retry prompt drops the second-pass failure rate to under 1%."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Retry loop with error feedback (plain implementation)",
+          "code": "import json\nfrom pydantic import ValidationError\n\nMAX_RETRIES = 3\n\ndef call_with_validation(prompt: str, llm_fn, schema_cls) -> dict:\n    messages = [{\"role\": \"user\", \"content\": prompt}]\n    last_error = None\n\n    for attempt in range(MAX_RETRIES):\n        raw = llm_fn(messages)          # returns the model's text\n        try:\n            data = json.loads(raw)\n            return schema_cls(**data)   # raises ValidationError on bad schema\n        except (json.JSONDecodeError, ValidationError) as e:\n            last_error = str(e)\n            # Feed the error back so the model knows what to fix\n            messages.append({\"role\": \"assistant\", \"content\": raw})\n            messages.append({\n                \"role\": \"user\",\n                \"content\": f\"Your response failed validation: {last_error}. \"\n                           f\"Please respond again with valid JSON matching the schema.\"\n            })\n\n    raise RuntimeError(f\"Output validation failed after {MAX_RETRIES} attempts: {last_error}\")"
+        },
+        {
+          "type": "p",
+          "md": "Libraries like **Instructor** and **Pydantic AI** automate exactly this pattern. Instructor wraps any OpenAI-compatible API — you pass a Pydantic model as `response_model` and set `max_retries`; the library handles prompt construction, parsing, and the retry loop. Instructor has over 3 million monthly downloads and is the most widely deployed tool for this pattern."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Instructor — one-liner structured output with retries",
+          "code": "import instructor\nfrom openai import OpenAI\nfrom pydantic import BaseModel\n\nclient = instructor.from_openai(OpenAI())\n\nclass SentimentResult(BaseModel):\n    label: str\n    confidence: float\n\nresult = client.chat.completions.create(\n    model=\"gpt-4o-mini\",\n    response_model=SentimentResult,\n    max_retries=3,          # retries with error feedback automatically\n    messages=[{\"role\": \"user\", \"content\": \"Analyse the sentiment of: 'Great product!'\"}],\n)\nprint(result.label, result.confidence)"
+        },
+        {
+          "type": "h3",
+          "text": "Fallback hierarchy"
+        },
+        {
+          "type": "p",
+          "md": "Retries add latency — each retry costs 1.5–3 seconds on a typical hosted API call. Decide upfront on a **fallback hierarchy**: what the app does when retries are exhausted."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Fallback hierarchy on validation failure",
+            "steps": [
+              { "label": "Attempt 1", "sub": "initial model call" },
+              { "label": "Attempt 2", "sub": "retry + error in prompt" },
+              { "label": "Attempt 3", "sub": "retry with simpler prompt" },
+              { "label": "Safe default", "sub": "cached / static fallback value" },
+              { "label": "Human review queue", "sub": "log + escalate if critical" }
+            ]
+          }
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Safe default**: return a known-good static value or a neutral sentinel (e.g., `{\"label\": \"unknown\", \"confidence\": 0.0}`) rather than crashing.",
+            "**Graceful degradation**: show the raw model text to the user with a disclaimer instead of the structured data, so the interaction still completes.",
+            "**Human-in-the-loop**: queue the failed output for manual review if the stakes are high (financial decisions, medical advice, legal content).",
+            "**Circuit breaker**: if more than X% of calls to a model are failing validation in a rolling window, switch to a backup model or disable the feature until investigated."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Set `max_retries=3` as a starting point. In production, most teams find 2–3 retries catch the tail of parse failures without hurting p95 latency noticeably. Beyond 3, you're likely chasing a prompt-design issue, not a transient model failure."
+        }
+      ]
+    },
+    {
+      "id": "content-filters-and-sanitization",
+      "title": "Content filters and sanitization",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Schema validation confirms the output is the right *shape*. Content filtering confirms the output is *safe to use*. The two are complementary: a response can be perfectly valid JSON and still contain a customer's email address, a racial slur, or a competitor recommendation that violates your policy."
+        },
+        {
+          "type": "h3",
+          "text": "Common content checks"
+        },
+        {
+          "type": "table",
+          "headers": ["Check", "What it catches", "Typical tool"],
+          "rows": [
+            ["PII detection", "Names, emails, SSNs, phone numbers in model output", "Regex + NER models (spaCy, AWS Comprehend, Azure PII)"],
+            ["Toxicity filter", "Hate speech, explicit content, threats", "OpenAI Moderation API, Perspective API, Llama Guard"],
+            ["HTML/script sanitization", "XSS payloads when output is rendered in browser", "bleach (Python), DOMPurify (JS)"],
+            ["SQL injection scan", "Dangerous SQL when model generates queries", "Parameterized queries; never concatenate model text into SQL"],
+            ["Hallucination check", "Claims that contradict grounding documents", "LLM-as-a-judge or retrieval-based consistency check"]
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Sanitizing for downstream context"
+        },
+        {
+          "type": "p",
+          "md": "The right sanitization strategy depends on *where* the output goes, not just what it contains. Four common downstream contexts each have different rules:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Rendered HTML**: strip all tags except a known-safe allowlist using `bleach.clean()` or `DOMPurify.sanitize()`. Never trust `innerHTML` with raw model output.",
+            "**Database writes**: use parameterized queries or an ORM — never concatenate model text into a SQL string, even if the model was asked for a query.",
+            "**Shell/subprocess calls**: avoid passing model output to a shell entirely. If unavoidable, use an allowlist of permitted commands and reject everything else.",
+            "**Downstream API calls**: validate that model-generated API parameters (URLs, identifiers, amounts) are in the expected format and within permitted ranges before sending."
+          ]
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "HTML sanitization before rendering",
+          "code": "import bleach\n\nALLOWED_TAGS = [\"b\", \"i\", \"em\", \"strong\", \"p\", \"ul\", \"ol\", \"li\"]\n\ndef sanitize_for_html(model_output: str) -> str:\n    \"\"\"Strip any tags not in the allowlist before rendering in a browser.\"\"\"\n    return bleach.clean(model_output, tags=ALLOWED_TAGS, strip=True)"
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "OWASP's 2025 LLM Top 10 lists **Insecure Output Handling** (passing unsanitized model output to HTML renderers, shells, or databases) as one of the most commonly exploited LLM vulnerabilities. Validate *and* sanitize — they are different operations."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "Constrained decoding vs post-hoc validation"
+        },
+        {
+          "type": "p",
+          "md": "For teams running self-hosted models, **constrained decoding** (Outlines, llama.cpp grammar mode) is architecturally superior to retry loops: the model is structurally incapable of producing invalid output, so there is nothing to retry. The finite-state machine (FSM) approach masks tokens at sampling time — if the current partial JSON requires the next token to be a digit, all non-digit tokens get probability zero. The output is always schema-valid, at the cost of a small speed penalty (~5–10%) from the FSM overhead."
+        },
+        {
+          "type": "p",
+          "md": "For hosted APIs, use **native structured output modes** (OpenAI's `response_format: {type: \"json_schema\"}`, Anthropic's tool-use with a typed input schema) before falling back to post-hoc parsing. Native modes are server-side constrained decoding — you get the reliability benefit without self-hosting."
+        },
+        {
+          "type": "h3",
+          "text": "Validation as an LLM-as-a-judge step"
+        },
+        {
+          "type": "p",
+          "md": "Schema validation catches structural errors, but not semantic ones. For high-stakes outputs (medical summaries, legal drafts, financial recommendations), a second model call that checks the first response against a rubric — sometimes called **LLM-as-a-judge** or **self-consistency checking** — can catch confident hallucinations that pass schema validation cleanly. See [LLM as a Judge Explained](/learn/evaluation-safety/llm-as-judge/llm-as-a-judge-explained) for the mechanics."
+        },
+        {
+          "type": "h3",
+          "text": "Observability: log every validation failure"
+        },
+        {
+          "type": "p",
+          "md": "Every parse error, schema violation, and content-filter hit is a signal about your prompt quality. Instrument your validation layer to emit structured logs with the model used, the prompt version, the failure type, and the raw response. Review these weekly — a spike in JSON parse errors after a prompt change is far cheaper to catch in logs than in production incidents."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Structured validation failure logging",
+          "code": "import logging, json\nfrom datetime import datetime\n\nlogger = logging.getLogger(\"llm.validation\")\n\ndef log_validation_failure(\n    prompt_version: str,\n    model: str,\n    failure_type: str,   # \"parse_error\" | \"schema_error\" | \"content_filter\"\n    raw_output: str,\n    error_detail: str,\n):\n    logger.warning(json.dumps({\n        \"ts\": datetime.utcnow().isoformat(),\n        \"prompt_version\": prompt_version,\n        \"model\": model,\n        \"failure_type\": failure_type,\n        \"error\": error_detail,\n        # Truncate raw output to avoid flooding logs with huge responses\n        \"raw_output_preview\": raw_output[:500],\n    }))"
+        },
+        {
+          "type": "h3",
+          "text": "Choosing the right library"
+        },
+        {
+          "type": "p",
+          "md": "The ecosystem has converged on a few well-maintained options:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Instructor** — best for hosted APIs (OpenAI, Anthropic, Gemini, and any OpenAI-compatible endpoint). Minimal code change, automatic retry with error feedback, TypeScript port available.",
+            "**Pydantic AI** — agent-oriented; the output type is declared as part of the agent, with retry and tool-calling baked in. Better choice when you're building a multi-step agent rather than a single call.",
+            "**Outlines** — best for local/self-hosted models where you need zero-retry guaranteed schema compliance. Requires ownership of the inference stack.",
+            "**Guardrails AI** — broader scope than just output validation; combines schema validation with a content-policy pipeline. Higher setup cost, more useful when you need both structural and semantic checks from one library."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Start with Instructor on hosted APIs — it adds two lines of code to your existing `openai` or `anthropic` call and gives you schema validation plus retries out of the box. Add content filters (moderation API, bleach) as a second pass before the output reaches any downstream consumer."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Why does my LLM sometimes return prose instead of JSON even when I ask for JSON?",
+      "a": "Models are trained to be helpful and conversational. When they're uncertain or the prompt is ambiguous, they default to natural language. Use a native structured output mode (e.g., `response_format` with a JSON schema) to enforce structure at the API level, or use a constrained-decoding library for local models. Always include a concrete JSON example in your prompt as a fallback — it shifts the model's probability distribution toward compliant output."
+    },
+    {
+      "q": "How many retries should I allow before giving up?",
+      "a": "Two to three retries is the practical sweet spot in production. One retry with error feedback catches the vast majority of transient failures. Beyond three retries, failure is usually a prompt-design problem — the model doesn't understand what you need — not a stochastic blip. More retries also add user-facing latency: each retry on a hosted API typically adds 1.5–3 seconds."
+    },
+    {
+      "q": "What is the difference between output validation and output sanitization?",
+      "a": "Validation checks that the output matches the expected structure and values — right shape, right types, required fields present. Sanitization transforms the output to remove or neutralize unsafe content before it reaches a downstream system — stripping HTML tags, escaping SQL special characters, redacting PII. You normally need both: validate first, then sanitize the validated output before passing it on."
+    },
+    {
+      "q": "Does using structured output mode (JSON mode) mean I don't need Pydantic validation?",
+      "a": "No. JSON mode (or `response_format: json_schema`) guarantees the output is valid JSON that conforms to the schema — it prevents missing fields and wrong types. It does not check business-rule constraints (e.g., confidence must be between 0 and 1, date must be in the future), and it does not filter harmful content. Pydantic adds those deeper checks on top of the structural guarantee."
+    },
+    {
+      "q": "How do I catch PII leaking in LLM responses?",
+      "a": "Combine a regex pass (for high-recall detection of patterns like emails and phone numbers) with an NER model (for names, addresses) that runs as a post-processing step. Cloud options include AWS Comprehend Detect PII Entities and Azure Cognitive Services PII detection. If a PII hit is found, either redact the sensitive span with a placeholder or discard the response and return a fallback."
+    },
+    {
+      "q": "Should I validate inputs or outputs, or both?",
+      "a": "Both — for different reasons. Input validation (prompts, user messages) prevents injection attacks and runaway costs from unexpectedly long inputs. Output validation ensures the model's response is safe and correctly structured before your app acts on it. The two layers are complementary; skipping either leaves a gap."
+    }
+  ],
+  "related": [
+    "what-are-llm-guardrails",
+    "testing-llm-apps",
+    "what-are-llm-evals",
+    "llm-as-a-judge-explained",
+    "what-is-function-calling"
+  ],
+  "furtherReading": [
+    {
+      "title": "Instructor — Structured Outputs for LLMs",
+      "url": "https://python.useinstructor.com/"
+    },
+    {
+      "title": "Outlines: Structured Text Generation",
+      "url": "https://aws.amazon.com/blogs/machine-learning/generate-structured-output-from-llms-with-dottxt-outlines-in-aws/"
+    },
+    {
+      "title": "OWASP LLM Top 10 — Insecure Output Handling",
+      "url": "https://www.oligo.security/academy/owasp-top-10-llm-updated-2025-examples-and-mitigation-strategies"
+    }
+  ]
+}

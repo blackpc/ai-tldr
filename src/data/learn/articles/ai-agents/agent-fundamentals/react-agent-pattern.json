@@ -1,0 +1,362 @@
+{
+  "slug": "react-agent-pattern",
+  "title": "What Is the ReAct Agent Pattern?",
+  "seoTitle": "ReAct Agent Pattern: Reasoning + Acting in LLMs Explained",
+  "metaDescription": "ReAct is the dominant LLM agent pattern: the model thinks (Thought), calls a tool (Action), reads the result (Observation), and loops until done.",
+  "keywords": [
+    "react agent pattern",
+    "reasoning and acting llm",
+    "react pattern ai agents explained",
+    "thought action observation loop",
+    "react vs chain of thought",
+    "react agent tutorial"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Understand the Thought → Action → Observation loop that powers most LLM agents, why it outperforms plain chain-of-thought, and where it breaks down.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**ReAct** (short for **Re**asoning + **Act**ing) is a pattern for running an LLM as an agent. Instead of asking the model to jump straight to an answer, you ask it to *think out loud first*, then choose a tool to call, then read what the tool returned, then think again — looping until the task is done. The cycle of **Thought → Action → Observation** is the entire pattern."
+        },
+        {
+          "type": "p",
+          "md": "It sounds simple, and it is. But that simplicity is the point. Before ReAct, LLMs either produced an answer in one shot (fast but brittle) or used chain-of-thought to reason step-by-step (better, but still no ability to check external facts). ReAct adds the missing piece: **grounding**. After every reasoning step the model can actually *look something up*, run code, or query a database — and then update its reasoning based on what it finds. The model stops guessing and starts verifying."
+        },
+        {
+          "type": "p",
+          "md": "ReAct was introduced by Yao et al. in the 2023 paper *\"ReAct: Synergizing Reasoning and Acting in Language Models\"*. It quickly became the dominant architecture for LLM agents because it maps almost perfectly onto how [tool use](/learn/ai-agents/tool-use/what-is-tool-use) already works: the model emits a structured request, your code runs the real function, the result comes back. ReAct just adds an explicit thinking step before each call."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "If you already know what an agent is, think of ReAct as the *prompt format* that makes agents work well. It tells the model to narrate its reasoning before each tool call, which makes it far less likely to skip steps or call the wrong tool."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The core problem ReAct solves is **hallucination under uncertainty**. A plain LLM asked *\"What did Apple announce yesterday?\"* will confidently make something up if the answer isn't in its training data. A chain-of-thought LLM will reason carefully about what Apple *probably* announced — still made up. A ReAct agent will instead emit `Thought: I need to search for Apple's latest news` → `Action: web_search(\"Apple announcement today\")` → `Observation: [real results]` — and only then write an answer grounded in what it actually found."
+        },
+        {
+          "type": "p",
+          "md": "The second thing ReAct gives you is **interpretability**. Because the model writes down every Thought before acting, you get a step-by-step transcript of its reasoning. When a run goes wrong you can read the trace and see exactly where the model misunderstood the task, chose the wrong tool, or drew the wrong conclusion from an observation. That's far better than a black-box answer with no trail."
+        },
+        {
+          "type": "h3",
+          "text": "Improvements over related approaches"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**vs. direct prompting** — the model can fetch real data mid-task instead of relying on frozen training knowledge.",
+            "**vs. chain-of-thought** — CoT gives better reasoning but no external actions; ReAct adds the action-and-observe loop that keeps reasoning anchored to real results.",
+            "**vs. tool use with no explicit reasoning** — calling tools without narrated thoughts works but the model often calls the wrong tool or misreads outputs; the Thought step acts as a planning check before each call.",
+            "**vs. pure planning (Plan then Act)** — a plan written upfront can become stale after the first tool call reveals unexpected data; ReAct replans after every observation, adapting in real time."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "In the original paper, ReAct outperformed chain-of-thought on multi-hop QA benchmarks (HotpotQA) and fact-checking (Fever), and outperformed pure tool-use agents on decision-making tasks (ALFWorld, WebShop). The gain came from the combination, not from either part alone."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A ReAct agent receives a task. It then enters a loop where each turn of the loop produces three labeled outputs in order:"
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Thought** — the model narrates what it knows so far and what it plans to do next. This is not yet an action; it's the model thinking on paper.",
+            "**Action** — the model specifies a tool to call and its inputs (e.g., `search[Apple WWDC 2025 announcements]`).",
+            "**Observation** — the result returned by that tool, appended to the context by the agent harness (your code). The model reads this on the next turn."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "When the model decides it has enough information, it emits a final `Thought` explaining its conclusion followed by `Final Answer: ...` instead of another Action. Your code detects the absence of a tool call and returns the answer to the user."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "The ReAct loop",
+            "steps": [
+              {
+                "label": "Thought",
+                "sub": "model reasons about the next step"
+              },
+              {
+                "label": "Action",
+                "sub": "model calls a tool with structured input",
+                "accent": true
+              },
+              {
+                "label": "Observation",
+                "sub": "tool result appended to context"
+              },
+              {
+                "label": "Repeat or finish",
+                "sub": "loop until Final Answer"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "What the raw prompt looks like"
+        },
+        {
+          "type": "p",
+          "md": "Concretely, the context the model sees grows with each turn. A typical trace for *\"How many days until the next leap year from today?\"* might look like this:"
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "code": "Task: How many days until the next leap year from today (2026-06-12)?\n\nThought: I need to know what year the next leap year after 2026 is.\n  2028 is divisible by 4 and not a century year, so it qualifies.\n  Next I need to calculate the days between 2026-06-12 and 2028-01-01.\nAction: calculator[days_between(\"2026-06-12\", \"2028-01-01\")]\nObservation: 568\n\nThought: The tool returned 568 days. That is my answer.\nFinal Answer: There are 568 days until 1 January 2028, the next leap year."
+        },
+        {
+          "type": "p",
+          "md": "Notice the Thought before the Action isn't optional fluff — it's doing real work. The model decides which tool to call *and* what inputs to give it based on its reasoning. And when the Observation comes back, the model immediately integrates it into the next Thought rather than ignoring it."
+        },
+        {
+          "type": "h3",
+          "text": "Implementing ReAct with a modern SDK"
+        },
+        {
+          "type": "p",
+          "md": "In practice you don't have to parse \"Thought:\" / \"Action:\" labels yourself. Modern SDKs handle the structure through [function calling](/learn/llm-apis/function-calling/what-is-function-calling): the model returns a tool-use block (the Action), your loop runs the tool and returns the result (the Observation), and the reasoning (Thought) is embedded in the model's text or scratchpad. Here is a minimal Python example using the Anthropic SDK:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "import anthropic, datetime\n\nclient = anthropic.Anthropic()\n\ntools = [\n    {\n        \"name\": \"web_search\",\n        \"description\": \"Search the web for current information.\",\n        \"input_schema\": {\n            \"type\": \"object\",\n            \"properties\": {\"query\": {\"type\": \"string\"}},\n            \"required\": [\"query\"],\n        },\n    }\n]\n\ndef run_tool(name: str, args: dict) -> str:\n    if name == \"web_search\":\n        # In production, call a real search API here.\n        return f\"[stub] results for: {args['query']}\"\n    return \"unknown tool\"\n\nmessages = [{\"role\": \"user\", \"content\": \"What AI model did Anthropic release most recently?\"}]\n\n# ReAct loop\nfor step in range(10):  # hard cap prevents infinite loops\n    resp = client.messages.create(\n        model=\"claude-sonnet-4-5\",\n        max_tokens=1024,\n        tools=tools,\n        # Extended thinking (if supported) produces explicit Thought blocks\n        messages=messages,\n    )\n    messages.append({\"role\": \"assistant\", \"content\": resp.content})\n\n    if resp.stop_reason != \"tool_use\":\n        # No tool call → model gave its Final Answer\n        for block in resp.content:\n            if hasattr(block, \"text\"):\n                print(\"Answer:\", block.text)\n        break\n\n    # Run every tool the model requested (Action), feed results back (Observation)\n    results = []\n    for block in resp.content:\n        if block.type == \"tool_use\":\n            output = run_tool(block.name, block.input)\n            results.append({\n                \"type\": \"tool_result\",\n                \"tool_use_id\": block.id,\n                \"content\": output,\n            })\n    messages.append({\"role\": \"user\", \"content\": results})"
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The `for step in range(10)` hard cap is not optional hygiene — it's a load-bearing safety rail. A confused agent with no step limit will loop forever, burning tokens and money. Always set one."
+        }
+      ]
+    },
+    {
+      "id": "strengths-and-failure-modes",
+      "title": "Strengths and failure modes",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "ReAct has real strengths that explain why it became the default agent pattern. But it also has well-documented failure modes you need to plan for."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "ReAct: what works vs. what breaks",
+            "columns": [
+              {
+                "title": "Strengths",
+                "items": [
+                  "Grounds answers in real tool output",
+                  "Step-by-step trace is human-readable",
+                  "Adapts plan after each observation",
+                  "Works with any tool set",
+                  "Easy to debug via transcript"
+                ]
+              },
+              {
+                "title": "Failure modes",
+                "items": [
+                  "Hallucinated Thoughts leak false context",
+                  "Repetitive loops (same action, same result)",
+                  "Observation overload loses earlier context",
+                  "Context window fills on long tasks",
+                  "Reasoning and action can diverge"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Hallucinated thoughts"
+        },
+        {
+          "type": "p",
+          "md": "The Thought is still generated by the LLM and can contain false assertions. A common failure: the model writes `Thought: The user's account was created in 2019` (invented) before calling a lookup tool — and then the model trusts its own hallucinated Thought even when the Observation says otherwise. The fix is to treat Thought blocks as *plans*, never as facts; the Observation is the only source of truth."
+        },
+        {
+          "type": "h3",
+          "text": "Repetitive loops"
+        },
+        {
+          "type": "p",
+          "md": "If a tool returns an error or a result the model doesn't know how to interpret, it may call the same tool again with the same arguments — and repeat until the step limit fires. Mitigation: inject the full error message as the Observation, add a system prompt rule like *\"if you receive the same error twice in a row, stop and explain the problem to the user\"*, and set a per-tool retry cap in your harness."
+        },
+        {
+          "type": "h3",
+          "text": "Context window pressure"
+        },
+        {
+          "type": "p",
+          "md": "Every Thought, Action, and Observation gets appended to the context. A long task with many tool calls — especially tools that return large text blobs — can fill the [context window](/learn/llm-fundamentals/context-windows/what-is-a-context-window) before the task is done. Common mitigations: truncate or summarize observations before appending, prune old turns from the transcript, or summarize completed sub-tasks into a compact status block."
+        },
+        {
+          "type": "h3",
+          "text": "Reasoning–action divergence"
+        },
+        {
+          "type": "p",
+          "md": "Occasionally the model's Thought says *\"I should search for X\"* but the Action calls a different tool or uses different search terms. This is an alignment failure between the two outputs. Monitoring for it requires logging both the Thought and the Action in your traces — another reason [LLM observability](/learn/production-llmops/observability-monitoring/what-is-llm-observability) matters for agents in production."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "**Error compounding is the main reliability killer.** If each ReAct step is 95% reliable, a 10-step task succeeds only ~60% of the time. Keep tasks as short as possible and validate tool results after each step rather than assuming they're correct."
+        }
+      ]
+    },
+    {
+      "id": "react-vs-alternatives",
+      "title": "ReAct vs. related patterns",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "ReAct is not the only pattern for agentic LLMs. As agents became a serious engineering discipline, several variants and successors emerged."
+        },
+        {
+          "type": "h3",
+          "text": "ReAct vs. Plan-and-Execute"
+        },
+        {
+          "type": "p",
+          "md": "Plan-and-Execute (also called Plan-and-Solve) separates planning from execution: a **planner** LLM call produces a full multi-step plan, then each step is executed in sequence, sometimes by a separate **executor** model. This gives a more structured decomposition and is easier to audit upfront. The tradeoff: if step 3 reveals that the plan was wrong, there's no cheap way to replan mid-execution without re-running the planner. ReAct replans implicitly after every observation — better for exploratory tasks, worse for predictable pipelines."
+        },
+        {
+          "type": "h3",
+          "text": "ReAct vs. Reflexion"
+        },
+        {
+          "type": "p",
+          "md": "Reflexion (Shinn et al., 2023) adds a **self-evaluation** step: after each full trial the agent reflects on what went wrong and stores a verbal summary of lessons learned, then retries. Think of it as ReAct plus long-term memory of failures. Reflexion outperforms ReAct on benchmarks that allow multiple attempts, but adds latency and requires a persistent memory store across trials."
+        },
+        {
+          "type": "h3",
+          "text": "ReAct in frameworks"
+        },
+        {
+          "type": "p",
+          "md": "Every major agent framework has first-class ReAct support. [LangChain](/learn/agent-frameworks/langchain-ecosystem/what-is-langchain) ships a `create_react_agent` helper that handles the Thought/Action/Observation formatting. LangGraph wraps ReAct in a stateful graph for branching and persistence. The [Claude Agent SDK](/learn/agent-frameworks/provider-agent-sdks/what-is-claude-agent-sdk) and OpenAI Agents SDK implement the same loop via native function calling. The pattern is the same in all of them — only the boilerplate changes."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Building ReAct from scratch once — as shown in the loop above — is worth the hour it takes. When you later add a framework, you'll understand what the abstraction is doing instead of treating it as magic."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you're comfortable with the basic loop, the engineering challenges shift from *making it work* to *making it reliable and cheap*. Here are the threads worth pulling."
+        },
+        {
+          "type": "h3",
+          "text": "Prompt design for ReAct"
+        },
+        {
+          "type": "p",
+          "md": "The system prompt is load-bearing in a ReAct agent. At minimum it should: list available tools with precise descriptions; instruct the model to always emit a Thought before acting; set the format for the Final Answer; and tell the model how to handle errors and ambiguous observations. Verbose, underspecified tool descriptions are the single biggest source of wrong tool calls."
+        },
+        {
+          "type": "h3",
+          "text": "Extended thinking and native reasoning models"
+        },
+        {
+          "type": "p",
+          "md": "Models with built-in extended thinking (like Claude 3.7 Sonnet with extended thinking enabled, or OpenAI o1/o3) already generate internal reasoning traces before responding. This effectively gives you the Thought step for free at the model level. For these models the ReAct loop still applies — you still need the Action → Observation cycle — but you no longer need to prompt-engineer the Thought into the visible context; it happens internally."
+        },
+        {
+          "type": "h3",
+          "text": "Observability and debugging"
+        },
+        {
+          "type": "p",
+          "md": "Every production ReAct agent should log each turn's full context: the Thought, the Action (tool name + inputs), and the Observation (truncated if large). This transcript is your primary debugging tool. When a run fails, read the trace top-to-bottom and look for the first Thought that contains a false assumption — that's almost always where the run diverged. Services like LangSmith, Langfuse, and Weave are built around this trace-first debugging model."
+        },
+        {
+          "type": "h3",
+          "text": "When not to use ReAct"
+        },
+        {
+          "type": "p",
+          "md": "ReAct adds overhead — tokens, latency, cost — that isn't always justified. If a task can be solved with a single well-crafted prompt and the model's training data, [chain-of-thought prompting](/learn/prompt-engineering/reasoning-techniques/chain-of-thought-prompting) is faster and cheaper. If the sequence of steps is known in advance, a hard-coded [RAG](/learn/rag/rag-fundamentals/what-is-rag) pipeline or a scripted workflow is more reliable. Reach for ReAct when the steps genuinely depend on what the tools return — that is, when you can't know the path until you start walking it."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What does ReAct stand for in AI?",
+      "a": "ReAct stands for Reasoning and Acting. It's a pattern introduced in a 2023 paper where an LLM is prompted to emit a Thought (reasoning) before each Action (tool call), then reads the tool's Observation before reasoning again. The cycle repeats until the model produces a Final Answer."
+    },
+    {
+      "q": "How is ReAct different from chain-of-thought prompting?",
+      "a": "Chain-of-thought adds reasoning steps to a single prompt-and-answer turn but has no ability to call external tools or check facts mid-reasoning. ReAct extends CoT with an action-and-observe loop: after each reasoning step the model can call a real tool, read the actual result, and update its reasoning — grounding the answer in live data rather than training-time knowledge."
+    },
+    {
+      "q": "Does ReAct prevent hallucinations?",
+      "a": "It reduces them significantly for factual tasks by grounding answers in tool outputs rather than model memory. But it doesn't eliminate hallucinations entirely — the Thought step itself is generated by the model and can contain false assumptions that contaminate later reasoning. The Observation is the only reliable source of truth; treat Thoughts as plans, not facts."
+    },
+    {
+      "q": "What is an Observation in ReAct?",
+      "a": "An Observation is the result returned by a tool call, appended to the conversation context by the agent harness (your code). The model reads it on the next turn and uses it to update its reasoning. Observations are the mechanism that grounds the agent in real data instead of model hallucinations."
+    },
+    {
+      "q": "Is ReAct the same as an agent loop?",
+      "a": "ReAct is one specific implementation of an agent loop — the most popular one. The broader concept of an agent loop (observe, reason, act, repeat) predates ReAct. What ReAct adds is the explicit Thought step before each Action and the Thought/Action/Observation labeling in the prompt, which proved to be the key that makes the loop reliable in practice."
+    },
+    {
+      "q": "Do LangChain and LangGraph use ReAct?",
+      "a": "Yes. LangChain provides a create_react_agent function that wires up the Thought/Action/Observation loop with a set of tools. LangGraph lets you build more complex variants — branching, parallelism, persistent state — while still following the same core pattern. Most modern agent frameworks, including the Claude Agent SDK and OpenAI Agents SDK, implement the same loop via native function-calling APIs."
+    }
+  ],
+  "related": [
+    "what-is-an-ai-agent",
+    "what-is-tool-use",
+    "chain-of-thought-prompting",
+    "what-is-agent-planning",
+    "what-is-langchain"
+  ],
+  "furtherReading": [
+    {
+      "title": "ReAct: Synergizing Reasoning and Acting in Language Models (arXiv, Yao et al. 2023)",
+      "url": "https://arxiv.org/abs/2210.03629"
+    },
+    {
+      "title": "What is a ReAct Agent? — IBM Think",
+      "url": "https://www.ibm.com/think/topics/react-agent"
+    },
+    {
+      "title": "Building ReAct Agents with LangGraph — Machine Learning Mastery",
+      "url": "https://machinelearningmastery.com/building-react-agents-with-langgraph-a-beginners-guide/"
+    }
+  ]
+}

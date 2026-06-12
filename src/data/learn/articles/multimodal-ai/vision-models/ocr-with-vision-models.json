@@ -1,0 +1,392 @@
+{
+  "slug": "ocr-with-vision-models",
+  "title": "How to Use Vision Models for Document AI",
+  "seoTitle": "Vision Models for OCR & Document AI: GPT-4o, Claude, Gemini",
+  "metaDescription": "Learn to use GPT-4o, Claude, and Gemini for OCR, PDF parsing, and table extraction — prompting strategies and when vision models beat traditional OCR.",
+  "keywords": [
+    "vision models OCR",
+    "document AI with GPT-4o",
+    "PDF extraction vision model",
+    "Claude document understanding",
+    "table extraction LLM",
+    "vision model vs traditional OCR"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn how to point GPT-4o, Claude, or Gemini at a document and get structured data out — and when that beats a traditional OCR pipeline.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Traditional OCR (Optical Character Recognition) is a translator: it looks at a scanned image, recognises each character, and outputs raw text. That raw text then has to go through a second, separate system that figures out what the words *mean* — which number is the invoice total, which row is whose address, which column is the quantity. Two pipelines, two failure points."
+        },
+        {
+          "type": "p",
+          "md": "A [vision language model](/learn/multimodal-ai/vision-models/what-is-vision-language-model) like GPT-4o, Claude, or Gemini collapses that into one step. You hand it an image of a document — a scanned invoice, a PDF slide, a photo of a handwritten form — and ask it a question in plain English: *\"Extract the line items as JSON\"* or *\"What is the total amount due?\"* The model reads the pixels, understands the layout and context, and returns a structured answer, all in a single API call."
+        },
+        {
+          "type": "p",
+          "md": "This is called **vision-based Document AI**, and it has become one of the most commercially valuable uses of large multimodal models. The catch is that it requires good prompting and a realistic understanding of where these models beat traditional pipelines and where they don't."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This article is about *using* vision models for document tasks via API — prompting, structuring outputs, choosing the right model. If you want to understand how VLMs work internally, start with [What Is a Vision Language Model](/learn/multimodal-ai/vision-models/what-is-vision-language-model)."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Most enterprise data is locked in documents. Invoices, contracts, medical records, insurance claims, shipping manifests, research papers — almost none of it arrives as clean, structured rows in a database. Before vision models, processing these documents at scale required:"
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "An OCR engine (e.g. Tesseract, AWS Textract, Google Document AI) to extract raw text.",
+            "A layout parser to identify regions — headers, tables, footers — from bounding-box coordinates.",
+            "A custom extraction model or regex rules to pull specific fields from the extracted text.",
+            "Post-processing logic to validate, normalise, and handle errors."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Each stage needs maintenance, training data, and its own failure modes. Vision models replace most of that stack with a single model you instruct in natural language. For many use cases — especially those with varied document layouts or occasional handwriting — this is dramatically faster to build and easier to adapt."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Invoice and receipt processing.** Extract line items, totals, vendor names, and dates across thousands of invoice layouts with no per-layout training.",
+            "**Contract and legal document review.** Find specific clauses, dates, and parties across dense multi-page PDFs.",
+            "**Medical form digitisation.** Read handwritten or mixed print/handwrite patient forms into structured records.",
+            "**Research and report summarisation.** Pull key figures, tables, and conclusions from academic PDFs.",
+            "**ID and credential verification.** Extract fields from passports, driving licences, and ID cards."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Vision models are not a universal replacement for dedicated OCR tools. They are slower and more expensive per page. The sweet spot is document types with variable layouts, mixed content, or reasoning requirements — not bulk-scanning millions of simple, uniform forms where speed and cost dominate."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The basic pipeline for vision-based document extraction is straightforward. You convert your document to an image (or use the model's native PDF support where available), send that image alongside a carefully written prompt via the model's API, and receive structured text — ideally JSON — in return."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Vision-based document extraction pipeline",
+            "steps": [
+              { "label": "Source document", "sub": "PDF, scan, photo, DOCX" },
+              { "label": "Convert to image", "sub": "PDF → PNG pages, or use native PDF input" },
+              { "label": "Build prompt", "sub": "Instruction + JSON schema + image" },
+              { "label": "Vision model API", "sub": "GPT-4o, Claude, Gemini" },
+              { "label": "Structured output", "sub": "JSON, Markdown table, plain text" },
+              { "label": "Validate & store", "sub": "Parse, check required fields, write to DB" }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Step 1: prepare the image"
+        },
+        {
+          "type": "p",
+          "md": "Most vision model APIs accept JPEG or PNG images up to a few MB. PDFs need to be rasterised first — the `pdf2image` Python library (backed by Poppler) is the standard choice. Aim for **150–300 DPI** for printed documents; go higher (300–400 DPI) for handwriting or small print. Too low and characters blur; too high wastes tokens and increases latency."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "from pdf2image import convert_from_path\nimport base64, io\n\n# Convert first page of a PDF to a base64-encoded PNG\npages = convert_from_path(\"invoice.pdf\", dpi=200)\nbuffer = io.BytesIO()\npages[0].save(buffer, format=\"PNG\")\nimage_b64 = base64.b64encode(buffer.getvalue()).decode()"
+        },
+        {
+          "type": "h3",
+          "text": "Step 2: write a high-quality extraction prompt"
+        },
+        {
+          "type": "p",
+          "md": "The prompt is the most important variable in vision document AI. A vague instruction like *\"extract the data\"* will produce inconsistent results. A structured prompt with a clear task, an explicit output format, and a JSON schema example reliably outperforms both."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "SYSTEM_PROMPT = \"\"\"\nYou are a document extraction assistant. Extract structured data from the document image.\nReturn ONLY a valid JSON object matching the schema below. Do not add commentary.\n\nSchema:\n{\n  \"vendor_name\": \"string\",\n  \"invoice_number\": \"string\",\n  \"invoice_date\": \"YYYY-MM-DD\",\n  \"due_date\": \"YYYY-MM-DD or null\",\n  \"line_items\": [\n    {\n      \"description\": \"string\",\n      \"quantity\": \"number\",\n      \"unit_price\": \"number\",\n      \"total\": \"number\"\n    }\n  ],\n  \"subtotal\": \"number\",\n  \"tax\": \"number or null\",\n  \"total_due\": \"number\"\n}\n\nIf a field is not present in the document, use null.\n\"\"\""
+        },
+        {
+          "type": "h3",
+          "text": "Step 3: call the API"
+        },
+        {
+          "type": "p",
+          "md": "The API call is the same for most providers — you pass the image as a base64 data URL alongside the text prompt. Here is an example using the Anthropic SDK:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "import anthropic\n\nclient = anthropic.Anthropic()\n\nmessage = client.messages.create(\n    model=\"claude-sonnet-4-5\",\n    max_tokens=1024,\n    system=SYSTEM_PROMPT,\n    messages=[\n        {\n            \"role\": \"user\",\n            \"content\": [\n                {\n                    \"type\": \"image\",\n                    \"source\": {\n                        \"type\": \"base64\",\n                        \"media_type\": \"image/png\",\n                        \"data\": image_b64\n                    }\n                },\n                {\n                    \"type\": \"text\",\n                    \"text\": \"Extract all invoice data from this document.\"\n                }\n            ]\n        }\n    ]\n)\n\nimport json\nresult = json.loads(message.content[0].text)"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "**Use structured outputs / JSON mode when available.** OpenAI's GPT-4o supports a `response_format: {type: \"json_object\"}` parameter that forces valid JSON output and eliminates parse errors. Claude and Gemini can be steered reliably with a strong system prompt and by ending your user message with *\"Respond only with JSON.\"*"
+        }
+      ]
+    },
+    {
+      "id": "prompting-strategies",
+      "title": "Prompting strategies that improve accuracy",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The difference between a 70% and a 95% extraction accuracy often comes down to the prompt. Research and practitioner benchmarks consistently identify five techniques that move the needle:"
+        },
+        {
+          "type": "h3",
+          "text": "1. Provide an explicit JSON schema"
+        },
+        {
+          "type": "p",
+          "md": "Listing the exact output schema — field names, types, and a note about nulls — reduces hallucination and schema drift. The model treats the schema as a checklist; fields that are missing from the document get `null` rather than a fabricated value."
+        },
+        {
+          "type": "h3",
+          "text": "2. Define entities you care about"
+        },
+        {
+          "type": "p",
+          "md": "Short, concise entity definitions outperform both no definitions and overly verbose ones. For example: *\"`due_date`: the payment deadline, printed as 'Due by' or 'Payment due'. Format as YYYY-MM-DD.\"* This tells the model exactly which text to look for and how to normalise it."
+        },
+        {
+          "type": "h3",
+          "text": "3. One-shot or few-shot examples"
+        },
+        {
+          "type": "p",
+          "md": "Including one complete input/output example in your system prompt dramatically improves format compliance. Show a fictional document snippet alongside the ideal JSON output. The model calibrates its output format to match your example rather than guessing."
+        },
+        {
+          "type": "h3",
+          "text": "4. Ask for Markdown tables when structure matters"
+        },
+        {
+          "type": "p",
+          "md": "For table-heavy documents (financial statements, data sheets), asking the model to return a **Markdown table** first, then parse that table separately, can be more reliable than asking for JSON directly. The model's visual table-reading accuracy is high; JSON serialisation is where errors creep in."
+        },
+        {
+          "type": "h3",
+          "text": "5. Chain-of-thought for complex layouts"
+        },
+        {
+          "type": "p",
+          "md": "For multi-page documents or ambiguous layouts, prepend *\"Think step by step: first identify all sections, then extract fields from each section\"* to your instruction. [Chain-of-thought prompting](/learn/prompt-engineering/reasoning-techniques/chain-of-thought-prompting) helps models navigate complex structures without jumping to conclusions."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "**Watch for confident hallucination.** Vision models will sometimes invent a plausible-looking value for a field they couldn't read clearly, especially on low-quality scans. Always validate critical numeric fields (totals, dates) with a post-processing step — for example, checking that `subtotal + tax ≈ total_due`."
+        }
+      ]
+    },
+    {
+      "id": "model-and-tool-comparison",
+      "title": "Choosing the right model",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "GPT-4o, Claude, and Gemini all perform well at document extraction, but they have different strengths. Here is a practical comparison based on 2025–2026 benchmarks and practitioner experience:"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Vision model comparison for document AI",
+            "columns": [
+              {
+                "title": "GPT-4o",
+                "items": [
+                  "Strong JSON schema compliance",
+                  "JSON mode forces valid output",
+                  "Good all-round printed text accuracy",
+                  "Fastest among flagship models",
+                  "Higher cost per page at scale"
+                ]
+              },
+              {
+                "title": "Claude (Sonnet/Opus)",
+                "items": [
+                  "Low hallucination rate on structured fields",
+                  "Excellent for long documents and contracts",
+                  "Strong reasoning about document context",
+                  "Native PDF support in API (no rasterising)",
+                  "More conservative — may return null vs. guess"
+                ]
+              },
+              {
+                "title": "Gemini 2.5 Pro",
+                "items": [
+                  "Top benchmark scores for printed text",
+                  "Large context window for multi-page docs",
+                  "Competitive on handwriting accuracy",
+                  "Native PDF and multi-image support",
+                  "Best cost/accuracy ratio at high volume"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Vision models vs traditional OCR tools"
+        },
+        {
+          "type": "p",
+          "md": "Traditional OCR tools like AWS Textract, Google Document AI, and Azure Form Recognizer are purpose-built for specific document types. They are faster (milliseconds vs seconds), cheaper per page at high volume, and offer specialised extractors for common formats like W-2 forms or driving licences. Vision models beat them on flexibility — novel layouts, mixed content, reasoning questions — but lose on throughput and unit economics."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Traditional OCR vs Vision model tradeoffs",
+            "columns": [
+              {
+                "title": "Traditional OCR (Textract, Document AI)",
+                "items": [
+                  "Milliseconds per page",
+                  "Low cost at high volume",
+                  "Deterministic, easy to test",
+                  "Requires per-layout training for custom fields",
+                  "Poor on handwriting and novel layouts",
+                  "No reasoning — extracts text, not meaning"
+                ]
+              },
+              {
+                "title": "Vision LLM (GPT-4o, Claude, Gemini)",
+                "items": [
+                  "Seconds per page",
+                  "Higher cost per page",
+                  "Non-deterministic — test with eval sets",
+                  "Zero training needed — describe in the prompt",
+                  "Handles handwriting and variable layouts",
+                  "Understands context and can reason across fields"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "**Hybrid pipelines are common in production.** A fast, cheap OCR tool extracts raw text from the easy 80% of documents; the vision model handles the remaining 20% with poor quality, unusual layouts, or reasoning requirements. This keeps costs manageable while preserving flexibility."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you have a basic extraction pipeline working, there are several directions to explore depending on your use case."
+        },
+        {
+          "type": "h3",
+          "text": "Multi-page documents"
+        },
+        {
+          "type": "p",
+          "md": "For long PDFs, you have two options. **Native PDF input** (supported by Claude and Gemini) lets you send the entire PDF as a single API input; the model handles page segmentation internally. **Page-by-page processing** with aggregation gives you more control — process each page independently, then merge the JSON outputs. The latter is more predictable for very long documents and lets you parallelize requests."
+        },
+        {
+          "type": "h3",
+          "text": "Evaluation and quality measurement"
+        },
+        {
+          "type": "p",
+          "md": "Build an eval set of 50–100 documents with known ground-truth values and run your pipeline against it before going to production. Measure field-level accuracy (not just full-record accuracy), track null rates, and log confidence by document type. An [LLM-as-a-judge](/learn/evaluation-safety/llm-as-judge/llm-as-a-judge-explained) can help grade free-text fields where exact-match comparison doesn't work."
+        },
+        {
+          "type": "h3",
+          "text": "Image pre-processing for accuracy"
+        },
+        {
+          "type": "p",
+          "md": "On scanned or photographed documents, pre-processing can significantly improve results: deskew (correct rotation), binarise (convert to black and white), and remove background noise before sending to the model. The Python `opencv-python` and `Pillow` libraries cover most of these needs. Even a simple deskew step can recover several accuracy percentage points on difficult scans."
+        },
+        {
+          "type": "h3",
+          "text": "Agentic document workflows"
+        },
+        {
+          "type": "p",
+          "md": "For complex document workflows — classify the document type, route it to a specialist extraction prompt, validate the result, then request human review if confidence is low — an [AI agent](/learn/ai-agents/agent-fundamentals/what-is-an-ai-agent) with [tool use](/learn/ai-agents/tool-use/what-is-tool-use) is a natural fit. The vision model becomes one tool in a broader pipeline rather than the whole system."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Benchmark numbers shift quickly as models improve. Always run your own eval on a representative sample of your documents before committing to a model choice — lab benchmarks rarely reflect the specific quirks of your document corpus."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Can vision models replace Tesseract or AWS Textract for OCR?",
+      "a": "For simple, high-volume, uniform documents, dedicated OCR tools like Tesseract, AWS Textract, or Google Document AI are still faster and cheaper. Vision models are the better choice when documents have variable layouts, mixed printed and handwritten content, or require reasoning to extract meaning — not just raw text. Many production pipelines use both: OCR for the easy cases, a vision model for the hard ones."
+    },
+    {
+      "q": "Which is more accurate for OCR: GPT-4o, Claude, or Gemini?",
+      "a": "Based on 2025–2026 benchmarks, all three perform well on printed text. Gemini 2.5 Pro and Claude Sonnet consistently lead on printed-document accuracy. GPT-4o is strong on JSON schema compliance. For handwriting, GPT-4o and Gemini 2.5 Pro are generally top performers. The differences are small enough that your document type and prompting quality often matter more than the model choice. Always test on a representative sample of your own documents."
+    },
+    {
+      "q": "How do I extract tables from a PDF using a vision model?",
+      "a": "Convert the PDF page to an image at 200–300 DPI and ask the model to return the table as a Markdown table. Provide a clear prompt such as 'Extract the table on this page as a Markdown table with headers.' You can then parse the Markdown table into CSV or JSON programmatically. For tables that span multiple pages, process each page separately and concatenate the rows."
+    },
+    {
+      "q": "How do I prevent hallucination when extracting document fields?",
+      "a": "Include a JSON schema with explicit null handling ('if a field is not present, return null'), add concise entity definitions, and validate critical numeric fields with cross-checks (e.g., line item totals should sum to subtotal). Building a small eval set and measuring null rates and field accuracy helps surface hallucination patterns early. Structured output modes (OpenAI's JSON mode, or Pydantic-backed parsing) add another layer of safety."
+    },
+    {
+      "q": "Does Claude support native PDF input without converting to images?",
+      "a": "Yes. The Anthropic API supports PDFs as a document type alongside images. You can pass a PDF directly and Claude will process its pages without you needing to rasterise them first. This simplifies the pipeline for multi-page documents. Gemini also supports native PDF input. GPT-4o requires the PDF to be converted to images first, or you can use the Assistants API with file retrieval for text-layer PDFs."
+    },
+    {
+      "q": "What DPI should I use when converting PDFs to images for vision model OCR?",
+      "a": "150–200 DPI is sufficient for most printed documents and balances image quality with file size and token cost. Use 300 DPI for documents with small print, handwriting, or fine table borders. Avoid going above 400 DPI — it increases image size significantly without meaningful accuracy gains for most models, and very large images may be downscaled by the API anyway."
+    }
+  ],
+  "related": [
+    "what-is-vision-language-model",
+    "what-is-function-calling",
+    "chain-of-thought-prompting",
+    "what-is-an-ai-agent",
+    "llm-as-a-judge-explained"
+  ],
+  "furtherReading": [
+    {
+      "title": "Document Data Extraction in 2026: LLMs vs OCRs",
+      "url": "https://www.vellum.ai/blog/document-data-extraction-llms-vs-ocrs"
+    },
+    {
+      "title": "Claude Vision for Document Analysis — A Developer's Guide",
+      "url": "https://getstream.io/blog/anthropic-claude-visual-reasoning/"
+    },
+    {
+      "title": "Using Vision Language Models to Process Millions of Documents",
+      "url": "https://towardsdatascience.com/using-vision-language-models-to-process-millions-of-documents/"
+    }
+  ]
+}

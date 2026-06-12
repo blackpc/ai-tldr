@@ -1,0 +1,320 @@
+{
+  "slug": "tool-calling-best-practices",
+  "title": "Tool Calling Best Practices for LLMs",
+  "seoTitle": "Tool Calling Best Practices for LLMs (2026 Guide)",
+  "metaDescription": "Practical LLM tool calling best practices: schema design, naming, descriptions, parallel execution, error handling, and when to skip tools entirely.",
+  "keywords": [
+    "tool calling best practices llm",
+    "llm function calling schema design",
+    "parallel tool calling",
+    "llm tool error handling",
+    "function calling naming conventions"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn how to design schemas, write descriptions, handle errors, and know when to skip tools entirely so your LLM agent calls functions reliably.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You already know *what* tool calling is — the model asks your code to run a function and returns the result (see [What Is Function Calling?](/learn/llm-apis/function-calling/what-is-function-calling)). The harder question is: **how do you build it so the model chooses the right tool, fills in the right arguments, and keeps working when something goes wrong?**"
+        },
+        {
+          "type": "p",
+          "md": "That is what this article is about. Tool calling reliability lives almost entirely in three places: the JSON schema you give the model, the plain-English description attached to each tool and each parameter, and the error-handling logic in your agent loop. Get those three right and a well-tuned model will pick the right function, supply valid arguments, and recover gracefully when the external call fails."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This article assumes you already understand the basic tool-calling loop (model → tool call → your code → result → model). If not, read [What Is Function Calling?](/learn/llm-apis/function-calling/what-is-function-calling) first."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Research on tool-use accuracy identifies two failure modes: **selection errors** (the model chooses the wrong tool, calls an extra one, or skips one entirely) and **invocation errors** (correct tool, wrong arguments). Studies find that argument correctness has a larger impact on end-to-end success than tool selection alone — which means a polished schema beats a clever prompt nearly every time."
+        },
+        {
+          "type": "p",
+          "md": "There is also a catalog-size effect: giving a model 50 tools when it only needs 5 measurably degrades selection accuracy and consumes input tokens that would otherwise be available for reasoning. The engineering implication is clear — keep toolsets small and scoped, and load tools dynamically when the catalog grows large."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Reliability** — well-described tools cut hallucinated or malformed arguments",
+            "**Latency** — parallel execution collapses independent calls into one round-trip",
+            "**Safety** — explicit scope and human-in-the-loop gates stop runaway write operations",
+            "**Cost** — concise schemas consume fewer input tokens per call",
+            "**Debuggability** — structured error returns let the model self-correct without a retry from scratch"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How the decision loop works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Before diving into individual practices, it helps to see the full agent loop in one place. Understanding where each best practice *slots in* makes the guidance easier to remember and apply."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Agent tool-calling loop with best-practice checkpoints",
+            "steps": [
+              { "label": "User message arrives", "sub": "System prompt includes scoped tool list" },
+              { "label": "Model reasons over tools", "sub": "Names + descriptions guide selection" },
+              { "label": "Tool call(s) emitted", "sub": "Parallel if independent; sequential if dependent" },
+              { "label": "Your code validates args", "sub": "Schema + runtime checks before execution" },
+              { "label": "Tool executes", "sub": "Least-privilege; confirm before irreversible writes" },
+              { "label": "Result returned to model", "sub": "Structured error string on failure" },
+              { "label": "Model produces final reply", "sub": "Or calls another tool if needed" }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Each step in the loop has at least one best practice attached. The sections below walk through them in the order a developer encounters them: **schema design → naming → descriptions → parallel calling → error handling → when not to use tools**."
+        }
+      ]
+    },
+    {
+      "id": "practical-guidance",
+      "title": "Practical best practices",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "1. Schema design — be explicit, be minimal"
+        },
+        {
+          "type": "p",
+          "md": "The JSON Schema block you pass to the API is the most influential thing you control. A few concrete rules:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Mark every required field as required.** Leaving required parameters in the optional array is the single most common cause of invocation errors — the model omits them without error.",
+            "**Use enum for constrained strings.** If a parameter can only be `\"celsius\"` or `\"fahrenheit\"`, say so. The model will never hallucinate a third option.",
+            "**Add `format` hints for structured strings.** `\"format\": \"date\"` (ISO 8601) or `\"format\": \"uri\"` gives the model a machine-readable contract, not just a hint.",
+            "**Keep schemas as flat as possible.** Deeply nested objects increase the chance of structural errors. One level of nesting is usually enough.",
+            "**Omit optional parameters you rarely use.** Every parameter in the schema is a token the model has to reason about."
+          ]
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "code": "{\n  \"name\": \"get_weather\",\n  \"description\": \"Return current weather for a city. Use this when the user asks about current conditions, not forecasts.\",\n  \"parameters\": {\n    \"type\": \"object\",\n    \"properties\": {\n      \"city\": {\n        \"type\": \"string\",\n        \"description\": \"City name, e.g. 'Tokyo' or 'New York'\"\n      },\n      \"unit\": {\n        \"type\": \"string\",\n        \"enum\": [\"celsius\", \"fahrenheit\"],\n        \"description\": \"Temperature unit. Default to celsius unless the user specifies otherwise.\"\n      }\n    },\n    \"required\": [\"city\"]\n  }\n}"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Libraries like **Pydantic** (Python) or **Zod** (TypeScript) can generate JSON Schema from typed classes, eliminating most hand-crafted schema mistakes."
+        },
+        {
+          "type": "h3",
+          "text": "2. Naming — verb_noun, snake_case, under 64 characters"
+        },
+        {
+          "type": "p",
+          "md": "Function names directly influence the model's selection decision — they are the first thing the model reads. Prefer `verb_noun` patterns: `search_products`, `create_calendar_event`, `cancel_order`. Most providers (OpenAI, Anthropic, Google) restrict names to alphanumerics, underscores, and hyphens with a 64-character maximum. Stay inside that limit and you are compatible across all major APIs."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Do:** `get_order_status`, `send_email`, `list_calendar_events`",
+            "**Avoid:** `doStuff`, `tool1`, `process` — vague names hurt selection accuracy",
+            "**Avoid:** Names longer than 40 characters — readability matters for the model too",
+            "**Separate read from write:** `get_` vs `update_` vs `delete_` makes the scope of an action obvious"
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "3. Descriptions — tell the model when AND when not to call"
+        },
+        {
+          "type": "p",
+          "md": "The description field is your primary lever for improving selection accuracy. Most developers write what the function does; the better move is to write *when to use it* and *when not to*. The model resolves ambiguity between similar tools by reading descriptions, not names."
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "code": "{\n  \"name\": \"search_knowledge_base\",\n  \"description\": \"Search the internal knowledge base for factual answers. Use this for product documentation, policies, and FAQs. Do NOT use this for real-time data like prices, stock levels, or order status — use get_product or get_order_status instead.\"\n}"
+        },
+        {
+          "type": "p",
+          "md": "Parameter descriptions deserve the same care. Include the expected format, valid range, and a concrete example. `\"The ISO 8601 start date, e.g. '2026-03-15'\"` is better than `\"The start date\"`."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Test descriptions by asking yourself: if I were a smart intern reading only this description, would I know exactly when to call this function — and when to avoid it?"
+        },
+        {
+          "type": "h3",
+          "text": "4. Parallel calling — collapse independent calls"
+        },
+        {
+          "type": "p",
+          "md": "When a model needs to call two or more tools whose outputs do not depend on each other, modern APIs let it emit all the calls in a single response. Your code executes them concurrently and returns all results in one batch. Total latency drops from the *sum* of every call to the *slowest* single call."
+        },
+        {
+          "type": "p",
+          "md": "The key mental model: **parallel when independent, sequential when dependent.**"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "# Sequential (slow) — second call waits for first\nweather = get_weather(city=\"Tokyo\")\ntime_zone = get_timezone(city=\"Tokyo\")\n\n# Parallel — model emits both calls at once;\n# you run them concurrently and return both results\n# [get_weather(city=\"Tokyo\"), get_timezone(city=\"Tokyo\")]  <- one model turn\nimport asyncio\nweather, timezone = await asyncio.gather(\n    async_get_weather(city=\"Tokyo\"),\n    async_get_timezone(city=\"Tokyo\")\n)"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Use parallel when:** outputs are independent, calls are I/O-bound (database, API), order does not matter",
+            "**Use sequential when:** output of call A is input to call B, calls modify shared state, you need deterministic ordering",
+            "**Watch for conflicts:** if two parallel results contradict each other (e.g. two price sources disagree), define a resolution strategy before the model synthesizes them"
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "5. Error handling — return structured failures, not exceptions"
+        },
+        {
+          "type": "p",
+          "md": "When a tool fails, do not raise an unhandled exception. Return a structured error string as the tool result. The model can then decide whether to retry with different arguments, call a fallback tool, or tell the user what went wrong — instead of crashing the loop."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "def get_order_status(order_id: str) -> str:\n    try:\n        order = db.get_order(order_id)\n        if order is None:\n            # Return structured error — model can reason over this\n            return '{\"error\": \"ORDER_NOT_FOUND\", \"message\": \"No order with id ' + order_id + '\", \"suggestion\": \"Check the order id and try again.\"}'\n        return order.to_json()\n    except Exception as e:\n        return '{\"error\": \"SERVICE_UNAVAILABLE\", \"message\": \"Order service is down. Try again in 30 seconds.\"}'"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Include an error code** (`ORDER_NOT_FOUND`) — makes it machine-readable for logging and retry logic",
+            "**Include a human message** — the model can surface this directly to the user",
+            "**Include a suggestion** when the fix is obvious — the model can self-correct without a new user prompt",
+            "**Set a maximum call count** (10–15 is a common limit) in your agent loop and terminate gracefully if exceeded",
+            "**Deduplicate calls** — if the model calls the same function with the same args twice consecutively, surface the loop to the user rather than executing indefinitely"
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "6. Safety and scope — least privilege, confirm before irreversible actions"
+        },
+        {
+          "type": "p",
+          "md": "Read tools are inherently safer than write tools. Split your surface into distinct functions: `get_order` (read-only) and `cancel_order` (write) should be separate tools, each with a description that names the side-effect explicitly. For irreversible writes — deleting data, sending emails, making payments — add a human-in-the-loop confirmation step rather than having the model trigger the action directly."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Never give a tool broader permissions than necessary. If a tool only needs to read calendar events, do not grant it write access. Scope leaks are hard to audit after the fact."
+        }
+      ]
+    },
+    {
+      "id": "when-not-to-use-tools",
+      "title": "When not to use tools",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Tool calling is powerful but not free. Every tool in the schema costs input tokens and adds a round-trip. Recognize the cases where tools add complexity without value:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**The answer is in the model's training data.** Basic math, well-known facts, and common unit conversions do not need a calculator tool. The model already knows `2 + 2 = 4`.",
+            "**The data can be injected into the system prompt.** If the context is small and static (a user's name, their account tier), pass it as text — not as a database lookup tool.",
+            "**The task is purely generative.** Drafting an email, summarising text, or translating a paragraph requires no external data. Adding tools here just increases latency.",
+            "**You need deterministic output.** Tools introduce network failures, schema mismatches, and latency variability. If reliability and exact reproducibility matter more than real-time data, consider a non-agentic pipeline.",
+            "**The tool catalog is too large to load at once.** More than 20–30 tools in a single context degrades selection accuracy. Use dynamic tool loading (retrieve a relevant subset via vector search on descriptions) rather than dumping the full catalog."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "A useful heuristic: tools are for **data the model cannot know** (live prices, user records, current time) and **actions that have real-world effects** (send email, write to DB). Everything else can usually stay in text."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you have reliable single-agent tool calling, the natural next step is multi-agent systems where specialized agents expose their capabilities as tools to an orchestrator. The same schema, naming, and description rules apply — but now your \"tool\" is another LLM rather than a Python function. The [Model Context Protocol (MCP)](/learn/ai-agents/model-context-protocol/what-is-mcp) standardises how tools are advertised and invoked across agent boundaries, so toolsets built to MCP specs work across different frameworks without rewiring."
+        },
+        {
+          "type": "p",
+          "md": "For evaluation, treat tool-calling accuracy as a first-class metric. Log every tool call (function name, arguments, result, latency) and track: selection accuracy (did the model call the right tool?), argument correctness (were required fields present and valid?), and end-to-end success rate. These signals tell you whether a description change helped or hurt before you ship it to production."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Dynamic tool loading** — embed tool descriptions, retrieve the top-K relevant ones per query via cosine similarity, inject only those into the context",
+            "**Structured output mode** — some APIs (OpenAI, Anthropic) support a strict mode where the model is constrained to emit only valid schema-conforming JSON — eliminates nearly all invocation errors",
+            "**Plan-then-act** — ask the model to reason about which tools it will need before calling any of them (`tool_choice=\"none\"` in the planning turn), then execute the plan; reduces redundant calls",
+            "**Tool versioning** — version your tool schemas (`get_order_v2`) so you can run A/B tests on description or schema changes without breaking existing callers"
+          ]
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "How many tools can I give an LLM at once?",
+      "a": "Most APIs support 64–128 tools in a single context, but accuracy degrades well before that limit. In practice, keep active toolsets to 10–20 tools. For larger catalogs, use dynamic tool loading: embed all tool descriptions, retrieve the 5–10 most relevant ones per query, and inject only those."
+    },
+    {
+      "q": "What is the difference between parallel and sequential tool calling?",
+      "a": "Parallel calling lets the model emit multiple tool calls in one response so your code can run them concurrently — ideal when the calls are independent. Sequential calling means each tool call waits for the previous result — necessary when output of one call is input to the next. Most modern APIs (OpenAI, Anthropic, Google Gemini) support both."
+    },
+    {
+      "q": "Why does my model keep calling the wrong tool?",
+      "a": "Selection errors are almost always a description problem. Rewrite the description to explicitly state when the tool should be used AND when it should not, naming the competing tools by name. Also check that tool names are meaningfully different — vague or similar names increase confusion."
+    },
+    {
+      "q": "How should I handle a tool that fails or returns an error?",
+      "a": "Return a structured error JSON string as the tool result rather than raising an exception. Include an error code, a plain-English message, and a suggestion for how to fix the problem. The model can then self-correct, try a fallback, or surface the error to the user — all without crashing the agent loop."
+    },
+    {
+      "q": "Should I use strict/structured output mode for tool calling?",
+      "a": "Yes, when your API supports it. Strict mode constrains the model to emit JSON that exactly conforms to your schema, eliminating structural invocation errors. OpenAI calls this strict mode; Anthropic enforces schema conformance by default for tool_use blocks. It costs a small amount of extra processing but is almost always worth it."
+    },
+    {
+      "q": "When should I not use tool calling at all?",
+      "a": "Skip tools when the answer is already in the model's training data (simple math, common facts), the data can be injected as plain text in the system prompt, the task is purely generative (writing, summarising), or you need deterministic and reproducible output. Tools are for live external data and real-world side-effects — not for things the model already knows."
+    }
+  ],
+  "related": [
+    "what-is-function-calling",
+    "what-is-tool-use",
+    "what-is-mcp",
+    "what-is-an-ai-agent",
+    "what-is-agent-planning"
+  ],
+  "furtherReading": [
+    {
+      "title": "LLM Function Calling Best Practices: Build Reliable Agents",
+      "url": "https://codewithcaptain.com/llm-function-calling-best-practices/"
+    },
+    {
+      "title": "Advanced Tool Calling in LLM Agents: A Deep Dive",
+      "url": "https://sparkco.ai/blog/advanced-tool-calling-in-llm-agents-a-deep-dive"
+    },
+    {
+      "title": "The Roadmap to Mastering Tool Calling in AI Agents",
+      "url": "https://machinelearningmastery.com/the-roadmap-to-mastering-tool-calling-in-ai-agents/"
+    }
+  ]
+}

@@ -1,0 +1,300 @@
+{
+  "slug": "what-is-reranking",
+  "title": "What Is Reranking in RAG?",
+  "seoTitle": "What Is Reranking in RAG? Cross-Encoders Explained",
+  "metaDescription": "Reranking in RAG uses a cross-encoder to re-score retrieved chunks for precision. Learn two-stage retrieval, Cohere Rerank, and latency tradeoffs.",
+  "keywords": [
+    "reranking in rag",
+    "cross-encoder reranking explained",
+    "cohere rerank api",
+    "two-stage retrieval rag",
+    "reranker vs retriever"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You'll understand how a reranker turns a broad set of retrieved candidates into a tight, high-precision shortlist — and when it's worth the extra latency.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The [retriever](/learn/rag/retrieval-and-reranking/what-is-a-retriever) in a RAG system is built for speed. It converts your query into a vector and asks: \"which stored chunks are *roughly* nearby in meaning?\" That's a great first pass, but \"roughly nearby\" is not the same as \"actually the best answer.\" A chunk about your company's refund *window* and a chunk about your refund *process* can sit almost identically close to the query \"how do refunds work?\" The retriever can't tell them apart — it just sees distance."
+        },
+        {
+          "type": "p",
+          "md": "A **reranker** solves that by doing something the retriever deliberately avoids: it reads the query and each candidate chunk *together* in a single pass, asking \"how relevant is this specific piece of text to this specific question?\" It produces a relevance score — not a distance — and reorders the candidates from most to least useful. The retriever casts a wide net cheaply; the reranker picks the best fish from the net carefully."
+        },
+        {
+          "type": "p",
+          "md": "This two-stage shape — retrieve broad, then rerank narrow — is the most reliable way to get both speed and accuracy in a RAG pipeline. Each stage does what it is actually good at."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "\"Reranker\" and \"cross-encoder\" are often used interchangeably. Cross-encoder is the model architecture that enables joint query-document scoring; reranker is the pipeline role it plays. You can have a reranker that isn't a cross-encoder (e.g., an LLM judge), but in practice cross-encoders are the dominant tool."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Retrievers optimize for **recall** — getting the right chunks somewhere in the top 50 results. They are not designed to guarantee those right chunks rank #1, #2, and #3. Ranking accuracy costs too much to compute at retrieval scale. So the retriever ships a \"probably relevant\" bag, and if you feed that bag straight to the LLM you are accepting the retriever's coarse ordering as final. For many queries that's fine. For hard queries — multi-hop facts, subtle distinctions, long documents with a mix of relevant and irrelevant material — the coarse ordering is often wrong."
+        },
+        {
+          "type": "p",
+          "md": "Adding a reranker consistently improves answer quality. Studies comparing naive top-k retrieval against a two-stage retrieve-then-rerank pipeline show **+20–40% accuracy gains** on question-answering benchmarks, with the biggest gains on complex, multi-hop queries where exact relevance ordering matters most."
+        },
+        {
+          "type": "p",
+          "md": "There is a second, often overlooked benefit: **token and cost savings**. If you retrieve 50 chunks and send all of them to the LLM you spend a lot of tokens and fill the context window with noise. Reranking lets you confidently pass only the top 5 to the model, keeping prompts short and inference cheap. Reranking adds a small latency hit but often *reduces* total LLM cost."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Docs chatbots and internal Q&A** where several chunks are superficially similar but only one directly answers the question.",
+            "**Legal, medical, and compliance apps** where selecting the *wrong* passage could produce a dangerously wrong answer.",
+            "**Long-document corpora** where a document is partially relevant and the single best paragraph needs to surface above the noisy surroundings.",
+            "**Hybrid retrieval pipelines** where BM25 and dense results are fused — a reranker can provide a single authoritative ordering after fusion."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The key distinction is how a **bi-encoder** (retriever) and a **cross-encoder** (reranker) process a query-document pair. Understanding this difference explains why one is fast and the other is accurate — and why you need both."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Two-stage retrieve-then-rerank pipeline",
+            "steps": [
+              { "label": "User query", "sub": "\"best way to cancel a subscription?\"" },
+              { "label": "Stage 1 — Retriever", "sub": "embed query → ANN search → top 50 candidates (fast, ~5ms)" },
+              { "label": "Stage 2 — Reranker", "sub": "score each (query, chunk) pair → reorder by relevance (slower, ~150ms)", "accent": true },
+              { "label": "Top 5 chunks", "sub": "high-precision shortlist sent to LLM" },
+              { "label": "LLM generates answer", "sub": "grounded in the best evidence" }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Bi-encoder (the retriever): encode separately"
+        },
+        {
+          "type": "p",
+          "md": "A bi-encoder passes the query through a transformer to produce one vector, and each document chunk through the *same* (or similar) transformer to produce another vector. Relevance is approximated by the **cosine distance** between those two independent vectors. Because documents are encoded once and cached, querying is just a distance lookup — extremely fast. The tradeoff: the query and document never interact during encoding, so the model can't do fine-grained reasoning about their relationship."
+        },
+        {
+          "type": "h3",
+          "text": "Cross-encoder (the reranker): encode jointly"
+        },
+        {
+          "type": "p",
+          "md": "A cross-encoder concatenates the query and a single document chunk into one input — `[CLS] query [SEP] chunk [SEP]` — and runs the full transformer over both simultaneously. Every attention head can see every token from both sides. The model outputs a single relevance score. This joint encoding is what makes cross-encoders so accurate: the model reasons about *how this query relates to this chunk specifically*, rather than mapping them independently into a shared space."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Cross-encoders cannot be pre-cached. Every query triggers a fresh forward pass for each candidate chunk. Reranking 50 chunks means 50 forward passes. This is why you must **pre-filter with the retriever first** — running a cross-encoder over thousands of documents for every query is prohibitively slow."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Bi-encoder vs cross-encoder",
+            "columns": [
+              {
+                "title": "Bi-encoder (Retriever)",
+                "items": [
+                  "Query and doc encoded separately",
+                  "Score = vector distance",
+                  "Documents pre-encoded + cached",
+                  "~5ms per query at any scale",
+                  "Optimized for recall",
+                  "Use it at retrieval stage"
+                ]
+              },
+              {
+                "title": "Cross-encoder (Reranker)",
+                "accent": true,
+                "items": [
+                  "Query + doc encoded jointly",
+                  "Score = direct relevance logit",
+                  "No pre-caching possible",
+                  "~3–8ms per candidate chunk",
+                  "Optimized for precision",
+                  "Use it after retrieval stage"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "reranker-options",
+      "title": "Reranker options: APIs vs open source",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You have three main choices: a managed API, a self-hosted open-source model, or an LLM-as-judge approach. Each makes a different tradeoff between accuracy, latency, and operational complexity."
+        },
+        {
+          "type": "h3",
+          "text": "Cohere Rerank API"
+        },
+        {
+          "type": "p",
+          "md": "**Cohere Rerank** is the dominant managed reranking API. You send a query and up to 1,000 documents; the API returns them sorted by relevance score. No model hosting required — it's a single HTTPS call. Cohere's current flagship, **Rerank 4 Pro**, supports a 32K context window, ranks among the top worldwide on the BEIR benchmark (1627 ELO), and shows especially strong gains on business and finance documents (+400 ELO improvement over Rerank v3.5 on those domains). It supports 100+ languages."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "cohere_rerank.py",
+          "code": "import cohere\n\nco = cohere.Client(\"YOUR_API_KEY\")\n\nquery = \"How do I cancel my subscription?\"\n\n# Stage 1 output: your retriever already found these 6 candidates\ncandidates = [\n    \"To cancel, go to Account > Billing > Cancel Plan.\",\n    \"Subscription billing cycles reset on the 1st of each month.\",\n    \"Pausing your subscription keeps your data but stops charges.\",\n    \"Cancellations take effect at the end of the current billing period.\",\n    \"You can manage team members under Account > Members.\",\n    \"Refunds are not issued for partial billing periods.\",\n]\n\nresults = co.rerank(\n    model=\"rerank-v3.5\",   # or rerank-4-pro\n    query=query,\n    documents=candidates,\n    top_n=3,               # only keep the 3 most relevant\n)\n\nfor hit in results.results:\n    print(f\"[{hit.relevance_score:.3f}] {candidates[hit.index]}\")"
+        },
+        {
+          "type": "p",
+          "md": "The API adds roughly **150–400ms of network latency** on top of model inference, making it suitable for applications where sub-100ms end-to-end is not required (most chatbots and Q&A systems). Pricing is per-search-unit (one query + one document = one unit), so reranking 50 candidates costs 50 units."
+        },
+        {
+          "type": "h3",
+          "text": "Open-source cross-encoders"
+        },
+        {
+          "type": "p",
+          "md": "For self-hosted pipelines, the most widely used models are the **`cross-encoder/ms-marco-MiniLM`** family from Sentence Transformers. They run entirely on CPU, add only 100–250ms for 50 candidates, and require no API key. They are less accurate than Cohere Rerank 4 on complex domains but are strong enough for general English Q&A."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "local_reranker.py",
+          "code": "from sentence_transformers import CrossEncoder\n\n# Loads ~66MB model on first run; cached locally after that\nmodel = CrossEncoder(\"cross-encoder/ms-marco-MiniLM-L-6-v2\")\n\nquery = \"How do I cancel my subscription?\"\ncandidates = [\n    \"To cancel, go to Account > Billing > Cancel Plan.\",\n    \"Subscription billing cycles reset on the 1st of each month.\",\n    \"Pausing your subscription keeps your data but stops charges.\",\n    \"Cancellations take effect at the end of the current billing period.\",\n    \"You can manage team members under Account > Members.\",\n]\n\n# Cross-encoder scores each (query, doc) pair jointly\npairs = [(query, doc) for doc in candidates]\nscores = model.predict(pairs)\n\nranked = sorted(zip(scores, candidates), reverse=True)\nfor score, doc in ranked[:3]:\n    print(f\"[{score:.3f}] {doc}\")"
+        },
+        {
+          "type": "p",
+          "md": "**FlashRank** is a lighter alternative — it uses quantized models and can score 50 candidates in 15–30ms on CPU, making it viable for latency-sensitive production deployments. For the highest accuracy without API costs, **BGE-Reranker-Large** from BAAI and **JinaAI's reranker** models are strong multilingual open-source options."
+        },
+        {
+          "type": "h3",
+          "text": "LLM-as-judge reranking"
+        },
+        {
+          "type": "p",
+          "md": "A third option is to ask an LLM to rate or rank candidates directly — for example, prompting it to return a relevance score 0–10 for each chunk. This can produce the highest accuracy on subtle queries because the LLM has full reasoning ability, but it is the slowest and most expensive option: scoring 20 candidates means 20 LLM calls. It is typically reserved for offline evaluation or very-high-stakes queries where latency constraints are relaxed."
+        }
+      ]
+    },
+    {
+      "id": "latency-and-tradeoffs",
+      "title": "Latency tradeoffs and when to skip reranking",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Reranking is not always the right choice. It adds latency and operational complexity, and for some pipelines the retriever is already accurate enough. Here is a practical guide:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Skip reranking** if your queries are simple and your corpus is small (< 10k chunks), your retriever already achieves good precision, or you need sub-50ms end-to-end latency and cannot tolerate the added step.",
+            "**Use a local cross-encoder** (MiniLM, FlashRank) when you want improved accuracy, can tolerate 100–250ms added latency, and want to avoid API dependency or per-query API costs.",
+            "**Use Cohere Rerank** when accuracy is the top priority, your corpus is multilingual, or you need a 32K context window for long-document reranking — and 150–400ms API latency is acceptable.",
+            "**Use LLM-as-judge** only for offline evaluation or very high-stakes single queries where you cannot tolerate ranking errors and latency is unconstrained."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The sweet spot for the two-stage setup is: retrieve the top **50–100** candidates (maximizes recall), rerank and keep the top **5–10** (maximizes precision for the LLM). Passing more than 10 chunks to the model rarely helps and quickly fills your [context window](/learn/llm-fundamentals/context-windows/what-is-a-context-window)."
+        },
+        {
+          "type": "p",
+          "md": "One important nuance: even a perfect reranker cannot surface a chunk that the retriever never retrieved in the first place. If the right answer is buried below rank 100 in your retrieval results, reranking can't help — it only reorders what Stage 1 returned. This is why improving retrieval recall (better embeddings, hybrid retrieval, query expansion) and improving reranking precision are complementary investments, not substitutes."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Modern reranker research pushes in several directions. **Late interaction models** like ColBERT sit between bi- and cross-encoders: they encode query and document separately but retain one vector *per token* rather than one per document, then compute a fine-grained similarity over every token pair at query time. ColBERT achieves cross-encoder-level accuracy at closer to bi-encoder speed, at the cost of significantly larger indexes."
+        },
+        {
+          "type": "p",
+          "md": "**Listwise reranking** — asking the model to rank all candidates simultaneously rather than scoring each pair independently — is gaining traction as LLMs get cheaper and faster. Instead of 50 pairwise scores, you send one prompt with all 50 candidates and ask the model for a ranked list. This can capture inter-document comparisons (\"document A is more specific than B\") that pairwise scoring misses."
+        },
+        {
+          "type": "p",
+          "md": "**Learned rerankers with diverse training signals** (click data, thumbs-up feedback, downstream answer quality) outperform models trained on annotation alone. If your RAG pipeline collects user signals — which answers were helpful, which citations users clicked — those signals can fine-tune a reranker directly on your domain, often giving larger accuracy gains than switching to a stronger base model."
+        },
+        {
+          "type": "p",
+          "md": "In [agentic RAG](/learn/rag/advanced-rag/what-is-agentic-rag) pipelines, reranking often runs multiple times: once after the first retrieval, and again after the agent issues follow-up searches to fill gaps. The reranker becomes a continuously active judge of relevance rather than a one-shot filter. When combined with [RAG evaluation](/learn/rag/rag-evaluation/how-to-evaluate-rag) tooling, you can measure whether reranking is actually moving the needle on your specific corpus — retrieval metrics like NDCG and MAP quantify ranking quality directly, giving you a signal to tune the retrieve-then-rerank split."
+        },
+        {
+          "type": "p",
+          "md": "Finally, the boundary between retriever and reranker is blurring. Models like **Jina ColBERT v2** and **Cohere Rerank 4** can handle inputs up to 32K tokens — long enough to rerank full documents rather than chunks. This opens the door to \"retrieve documents, rerank documents, then chunk only the winner\" pipelines that invert the traditional order. Whether that pattern wins over classic chunk-first retrieval is an open empirical question that depends heavily on corpus structure and query type."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is the difference between a retriever and a reranker?",
+      "a": "A retriever finds a broad set of candidate chunks quickly using vector distance (bi-encoder). A reranker re-scores those candidates precisely by reading the query and each chunk together (cross-encoder). The retriever optimizes recall; the reranker optimizes precision. You need both: the retriever makes reranking affordable by filtering down to ~50 candidates first."
+    },
+    {
+      "q": "Does reranking actually improve RAG accuracy?",
+      "a": "Yes, measurably. Two-stage retrieve-then-rerank consistently outperforms naive top-k retrieval on Q&A benchmarks, with gains of 20–40% on complex or multi-hop queries. The improvement is largest when your corpus has many similar chunks and the retriever's coarse ordering frequently puts the best answer outside the top 3."
+    },
+    {
+      "q": "What is Cohere Rerank and how do I use it?",
+      "a": "Cohere Rerank is a managed API that accepts a query and up to 1,000 document strings, and returns them sorted by relevance score. You call co.rerank() with your query and candidate list, specify top_n, and get back a ranked result. No model hosting required. The current flagship model is Rerank 4 Pro with a 32K context window and strong multilingual support."
+    },
+    {
+      "q": "How much latency does reranking add?",
+      "a": "It depends on the approach. A local cross-encoder like MiniLM on CPU adds roughly 100–250ms for 50 candidates. FlashRank (quantized) adds 15–30ms. Cohere's API adds 150–400ms including network round-trip. In most chatbot or Q&A settings this is acceptable; for sub-100ms real-time search it may not be."
+    },
+    {
+      "q": "What is a cross-encoder and why is it more accurate than a bi-encoder?",
+      "a": "A cross-encoder concatenates the query and the document into one input and runs a transformer over both simultaneously, so every attention head can see the full query-document relationship. A bi-encoder encodes them separately and compares vectors by distance. The joint encoding gives the cross-encoder far more information to reason from, at the cost of needing one full forward pass per candidate."
+    },
+    {
+      "q": "Do I still need reranking if I use hybrid retrieval (BM25 + embeddings)?",
+      "a": "Often yes. Hybrid retrieval with RRF improves recall by combining two ranking signals, but the merged list is still a coarse approximation of true relevance. A reranker provides a model-based precision pass that hybrid fusion cannot replicate. Many production pipelines use all three: BM25 + dense retrieval fused with RRF, then a cross-encoder reranker."
+    }
+  ],
+  "related": [
+    "what-is-a-retriever",
+    "what-is-rag",
+    "what-is-chunking-in-rag",
+    "how-to-evaluate-rag",
+    "what-is-agentic-rag"
+  ],
+  "furtherReading": [
+    {
+      "title": "Reranking in RAG: Cross-Encoders, Cohere Rerank & FlashRank (Medium, 2026)",
+      "url": "https://medium.com/@vaibhav-p-dixit/reranking-in-rag-cross-encoders-cohere-rerank-flashrank-c7d40c685f6a"
+    },
+    {
+      "title": "Cohere Rerank API Documentation",
+      "url": "https://docs.cohere.com/docs/rerank-2"
+    },
+    {
+      "title": "Sentence Transformers — Cross-Encoder Usage Guide",
+      "url": "https://www.sbert.net/examples/applications/cross-encoder/README.html"
+    }
+  ]
+}

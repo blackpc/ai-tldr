@@ -1,0 +1,348 @@
+{
+  "slug": "kv-cache-explained",
+  "title": "What Is the KV Cache? Why Long Chats Eat Memory",
+  "seoTitle": "What Is the KV Cache? LLM Memory Explained",
+  "metaDescription": "The KV cache stores attention keys and values so models don't recompute them. Why it makes generation fast and long contexts expensive.",
+  "keywords": [
+    "what is kv cache",
+    "kv cache explained llm",
+    "why do long chats slow down llm",
+    "kv cache memory usage",
+    "what is kv cache quantization"
+  ],
+  "difficulty": "advanced",
+  "oneLiner": "Understand the cache that makes token generation fast — and why it's the real reason long contexts cost GPU memory and money.",
+  "updated": "2026-06-11",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "An LLM writes its answer one token at a time. To pick each new token, it has to look back at *everything* written so far — your prompt, the chat history, its own half-finished answer. That looking-back is the attention mechanism, and it involves real math for every previous token."
+        },
+        {
+          "type": "p",
+          "md": "Here's the catch: most of that math is identical every single step. Token #500 doesn't change just because the model is now writing token #501. Imagine a meeting where, before anyone could say a new sentence, the minute-taker had to re-interview every person who had already spoken. Insane. The sane version: take notes the first time someone speaks, then just *read the notes*."
+        },
+        {
+          "type": "p",
+          "md": "The **KV cache** is those notes. When a transformer processes a token, it produces two vectors for it at every layer: a **key** (roughly: a label describing what this token is about, used for matching) and a **value** (the actual information the token contributes). Once computed, these never change for that position. So the model stores them in GPU memory and reuses them for every future token instead of recomputing them."
+        },
+        {
+          "type": "p",
+          "md": "That's the whole idea. It's not exotic — it's a plain lookup table of keys and values, growing by one entry per token. But it is single-handedly responsible for LLMs being fast enough to use, and for long conversations being expensive enough to hurt."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Without the cache, generation would be unusably slow. Consider a chat that's 10,000 tokens deep. To produce token #10,001, the model would have to re-run the attention math for all 10,000 previous tokens, at every layer — and then do it *again* for token #10,002, and again for #10,003. The work per token grows with the conversation, and the total work explodes. With the cache, each new token only pays for itself: one fresh computation, plus cheap lookups into stored keys and values."
+        },
+        {
+          "type": "p",
+          "md": "But the cache trades compute for memory, and that trade is the hidden economics of modern LLMs. It explains a surprising number of things you've probably noticed:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Long chats slow down and cost more.** Every decode step still has to *read* the entire cache, so a 100k-token conversation generates tokens noticeably slower than a fresh one.",
+            "**Local models run out of VRAM at long contexts.** The weights fit fine — it's the growing cache that triggers the out-of-memory error.",
+            "**API providers sell prompt caching.** Reusing a stored cache for a repeated prompt prefix is dramatically cheaper than recomputing it, and providers pass some of that saving on.",
+            "**Big [context windows](/learn/llm-fundamentals/context-windows/what-is-a-context-window) are an infrastructure feat, not just a config change.** Advertising a million-token window means provisioning the memory to hold a million tokens' worth of keys and values per request."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The KV cache didn't replace an older technique — transformer decoders have used it from the start. What changed is its importance. When context windows were 2,048 tokens, the cache was a rounding error next to the model weights. Now that windows stretch into the hundreds of thousands of tokens, the cache is often the *biggest* thing in GPU memory, and most of the cleverness in modern inference engines is about taming it."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Quick recap of [how attention works](/learn/llm-fundamentals/transformers-and-attention/how-attention-works): for each token, each attention head computes a **query** (what am I looking for?), a **key** (what do I offer?), and a **value** (what do I actually contribute?). A new token's query is compared against every previous token's key; the match scores decide how much of each previous token's value gets blended into the new token's representation."
+        },
+        {
+          "type": "p",
+          "md": "The crucial property: in a decoder-only model, a token's key and value depend only on the tokens *before* it. Future tokens can't reach back and change them. So once token #500's K and V are computed, they're frozen facts — safe to store and reuse forever within that sequence. The query, by contrast, is only needed once, at the moment the token is processed, so it's never cached. Hence \"KV cache\", not \"QKV cache\"."
+        },
+        {
+          "type": "p",
+          "md": "Generation runs in two very different phases:"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "One request, two phases",
+            "steps": [
+              {
+                "label": "Prompt arrives",
+                "sub": "say, 2,000 tokens"
+              },
+              {
+                "label": "Prefill",
+                "sub": "K and V computed for all tokens in parallel",
+                "accent": true
+              },
+              {
+                "label": "Cache stored",
+                "sub": "per layer, per head, in VRAM"
+              },
+              {
+                "label": "Decode begins",
+                "sub": "one token at a time"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "**Prefill** processes your entire prompt in one parallel pass — the GPU chews through all 2,000 tokens at once and fills the cache. This is why there's a pause before the first word appears (\"time to first token\"). **Decode** is the streaming part: each step processes exactly one new token."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "The decode loop",
+            "steps": [
+              {
+                "label": "Compute Q",
+                "sub": "for the newest token only"
+              },
+              {
+                "label": "Read cache",
+                "sub": "Q matched against all stored keys",
+                "accent": true
+              },
+              {
+                "label": "Predict token",
+                "sub": "blend values, pick next token"
+              },
+              {
+                "label": "Append K, V",
+                "sub": "cache grows by one entry"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Each decode step does a small amount of fresh compute (one token's worth) and a large amount of *reading* (the whole cache). The cache lives in GPU memory right next to the model weights — which is a big part of [why LLMs need GPUs](/learn/llm-fundamentals/llm-basics/why-llms-need-gpus) with lots of fast VRAM rather than just fast processors."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The cache is **per-request state**. The server must hold your conversation's keys and values in memory between tokens — and, with prompt caching, between turns. LLM serving looks stateless from the outside but is deeply stateful inside."
+        }
+      ]
+    },
+    {
+      "id": "the-memory-math",
+      "title": "Do the memory math yourself",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The cache size formula is simple: for every token you store one key and one value vector, per layer, per KV head. So: **2 × layers × KV heads × head dimension × bytes per number × tokens**. You can compute it for any open model whose config you can read:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "kv_cache_size.py",
+          "code": "def kv_cache_bytes(n_layers, n_kv_heads, head_dim, n_tokens, bytes_per_value=2):\n    # 2 = one key vector + one value vector, per token, per layer, per KV head\n    # bytes_per_value=2 assumes fp16/bf16 storage\n    return 2 * n_layers * n_kv_heads * head_dim * bytes_per_value * n_tokens\n\n# Llama 2 7B: classic multi-head attention -> 32 KV heads\nllama2 = kv_cache_bytes(n_layers=32, n_kv_heads=32, head_dim=128, n_tokens=32_000)\nprint(f\"Llama 2 7B  @ 32k tokens: {llama2 / 1e9:.1f} GB\")   # ~16.8 GB\n\n# Mistral 7B: grouped-query attention -> only 8 KV heads\nmistral = kv_cache_bytes(n_layers=32, n_kv_heads=8, head_dim=128, n_tokens=32_000)\nprint(f\"Mistral 7B @ 32k tokens: {mistral / 1e9:.1f} GB\")   # ~4.2 GB"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Model (fp16 cache)",
+            "Attention style",
+            "KV heads",
+            "Cache per token",
+            "Cache at 32k tokens"
+          ],
+          "rows": [
+            [
+              "Llama 2 7B",
+              "Multi-head (MHA)",
+              "32",
+              "~512 KB",
+              "~16.8 GB"
+            ],
+            [
+              "Mistral 7B",
+              "Grouped-query (GQA)",
+              "8",
+              "~128 KB",
+              "~4.2 GB"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Sit with that first row for a second. A 7B model's weights take roughly 14 GB at fp16. At a 32k-token context, Llama 2 7B's cache would take *more memory than the entire model*. And that's **one** conversation — a server handling ten concurrent 32k-token chats needs ten separate caches. This, more than anything else, is why serving long contexts is expensive and why every model released since has attacked the KV-heads number."
+        },
+        {
+          "type": "p",
+          "md": "You can also feel the cache's effect directly. Hugging Face `transformers` lets you disable it, which forces the model to recompute attention over the full sequence at every step:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "feel_the_difference.py",
+          "code": "from transformers import AutoModelForCausalLM, AutoTokenizer\n\nmodel_id = \"meta-llama/Llama-2-7b-chat-hf\"\ntok = AutoTokenizer.from_pretrained(model_id)\nmodel = AutoModelForCausalLM.from_pretrained(model_id, device_map=\"auto\")\ninputs = tok(\"The KV cache makes generation fast because\", return_tensors=\"pt\").to(model.device)\n\n# Default: cache on. Each step reuses stored keys and values.\nmodel.generate(**inputs, max_new_tokens=100)\n\n# Cache off: every step redoes the work for the whole sequence.\nmodel.generate(**inputs, max_new_tokens=100, use_cache=False)  # dramatically slower"
+        }
+      ]
+    },
+    {
+      "id": "shrinking-the-cache",
+      "title": "Shrinking the cache",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Because the cache is the bottleneck, a whole toolbox has grown around making it smaller. The biggest lever is architectural: reduce how many KV heads you store in the first place."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "How attention variants shrink the cache",
+            "columns": [
+              {
+                "title": "Multi-head (MHA)",
+                "items": [
+                  "Every head keeps its own K and V",
+                  "Highest quality ceiling",
+                  "Biggest cache (e.g. 32 sets)",
+                  "Older models: GPT-2, Llama 2 7B"
+                ]
+              },
+              {
+                "title": "Grouped-query (GQA)",
+                "accent": true,
+                "items": [
+                  "Query heads share K and V in groups",
+                  "Near-identical quality in practice",
+                  "4–8x smaller cache",
+                  "The modern default"
+                ]
+              },
+              {
+                "title": "Multi-query (MQA)",
+                "items": [
+                  "All heads share one K and V",
+                  "Smallest possible cache",
+                  "Measurable quality cost",
+                  "Used when memory is everything"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "**Grouped-query attention (GQA)** is the pragmatic winner: the [GQA paper](https://arxiv.org/abs/2305.13245) showed you can convert a multi-head model to grouped KV heads with a tiny fraction of the original training compute and keep almost all the quality. That's why nearly every model released since uses it — the Mistral row in the table above is GQA paying for itself."
+        },
+        {
+          "type": "p",
+          "md": "Beyond architecture, the serving stack adds more tricks:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**KV cache quantization** — store keys and values at int8 or int4 instead of fp16, cutting memory 2–4x for a small accuracy cost. Hugging Face exposes this as `QuantizedCache`; most local-inference tools (llama.cpp, vLLM) have an equivalent flag.",
+            "**Sliding-window attention** — some layers only attend to the last N tokens, so their slice of the cache stops growing at N. Mistral popularized this for open models.",
+            "**PagedAttention** — vLLM's signature idea: chop the cache into fixed-size blocks and manage them like an operating system manages virtual memory pages, instead of reserving one giant contiguous slab per request. This kills the memory fragmentation that used to waste most of the GPU.",
+            "**Prefix caching** — if a thousand requests share the same long system prompt, compute its K and V once and share the cache entries. This is exactly what API \"prompt caching\" features are selling."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Running a local model that OOMs on long inputs? The weights aren't the problem — the cache is. Before downloading a smaller model, try a quantized KV cache or a shorter max context. It's often the difference between fitting and not fitting."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**Decode is memory-bandwidth-bound, not compute-bound.** During prefill the GPU does dense parallel math and its compute units stay busy. During decode, each step does one token's worth of FLOPs but must stream the *entire* cache (plus the weights) from VRAM through the chip. Generation speed is therefore governed by memory bandwidth, and it degrades as the cache grows — your tokens-per-second at 100k context is genuinely worse than at 1k, even on idle hardware. This is also why [FlashAttention](/learn/llm-fundamentals/transformers-and-attention/flash-attention-explained) — which restructures the attention computation to avoid redundant memory traffic — helps prefill a lot but doesn't shrink the cache itself."
+        },
+        {
+          "type": "p",
+          "md": "**Throughput serving is a cache real-estate problem.** A production server batches many requests onto one GPU, and the number it can batch is limited by how many caches fit in VRAM. The [PagedAttention paper](https://arxiv.org/abs/2309.06180) found that pre-PagedAttention systems wasted most of their cache memory on fragmentation and over-reservation; fixing that with paged blocks delivered 2–4x throughput in the same hardware. SGLang pushed sharing further with **RadixAttention**, which keeps caches from past requests in a prefix tree so any new request sharing a prefix — same system prompt, same few-shot examples, same earlier conversation turns — reuses the stored entries instead of prefilling them again."
+        },
+        {
+          "type": "p",
+          "md": "**Compression beyond GQA.** DeepSeek's **multi-head latent attention (MLA)**, introduced with DeepSeek-V2, compresses keys and values into a small shared latent vector and reconstructs head-specific K and V on the fly. You pay a little extra compute per step to make the stored cache an order of magnitude smaller — the right trade in a bandwidth-bound regime. Expect more designs in this vein: the field is steadily moving compute back into the loop wherever it buys cache memory."
+        },
+        {
+          "type": "p",
+          "md": "**Eviction and streaming.** You don't always have to keep everything. The StreamingLLM work on **attention sinks** showed that models lean heavily on the first few tokens of a sequence; keep those plus a sliding window of recent tokens, evict the middle, and you can stream indefinitely with bounded memory — at the cost of genuinely forgetting evicted content. Smarter eviction (which tokens *matter*?) is an open research problem, and a wrong answer looks exactly like the lost-in-the-middle failures it's trying to avoid."
+        },
+        {
+          "type": "p",
+          "md": "**Statefulness is the operational tax.** Because the cache is per-conversation state pinned to a specific GPU, serving fleets need sticky routing (send the next turn to the machine that holds your cache), cache offloading to CPU RAM or NVMe between turns, and recompute-versus-store cost models. Every \"how do [million-token context windows](/learn/llm-fundamentals/context-windows/million-token-context-windows) actually work\" answer is, at its core, a stack of these KV-cache tricks composed together."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Why do long chats get slower the longer they go?",
+      "a": "Every new token's query has to be matched against the cached keys and values of all previous tokens, and that whole cache must be streamed through the GPU on every single decode step. A 100k-token cache means 100k entries read per token generated, so tokens-per-second drops as the conversation grows — even though the model itself hasn't changed."
+    },
+    {
+      "q": "How much GPU memory does the KV cache actually use?",
+      "a": "2 × layers × KV heads × head dimension × bytes per value, per token. For Llama 2 7B at fp16 that's about 512 KB per token — roughly 16.8 GB for a 32k-token context, more than the model's own weights. GQA models like Mistral 7B cut that 4x by sharing KV heads."
+    },
+    {
+      "q": "Is the KV cache the same thing as prompt caching?",
+      "a": "Prompt caching is built on the KV cache but isn't the same thing. The KV cache is the in-memory store used within a single generation. Prompt caching means keeping those entries around and reusing them across requests that share a prefix (like a long system prompt), so the provider skips the prefill work — which is why cached input tokens are billed cheaper."
+    },
+    {
+      "q": "Can I turn the KV cache off?",
+      "a": "Yes — in Hugging Face transformers, pass use_cache=False to generate(). There's almost never a reason to except debugging or measuring its benefit: generation gets dramatically slower because every step recomputes attention for the entire sequence from scratch. The output should be the same; only the speed changes."
+    },
+    {
+      "q": "What is KV cache quantization and does it hurt quality?",
+      "a": "It stores cached keys and values at lower precision (int8 or int4) instead of fp16, cutting cache memory 2–4x. Quality impact is usually small at int8 and noticeable-but-tolerable at int4 for most tasks. It's a memory-for-accuracy trade, separate from quantizing the model weights — you can do either or both."
+    },
+    {
+      "q": "Why is it called the KV cache and not the QKV cache?",
+      "a": "Attention computes queries, keys, and values for each token, but only keys and values are reused by later tokens. A token's query is consumed once, at the moment that token is processed, so there's nothing to gain from storing it."
+    }
+  ],
+  "related": [
+    "how-attention-works",
+    "flash-attention-explained",
+    "million-token-context-windows",
+    "what-is-a-context-window",
+    "why-llms-need-gpus"
+  ],
+  "furtherReading": [
+    {
+      "title": "Efficient Memory Management for LLM Serving with PagedAttention (vLLM paper, arXiv)",
+      "url": "https://arxiv.org/abs/2309.06180"
+    },
+    {
+      "title": "GQA: Training Generalized Multi-Query Transformer Models (arXiv)",
+      "url": "https://arxiv.org/abs/2305.13245"
+    },
+    {
+      "title": "KV cache strategies — Hugging Face Transformers docs",
+      "url": "https://huggingface.co/docs/transformers/kv_cache"
+    }
+  ]
+}

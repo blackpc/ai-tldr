@@ -1,0 +1,346 @@
+{
+  "slug": "designing-tools-for-llms",
+  "title": "How to Design Tools for LLM Agents",
+  "seoTitle": "Designing Tools for LLM Agents: Best Practices",
+  "metaDescription": "Learn how to design reliable LLM agent tools: clear names, precise descriptions, minimal parameters, LLM-friendly error messages, and systematic testing.",
+  "keywords": [
+    "designing tools for llm agents",
+    "llm tool design best practices",
+    "function calling schema design",
+    "ai agent tool descriptions",
+    "how to write tool descriptions for llm",
+    "testing llm agent tools"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Understand the schema design principles, naming conventions, error message patterns, and testing strategies that make LLM agent tools reliable.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You already know that [tool use](/learn/ai-agents/tool-use/what-is-tool-use) lets an agent call real functions — search, write files, query a database. The question this article answers is: **how do you design those tools so the agent actually uses them correctly?**"
+        },
+        {
+          "type": "p",
+          "md": "A tool for an LLM is nothing like an API endpoint for a human programmer. A human reads documentation once and remembers it; a model re-reads your description on every single request and decides — from that description alone — whether to call the tool, which arguments to pass, and how to interpret the result. If your description is vague, the model will guess. If your parameter names are ambiguous, the model will supply the wrong values. If your error messages say `400 Bad Request`, the model has no idea what to fix."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like this: writing a tool description is closer to writing a **job posting** than writing API docs. The posting has to tell a brand-new hire exactly what the role does, when to escalate vs. act independently, and what a success looks like — all in a few sentences they'll re-read every morning. If the posting is sloppy, the wrong candidates apply and the right ones opt out. Tool design is that same discipline applied to machine readers."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The Anthropic team that built the SWE-bench coding agent reported spending **more time optimizing their tools than the overall system prompt**. Tool design deserves the same engineering rigor as any other part of your agent."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Bad tool design is the most common reason a capable model produces frustrating agent behavior. The failures are predictable and come in three flavors:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Wrong tool selected.** Two tools with similar-sounding descriptions cause the model to pick arbitrarily, wasting turns and burning context. A `search_contacts` tool and a `list_contacts` tool with identical descriptions will be called interchangeably.",
+            "**Bad arguments supplied.** A parameter called `user` could accept a name, an email, or an integer ID. The model will guess — correctly sometimes, wrongly often. Rename it `user_id` and the ambiguity disappears.",
+            "**No recovery from errors.** When a tool returns `Error: 422`, the model usually tries the same call again with the same arguments, loops, or gives up. Return `\"City 'Tokyoo' not found. Use a full city name, e.g. Tokyo, New York.\"` and the model self-corrects."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "What makes this especially high-stakes is that tool errors **compound** in multi-step agents. A wrong argument in step two corrupts the inputs to step three, which corrupts step four, until the whole task collapses. Small improvements to tool quality have outsized downstream effects on task completion rates."
+        },
+        {
+          "type": "p",
+          "md": "Well-designed tools also control **context consumption**. An agent that calls `list_all_records` and gets 800 rows back has burned most of its context window on data it will never use. A `search_records(query)` that returns the 5 most relevant rows is not just faster — it makes the whole task possible within budget."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How tool design works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A tool has three parts the model reads before deciding to call it: the **name**, the **description**, and the **parameter schema**. Getting each right is a separate craft."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "What the model reads before calling a tool",
+            "steps": [
+              { "label": "Tool name", "sub": "verb_noun, unambiguous" },
+              { "label": "Description", "sub": "when to use, what it returns", "accent": true },
+              { "label": "Parameter schema", "sub": "typed, constrained, documented" },
+              { "label": "Model decides", "sub": "call it or skip it" },
+              { "label": "Arguments generated", "sub": "filled from context" }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Naming: verb_noun, always"
+        },
+        {
+          "type": "p",
+          "md": "Good tool names follow a `verb_noun` or `verb_object` pattern: `search_contacts`, `create_event`, `get_weather`, `delete_file`. This convention tells the model what action is happening and what it acts on, in two words. Vague names like `process`, `handle`, or `data` force the model to infer meaning from the description alone — and it frequently gets it wrong."
+        },
+        {
+          "type": "p",
+          "md": "When you have multiple tools in the same domain, **consistent prefixes** prevent confusion: `calendar_create_event`, `calendar_list_events`, `calendar_delete_event`. The model can immediately tell these are related, which makes it less likely to reach for the wrong tool when operating in a multi-tool environment."
+        },
+        {
+          "type": "h3",
+          "text": "Descriptions: the most important field"
+        },
+        {
+          "type": "p",
+          "md": "The description is not a label — it's the complete briefing the model gets before deciding whether to call your tool. A good description answers four questions: what the tool does, what inputs it expects, what it returns, and *when not to use it*."
+        },
+        {
+          "type": "p",
+          "md": "Write it like a docstring for a new junior developer who has never seen your codebase. Make implicit context explicit. If your tool queries a contacts database that only contains internal employees (not customers), say so — otherwise the model will try it for customers and be surprised by empty results."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Adding \"when NOT to use\" is especially valuable for tools that get overused. If your `search_web` tool is being called for questions the model should answer from its own knowledge, add: `\"Do not use for factual questions answerable without live data.\"`"
+        },
+        {
+          "type": "h3",
+          "text": "Parameter schema: type everything, constrain what you can"
+        },
+        {
+          "type": "p",
+          "md": "Every parameter should have a type, a description, and where possible, a constrained set of valid values. Use `enum` for any parameter with a fixed set of options. Use `format` hints (like `\"date-time\"`) for structured strings. Use specific types (`integer` vs. `number`) to prevent the model from passing `\"42\"` where you expect `42`."
+        },
+        {
+          "type": "p",
+          "md": "The Anthropic team found that changing a file-path parameter from accepting relative paths to requiring **absolute paths** eliminated a whole class of model errors entirely — the model stopped guessing the working directory. Constraints that prevent mistakes are called *poka-yoke* (mistake-proofing) in manufacturing; the same concept applies here."
+        }
+      ]
+    },
+    {
+      "id": "schema-and-errors",
+      "title": "Parameter schema and error messages",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Here is what a well-designed tool definition looks like in JSON Schema, the format used by all major providers:"
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "title": "Well-designed tool definition",
+          "code": "{\n  \"name\": \"search_contacts\",\n  \"description\": \"Search the internal employee directory by name or email. Returns up to 5 matching contacts with their name, email, and department. Use this when you need to find a person's contact details. Do NOT use for external customers — use search_customers instead.\",\n  \"input_schema\": {\n    \"type\": \"object\",\n    \"properties\": {\n      \"query\": {\n        \"type\": \"string\",\n        \"description\": \"Name or email address to search for. Partial matches work, e.g. 'alice' or 'ali@'\"\n      },\n      \"department\": {\n        \"type\": \"string\",\n        \"description\": \"Optional: filter to a specific department.\",\n        \"enum\": [\"engineering\", \"sales\", \"support\", \"hr\", \"finance\"]\n      }\n    },\n    \"required\": [\"query\"]\n  }\n}"
+        },
+        {
+          "type": "p",
+          "md": "Notice: the description explains what it covers *and* what it doesn't (`Do NOT use for external customers`). The `query` parameter says partial matches work and gives examples. The `department` parameter uses an `enum` so the model can only pass valid values — it cannot hallucinate a department name."
+        },
+        {
+          "type": "h3",
+          "text": "Error messages the model can act on"
+        },
+        {
+          "type": "p",
+          "md": "Unlike a human developer who can read an HTTP status code and Google what it means, an LLM reads your error string and must figure out the fix entirely from that text. That means your tool's error messages need to be **actionable prose**, not opaque codes."
+        },
+        {
+          "type": "table",
+          "headers": ["Bad error (model loops or gives up)", "Good error (model self-corrects)"],
+          "rows": [
+            ["`400 Bad Request`", "`\"date must be ISO 8601 format, e.g. 2026-06-12\"`"],
+            ["`Error: not found`", "`\"City 'Tokyoo' not found. Check spelling and use full city names like Tokyo, New York.\"`"],
+            ["`null`", "`\"No results found for query 'alice123'. Try a shorter or different search term.\"`"],
+            ["`403 Forbidden`", "`\"You do not have access to delete records. Use archive_record instead.\"`"]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The key pattern: state what went wrong, why, and what the correct form looks like. Include a concrete example in the error string itself. This turns a dead end into a recoverable step the agent can retry correctly."
+        },
+        {
+          "type": "h3",
+          "text": "Return values: signal over noise"
+        },
+        {
+          "type": "p",
+          "md": "What your tool *returns* matters as much as what it accepts. Agents have finite [context windows](/learn/llm-fundamentals/context-windows/what-is-a-context-window), and every byte of tool output takes up space the model needs for reasoning. A few principles:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Return human-readable values, not IDs.** `\"owner\": \"Alice Chen\"` is useful. `\"owner_uuid\": \"d4e2a1b9-...\"` is noise the agent can't act on directly.",
+            "**Drop fields the agent will never use.** `mime_type`, `256px_image_url`, internal audit fields — strip them. Return only what the agent needs to complete its task.",
+            "**Paginate and truncate.** If a query can return thousands of rows, default to returning the top 10–25 and include a `next_cursor` or tell the agent how to narrow the search. A `list_all_contacts` tool that returns 1,200 rows will overflow context.",
+            "**Let the agent pick verbosity.** A `response_format` parameter with `\"concise\"` vs. `\"detailed\"` options lets the agent request more detail when it needs it and keep responses short otherwise."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "testing-tools",
+      "title": "Testing and iterating on tool quality",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Tool quality is empirical, not theoretical. The only way to know if a tool description works is to run the agent against representative tasks and observe what it does. Anthropic's engineering team published a systematic process for this."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "Tool optimization loop",
+            "steps": [
+              { "label": "Write tool + description", "sub": "start with a clear draft" },
+              { "label": "Run eval tasks", "sub": "realistic multi-step scenarios", "accent": true },
+              { "label": "Analyze transcripts", "sub": "find confusion points" },
+              { "label": "Fix descriptions / schema", "sub": "iterate until metrics improve" }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "What to measure"
+        },
+        {
+          "type": "p",
+          "md": "When running evaluation tasks, track five metrics for each tool:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Task success rate** — did the agent complete the overall task correctly?",
+            "**Tool selection accuracy** — did it call the right tool for each step?",
+            "**Argument error rate** — how often did the model pass invalid or unexpected arguments?",
+            "**Redundant calls** — is the model calling the same tool repeatedly with the same inputs? That signals the return value isn't giving it what it needs.",
+            "**Token consumption** — how much context do tool results consume per task? High numbers point to over-returning tools."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Reading the transcripts"
+        },
+        {
+          "type": "p",
+          "md": "The most valuable debugging step is reading the model's **reasoning** before each tool call. Most agent frameworks expose this as a scratchpad or thinking block. Look for:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "Uncertainty between two tools: `\"I could use search_contacts or list_users...\"` — the descriptions are too similar, add distinguishing language.",
+            "Incorrect assumptions about what a parameter accepts: `\"I'll pass the user's name since user_id seems to want an identifier\"` — rename the parameter or add an example value in the description.",
+            "Giving up after one failed call instead of trying a corrected argument — the error message isn't actionable enough."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "You can use an LLM itself to review transcripts at scale. Feed it 20–30 agent transcripts and ask it to identify patterns where the agent was confused about which tool to use or what arguments to pass. This surfaces description problems faster than reading manually."
+        },
+        {
+          "type": "h3",
+          "text": "Common fixes and when to apply them"
+        },
+        {
+          "type": "table",
+          "headers": ["Symptom", "Root cause", "Fix"],
+          "rows": [
+            ["Wrong tool chosen between two similar ones", "Descriptions overlap", "Add 'Use this for X, NOT for Y' to both"],
+            ["Repeated calls with same bad args", "Error message not actionable", "Add correct-format example to error string"],
+            ["Tool never called despite being relevant", "Description too narrow or jargony", "Add synonyms and plain-language trigger phrases"],
+            ["Context window overflows on large results", "Tool returns too much", "Add pagination, filtering, or truncation"],
+            ["Model hallucinates enum values", "No enum constraint in schema", "Add `enum` array to the parameter definition"]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**Quality over quantity is the most important rule.** Every additional tool has a cost: more description text in the prompt, more surface area for the model to be confused about, more parameter combinations to test. Anthropic recommends 3–5 highly targeted tools per workflow rather than wrapping every available API endpoint. If you find yourself with 15 tools, ask whether some can be consolidated. A single `manage_event(action: create|update|delete, ...)` tool is often better than three separate tools for agents that do all three."
+        },
+        {
+          "type": "p",
+          "md": "**Dynamic tool loading** is the advanced solution to large catalogs. Instead of sending all 50 tools on every request (burning context and confusing the model), you route the user's intent first and inject only the 3–5 relevant tools for that intent. This is the same idea as [RAG](/learn/rag/rag-fundamentals/what-is-rag) applied to tool selection: retrieve the right tools from a larger catalog rather than dumping everything into context."
+        },
+        {
+          "type": "p",
+          "md": "**Agent-Computer Interface (ACI) design** is the emerging discipline that treats tool design the way UX treats human interfaces. Just as human-computer interface (HCI) asks \"what makes this easy for a person to use,\" ACI asks \"what makes this easy for a model to reason about.\" The differences from traditional API design are real: models benefit from examples in descriptions (humans skip examples), struggle with optional parameters that interact in non-obvious ways (humans ask for clarification), and behave differently based on tiny wording changes that a human would consider synonymous."
+        },
+        {
+          "type": "p",
+          "md": "**[MCP (Model Context Protocol)](/learn/ai-agents/model-context-protocol/what-is-mcp)** is the emerging standard for packaging tools so any agent can discover and use them without bespoke integration code. When you design a well-documented tool following the principles here and expose it as an MCP server, it becomes usable by any MCP-compatible agent — Claude, Cursor, or any framework that supports the protocol. Good tool design and good MCP design are the same discipline."
+        },
+        {
+          "type": "p",
+          "md": "**Security follows tool power.** The more a tool can do — write files, send emails, execute code, make purchases — the more care you need in its design and exposure. Scope permissions tightly: a tool that can *read* files is safer than one that can read *and* delete. Log every call with its arguments. For irreversible or high-stakes actions, build a human-confirmation step into the tool itself rather than relying on the model to ask. The model *will* eventually call a tool you didn't expect with inputs you didn't plan for — design for that inevitable moment."
+        },
+        {
+          "type": "p",
+          "md": "**Testing is never finished.** Tool descriptions that work perfectly for your initial eval tasks may degrade when users phrase requests differently, or when you add a new tool that overlaps with an existing one. Treat your tool definitions as living documentation: version them, run regression evals when you change them, and watch your production tool-call logs for new error patterns. The investment compounds — a well-tested tool base is the difference between an agent that works in demos and one that works in production."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "How long should a tool description be?",
+      "a": "Long enough to answer: what it does, what it returns, and when NOT to use it. In practice that's 2–5 sentences. Avoid one-liners like 'Gets data' — they're too vague. Avoid paragraph essays — the model reads the description on every request, so excessive length raises costs and dilutes signal. Aim for the density of a good docstring."
+    },
+    {
+      "q": "Why does the model keep calling the wrong tool?",
+      "a": "Almost always a description problem. Read both tools' descriptions side by side and find where they overlap. Add explicit 'Use this for X, NOT Y' language to both. If the tools genuinely cover very similar ground, consider merging them into one tool with a parameter that selects the behavior."
+    },
+    {
+      "q": "Should I return errors as exceptions or as text in the result?",
+      "a": "Return errors as text in the result (not as exceptions or empty returns). The model reads tool output as part of the conversation, so a clear error string like 'City not found. Try a full city name, e.g. Tokyo' gives the model the information it needs to self-correct on the next turn. An exception that crashes your application loop gives the model nothing."
+    },
+    {
+      "q": "How many tools can I give an agent before it gets confused?",
+      "a": "There is no hard limit, but performance typically degrades as the catalog grows beyond 10–15 tools, especially when some tools are similar. The practical solution is dynamic tool loading: route the user's intent first, then inject only the 3–5 most relevant tools for that intent rather than sending the full catalog."
+    },
+    {
+      "q": "What is the difference between tool design for LLMs and normal API design?",
+      "a": "Traditional APIs are designed for programmers who read documentation once and have context about the system. LLM tools are designed for a model that re-reads the description on every request, cannot ask clarifying questions before calling, and makes decisions based purely on the name and description text. This means LLM tools need more explicit constraints (enums, typed parameters), more prescriptive descriptions, and much more actionable error messages than human-facing APIs."
+    },
+    {
+      "q": "How do I test if my tool descriptions are good?",
+      "a": "Run your agent against 10–20 realistic tasks that require the tool and read the reasoning traces before each tool call. Look for uncertainty between tools, incorrect assumptions about parameters, and failed calls that are not retried correctly. High argument error rates and repeated identical calls are the two clearest quantitative signals of a description problem."
+    }
+  ],
+  "related": [
+    "what-is-tool-use",
+    "what-is-function-calling",
+    "what-is-mcp",
+    "what-is-an-ai-agent",
+    "what-is-agent-planning"
+  ],
+  "furtherReading": [
+    {
+      "title": "Writing effective tools for AI agents — Anthropic Engineering",
+      "url": "https://www.anthropic.com/engineering/writing-tools-for-agents"
+    },
+    {
+      "title": "Building effective agents — Anthropic Research",
+      "url": "https://www.anthropic.com/research/building-effective-agents"
+    },
+    {
+      "title": "A practical guide to building agents — OpenAI",
+      "url": "https://openai.com/business/guides-and-resources/a-practical-guide-to-building-ai-agents/"
+    }
+  ]
+}

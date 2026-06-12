@@ -1,0 +1,349 @@
+{
+  "slug": "hybrid-rag-explained",
+  "title": "What Is Hybrid RAG?",
+  "seoTitle": "What Is Hybrid RAG? BM25 + Vector Retrieval Explained",
+  "metaDescription": "Hybrid RAG combines BM25 keyword search with vector retrieval, fusing results via RRF. Learn how it works, when it beats pure vector search, and how to tune it.",
+  "keywords": [
+    "hybrid RAG",
+    "hybrid search RAG BM25 vector",
+    "reciprocal rank fusion RAG",
+    "BM25 vs vector search retrieval",
+    "hybrid retrieval pipeline",
+    "when to use hybrid RAG"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You'll understand how running BM25 and vector search in parallel — then fusing their results — closes the gaps that either method leaves on its own.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Imagine two librarians answering the same question. The first one has read every book cover to cover and understands meaning — she finds documents that are *about* your topic even if the exact words don't appear. The second librarian has memorised every word in the index and can instantly locate the one document that contains an unusual code, a version number, or a rare product name nobody else ever wrote. Neither librarian is wrong. But for most real questions you want both of them looking at the same time."
+        },
+        {
+          "type": "p",
+          "md": "**Hybrid RAG** does exactly that. It runs two retrievers in parallel — a **vector (dense) retriever** that works by semantic meaning, and a **keyword (sparse) retriever** using the BM25 algorithm — then merges their result lists into one ranked list before passing the top chunks to the language model. The fusion step is usually *Reciprocal Rank Fusion (RRF)*, which combines the two ranked lists without needing to reconcile their incompatible raw scores."
+        },
+        {
+          "type": "p",
+          "md": "The result is a retriever that handles both the kinds of queries that break pure vector search (exact codes, version strings, feature flag names) and the kinds that break pure keyword search (conceptual questions where the right document uses different words than the query). Most production [RAG](/learn/rag/rag-fundamentals/what-is-rag) systems at companies like Perplexity and Glean use this pattern."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Hybrid RAG is about *retrieval method fusion* — running BM25 and vector search side by side. Don't confuse it with mixing structured databases with unstructured documents (a different meaning of \"hybrid\" sometimes used in marketing)."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Pure vector search has a quiet failure mode that only shows up on the long tail of real queries. [Vector embeddings](/learn/embeddings-vector-databases/embeddings-explained/what-are-embeddings) are approximation engines — they compress meaning into a point in high-dimensional space. That compression is excellent for capturing semantic intent, but it systematically blurs small distinguishing tokens."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Error codes.** `ERR_BLOCKED_BY_CLIENT` and `ERR_CONNECTION_REFUSED` sit close in embedding space because they're both browser network errors. A vector retriever may surface the wrong one; BM25 returns an exact match because the token is rare (high IDF) and the query literally contains it.",
+            "**Version numbers.** `v3.2` vs `v3.3` may be semantically indistinguishable to an embedding model. If a user asks for the \"v3.2 migration guide\", vector search might return the v3.3 guide — same meaning, wrong document.",
+            "**Feature flags and product identifiers.** \"Rollback runbook for `payments-v2-rollout`\" requires both semantic understanding (what a runbook is) and exact token matching (the feature flag name). Either approach alone gets half the job done.",
+            "**Rare proper nouns and domain jargon.** Terms that appear in your corpus infrequently get low weight in embedding training data. BM25's Inverse Document Frequency (IDF) mechanism gives rare terms *high* weight — the exact opposite behaviour, and exactly what you need."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "BM25 alone fails on the other side: conceptual queries where the right document never uses the user's exact words. \"How do I cancel my account?\" won't match a help article titled \"Closing your subscription\" via keyword search, but a vector retriever catches it through semantic similarity."
+        },
+        {
+          "type": "p",
+          "md": "Most real user queries land somewhere in the middle — they have both an intent (vector territory) and specific identifiers (BM25 territory). Hybrid retrieval covers the whole space instead of optimising for one half."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Before adding hybrid retrieval, audit your failed queries. If a significant share involve exact codes, version strings, or uncommon proper nouns, hybrid is likely your highest-leverage improvement. If failures are mostly about vague or conceptual questions, focus on [chunking](/learn/rag/chunking-and-ingestion/what-is-chunking-in-rag) and embedding quality first."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A hybrid RAG pipeline has three mechanical stages: parallel retrieval, score fusion, and (optionally) reranking. Each stage solves a distinct problem."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Hybrid RAG retrieval pipeline",
+            "steps": [
+              {
+                "label": "User query",
+                "sub": "raw question or message"
+              },
+              {
+                "label": "Parallel retrieval",
+                "sub": "BM25 + vector search, simultaneously",
+                "accent": true
+              },
+              {
+                "label": "Fusion (RRF)",
+                "sub": "merge ranked lists by position",
+                "accent": true
+              },
+              {
+                "label": "Optional reranker",
+                "sub": "cross-encoder re-scores top N"
+              },
+              {
+                "label": "LLM generation",
+                "sub": "top-k chunks → answer"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Stage 1 — Parallel retrieval"
+        },
+        {
+          "type": "p",
+          "md": "The same query is sent simultaneously to two indexes. The **dense index** stores [vector embeddings](/learn/embeddings-vector-databases/embeddings-explained/what-are-embeddings) of your chunks — typically in a [vector database](/learn/embeddings-vector-databases/vector-database-guides/what-is-a-vector-database). The query is embedded with the same model and the top-k nearest vectors are returned (usually k = 50–150 candidates, more than the final top-k you'll pass to the LLM). The **sparse index** is an inverted index — BM25 scores each document by how often query terms appear in it, weighted by how rare those terms are across the entire corpus. Both retrievers return their own ranked lists independently."
+        },
+        {
+          "type": "h3",
+          "text": "Stage 2 — Reciprocal Rank Fusion (RRF)"
+        },
+        {
+          "type": "p",
+          "md": "You cannot simply average BM25 scores and cosine similarity scores — they live on incompatible scales. BM25 produces unbounded positive numbers; cosine similarity runs from 0 to 1. Normalising them introduces assumptions that break on unusual query distributions. RRF sidesteps this entirely by **operating on rank position, not raw scores**."
+        },
+        {
+          "type": "p",
+          "md": "The formula is: **RRF_score(d) = Σ 1 / (k + rank_r(d))** where the sum is over each retriever *r*, and *k* is a smoothing constant (default 60). A document ranked #1 contributes roughly 0.0164; ranked #10 it contributes roughly 0.0143. A document that appears in *both* retrievers' top results accumulates points from both terms — RRF rewards consensus. The final list is sorted by descending RRF score."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The *k* constant controls how much top-rank advantage matters. Lower values (20–30) sharpen the reward for exact top-1 placement — better for precision-heavy tasks. Higher values (80–100) smooth things out and favour recall. Start with the default k=60 and tune from your evaluation data."
+        },
+        {
+          "type": "h3",
+          "text": "Alternative: alpha weighting"
+        },
+        {
+          "type": "p",
+          "md": "Some systems use a weighted average instead: **score = α × vector_score + (1 − α) × BM25_score** where both scores are normalised to [0,1] first. Alpha = 0 means pure BM25; alpha = 1 means pure vector. This is simpler to reason about when you have a strong prior — for example, a code-search app might hardcode alpha = 0.3 to lean on keyword matching. The drawback is that the optimal alpha shifts per query type, making it less robust than RRF for general-purpose retrieval."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "RRF vs alpha weighting",
+            "columns": [
+              {
+                "title": "Reciprocal Rank Fusion (RRF)",
+                "items": [
+                  "Works on ranks — no score normalisation needed",
+                  "Robust across query types",
+                  "One tunable constant (k)",
+                  "Rewards documents appearing in both lists",
+                  "Default choice for most teams"
+                ]
+              },
+              {
+                "title": "Alpha Weighting",
+                "accent": true,
+                "items": [
+                  "Requires normalising scores to same scale",
+                  "Optimal alpha varies per query type",
+                  "Easier to reason about directionally",
+                  "Good when domain strongly favours one method",
+                  "More tuning overhead in practice"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Stage 3 — Optional cross-encoder reranker"
+        },
+        {
+          "type": "p",
+          "md": "After fusion you have a merged list of, say, 20–50 candidate chunks. A **cross-encoder reranker** takes each (query, chunk) pair and scores them jointly — unlike embeddings, which encode query and document independently, a cross-encoder reads both at once and can reason about fine-grained relevance. This is the most expensive step (one forward pass per candidate) but it consistently lifts precision. The typical pipeline keeps the reranker's input small (top 20–50 from hybrid fusion) to keep latency manageable, then passes the reranker's top 3–8 chunks to the LLM."
+        }
+      ]
+    },
+    {
+      "id": "implementation",
+      "title": "Implementing hybrid retrieval",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Most vector databases now support hybrid search natively, so you rarely need to wire the two indexes together yourself."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Qdrant** — native hybrid via `query_points` with `Prefetch` blocks for dense and sparse; RRF fusion built in.",
+            "**Elasticsearch / OpenSearch** — combine a `knn` clause (dense) with a `match` clause (BM25) in a single query; scores are merged via the `linear_combination` or `rrf` retriever.",
+            "**PostgreSQL** — use `pgvector` for the dense side and `tsvector`/`ts_rank` for the BM25 side, then join and rank in a CTE.",
+            "**Weaviate** — `hybrid` query parameter with configurable alpha and built-in RRF or relative-score-fusion.",
+            "**LangChain / LlamaIndex** — both ship `EnsembleRetriever` (LangChain) and `QueryFusionRetriever` (LlamaIndex) wrappers that combine any two retrievers with RRF."
+          ]
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Minimal hybrid retrieval with Qdrant + RRF",
+          "code": "from qdrant_client import QdrantClient, models\n\nclient = QdrantClient(url=\"http://localhost:6333\")\n\n# Run hybrid search: dense vector + sparse BM25, fused with RRF\nresults = client.query_points(\n    collection_name=\"docs\",\n    prefetch=[\n        # Dense (vector) retrieval\n        models.Prefetch(\n            query=embed(user_query),        # your embedding function\n            using=\"dense\",\n            limit=50,\n        ),\n        # Sparse (BM25-style) retrieval\n        models.Prefetch(\n            query=models.SparseVector(**bm25_encode(user_query)),\n            using=\"sparse\",\n            limit=50,\n        ),\n    ],\n    # Fuse both prefetch results with RRF\n    query=models.FusionQuery(fusion=models.Fusion.RRF),\n    limit=10,  # final top-k passed to the LLM\n)"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "When using LangChain's `EnsembleRetriever`, set the `weights` parameter to match your domain bias (e.g. `weights=[0.6, 0.4]` for vector-heavy corpora). The default is equal weighting, which is a safe starting point but rarely optimal."
+        },
+        {
+          "type": "p",
+          "md": "One practical note: the BM25 side needs its own tokenisation pipeline. Production systems typically use a tokeniser that lowercases, removes stopwords, and applies stemming — but keeps identifiers like `v3.2` intact. If your corpus is code-heavy, skip stemming entirely; stemming `payments-v2-rollout` to `payment-v2-rollout` destroys the exact match you were counting on."
+        }
+      ]
+    },
+    {
+      "id": "when-to-use",
+      "title": "When hybrid retrieval wins (and when it doesn't)",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Hybrid retrieval is not always the right upgrade. The decision depends on your query distribution and corpus."
+        },
+        {
+          "type": "table",
+          "headers": ["Scenario", "Best retrieval strategy", "Why"],
+          "rows": [
+            [
+              "Help-desk docs, conceptual questions only",
+              "Pure vector",
+              "Queries are paraphrased; rare tokens not the issue"
+            ],
+            [
+              "API docs, error codes, version-specific guides",
+              "Hybrid (BM25-heavy alpha)",
+              "Exact token matching is load-bearing"
+            ],
+            [
+              "Mixed enterprise corpus (docs + runbooks + tickets)",
+              "Hybrid with RRF",
+              "Both semantic and exact-match queries arrive"
+            ],
+            [
+              "Code search across a large repository",
+              "Hybrid + cross-encoder reranker",
+              "Symbol names need BM25; intent needs vectors; reranker lifts precision"
+            ],
+            [
+              "Very small corpus (< 500 documents)",
+              "BM25 alone may suffice",
+              "Embedding overhead not worth it; BM25 + full rerank is fast"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The clearest signal to add hybrid: run a [RAG evaluation](/learn/rag/rag-evaluation/how-to-evaluate-rag) and inspect the queries where retrieval recalls zero relevant chunks. If a disproportionate share contain rare identifiers, version strings, or jargon, BM25 will recover them. If the failures look like \"the user phrased it differently\", better embeddings or [chunking](/learn/rag/chunking-and-ingestion/what-is-chunking-in-rag) strategy are the right lever."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Hybrid retrieval adds operational overhead: two indexes to maintain, two index builds when the corpus updates, and more tuning surface (k constant, alpha, candidate pool size). Make sure the precision gain justifies the complexity for your use case before committing."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**Why BM25 is still competitive.** BM25 was published in 1994 and remains the default baseline in information retrieval research. The core insight — that term frequency has diminishing returns, that rare terms are more informative, and that document length needs normalisation — has held up as embeddings came to dominate. In BEIR benchmarks (a standard multi-domain retrieval benchmark suite), BM25 alone outperforms many out-of-the-box embedding models on domains where precise terminology matters, such as medical and legal retrieval. Hybrid with a good reranker consistently tops both."
+        },
+        {
+          "type": "p",
+          "md": "**Sparse learned retrievers (SPLADE, SPLADEv2).** An emerging alternative to classic BM25 is *learned sparse retrieval*: models like SPLADE learn to produce sparse token weight vectors rather than raw embedding coordinates. Unlike BM25, which weights terms purely by statistics, SPLADE can expand the query with related terms (it might add weight to \"rollback\" when it sees \"undo\") while keeping the inverted-index infrastructure. SPLADE often outperforms BM25 in hybrid pipelines at the cost of an additional model to deploy."
+        },
+        {
+          "type": "p",
+          "md": "**ColBERT and late interaction.** ColBERT is a third retrieval paradigm that sits between dense and sparse: it stores one embedding vector *per token* in the document (not one per chunk) and scores using MaxSim across all token pairs. This gives it BM25-like sensitivity to individual tokens with near-dense-search semantic coverage. ColBERT is more expensive to store and slower to query than pure vector search, but some teams incorporate it as a third leg in a hybrid pipeline for code-heavy or terminology-dense corpora."
+        },
+        {
+          "type": "p",
+          "md": "**Hybrid retrieval inside [agentic RAG](/learn/rag/advanced-rag/what-is-agentic-rag).** Hybrid retrieval and agentic RAG are orthogonal improvements that stack. An agent loop that calls a retrieval tool multiple times benefits from having each call be a hybrid search — it combines the adaptive query-rewriting of the agentic loop with the full-coverage retrieval of hybrid. The agent can also choose to issue a BM25-only query when it knows the question is identifier-heavy, effectively steering the alpha at query time."
+        },
+        {
+          "type": "p",
+          "md": "**Evaluation is how you tune.** The RRF k constant, the candidate pool size for each retriever, and the number of chunks passed to the reranker should all be set from offline evaluation data — not guessed. Build an [eval harness](/learn/rag/rag-evaluation/how-to-evaluate-rag) with a representative question set and ground-truth relevant documents, measure recall@k and MRR for each configuration, and grid-search the two or three key parameters. A surprisingly common result is that the optimal k is not 60 and the optimal candidate pool is 100, not 50."
+        },
+        {
+          "type": "p",
+          "md": "**The standardisation picture.** Vector database vendors are converging on hybrid search as a first-class API primitive, which reduces the barrier significantly. Qdrant, Weaviate, Elasticsearch, and MongoDB Atlas all support hybrid queries natively as of 2025. LangChain and LlamaIndex both have retriever wrappers for the pattern. The main remaining friction is maintaining a separate BM25 tokenisation pipeline for corpora with mixed natural language and code — a problem sparse learned models like SPLADE address by handling both in a single model."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is hybrid RAG and how does it differ from standard RAG?",
+      "a": "Standard RAG typically uses a single vector (dense) retriever: it embeds the query and fetches the nearest chunks by cosine similarity. Hybrid RAG runs two retrievers in parallel — a vector retriever for semantic similarity and a BM25 keyword retriever for exact token matching — then merges their result lists using a fusion algorithm like RRF before passing chunks to the LLM. The main difference is that hybrid covers both conceptual queries (vector's strength) and identifier-heavy queries like error codes and version numbers (BM25's strength)."
+    },
+    {
+      "q": "What is Reciprocal Rank Fusion and why is it used in hybrid RAG?",
+      "a": "Reciprocal Rank Fusion (RRF) is a score-free method of combining multiple ranked lists. Each document is scored as the sum of 1/(k + rank) across all retrievers, where k is a smoothing constant (default 60). RRF is preferred over weighted score averaging because BM25 scores and cosine similarity scores are on incompatible scales — normalising them introduces assumptions that often break in practice. RRF sidesteps this by only caring about rank position, rewarding documents that appear near the top in multiple retrievers."
+    },
+    {
+      "q": "When does BM25 beat vector search in a RAG pipeline?",
+      "a": "BM25 wins when the query contains tokens that are rare in the corpus but critical for finding the right document: error codes (ERR_BLOCKED_BY_CLIENT), version strings (v3.2), feature flag names, product identifiers, or uncommon proper nouns. Vector embeddings compress these distinguishing tokens into a shared semantic space, causing similar-sounding documents to rank equally. BM25's Inverse Document Frequency (IDF) mechanism gives rare tokens high weight — the opposite behaviour — making it the right tool for exact-identifier retrieval."
+    },
+    {
+      "q": "How do I choose between RRF and alpha-weighted hybrid search?",
+      "a": "Start with RRF. It requires no score normalisation, works robustly across varied query types, and has only one parameter (k). Switch to alpha weighting if you have a strong domain prior — for example, a code-search tool where you know identifier matching should always dominate — and you have enough evaluation data to tune the alpha reliably. In general-purpose or mixed-query environments, RRF is more stable and less likely to degrade when query distribution shifts."
+    },
+    {
+      "q": "Does adding hybrid retrieval require rebuilding my existing vector store?",
+      "a": "No, you add a parallel BM25 index alongside your existing vector index — you don't replace it. Most modern vector databases (Qdrant, Weaviate, Elasticsearch) support both index types in the same collection, so the hybrid query is a single API call. If you're on a database that doesn't support BM25 natively (e.g. vanilla pgvector), you run a separate `tsvector` index in Postgres and join the results in application code before applying RRF."
+    },
+    {
+      "q": "Should I add a reranker on top of hybrid retrieval?",
+      "a": "For most production systems: yes, if latency allows. A cross-encoder reranker re-scores each (query, chunk) pair jointly, catching relevance signals that independent embedding and BM25 scores miss. The typical pattern is to retrieve 20–50 candidates with hybrid fusion, rerank them with a cross-encoder, and pass the top 3–8 to the LLM. The reranker is the most expensive step — one forward pass per candidate — so keep its input small. If latency is tight, skip the reranker and rely on the hybrid fusion alone."
+    }
+  ],
+  "related": [
+    "what-is-rag",
+    "what-are-embeddings",
+    "what-is-semantic-search",
+    "what-is-a-retriever",
+    "how-to-evaluate-rag",
+    "what-is-agentic-rag"
+  ],
+  "furtherReading": [
+    {
+      "title": "Why Vector Search Alone Isn't Enough: Hybrid Retrieval for RAG (InfoQ)",
+      "url": "https://www.infoq.com/articles/vector-search-hybrid-retrieval-rag/"
+    },
+    {
+      "title": "Hybrid Search in RAG: Combining Keyword and Vector Retrieval (TeachMeIDEA)",
+      "url": "https://teachmeidea.com/hybrid-search-bm25-vector-rag/"
+    },
+    {
+      "title": "Optimizing RAG with Hybrid Search and Reranking (Superlinked VectorHub)",
+      "url": "https://superlinked.com/vectorhub/articles/optimizing-rag-with-hybrid-search-reranking"
+    }
+  ]
+}

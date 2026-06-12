@@ -1,0 +1,382 @@
+{
+  "slug": "approximate-nearest-neighbors",
+  "title": "What Is Approximate Nearest Neighbor Search?",
+  "seoTitle": "Approximate Nearest Neighbor Search Explained",
+  "metaDescription": "Approximate nearest neighbor (ANN) search finds the closest vectors in milliseconds at any scale. Learn how HNSW and IVF work, and the recall vs. speed tradeoff.",
+  "keywords": [
+    "approximate nearest neighbor search",
+    "HNSW explained",
+    "IVF vector index",
+    "ANN vs exact search",
+    "vector database indexing",
+    "recall vs speed tradeoff vector search"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Understand how HNSW and IVF let vector databases search millions of embeddings in milliseconds by trading a tiny bit of exactness for enormous speed.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Imagine you have a library with a million books and you want the five most similar to the one in your hand. The *exact* approach: compare your book to every other book, one by one. Accurate, but slow — and once your library grows to a billion books, it becomes completely unusable at real-time speed."
+        },
+        {
+          "type": "p",
+          "md": "**Approximate nearest neighbor (ANN) search** solves this with a clever shortcut: instead of checking every book, it uses a pre-built index that tells you which neighborhood of the library to walk into. You skip 99% of the shelves, land near the right section, and find books that are *almost certainly* the closest matches — in milliseconds instead of minutes. The price is a tiny risk of missing one or two ideal matches, but in practice that tradeoff is almost always worth it."
+        },
+        {
+          "type": "p",
+          "md": "In the world of AI, \"books\" are **embeddings** — dense vectors of numbers that encode the meaning of text, images, or audio. When a vector database runs a semantic search or a recommendation query, ANN search is the engine underneath it. It's what lets a system with 100 million product embeddings return the ten most relevant results in under 20 milliseconds."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "**Exact** nearest neighbor (also called *flat* or *brute-force* search) checks every vector. It is always correct but scales as O(n). **Approximate** nearest neighbor uses an index structure to scale sub-linearly — much faster once n grows large, with a small and tunable accuracy cost."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Modern AI applications embed everything — every product, every document, every user action — and then search those embeddings millions of times per day. Exact search simply doesn't scale to that world."
+        },
+        {
+          "type": "p",
+          "md": "A single 1,536-dimension OpenAI embedding takes about 6 KB. A corpus of 10 million documents holds 60 GB of vectors. An exact search computes the distance from your query to each of the 10 million vectors — roughly 10 million floating-point dot products — for *every single query*. At any meaningful request rate, you'd need racks of hardware just to keep up. With an ANN index, the same search visits only a few thousand vectors, and a mid-range server handles hundreds of queries per second."
+        },
+        {
+          "type": "p",
+          "md": "Who needs to care:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**RAG (retrieval-augmented generation) builders.** The retrieval step — finding the right context chunks for your LLM — runs an ANN query on every user message. Latency here adds directly to your chatbot's response time.",
+            "**Recommendation system engineers.** \"Users like you also bought\" is an ANN lookup against millions of user-preference vectors.",
+            "**Image and multimodal search teams.** Reverse image search, visual similarity, and content moderation all search embedding spaces at scale.",
+            "**Vector database users.** Every managed vector database (Pinecone, Weaviate, Qdrant, Milvus, pgvector, etc.) uses ANN indexes internally. Knowing the knobs means tuning them for your workload instead of accepting defaults."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The core tradeoff is **recall vs. latency**. *Recall@10* means: of the true 10 nearest neighbors, what fraction did the ANN search actually return? A recall of 0.95 means you got 9 or 10 of the real top-10 results in a fraction of the time it would take to guarantee all 10. For most applications, 0.90–0.95 recall is indistinguishable in quality from perfect recall — and the latency difference is the difference between a usable and an unusable product."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "There are two dominant ANN algorithm families used in production vector databases today: **HNSW** (graph-based) and **IVF** (cluster-based). They take very different approaches to the same problem."
+        },
+        {
+          "type": "h3",
+          "text": "HNSW — Hierarchical Navigable Small World"
+        },
+        {
+          "type": "p",
+          "md": "HNSW builds a **multi-layer proximity graph** over your vectors. Think of it like a highway system: the top layer has a few nodes connected by very long-range links (the expressways), and each lower layer adds more nodes with shorter connections, until the bottom layer contains every vector with dense local links. To find nearest neighbors, you enter at the top, greedily hop toward your query's neighborhood on the fast highway, descend to the next layer, refine your position, and keep descending until the dense bottom layer — where you do a final local sweep."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "HNSW search: coarse to fine",
+            "steps": [
+              {
+                "label": "Layer 2 (sparse)",
+                "sub": "few nodes, long-range links"
+              },
+              {
+                "label": "Layer 1 (medium)",
+                "sub": "more nodes, medium links"
+              },
+              {
+                "label": "Layer 0 (dense)",
+                "sub": "all vectors, local links",
+                "accent": true
+              },
+              {
+                "label": "ef-size candidate set",
+                "sub": "beam search at bottom layer"
+              },
+              {
+                "label": "Top-k results",
+                "sub": "closest neighbors returned"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "HNSW has three key parameters you'll encounter in every vector database:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**M** — the number of bidirectional links each node keeps in the graph. Higher M improves recall and handles high-dimensional data better, but the index uses more RAM and builds more slowly. Typical range: 8–64.",
+            "**efConstruction** — controls candidate list size *during index build*. Higher values produce a better-connected graph (higher recall at query time) at the cost of slower indexing. Typical range: 100–500.",
+            "**efSearch** — controls candidate list size *during queries*. The main dial for the recall-vs-latency tradeoff at query time — you can tune it without rebuilding the index. Typical range: 50–200."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "HNSW is the default index in most vector databases because it has near-logarithmic search time, needs no training data, and supports **incremental inserts** without a full rebuild. The main cost is memory: the graph structure adds roughly 1.5–2× the raw vector storage."
+        },
+        {
+          "type": "h3",
+          "text": "IVF — Inverted File Index"
+        },
+        {
+          "type": "p",
+          "md": "IVF takes a clustering approach. During index build, it runs **k-means** to partition all vectors into `nlist` clusters (called *Voronoi cells*). Each cluster has a centroid. At query time, you compute the distance from your query to all centroids (fast — there are only `nlist` of them), pick the `nprobe` closest centroids, and then do exact search *only within those clusters*."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "IVF: query visits only nprobe clusters",
+            "root": {
+              "label": "Query vector",
+              "sub": "find nearest centroids"
+            },
+            "children": [
+              {
+                "label": "Cluster A",
+                "sub": "searched (nprobe=3)",
+                "accent": true
+              },
+              {
+                "label": "Cluster B",
+                "sub": "searched (nprobe=3)",
+                "accent": true
+              },
+              {
+                "label": "Cluster C",
+                "sub": "searched (nprobe=3)",
+                "accent": true
+              },
+              {
+                "label": "Clusters D–N",
+                "sub": "skipped entirely"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The key parameters for IVF:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**nlist** — the number of clusters. More clusters = finer partitioning = faster search per query, but the index requires more training time and memory for centroids. A rule of thumb: `nlist ≈ sqrt(n)` where n is your dataset size.",
+            "**nprobe** — how many clusters to search at query time. The main recall-vs-speed dial: nprobe=1 is fastest (lowest recall), nprobe=nlist is exact search. Most production deployments use 8–64."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "IVF requires a **training phase** before it can index vectors — it needs a representative sample to build the cluster centroids. This makes it less convenient for datasets that grow continuously, but it is highly memory-efficient and works well when your data can be loaded in batch."
+        },
+        {
+          "type": "h3",
+          "text": "IVF + PQ: compression for huge datasets"
+        },
+        {
+          "type": "p",
+          "md": "**Product Quantization (PQ)** is often combined with IVF (as IVF-PQ or IVFADC) to compress vectors before storing them. PQ splits each vector into sub-vectors and replaces each with a short code from a learned codebook, reducing memory by 4–32× at the cost of some recall. This is how systems search billions of vectors on a single server: the centroid lookup is still exact, but the within-cluster comparison uses compressed codes instead of full floats."
+        }
+      ]
+    },
+    {
+      "id": "flat-vs-indexed",
+      "title": "Flat (exact) vs indexed: when to use each",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Not every use case needs an ANN index. Choosing the right approach depends on dataset size, latency requirements, and how much you care about guaranteed accuracy."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Flat search vs ANN index",
+            "columns": [
+              {
+                "title": "Flat / brute-force",
+                "items": [
+                  "Checks every vector",
+                  "100% recall guaranteed",
+                  "O(n) — slow at scale",
+                  "No index build time",
+                  "No extra memory overhead",
+                  "Good for < ~100k vectors"
+                ]
+              },
+              {
+                "title": "ANN index (HNSW / IVF)",
+                "accent": true,
+                "items": [
+                  "Visits only a small fraction",
+                  "95–99% recall typical",
+                  "Sub-linear — fast at scale",
+                  "One-time build cost",
+                  "Extra RAM for graph/centroids",
+                  "Essential above ~500k vectors"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Most vector databases offer a *Flat* index type alongside their ANN options. Use it for:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Small corpora** (under ~100,000 vectors) where brute-force is fast enough and you want perfect accuracy.",
+            "**Gold-standard evaluation** — running flat search offline to measure what 100% recall looks like, then choosing ANN parameters that get you to 95–99% of that quality.",
+            "**Reranking pools** — after ANN retrieves a top-50 candidate set, flat search over just those 50 vectors to reorder them precisely."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "If your dataset is under 10,000 vectors and latency is under 50 ms, **don't bother with an ANN index** — flat search will be faster to set up, simpler to debug, and just as quick. Premature indexing adds complexity without measurable benefit."
+        }
+      ]
+    },
+    {
+      "id": "tuning-recall",
+      "title": "Tuning recall vs. speed in practice",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every vector database exposes the recall-vs-speed knobs. Here's how to use them in Python with **Faiss**, the open-source ANN library that underlies many vector databases internally."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "ann_demo.py — HNSW vs flat in Faiss",
+          "code": "# pip install faiss-cpu numpy\nimport faiss\nimport numpy as np\nimport time\n\ndim = 768          # embedding dimension (e.g. sentence-transformers)\nn_vectors = 500_000\nk = 10             # top-k neighbors to retrieve\n\n# Simulate a corpus of embeddings\nnp.random.seed(42)\ncorpus = np.random.rand(n_vectors, dim).astype(\"float32\")\nquery  = np.random.rand(1, dim).astype(\"float32\")\n\n# --- Flat (exact) index ---\nflat = faiss.IndexFlatL2(dim)\nflat.add(corpus)\nt0 = time.perf_counter()\n_, ids_flat = flat.search(query, k)\nprint(f\"Flat:  {(time.perf_counter()-t0)*1000:.1f} ms  ids={ids_flat[0][:3]}\")\n\n# --- HNSW index ---\nhnsw = faiss.IndexHNSWFlat(dim, 32)   # M=32\nhnsw.hnsw.efConstruction = 200\nhnsw.add(corpus)                       # one-time build\nhnsw.hnsw.efSearch = 64               # tune at query time, no rebuild\nt0 = time.perf_counter()\n_, ids_hnsw = hnsw.search(query, k)\nprint(f\"HNSW:  {(time.perf_counter()-t0)*1000:.1f} ms  ids={ids_hnsw[0][:3]}\")\n\n# Recall@10: how many of the exact top-10 did HNSW return?\nrecall = len(set(ids_hnsw[0]) & set(ids_flat[0])) / k\nprint(f\"Recall@10: {recall:.2f}\")"
+        },
+        {
+          "type": "p",
+          "md": "On a typical run with 500k vectors, the flat search might take 300–500 ms while HNSW returns results in 2–5 ms with recall above 0.95. To push recall toward 0.99, raise `efSearch`; to drop latency further, lower it. You find the right point by measuring your own data — there is no universal \"best\" setting."
+        },
+        {
+          "type": "p",
+          "md": "The same pattern applies in managed vector databases. In **Pinecone**, recall is controlled by the `top_k` and metadata filtering settings. In **Weaviate**, you set `efConstruction`, `maxConnections` (M), and `ef` (efSearch) per collection. In **Qdrant**, the equivalent parameters are `m`, `ef_construct`, and query-time `ef`. The names differ; the concepts are identical."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Always measure recall against your *actual* query distribution, not a random benchmark. ANN performance can vary significantly between domains — code embeddings, image embeddings, and short-text embeddings have different intrinsic dimensionalities that affect which parameters work best."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "HNSW and IVF are the workhorses, but they are not the whole story. Several forces are reshaping ANN search in 2025–2026."
+        },
+        {
+          "type": "h3",
+          "text": "Filtered ANN search"
+        },
+        {
+          "type": "p",
+          "md": "Most real applications don't just search all vectors — they apply **metadata filters** (\"only products in category X, priced under $50\"). Naively filtering *after* ANN retrieval fails when the filter is highly selective: you retrieve 100 candidates, filter them down to 2, and miss the 8 that were close but outside the ANN window. Vector databases now offer native filtered ANN, either by pre-filtering before graph traversal or by building per-filter sub-indexes. This is an active research area, with IVF sometimes outperforming HNSW under very low-selectivity filters."
+        },
+        {
+          "type": "h3",
+          "text": "Quantization: shrinking vectors"
+        },
+        {
+          "type": "p",
+          "md": "Storing 1 billion float32 vectors at 768 dimensions requires 3 TB of RAM — impractical. **Scalar quantization (SQ8)** compresses each float to an 8-bit integer, cutting memory by 4× with minimal recall loss. **Binary quantization** goes further, compressing each dimension to a single bit (32× compression) at a more significant recall cost. **Matryoshka embeddings** (like OpenAI's text-embedding-3 models) allow truncating a 3,072-dim vector to 256 dims at index time, scaling the recall-storage tradeoff continuously."
+        },
+        {
+          "type": "h3",
+          "text": "GPU-native ANN"
+        },
+        {
+          "type": "p",
+          "md": "GPU-accelerated ANN (IVF-RaBitQ, FAISS GPU, RAPIDS cuVS) can build and query indexes orders of magnitude faster than CPU-based implementations. This matters for systems that need to rebuild indexes frequently (streaming data) or serve extremely high query throughput. As of 2025–2026, GPU-native ANN is moving from research into production deployments."
+        },
+        {
+          "type": "h3",
+          "text": "The recall floor problem at scale"
+        },
+        {
+          "type": "p",
+          "md": "HNSW's recall degrades as the dataset grows beyond the parameters it was tuned for. An index built for 1 million vectors with M=16 may drop from 0.97 recall to 0.85 when the corpus reaches 100 million — because the graph's local neighborhoods become worse approximations of the true nearest-neighbor structure. Production RAG systems that grow continuously must monitor recall over time and schedule periodic index rebuilds with recalibrated M and efConstruction values."
+        },
+        {
+          "type": "p",
+          "md": "Understanding ANN search at this level is what separates a vector database *user* from a vector database *operator*. The defaults in every managed service are tuned for a median workload. If your application demands sub-10 ms p99 latency at 0.99 recall over 50 million vectors, you need to measure, tune, and monitor — not just accept the defaults. The [how to choose a vector database](/learn/embeddings-vector-databases/vectors-in-production/how-to-choose-vector-database) guide covers how these performance characteristics map to specific database choices."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is the difference between approximate and exact nearest neighbor search?",
+      "a": "Exact (flat) search computes the distance from your query to every vector in the dataset and is guaranteed to return the true nearest neighbors, but it scales as O(n) — too slow for large corpora. Approximate nearest neighbor search uses an index structure (like HNSW or IVF) to skip most vectors, returning results that are almost always the true nearest neighbors in sub-linear time. The tradeoff is a small, tunable probability of missing one or two ideal matches."
+    },
+    {
+      "q": "What is HNSW and why do vector databases use it?",
+      "a": "HNSW (Hierarchical Navigable Small World) is a multi-layer graph index where each node connects to its nearest neighbors across sparse upper layers and a dense bottom layer. Queries navigate from coarse upper layers down to the dense bottom layer, finding approximate nearest neighbors in near-logarithmic time. Vector databases favor HNSW because it supports incremental inserts (no full rebuild), delivers high recall at low latency, and has only three tuning parameters (M, efConstruction, efSearch)."
+    },
+    {
+      "q": "What does recall mean in vector search?",
+      "a": "Recall@k measures the fraction of the true k nearest neighbors that an ANN search actually returned. For example, recall@10 = 0.95 means the ANN search returned 9 or 10 of the 10 true nearest neighbors. Higher recall costs more latency. Most production applications target 0.90–0.97 recall, where the quality difference from perfect recall is imperceptible to users."
+    },
+    {
+      "q": "What is the difference between HNSW and IVF?",
+      "a": "HNSW builds a navigable graph over all vectors and traverses it at query time — no training needed, supports live inserts, uses more RAM. IVF clusters vectors using k-means into partitions (cells) and at query time only searches the nprobe closest clusters — requires a training phase, more memory-efficient, works well for batch-loaded datasets. IVF-PQ extends IVF by compressing vectors with Product Quantization for very large datasets."
+    },
+    {
+      "q": "When should I use flat (exact) search instead of ANN?",
+      "a": "Use flat search when your dataset is small (under roughly 100,000 vectors), when you need guaranteed 100% recall for correctness-critical applications, or as an offline benchmark to measure what perfect recall looks like before choosing ANN parameters. For datasets above ~500,000 vectors or latency requirements under 20 ms, an ANN index is almost always necessary."
+    },
+    {
+      "q": "How do I tune ANN parameters in a vector database?",
+      "a": "The workflow is: (1) run flat search on a sample of real queries to get the ground-truth top-k results; (2) run your ANN index with default parameters and compute recall@k against the ground truth; (3) raise or lower the query-time parameter (efSearch for HNSW, nprobe for IVF) until you hit your recall target; (4) measure p50/p99 query latency at that setting. Only rebuild the index (changing M or efConstruction/nlist) if you can't reach your recall target by adjusting the query-time knob."
+    }
+  ],
+  "related": [
+    "what-are-embeddings",
+    "what-is-semantic-search",
+    "what-is-a-vector-database",
+    "how-to-choose-vector-database",
+    "what-is-rag"
+  ],
+  "furtherReading": [
+    {
+      "title": "Approximate Nearest Neighbor (ANN) Search Explained: IVF vs HNSW vs PQ — PingCAP",
+      "url": "https://www.pingcap.com/article/approximate-nearest-neighbor-ann-search-explained-ivf-vs-hnsw-vs-pq/"
+    },
+    {
+      "title": "HNSW key configuration parameters (M, efConstruction, efSearch) — Milvus Reference",
+      "url": "https://milvus.io/ai-quick-reference/what-are-the-key-configuration-parameters-for-an-hnsw-index-such-as-m-and-efconstructionefsearch-and-how-does-each-influence-the-tradeoff-between-index-size-build-time-query-speed-and-recall"
+    },
+    {
+      "title": "A Comprehensive Guide to Approximate Nearest Neighbor Algorithms — Shaped",
+      "url": "https://www.shaped.ai/blog/approximate-nearest-neighbors-algorithms"
+    }
+  ]
+}

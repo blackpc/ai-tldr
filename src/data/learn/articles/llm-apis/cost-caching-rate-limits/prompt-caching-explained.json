@@ -1,0 +1,350 @@
+{
+  "slug": "prompt-caching-explained",
+  "title": "What Is Prompt Caching?",
+  "seoTitle": "Prompt Caching Explained: Cut LLM Costs by 90%",
+  "metaDescription": "Prompt caching stores reusable prompt prefixes so LLMs skip redundant computation. Learn how cache breakpoints, TTLs, and cost math work for Claude and OpenAI.",
+  "keywords": [
+    "prompt caching explained",
+    "how does prompt caching work",
+    "anthropic prompt caching cache_control",
+    "openai automatic prompt caching",
+    "llm api cost reduction caching",
+    "cache breakpoints ttl"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Understand how prompt caching stores KV state for reusable prompt prefixes — and how to structure requests so 90% of your input tokens cost almost nothing.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every time you call an LLM API, the model processes every token you send — even if that text was identical on the last request. A 10,000-token system prompt, a document you attached, a list of tool definitions: the model re-reads all of it from scratch, charges you for every token, and discards the internal computation the moment it returns a response."
+        },
+        {
+          "type": "p",
+          "md": "**Prompt caching** fixes that. When you mark part of your prompt as cacheable, the provider stores the model's internal state — specifically the key-value (KV) tensors computed for that prefix — on their servers. The next request that starts with the same prefix skips the expensive re-computation and pulls the cached state instead. You still pay, but at a fraction of the normal rate."
+        },
+        {
+          "type": "p",
+          "md": "The analogy: imagine you're a chef who prepares the same mise en place every morning. Prompt caching is like keeping your pre-chopped vegetables in the fridge. You pay once to chop them (a cache write). Every dish you make that day uses them without re-chopping (a cache read). If you throw them out at the end of service and re-chop tomorrow, you pay again — that's the TTL expiring."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Prompt caching is different from [semantic caching](/learn/production-llmops/cost-latency-optimization/semantic-caching-llm), which stores and replays full responses when two *questions* are similar enough. Prompt caching operates at the token-computation level inside the model — the response is still freshly generated every time, just without redundant prefix processing."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The economics shift dramatically once you understand the price multipliers. On **Claude Sonnet 4.6**, a cached token costs **$0.30 per million** — compared to $3.00/M for a normal input token. That is a **10× reduction**. On **OpenAI GPT-4o**, caching gives a 50% discount automatically."
+        },
+        {
+          "type": "h3",
+          "text": "Real-world savings example"
+        },
+        {
+          "type": "p",
+          "md": "Suppose you run a support chatbot with a 6,000-token system prompt and serve 5,000 conversations per day. Without caching, you pay for 6,000 × 5,000 = **30 million input tokens/day** just for the system prompt. With caching and a high cache-hit rate, those 30M tokens cost 10× less. At Claude Sonnet 4.6 rates, the monthly saving is roughly **$2,430/month on that prompt alone**."
+        },
+        {
+          "type": "p",
+          "md": "Latency also drops. Skipping prefix computation reduces **time-to-first-token by up to 85%** for long prompts. For an agent that processes a 50-page document on every tool call, that is the difference between a 3-second wait and a sub-second response."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Document Q&A** — attach a large PDF once, cache it, answer many questions without re-uploading",
+            "**Multi-turn chat** — cache the system prompt + growing conversation history separately",
+            "**Agentic loops** — cache tool schemas and memory context that stay constant across many tool calls",
+            "**Batch processing** — pre-warm the cache before a burst of requests all using the same context",
+            "**Code assistants** — cache a large codebase or style guide shared across all users of a session"
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "A ProjectDiscovery engineering team reported cutting their LLM costs by **59%** simply by restructuring prompts so static content appeared at the front — before dynamic user input — enabling consistent cache hits."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Under the hood, every transformer layer in the model produces key-value tensors as it processes each token. Normally these tensors are ephemeral — created for one request, used to generate the response, then discarded. Prompt caching **serializes and stores** those KV tensors on the provider's inference servers. On the next matching request, the model picks up exactly where those tensors left off and processes only the new tokens at the end."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Prompt caching request lifecycle",
+            "steps": [
+              {
+                "label": "First request",
+                "sub": "Full prompt sent with cache_control marker"
+              },
+              {
+                "label": "Cache write",
+                "sub": "KV tensors for the marked prefix stored server-side (1.25× cost)"
+              },
+              {
+                "label": "Response generated",
+                "sub": "Dynamic suffix processed normally; answer returned"
+              },
+              {
+                "label": "Subsequent request",
+                "sub": "Same prefix detected — cached KV tensors loaded"
+              },
+              {
+                "label": "Cache read",
+                "sub": "Prefix computation skipped entirely (0.1× cost)"
+              },
+              {
+                "label": "Response generated",
+                "sub": "Only the new dynamic suffix is processed; answer returned faster"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Cache breakpoints (Anthropic)"
+        },
+        {
+          "type": "p",
+          "md": "Anthropic's API requires you to place explicit **cache breakpoints** using the `cache_control` parameter. A breakpoint is a marker on a content block telling the server: *cache all tokens from the beginning of this request up to and including this block*. You can place up to **4 breakpoints** per request, which is useful for separating a static system prompt, a shared document, a conversation history, and a final user turn — each with its own cache lifecycle."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "import anthropic\n\nclient = anthropic.Anthropic()\n\nresponse = client.messages.create(\n    model=\"claude-sonnet-4-6\",\n    max_tokens=1024,\n    system=[\n        {\n            \"type\": \"text\",\n            \"text\": \"You are a legal document analyst. [long system prompt...]\",\n            \"cache_control\": {\"type\": \"ephemeral\"}  # Breakpoint 1: cache system prompt\n        }\n    ],\n    messages=[\n        {\n            \"role\": \"user\",\n            \"content\": [\n                {\n                    \"type\": \"text\",\n                    \"text\": \"[Full text of 50-page contract...]\",\n                    \"cache_control\": {\"type\": \"ephemeral\"}  # Breakpoint 2: cache document\n                },\n                {\n                    \"type\": \"text\",\n                    \"text\": \"What are the termination clauses?\"  # Not cached — changes each turn\n                }\n            ]\n        }\n    ]\n)\n\nprint(response.usage.cache_creation_input_tokens)  # tokens written to cache\nprint(response.usage.cache_read_input_tokens)      # tokens read from cache\nprint(response.usage.input_tokens)                 # tokens processed normally"
+        },
+        {
+          "type": "h3",
+          "text": "Automatic caching (OpenAI)"
+        },
+        {
+          "type": "p",
+          "md": "OpenAI takes the opposite approach: **no configuration required**. Their infrastructure automatically detects when a request's prefix matches a cached entry and applies a 50% discount on those tokens. The cache requires a minimum prefix of **1,024 tokens** and expires after roughly 5–10 minutes of inactivity. The tradeoff is that you have less control — you can't force a cache write or inspect what was cached."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "OpenAI returns `cached_tokens` in the `usage.prompt_tokens_details` field of the response. If you see a non-zero value there, caching is working."
+        }
+      ]
+    },
+    {
+      "id": "cost-math-and-ttl",
+      "title": "Cost math and TTL choices",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Prompt caching is not free — the first request with a new cacheable prefix costs *more* than a regular request, because the provider has to store those KV tensors. The savings only materialise on subsequent hits. Understanding the math helps you decide whether caching is worth it for a given use case."
+        },
+        {
+          "type": "h3",
+          "text": "Anthropic price multipliers"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Cache write (5-min TTL):** 1.25× the standard input price — the one-time cost to populate the cache",
+            "**Cache write (1-hour TTL):** 2× the standard input price — higher upfront, but the cache survives longer gaps between requests",
+            "**Cache read:** 0.1× the standard input price — 10× cheaper than normal input tokens",
+            "**No-cache input:** 1× — standard rate for tokens after the last breakpoint"
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Break-even calculation"
+        },
+        {
+          "type": "p",
+          "md": "For a 5-minute TTL, the break-even point is just **2 requests**. The first request costs 1.25× (write). The second costs 0.1× (read). Combined: 1.35× for two requests — cheaper than paying 1× twice. Every additional hit beyond that is pure saving."
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "code": "Example: 4,000-token system prompt, Claude Sonnet 4.6 ($3.00/MTok)\n\nWithout caching (10 requests):\n  10 × 4,000 tokens × $3.00/M = $0.1200\n\nWith caching (1 write + 9 reads, 5-min TTL):\n  Write:  4,000 × $3.75/M   = $0.0150\n  Reads:  9 × 4,000 × $0.30/M = $0.0108\n  Total:  $0.0258\n\nSaving: 78% on that prefix across 10 requests"
+        },
+        {
+          "type": "h3",
+          "text": "Choosing between 5-minute and 1-hour TTL"
+        },
+        {
+          "type": "p",
+          "md": "The default **5-minute TTL** resets on every cache hit — so as long as users keep interacting, the cache stays alive. It is the right choice for interactive chat applications where turns arrive frequently."
+        },
+        {
+          "type": "p",
+          "md": "The **1-hour TTL** (specified by adding `\"ttl\": \"1h\"` to `cache_control`) costs 2× to write but keeps the cache warm through long gaps. Use it for batch jobs, document analysis sessions where the user reads slowly, or server-side cache pre-warming before a surge of traffic."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Cache entries must be ordered longest-TTL first. A 1-hour cache breakpoint must appear *before* any 5-minute breakpoints in your request. Reversing this order will cause a cache miss."
+        },
+        {
+          "type": "h3",
+          "text": "Minimum cacheable token counts"
+        },
+        {
+          "type": "p",
+          "md": "Caching only activates above a minimum prefix size. On Anthropic's API: **1,024 tokens** for most current Claude models (Claude Sonnet 4.6, Claude Opus 4.8), and **512 tokens** for Claude Fable 5. There is no point placing a `cache_control` marker on a 200-token system prompt — it won't cache regardless."
+        }
+      ]
+    },
+    {
+      "id": "when-to-use-it",
+      "title": "When to use it — and when not to",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "Structure prompts for cache hits"
+        },
+        {
+          "type": "p",
+          "md": "Caching only works when the prefix is **byte-for-byte identical** across requests. The single most important rule: put stable content at the **top** of your prompt and dynamic content at the **bottom**. If you insert a timestamp, user name, or request ID near the beginning, it breaks the cache for everything that follows."
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**System prompt / instructions** — almost never changes; cache first",
+            "**Shared context** (documents, tool schemas, knowledge base) — changes only when updated; cache second",
+            "**Conversation history** — grows each turn; cache at the end of the history with its own breakpoint",
+            "**Current user message** — unique each request; never cache this"
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Good use cases"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Long system prompts** (>1,024 tokens) reused across many requests or users",
+            "**Document Q&A** where the same document is queried multiple times in one session",
+            "**Agentic loops** that pass the same tool schemas and memory on every iteration",
+            "**Multi-turn conversations** — cache the conversation history up to the last assistant turn",
+            "**API pre-warming** — send a `max_tokens: 0` request at startup to populate the cache before real traffic arrives"
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "When caching won't help"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**One-off requests** with no repeated prefix — there is no second request to hit the cache",
+            "**Short prompts under the minimum** (< 1,024 tokens for most Claude models)",
+            "**Highly dynamic prompts** where every token changes per request (e.g., personalised marketing copy)",
+            "**Serverless functions with cold starts** spaced far apart — the 5-minute cache will have expired"
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Monitor `cache_read_input_tokens` in your API responses. If that number stays at zero after the first few requests, your prefix is changing between calls — check for hidden dynamic content like injected timestamps or session IDs near the top of your prompt."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Prompt caching is one layer in a broader cost-optimisation stack. Once you have caching in place, consider combining it with other techniques:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**[Semantic caching](/learn/production-llmops/cost-latency-optimization/semantic-caching-llm)** — cache full responses when two questions are semantically similar, not just token-identical. Complements prompt caching for FAQ-style applications.",
+            "**[Batch APIs](/learn/llm-apis/cost-caching-rate-limits/llm-api-pricing)** — Anthropic and OpenAI both offer asynchronous batch endpoints at 50% discount for non-latency-sensitive workloads. Stack with caching for maximum savings.",
+            "**[Context window management](/learn/llm-fundamentals/context-windows/what-is-a-context-window)** — trimming conversation history keeps prompts within the cache prefix boundary and avoids the lookback-window miss when history grows past 20 blocks.",
+            "**KV cache internals** — understanding how attention's key-value tensors work explains exactly why prefix caching is possible and why only the *prefix* (not arbitrary middle sections) can be cached."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Limitations to be aware of"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Cache is per-account and per-model** — a cache entry created with claude-sonnet-4-6 is not reused by claude-opus-4-8, and caches are not shared between different API keys",
+            "**No cache invalidation API** — you cannot force-expire an entry; you wait for the TTL",
+            "**Automatic caching not available on Bedrock / Vertex AI** — on those platforms you must use explicit `cache_control` markers",
+            "**Not a substitute for streaming** — caching reduces time-to-first-token but the model still generates output sequentially; combine with [streaming](/learn/llm-apis/streaming-structured-outputs/llm-streaming-explained) for perceived responsiveness",
+            "**Prefix must be exact** — even a single changed character in the cached portion causes a cache miss and a full re-write"
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "As of mid-2026, Anthropic supports a fourth breakpoint specifically for growing conversation histories: place `cache_control` after the last assistant message and the system will maintain a sliding cache that tracks the conversation rather than invalidating on every turn."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Does prompt caching change the model's response?",
+      "a": "No. The cached KV tensors are mathematically identical to what the model would compute fresh — the output is the same. Caching only affects cost and speed, not quality or content."
+    },
+    {
+      "q": "How do I know if my cache is actually being hit?",
+      "a": "Check the `usage` object in the API response. Anthropic returns `cache_read_input_tokens` (tokens served from cache) and `cache_creation_input_tokens` (tokens written to cache). If `cache_read_input_tokens` is greater than zero, you had a cache hit. OpenAI reports `cached_tokens` inside `usage.prompt_tokens_details`."
+    },
+    {
+      "q": "What happens when the TTL expires?",
+      "a": "The cached KV state is discarded. The next request processes the full prefix normally and pays the standard 1.25× write cost to repopulate the cache. The 5-minute TTL resets on every successful cache hit, so active sessions rarely see expiry."
+    },
+    {
+      "q": "Can I cache the middle of a prompt, not just the beginning?",
+      "a": "No — only prefixes can be cached. LLMs process tokens left-to-right; caching stores computation state at a fixed point. You can place multiple breakpoints to cache several contiguous sections from the start, but you cannot skip the beginning and cache only the middle."
+    },
+    {
+      "q": "Is prompt caching worth it for short prompts?",
+      "a": "Usually not. Anthropic requires a minimum of 1,024 tokens for most models before a cache write is accepted. For shorter prompts the write overhead is wasted and you get no savings. Focus caching efforts on system prompts, documents, or tool schemas that exceed that threshold."
+    },
+    {
+      "q": "Does OpenAI charge for cache writes?",
+      "a": "No — OpenAI's automatic caching has no cache-write surcharge. You simply pay 50% of the normal rate when a cache hit occurs, and the full normal rate when there is a miss. Anthropic charges 1.25× for a 5-minute write or 2× for a 1-hour write, offset by the 10× saving on reads."
+    }
+  ],
+  "related": [
+    "llm-api-pricing",
+    "what-is-a-context-window",
+    "semantic-caching-llm",
+    "llm-streaming-explained",
+    "what-is-llm-api"
+  ],
+  "furtherReading": [
+    {
+      "title": "Prompt Caching — Claude API Documentation",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching"
+    },
+    {
+      "title": "Prompt Caching Savings 2026: OpenAI vs Anthropic Cost Comparison",
+      "url": "https://aicostcheck.com/blog/ai-prompt-caching-cost-savings"
+    },
+    {
+      "title": "How We Cut LLM Costs by 59% With Prompt Caching",
+      "url": "https://projectdiscovery.io/blog/how-we-cut-llm-cost-with-prompt-caching"
+    }
+  ]
+}

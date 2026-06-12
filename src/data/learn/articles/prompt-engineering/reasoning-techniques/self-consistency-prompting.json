@@ -1,0 +1,297 @@
+{
+  "slug": "self-consistency-prompting",
+  "title": "What Is Self-Consistency? Sampling Multiple Answers and Voting",
+  "seoTitle": "Self-Consistency Prompting: Sample, Vote, Answer",
+  "metaDescription": "Self-consistency explained: why sampling several chain-of-thought answers and taking a majority vote beats a single response, and what it costs.",
+  "keywords": [
+    "what is self-consistency prompting",
+    "self-consistency chain of thought",
+    "majority voting llm answers",
+    "sampling multiple llm answers",
+    "self-consistency vs greedy decoding"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn how running the same prompt several times and voting on the answer trades tokens for accuracy — and how to decide if it is worth it.",
+  "updated": "2026-06-11",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Self-consistency is a prompting technique with an almost embarrassingly simple core: ask the model the same question several times, let it reason through the problem from scratch on each run, and go with whichever final answer shows up most often. No new model, no fine-tuning, no clever wording — just repetition and a majority vote."
+        },
+        {
+          "type": "p",
+          "md": "The everyday analogy is getting a second opinion — then a third, fourth, and fifth. One doctor can have an off day, fixate on the wrong symptom, or make a careless slip. Ask five doctors *independently*, and if four arrive at the same diagnosis, you trust the four. Self-consistency turns one model into that panel: sampling randomness makes every run take a slightly different reasoning route, so each completion behaves like an independent expert working the case alone."
+        },
+        {
+          "type": "p",
+          "md": "The insight behind why this works comes from the 2022 Google Research paper that introduced the technique (Wang et al.): a hard problem usually has many valid reasoning routes that all land on the same correct answer, while broken routes land all over the place. Correct chains agree with each other; wrong chains disagree. So when the same answer keeps surfacing across independent attempts, that convergence is real evidence — not proof, but evidence — that it's right."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Self-consistency sits directly on top of [chain-of-thought prompting](/learn/prompt-engineering/reasoning-techniques/chain-of-thought-prompting). If that term is new, start there — self-consistency is essentially *chain-of-thought, run N times, plus a vote at the end*."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A single chain of thought is brittle. The model writes its reasoning one token at a time, and one bad move — an arithmetic slip in step two, a misread unit, a wrong assumption — quietly poisons everything after it. The model doesn't go back and check. And the default way of generating one answer, *greedy decoding* (always pick the most likely next token), commits to exactly one path through the problem. Nothing guarantees that the single most probable path is the correct one."
+        },
+        {
+          "type": "p",
+          "md": "Self-consistency was the first widely adopted demonstration that you can trade inference-time compute for accuracy without touching the model. The original paper reported absolute accuracy gains of up to +17.9% on GSM8K, a benchmark of grade-school math word problems — the kind of jump you'd normally expect from switching to a much bigger model. Here you get it from the model you already have, by spending more output tokens."
+        },
+        {
+          "type": "p",
+          "md": "Who should care: anyone whose LLM output is a *checkable* answer — a number, a category label, a multiple-choice letter, a yes/no — and where being wrong costs more than tokens do. Extraction pipelines pulling totals from invoices, classifiers routing support tickets, eval harnesses grading other models. In all of these, the occasional silent error is the expensive part, and the vote does double duty: it reduces errors *and* tells you when the model is unsure. Ten out of ten chains agreeing is a very different situation from a 4–3–3 split."
+        },
+        {
+          "type": "p",
+          "md": "It also matters historically. Before self-consistency, the standard response to \"the model sometimes gets this wrong\" was rewrite the prompt or buy a bigger model. This paper added a third lever — sample more — and that lever grew into today's entire *test-time compute* movement. Reasoning models that \"think longer\" before answering are direct descendants of the same idea: spend more tokens at inference time, get better answers."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "There are three moving parts, and you already know the first from chain-of-thought prompting:"
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Prompt for reasoning with a parseable final answer.** Use a chain-of-thought prompt (few-shot examples or a plain \"think step by step\") and demand the answer in a fixed format, like `ANSWER: <number>` on the last line. Without a fixed format you can't count votes.",
+            "**Sample N completions with temperature above zero.** Temperature is what makes each chain take a different route; typical setups use 0.7–1.0 and anywhere from 5 to 40 samples. At temperature 0 you'd get nearly the same chain N times, and the vote would be theater.",
+            "**Extract each final answer, discard the reasoning, count votes.** The most common answer wins. The chains served their purpose — getting the model to a destination — and are thrown away."
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Self-consistency in one pass",
+            "steps": [
+              {
+                "label": "One prompt",
+                "sub": "CoT + fixed answer format"
+              },
+              {
+                "label": "Sample N chains",
+                "sub": "temperature ≈ 0.7, independent"
+              },
+              {
+                "label": "Extract answers",
+                "sub": "parse the last line"
+              },
+              {
+                "label": "Majority vote",
+                "sub": "most common answer wins",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The paper's formal phrase for the last step is *marginalizing out the reasoning paths*, which sounds fancy but means exactly this: you don't care which explanation was most eloquent. Reasoning is treated as a random route, the answer is the destination, and you count destinations."
+        },
+        {
+          "type": "p",
+          "md": "Two requirements hide in there. First, answers must be **comparable**, because a vote needs exact matches after normalization — `42`, `42.0`, and `$42` should all count as one candidate. Numbers, labels, and letters are perfect; free-form paragraphs are not (more on that in Going deeper). Second, the chains must be **independent**. Don't run them as turns of one conversation where the model can see its earlier attempts — it will anchor on them, and your five opinions collapse into one opinion with four echoes."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Make the answer format do the work. A strict last-line format like `ANSWER: <number>` turns extraction into a one-line regex and prevents the classic failure where the chain is correct but your parser grabs an intermediate number from the middle of the reasoning."
+        }
+      ]
+    },
+    {
+      "id": "show-me-the-code",
+      "title": "Show me the code",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The whole harness is about thirty lines, and none of them are provider-specific. The interesting parts are the answer normalization and the agreement rate."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "self_consistency.py",
+          "code": "import re\nfrom collections import Counter\nfrom concurrent.futures import ThreadPoolExecutor\n\n# Swap in any chat-completion client here -- the technique is\n# provider-agnostic. The function returns the model's full text.\ndef call_llm(prompt: str, temperature: float = 0.8) -> str:\n    ...\n\nPROMPT = \"\"\"A store sells pencils in packs of 12 for $3.\nMaria needs 150 pencils for her class. How much does she spend?\n\nThink step by step, then give your final answer on the last line\nin exactly this format: ANSWER: <number>\"\"\"\n\ndef extract_answer(text: str) -> str | None:\n    match = re.search(r\"ANSWER:\\s*\\$?(-?\\d+(?:\\.\\d+)?)\", text)\n    if not match:\n        return None\n    # Normalize so \"39\", \"39.0\" and \"$39\" count as the same vote.\n    return str(float(match.group(1)))\n\ndef self_consistency(prompt: str, n: int = 10) -> tuple[str, float]:\n    # The n calls are independent, so fire them in parallel.\n    with ThreadPoolExecutor(max_workers=n) as pool:\n        outputs = list(pool.map(lambda _: call_llm(prompt), range(n)))\n\n    answers = [a for a in (extract_answer(o) for o in outputs) if a]\n    votes = Counter(answers)\n    winner, count = votes.most_common(1)[0]\n    return winner, count / n  # the answer plus its agreement rate\n\nanswer, confidence = self_consistency(PROMPT)\nprint(answer, confidence)  # e.g. 39.0 0.9\n"
+        },
+        {
+          "type": "p",
+          "md": "Two production notes. The N calls are embarrassingly parallel — total latency is one call, not ten, if you fan out like the example does. And the returned `confidence` is the practical gem: route anything with agreement below, say, 0.6 to a human, a retry with more samples, or a stronger model. You get an uncertainty estimate without training anything."
+        }
+      ]
+    },
+    {
+      "id": "when-its-worth-it",
+      "title": "When it's worth the tokens",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Self-consistency's price is blunt: N samples means roughly N times the output tokens of a single answer. (Input tokens hurt less — the prompt prefix is identical across samples, which is exactly what provider-side prompt caching exists to exploit, and some APIs can return several completions for one request.) So the real question is where the accuracy is worth the multiplier."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "One shot vs the vote",
+            "columns": [
+              {
+                "title": "Single greedy answer",
+                "items": [
+                  "1x output tokens",
+                  "Fastest possible",
+                  "One slip ruins the answer",
+                  "No signal when it's unsure"
+                ]
+              },
+              {
+                "title": "Self-consistency (N = 10)",
+                "accent": true,
+                "items": [
+                  "~10x output tokens",
+                  "Same latency if parallel",
+                  "Random errors get outvoted",
+                  "Agreement rate = free confidence score"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Task",
+            "Fit",
+            "Why"
+          ],
+          "rows": [
+            [
+              "Math word problems",
+              "Excellent",
+              "Many valid routes, one number; wrong answers scatter"
+            ],
+            [
+              "Classification, multiple choice",
+              "Excellent",
+              "Tiny answer space, votes are trivially comparable"
+            ],
+            [
+              "Structured extraction (dates, totals)",
+              "Good",
+              "Works well once answers are normalized before counting"
+            ],
+            [
+              "Code generation",
+              "Poor as-is",
+              "Vote on test results, not code text — two correct programs rarely match"
+            ],
+            [
+              "Summaries, essays, open chat",
+              "Poor",
+              "No two outputs match exactly; needs the universal variant"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Returns diminish fast. Accuracy climbs steeply over the first handful of samples and then flattens; the original paper sampled up to 40 chains, but most of the lift typically arrives by 5–10. Start at 5, A/B test the change against your single-shot baseline on a real eval set, and only scale N up if the errors you're fixing justify the bill."
+        },
+        {
+          "type": "p",
+          "md": "Skip it entirely for latency-sensitive chat (users won't wait for a senate vote), for tasks your single call already aces (measure first), and for open-ended generation where there's nothing countable to vote on."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**Weighted vs unweighted voting.** The original paper also tried weighting each answer by the model's own probability for the chain that produced it. The surprise: plain unweighted majority vote performed about as well. That result is why everyone just counts — a chain's probability adds little information beyond the fact that it was sampled at all."
+        },
+        {
+          "type": "p",
+          "md": "**Universal self-consistency (USC).** Vanilla voting dies on free-form output, since no two summaries match character for character. USC (Chen et al., 2023) replaces the regex-and-count step with the model itself: paste all N candidate responses into one prompt and ask the model to select the most consistent one. That extends the idea to summarization and open-ended QA — at the cost of trusting the model as its own judge, and of one extra call whose context window must hold all N candidates."
+        },
+        {
+          "type": "p",
+          "md": "**Voting vs verifying.** Self-consistency is a vote without a judge. Its sibling, best-of-N with a verifier, generates the same N candidates but lets a separate signal pick the winner — a trained reward model, or better, ground truth. When a cheap, reliable verifier exists, use it instead of voting: for code, run the unit tests and keep what passes. Voting is what you reach for when no such verifier exists."
+        },
+        {
+          "type": "p",
+          "md": "**Correlated errors are the failure mode.** Majority voting only cancels *random* errors. If the model holds a systematic misconception — it consistently mishandles leap years, say — all ten chains will confidently agree on the same wrong answer, and your agreement-rate \"confidence\" becomes actively misleading. Consistency is not correctness. This is the same family of problems covered in when chain-of-thought backfires: more reasoning, even unanimous reasoning, is not a guarantee of truth."
+        },
+        {
+          "type": "p",
+          "md": "**Adaptive sampling.** You rarely need the full budget on every input. Adaptive-consistency schemes stop sampling early once the vote is effectively decided — say, as soon as one answer leads by three — cutting average cost sharply on easy inputs while spending the full N only on contested ones."
+        },
+        {
+          "type": "p",
+          "md": "**Self-consistency in the reasoning-model era.** Modern reasoning models internalize part of this trick: a long thinking trace with self-checks is *sequential* test-time compute, where self-consistency is the *parallel* kind. The two stack — majority voting over multiple reasoning-model runs is a standard baseline in test-time-compute research and still squeezes out gains on the hardest problems. Practical order of operations: try one call with a bigger thinking budget first, and reach for parallel sampling when single long-thinking calls plateau. Compare it also with tree-of-thought, which spends its extra compute on structured exploration with backtracking instead of independent reruns — better for puzzles where partial attempts must be evaluated and pruned, worse for simplicity and parallelism."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "How many samples do you need for self-consistency?",
+      "a": "Most of the accuracy gain arrives in the first 5–10 samples, and returns flatten after that — the original paper went up to 40, but the curve is steep early and flat late. Start with 5, measure against your single-call baseline, and use an odd number when the answer space is small (like yes/no) so ties stay rare."
+    },
+    {
+      "q": "Does self-consistency work with temperature 0?",
+      "a": "No. Temperature 0 makes the model pick its most likely token at every step, so all N runs produce nearly identical chains and the vote is meaningless. You need temperature roughly in the 0.5–1.0 range (or equivalent top-p sampling) so each chain takes a genuinely different reasoning route."
+    },
+    {
+      "q": "What's the difference between self-consistency and tree-of-thought?",
+      "a": "Self-consistency runs N completely independent chains and only compares their final answers. Tree-of-thought branches within a single structured search — generating partial steps, scoring them, and backtracking. Self-consistency is simpler and fully parallel; tree-of-thought suits puzzles where early decisions must be explored and pruned deliberately."
+    },
+    {
+      "q": "Can self-consistency be used for summaries or other free-form output?",
+      "a": "Not in its vanilla form — voting needs exact-match answers, and no two summaries match. The universal self-consistency variant handles this by showing all N candidates to the model and asking it to pick the most consistent one, which works for summarization and open-ended QA at the cost of an extra judging call."
+    },
+    {
+      "q": "Is self-consistency still worth it with reasoning models?",
+      "a": "Sometimes. Reasoning models already spend extra compute sequentially inside one long thinking trace, which captures much of the benefit. Majority voting over several reasoning-model runs still adds accuracy on the hardest problems, but given the cost of N long-thinking calls, try a larger thinking budget on a single call first."
+    },
+    {
+      "q": "Does self-consistency prevent hallucinations?",
+      "a": "Only the random kind. If the model slips differently on each run, the vote filters the slips out. If the model holds a systematic false belief, every chain repeats it and the vote confidently confirms a hallucination. High agreement means stable, not true."
+    }
+  ],
+  "related": [
+    "chain-of-thought-prompting",
+    "llm-temperature-explained",
+    "top-p-vs-top-k"
+  ],
+  "furtherReading": [
+    {
+      "title": "Self-Consistency Improves Chain of Thought Reasoning in Language Models (Wang et al., 2022)",
+      "url": "https://arxiv.org/abs/2203.11171"
+    },
+    {
+      "title": "Universal Self-Consistency for Large Language Model Generation (Chen et al., 2023)",
+      "url": "https://arxiv.org/abs/2311.17311"
+    },
+    {
+      "title": "Prompt Engineering Guide: Self-Consistency",
+      "url": "https://www.promptingguide.ai/techniques/consistency"
+    }
+  ]
+}

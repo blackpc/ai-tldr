@@ -1,0 +1,333 @@
+{
+  "slug": "llm-ab-testing",
+  "title": "How to A/B Test LLM Prompts and Models",
+  "seoTitle": "How to A/B Test LLM Prompts and Models",
+  "metaDescription": "A practical guide to A/B testing LLM prompts and models in production: traffic splitting, sample size, statistical significance, metrics, and tools.",
+  "keywords": [
+    "A/B testing LLM prompts",
+    "how to A/B test language models",
+    "LLM prompt experimentation",
+    "statistical significance LLM evaluation",
+    "canary deployment LLM",
+    "prompt A/B test sample size"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn how to run statistically valid A/B tests on LLM prompts and models in production — from traffic splitting and sample sizing to reading results with confidence.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You tweaked a prompt. The answers feel better. But *feel* is not a measurement — it's wishful thinking with good lighting. A/B testing is the technique that turns \"I think this is better\" into a number you can stake a production deployment on."
+        },
+        {
+          "type": "p",
+          "md": "The idea is borrowed directly from web experimentation. You keep your current prompt or model as the **control** (variant A), introduce your change as the **treatment** (variant B), and then split live traffic between them so both variants see real requests at the same time. After enough requests have accumulated, you compare the measured outcomes — accuracy, user satisfaction, task completion, latency — and let the numbers decide."
+        },
+        {
+          "type": "p",
+          "md": "The LLM twist is that the outputs are nondeterministic and the quality metrics are fuzzy. You can't just count button clicks. You have to define what \"better\" means before the test starts, instrument the system to measure it during the test, and use statistics to tell apart a real improvement from the random noise that is baked into every language model."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This article is about **live traffic experiments** — comparing variants on real users to measure real business outcomes. If you want offline evaluation strategies (assertions, evals, snapshots against a fixed dataset), see [How Do You Test LLM Apps?](/learn/production-llmops/testing-deployment/testing-llm-apps). A/B testing picks up where offline evals leave off: it answers questions offline evals cannot, like \"does this improvement in eval score actually translate to happier users?\""
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The most expensive lesson in LLM development is discovering that a prompt change that looked great in offline testing made things worse for real users. This happens more than you'd expect, because eval datasets cannot perfectly represent the full distribution of live traffic. A/B testing is the safety net that catches that gap."
+        },
+        {
+          "type": "p",
+          "md": "Without it, teams end up in one of two failure modes:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Ship everything, measure nothing.** You iterate fast but have no idea whether any change actually helped. The product drifts in quality with no feedback signal.",
+            "**Eval-gate everything.** You only ship when offline eval scores go up. But eval scores are not the same as user outcomes — a variant can score 5% higher on your benchmark and still be worse in production because the benchmark doesn't match your real traffic distribution."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "A/B testing threads the needle. It is slower than shipping blindly, but it gives you **ground truth from your actual users** rather than proxies. For high-stakes features — a support bot that handles refunds, a coding assistant that writes production code, a search box that thousands of people use daily — that ground truth is worth the wait."
+        },
+        {
+          "type": "p",
+          "md": "It also matters for **model swaps**, not just prompt tweaks. When a provider silently updates a model, or when you want to migrate from one provider to another, a canary A/B test lets you verify quality holds before you cut over 100% of traffic. The alternative is discovering the regression in your on-call alert at 2am."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "One subtle failure mode: **optimizing the wrong metric.** Higher resolution rates on a support bot can actually mean the bot gave up on hard questions rather than solving them. Always define metrics that track user outcomes (did the problem get solved?) not just model behavior (did the model give a long answer?)."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A well-run LLM A/B test moves through four stages: design, split, measure, and decide. Skipping any stage is how you end up with a test whose results you can't trust."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "The A/B testing pipeline",
+            "steps": [
+              { "label": "Design", "sub": "hypothesis + metrics + minimum detectable effect" },
+              { "label": "Split traffic", "sub": "canary or shadow deployment, stable user assignment" },
+              { "label": "Collect data", "sub": "run until target sample size is reached" },
+              { "label": "Analyze results", "sub": "t-test or bootstrap CI, check significance" },
+              { "label": "Decide & ship", "sub": "roll out winner or revert, log learnings" }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Stage 1: Design — write a falsifiable hypothesis"
+        },
+        {
+          "type": "p",
+          "md": "A weak hypothesis is \"let's try a more concise prompt.\" A strong one is: **\"If we shorten the system prompt from 800 to 400 tokens, then task-completion rate will increase by at least 5% and average latency will decrease by 200ms.\"** The strong version specifies the change, the metric, and the minimum improvement worth shipping. That last number is called the **minimum detectable effect (MDE)**, and it determines your sample size before you ever send a single request."
+        },
+        {
+          "type": "h3",
+          "text": "Stage 2: Split traffic safely"
+        },
+        {
+          "type": "p",
+          "md": "The standard pattern is a **canary deployment**: route a small slice of real traffic (typically 5–10%) to variant B while variant A serves the rest. Key rules:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Assign at the user level, not request level.** The same user must always see the same variant. Request-level splitting means a user can see A on one turn and B on the next — their experience is incoherent and you're measuring noise.",
+            "**Use a deterministic hash** of the user ID (or session ID for anonymous users) modulo 100 to assign variants. This is reproducible, requires no database, and keeps assignment stable across restarts.",
+            "**Never change assignments mid-experiment.** Once a user is in variant B, they stay there until the experiment ends. Changing the split mid-run invalidates all accumulated data.",
+            "**For B2B products, randomize at the account level** to prevent colleagues at the same company from seeing different behavior in the same workflow."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "**Shadow mode** is a low-risk alternative to canary for particularly sensitive deployments. In shadow mode, every request goes to both A and B, but users only see the response from A. B runs in the background and its output is logged and scored asynchronously. Shadow mode lets you measure quality without any user-facing risk — ideal for the first week of testing a major model swap."
+        },
+        {
+          "type": "h3",
+          "text": "Stage 3: Define and collect metrics"
+        },
+        {
+          "type": "p",
+          "md": "LLM experiments need metrics in three buckets, tracked simultaneously for each variant:"
+        },
+        {
+          "type": "table",
+          "headers": ["Bucket", "Examples", "How to collect"],
+          "rows": [
+            ["**Outcome metrics**", "Task completion rate, retention, feature re-use", "Product analytics (your source of truth)"],
+            ["**Behavioral signals**", "Acceptance rate, regeneration rate, early exits", "Instrumented in the UI — fast proxy, imperfect"],
+            ["**Quality scores**", "Relevance, faithfulness, coherence", "LLM-as-a-judge or human raters on a sample"],
+            ["**Operational metrics**", "Latency (p50, p95), cost per request", "Traced automatically via observability tooling"]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Outcome metrics are the ground truth but they're slow to accumulate. Behavioral signals and quality scores give you faster feedback, but treat them as leading indicators, not final verdicts. For example, users who click \"regenerate\" are signaling dissatisfaction — that signal responds to prompt changes within hours. Task completion may take days of data to move meaningfully."
+        },
+        {
+          "type": "h3",
+          "text": "Stage 4: Sample size and statistical significance"
+        },
+        {
+          "type": "p",
+          "md": "The most common mistake is stopping the experiment too early because the early numbers look promising. LLM outputs are high-variance — the same prompt can score 95% on Monday and 88% on Tuesday from random sampling variation alone. You need enough data to tell real signal from that noise. A rough guide based on the effect size you want to detect:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**50–100 samples** can reliably detect large effects (10%+ accuracy change)",
+            "**200–500 samples** can detect moderate effects (5–10% change)",
+            "**500–2,000+ samples** are needed for small effects (1–3% change)"
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Once your target sample size is reached, test for significance with a **two-sample t-test** (for continuous metrics like quality scores or latency) or a **chi-squared test** (for binary outcomes like task completion). The p-value tells you the probability of seeing a difference this large by chance alone. The industry standard threshold is **p < 0.05** — but for high-stakes decisions, tighten it to **p < 0.01**."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Model swaps can change the *variance* of your metrics in unpredictable ways, making pre-experiment power calculations unreliable. Always verify your sample size assumption empirically after the first few hundred data points have come in, and use **bootstrap confidence intervals** as a variance-robust alternative to the t-test when metric distributions look non-normal."
+        }
+      ]
+    },
+    {
+      "id": "running-an-experiment",
+      "title": "Running an experiment in code",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Here is a minimal but real implementation pattern — a Python function that deterministically routes a user to a variant and runs the appropriate prompt, then logs enough data to analyze later. This pattern works whether you wire it into a web framework, a background worker, or a CLI."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "import hashlib\nimport time\nimport json\nfrom anthropic import Anthropic\n\nclient = Anthropic()\n\n# --- Experiment config ---\nEXPERIMENT_ID = \"prompt-concise-v2\"\nTREATMENT_FRACTION = 0.10  # 10% of users see variant B\n\nPROMPT_A = \"You are a helpful customer support assistant. Answer the user's question clearly and thoroughly.\"\nPROMPT_B = \"You are a concise customer support assistant. Answer in 2-3 sentences maximum.\"\n\n\ndef assign_variant(user_id: str) -> str:\n    \"\"\"Deterministically assign a user to control (A) or treatment (B).\"\"\"\n    digest = hashlib.sha256(f\"{EXPERIMENT_ID}:{user_id}\".encode()).hexdigest()\n    bucket = int(digest[:8], 16) % 100  # 0-99\n    return \"B\" if bucket < (TREATMENT_FRACTION * 100) else \"A\"\n\n\ndef run_experiment_turn(user_id: str, user_message: str) -> dict:\n    \"\"\"Run one turn, log variant + outcome metrics.\"\"\"\n    variant = assign_variant(user_id)\n    system_prompt = PROMPT_B if variant == \"B\" else PROMPT_A\n\n    t0 = time.perf_counter()\n    response = client.messages.create(\n        model=\"claude-sonnet-4-5\",\n        max_tokens=512,\n        system=system_prompt,\n        messages=[{\"role\": \"user\", \"content\": user_message}],\n    )\n    latency_ms = (time.perf_counter() - t0) * 1000\n    output_text = response.content[0].text\n\n    # Log everything needed for later analysis\n    log_entry = {\n        \"experiment_id\": EXPERIMENT_ID,\n        \"user_id\": user_id,\n        \"variant\": variant,\n        \"input_tokens\": response.usage.input_tokens,\n        \"output_tokens\": response.usage.output_tokens,\n        \"latency_ms\": round(latency_ms, 1),\n        \"output\": output_text,\n        # Quality score to be filled in asynchronously by an LLM judge\n        \"quality_score\": None,\n    }\n    # In production: write to your observability platform or data warehouse\n    print(json.dumps(log_entry))\n    return log_entry"
+        },
+        {
+          "type": "p",
+          "md": "A few things worth noting in this pattern. The `sha256` hash is seeded with both the experiment ID and the user ID, so re-using the same user IDs across different experiments gives independent assignments — users in the 10% bucket for this experiment won't necessarily be in the 10% bucket for the next one. The `quality_score` field is left `null` to be filled in later by an asynchronous [LLM-as-a-judge](/learn/evaluation-safety/llm-as-judge/llm-as-a-judge-explained) job, keeping the critical request path fast."
+        },
+        {
+          "type": "h3",
+          "text": "Analyzing results"
+        },
+        {
+          "type": "p",
+          "md": "Once you have your sample, a basic significance check in Python takes ten lines:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "from scipy import stats\nimport numpy as np\n\n# Assume scores_a and scores_b are lists of quality scores (0-1) for each variant\nscores_a = [0.82, 0.91, 0.78, 0.85, 0.88]  # replace with real data\nscores_b = [0.89, 0.93, 0.90, 0.87, 0.95]\n\nt_stat, p_value = stats.ttest_ind(scores_a, scores_b)\nmean_a, mean_b = np.mean(scores_a), np.mean(scores_b)\nlift = (mean_b - mean_a) / mean_a * 100\n\nprint(f\"Control mean:   {mean_a:.3f}\")\nprint(f\"Treatment mean: {mean_b:.3f}\")\nprint(f\"Lift:           {lift:+.1f}%\")\nprint(f\"p-value:        {p_value:.4f}\")\nprint(f\"Significant:    {'yes' if p_value < 0.05 else 'no — collect more data'}\")"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Before doing any analysis, pre-register your primary metric and significance threshold. \"I will compare mean quality score and ship if p < 0.05\" written down *before* the data comes in prevents the common trap of flipping between metrics until one happens to be significant — a practice called **p-hacking** that produces false confidence."
+        }
+      ]
+    },
+    {
+      "id": "tools-for-prompt-experimentation",
+      "title": "Tools for prompt experimentation",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You can build what you need from scratch — the pattern above is genuinely all you need to start. But dedicated tools save significant instrumentation work and give you dashboards, dataset management, and significance tests out of the box. Here are the main options teams actually use:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Braintrust** — a full prompt management platform with native A/B testing. You define variants, run them against datasets, and compare quality scores side by side. Autoevals provides common scoring metrics (factuality, helpfulness, coherence) out of the box. CI/CD integration prevents prompt regressions from merging. Good for teams that want an opinionated end-to-end workflow.",
+            "**Traceloop / OpenLLMetry** — an open-source observability SDK that integrates with platforms like LangSmith, Langfuse, and Arize Phoenix. Captures full traces (prompt, response, latency, tokens) and can attach custom eval scores. Good for teams already invested in tracing who want to layer experiments on top.",
+            "**GrowthBook** — a general-purpose open-source A/B testing platform with explicit support for AI features. Handles user assignment, variant configuration, and statistical analysis. Good if your organization already runs web experiments and you want LLM experiments in the same system.",
+            "**promptfoo** — a config-driven CLI primarily for offline comparison (run prompt A vs. B vs. C against a dataset), but also supports CI gates. Lighter-weight than the above — good for fast iteration before you need live traffic experiments.",
+            "**Langfuse** — open-source LLM engineering platform with dataset management, prompt versioning, and eval scoring. You can run experiments offline against datasets and graduate promising variants to canary rollout tracked via its tracing SDK."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Most teams use a **two-tier approach**: offline tools (promptfoo, Braintrust playground, Langfuse experiments) to quickly filter candidates down to one or two strong variants, then a live canary experiment on real traffic to confirm the winner. The offline pass is cheap and fast; the live pass is slow but definitive. Don't skip either."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A basic canary experiment will answer most questions. The following patterns come up when experiments get more complex or higher-stakes."
+        },
+        {
+          "type": "h3",
+          "text": "Multi-variate tests and interaction effects"
+        },
+        {
+          "type": "p",
+          "md": "It's tempting to test several changes at once — a new model *and* a shorter prompt *and* a different temperature. Resist this. Multi-variate experiments are statistically valid, but they require far more traffic to isolate which variable drove the result. The standard advice: package your changes into complete configurations (e.g., \"model X + short prompt + temp 0.3\") and test the package against the baseline. If the package wins, run follow-up experiments to isolate the driver. You ship faster and learn more."
+        },
+        {
+          "type": "h3",
+          "text": "Bandit algorithms as an alternative"
+        },
+        {
+          "type": "p",
+          "md": "Classical A/B testing holds the traffic split fixed (e.g., 90/10) for the entire experiment duration. **Multi-armed bandit** algorithms dynamically shift traffic toward whichever variant is performing better as data accumulates. This is useful when you care about minimizing the total number of users exposed to the worse variant — a common concern in consumer products. The tradeoff is that bandits are harder to interpret statistically and can get stuck if early data is noisy. Use fixed splits when you need a clean significance result; use bandits when minimizing regret during the experiment matters more."
+        },
+        {
+          "type": "h3",
+          "text": "Guardrail metrics and one-way doors"
+        },
+        {
+          "type": "p",
+          "md": "Define **guardrail metrics** before the experiment: metrics that cannot get worse even if your primary metric improves. Common guardrails for LLM experiments are hallucination rate, toxicity score, PII leakage rate, and p95 latency. If a variant improves task completion but causes hallucination rate to spike, it does not ship — full stop. Guardrails turn a complex multi-metric decision into a clear two-step: does the primary metric improve? Do all guardrails hold? Both must be yes."
+        },
+        {
+          "type": "h3",
+          "text": "The offline-to-live transition problem"
+        },
+        {
+          "type": "p",
+          "md": "A prompt that wins in offline eval sometimes loses in live traffic. This is not a flaw in your eval — it is telling you something real: **your eval dataset does not represent your live distribution.** When this happens, mine the losing live traffic for new test cases, add them to your offline eval set, and re-run. Each iteration makes your offline eval a better proxy for reality. Teams that close this feedback loop eventually reach a state where offline evals are reliable enough to gate most changes, and live experiments are reserved for high-uncertainty decisions."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The full picture: A/B testing is one layer in a complete [LLMOps](/learn/production-llmops/llmops-fundamentals/what-is-llmops) stack. [Offline evals](/learn/production-llmops/testing-deployment/testing-llm-apps) catch regressions before deployment. Live A/B tests validate improvements on real users. [Observability](/learn/production-llmops/observability-monitoring/what-is-llm-observability) monitors quality continuously after the test ends. None of these replaces the others — they cover different parts of the deployment risk surface."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "How many samples do I need for an LLM A/B test?",
+      "a": "It depends on the effect size you want to detect. As a rough guide: 50–100 samples can detect large effects (10%+ changes), 200–500 for moderate effects (5–10%), and 500–2,000+ for small effects (1–3%). LLM outputs are high-variance, so err on the side of collecting more data than you think you need before reading results."
+    },
+    {
+      "q": "Should I A/B test at the user level or request level?",
+      "a": "User level. Assigning at the request level means the same user can see variant A on one turn and B on the next, making their experience incoherent and contaminating your data. Hash the user ID (or session ID for anonymous users) to assign a stable variant for the full duration of the experiment."
+    },
+    {
+      "q": "What is the difference between canary deployment and shadow testing for LLMs?",
+      "a": "In a canary deployment, a small percentage of real users (typically 5–10%) actually receive responses from the new variant — it has user-facing impact. In shadow mode, every request goes to both variants but users only see the response from the control; the treatment runs silently in the background. Shadow mode is lower risk and good for the first validation of a major change, but it cannot measure user behavior metrics like acceptance rate."
+    },
+    {
+      "q": "What metrics should I track in an LLM A/B test?",
+      "a": "Track three buckets simultaneously: outcome metrics (task completion, retention — your source of truth), behavioral signals (regeneration rate, early exits — fast proxies), and quality scores (relevance, faithfulness — from LLM-as-a-judge or human raters). Also track operational metrics (latency, cost) as guardrails. Thumbs-up/down ratings are heavily self-selected and make poor primary metrics."
+    },
+    {
+      "q": "How do I know if my A/B test result is statistically significant?",
+      "a": "Use a two-sample t-test for continuous metrics (quality scores, latency) or a chi-squared test for binary outcomes (task completion). The standard threshold is p < 0.05, meaning less than a 5% chance the result is random noise. For high-stakes decisions, use p < 0.01. Crucially, pre-register your metric and threshold before looking at results — flipping between metrics until one is significant (p-hacking) produces false confidence."
+    },
+    {
+      "q": "What tools are used for LLM prompt A/B testing?",
+      "a": "Common tools include Braintrust (end-to-end prompt management with native experiments), Langfuse (open-source, dataset + prompt versioning + tracing), GrowthBook (general A/B platform with AI support), promptfoo (config-driven CLI for offline comparison), and Traceloop/OpenLLMetry (observability SDK that layers on top of existing tracing setups). Many teams start with a simple hash-based traffic splitter and plain logging before adopting a dedicated platform."
+    }
+  ],
+  "related": [
+    "testing-llm-apps",
+    "what-are-llm-evals",
+    "llm-as-a-judge-explained",
+    "what-is-llm-observability",
+    "what-is-llmops"
+  ],
+  "furtherReading": [
+    {
+      "title": "The Definitive Guide to A/B Testing LLM Models in Production — Traceloop",
+      "url": "https://www.traceloop.com/blog/the-definitive-guide-to-a-b-testing-llm-models-in-production"
+    },
+    {
+      "title": "A/B testing for LLM prompts: A practical guide — Braintrust",
+      "url": "https://www.braintrust.dev/articles/ab-testing-llm-prompts"
+    },
+    {
+      "title": "How to A/B Test AI: A Practical Guide — GrowthBook",
+      "url": "https://www.growthbook.io/blog/how-to-a-b-test-ai-a-practical-guide"
+    }
+  ]
+}

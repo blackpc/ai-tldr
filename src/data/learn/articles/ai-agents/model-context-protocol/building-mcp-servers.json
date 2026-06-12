@@ -1,0 +1,392 @@
+{
+  "slug": "building-mcp-servers",
+  "title": "How to Build an MCP Server",
+  "seoTitle": "How to Build an MCP Server (TypeScript & Python)",
+  "metaDescription": "Step-by-step guide to building an MCP server: anatomy, tools and resources, TypeScript and Python SDKs, connecting to Claude, and local vs hosted deployment.",
+  "keywords": [
+    "how to build an mcp server",
+    "mcp server tutorial",
+    "model context protocol python sdk",
+    "mcp server typescript",
+    "mcp server local vs hosted",
+    "mcp tools resources prompts"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Walk through every layer of an MCP server — primitives, SDK setup, tool and resource definitions, transport choices, and how to wire it into Claude.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "An **MCP server** is a small process you write once that wraps any capability — a database, an API, the local file system — and hands it to any [MCP-compatible](/learn/ai-agents/model-context-protocol/what-is-mcp) AI host (Claude Desktop, Cursor, your own agent) through a standard protocol. Once the server is running, the host can discover your tools automatically, and the model can invoke them without you writing any host-specific glue."
+        },
+        {
+          "type": "p",
+          "md": "This article is about the **building** side. You will learn the three server primitives (tools, resources, prompts), how to define them with the official Python and TypeScript SDKs, how to choose a transport, and how to test locally before moving to a hosted deployment. If you are still fuzzy on what MCP *is*, read [What Is MCP?](/learn/ai-agents/model-context-protocol/what-is-mcp) first and come back — this article assumes you understand the protocol basics."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The official SDKs are `mcp` on PyPI (Python, requires 3.10+, SDK 1.2.0+) and `@modelcontextprotocol/sdk` on npm (TypeScript/Node, requires Node 16+). Both are open-source under the MCP GitHub org."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why building your own server matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Hundreds of community MCP servers already exist — for GitHub, Slack, Postgres, Google Drive, and more. But any internal system, proprietary API, or domain-specific tool you control needs a server *you* write. Once you write it, every MCP host your team uses gets access to that tool for free. You do not rewrite the integration for each new AI app."
+        },
+        {
+          "type": "p",
+          "md": "Building a server is also the fastest way to make an [AI agent](/learn/ai-agents/agent-fundamentals/what-is-an-ai-agent) truly useful in your own context. Agents are only as capable as the tools they can reach. A well-designed MCP server with clear descriptions and tight input schemas will let a model choose the right tool with much higher reliability than a vague, catch-all function."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Internal APIs** that third-party servers do not cover — HR systems, billing data, internal knowledge bases",
+            "**Local tools** like shell commands, file watchers, or dev-environment introspection that must run on the developer's machine",
+            "**Composite servers** that wrap several downstream services behind a single MCP facade to reduce context clutter",
+            "**Regulated or air-gapped environments** where data cannot leave your infrastructure and a hosted server is not an option"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "Anatomy of an MCP server",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every MCP server has the same four-layer structure regardless of language: an **SDK instance** that manages the lifecycle, one or more **primitives** (tools, resources, prompts) that you register, a **transport** that carries JSON-RPC messages to and from the host, and your **business logic** — the actual code that does the work."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "stack",
+            "title": "MCP server layers",
+            "layers": [
+              { "label": "Business logic", "sub": "your DB calls, API fetches, file I/O" },
+              { "label": "Primitives", "sub": "tools · resources · prompts" },
+              { "label": "SDK (FastMCP / McpServer)", "sub": "JSON-RPC, capability negotiation, schema gen" },
+              { "label": "Transport", "sub": "stdio (local) or Streamable HTTP (remote)" }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "The three primitives at a glance"
+        },
+        {
+          "type": "p",
+          "md": "MCP hosts discover what your server offers by calling `tools/list`, `resources/list`, and `prompts/list`. You register primitives once at startup; the SDK handles the list responses automatically."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Tools** — functions the model can call to take an action or fetch data. Each tool has a `name`, a human-readable `description`, and a JSON Schema `inputSchema`. Tools are the most-used primitive in practice.",
+            "**Resources** — read-only data the host can load as context. Think of a resource like a file: the host reads it, not the model directly. Good for things like a DB schema, a config file, or a dashboard snapshot the model needs to understand before acting.",
+            "**Prompts** — reusable prompt templates the server offers. The host can fill in parameters and inject the result into the conversation. Useful for standardizing how a team asks about a codebase or a dataset."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "How a tool call flows"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Tool call lifecycle",
+            "steps": [
+              { "label": "Host sends initialize", "sub": "capability negotiation" },
+              { "label": "Host calls tools/list", "sub": "server returns tool schemas" },
+              { "label": "Model picks a tool", "sub": "emits function-call request" },
+              { "label": "Host sends tools/call", "sub": "name + arguments JSON" },
+              { "label": "Server runs handler", "sub": "your business logic" },
+              { "label": "Server returns content", "sub": "text, image, or error" }
+            ]
+          }
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The description you write for a tool is **injected directly into the model's context**. Treat it like a mini-prompt: be concrete about what the tool does, what its inputs mean, and when the model should (or should not) use it. Vague descriptions cause the model to call the wrong tool or hallucinate arguments."
+        }
+      ]
+    },
+    {
+      "id": "writing-your-first-server",
+      "title": "Writing your first server",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Below are minimal working servers in both Python and TypeScript. Both expose one tool (`get_word_count`) that counts words in a string. This tiny example shows all the boilerplate you need — scale it up by adding more `@mcp.tool()` decorators or `server.registerTool()` calls."
+        },
+        {
+          "type": "h3",
+          "text": "Python (FastMCP)"
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "code": "# install the SDK (Python 3.10+)\nuv add \"mcp[cli]\"\n# or: pip install \"mcp[cli]\""
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "# server.py\nfrom mcp.server.fastmcp import FastMCP\n\n# 1. Create the server instance (name shown in host UI)\nmcp = FastMCP(\"text-utils\")\n\n# 2. Register a tool using the decorator\n@mcp.tool()\ndef get_word_count(text: str) -> int:\n    \"\"\"Count the number of words in a block of text.\n\n    Args:\n        text: The text to count words in.\n    \"\"\"\n    # Type hints → JSON Schema input schema (automatic)\n    # Docstring → tool description the model reads (automatic)\n    return len(text.split())\n\n# 3. Run over stdio so a local host can launch this as a subprocess\nif __name__ == \"__main__\":\n    mcp.run(transport=\"stdio\")"
+        },
+        {
+          "type": "p",
+          "md": "FastMCP reads your Python type hints to build the JSON Schema `inputSchema` automatically. The docstring becomes the tool description. You rarely write raw JSON Schema by hand when using FastMCP."
+        },
+        {
+          "type": "h3",
+          "text": "TypeScript (McpServer)"
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "code": "# install the SDK (Node 16+)\nnpm install @modelcontextprotocol/sdk zod@3\nnpm install -D typescript @types/node"
+        },
+        {
+          "type": "code",
+          "lang": "typescript",
+          "code": "// src/index.ts\nimport { McpServer } from \"@modelcontextprotocol/sdk/server/mcp.js\";\nimport { StdioServerTransport } from \"@modelcontextprotocol/sdk/server/stdio.js\";\nimport { z } from \"zod\";\n\n// 1. Create the server instance\nconst server = new McpServer({\n  name: \"text-utils\",\n  version: \"1.0.0\",\n});\n\n// 2. Register a tool — inputSchema uses Zod, which the SDK converts to JSON Schema\nserver.registerTool(\n  \"get_word_count\",\n  {\n    description: \"Count the number of words in a block of text.\",\n    inputSchema: {\n      text: z.string().describe(\"The text to count words in.\"),\n    },\n  },\n  async ({ text }) => ({\n    content: [{ type: \"text\", text: String(text.split(/\\s+/).length) }],\n  })\n);\n\n// 3. Connect stdio transport and start\nasync function main() {\n  const transport = new StdioServerTransport();\n  await server.connect(transport);\n  // server is now running; do NOT use console.log() — it corrupts stdio\n  console.error(\"text-utils MCP server running on stdio\");\n}\n\nmain();"
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "**Never call `console.log()` in a stdio MCP server.** Stdout is the JSON-RPC transport channel. Any stray bytes — even a debug `console.log` — corrupt the message framing and break the connection. Use `console.error()` (writes to stderr) for all logging."
+        },
+        {
+          "type": "h3",
+          "text": "Exposing a resource"
+        },
+        {
+          "type": "p",
+          "md": "Resources let a host load data as context without making a tool call. You register them with a URI scheme of your choosing. Here is a Python example that exposes a static config file:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "@mcp.resource(\"config://app/settings\")\ndef get_settings() -> str:\n    \"\"\"Current application settings (read-only).\"\"\"\n    return open(\"settings.json\").read()"
+        },
+        {
+          "type": "h3",
+          "text": "Exposing a prompt template"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "from mcp.server.fastmcp import FastMCP\nfrom mcp.types import PromptMessage, TextContent\n\n@mcp.prompt()\ndef summarize_code(language: str, code: str) -> list[PromptMessage]:\n    \"\"\"Summarize a code snippet in plain English.\n\n    Args:\n        language: Programming language of the snippet.\n        code: The source code to summarize.\n    \"\"\"\n    return [\n        PromptMessage(\n            role=\"user\",\n            content=TextContent(\n                type=\"text\",\n                text=f\"Summarize the following {language} code in one paragraph:\\n\\n{code}\",\n            ),\n        )\n    ]"
+        }
+      ]
+    },
+    {
+      "id": "transport-and-deployment",
+      "title": "Choosing a transport: local vs hosted",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The same server code can run over two transports. The choice determines who can connect and where the server lives."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "stdio vs Streamable HTTP",
+            "columns": [
+              {
+                "title": "stdio (local)",
+                "items": [
+                  "Host launches server as a subprocess",
+                  "Messages travel over stdin/stdout",
+                  "One client per process instance",
+                  "No network, no auth needed",
+                  "Best for: filesystem, git, local dev tools",
+                  "Config: command + args in host JSON"
+                ]
+              },
+              {
+                "title": "Streamable HTTP (hosted)",
+                "accent": true,
+                "items": [
+                  "Server is a normal HTTP service",
+                  "Uses HTTP POST + SSE for streaming",
+                  "Many clients, one server process",
+                  "Requires OAuth / bearer token auth",
+                  "Best for: SaaS APIs, team-shared tools",
+                  "Config: URL + auth token in host JSON"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Running locally over stdio"
+        },
+        {
+          "type": "p",
+          "md": "A stdio server is launched on demand by the host each time it starts. You register it with a JSON config that tells the host which command to run. For Claude Desktop, that config lives at `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS or `%APPDATA%\\Claude\\claude_desktop_config.json` on Windows:"
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "code": "{\n  \"mcpServers\": {\n    \"text-utils\": {\n      \"command\": \"uv\",\n      \"args\": [\n        \"--directory\", \"/absolute/path/to/project\",\n        \"run\", \"server.py\"\n      ]\n    }\n  }\n}"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Always use the **absolute path** to your project directory. Relative paths break when the host launches the subprocess from a different working directory. On Windows use double backslashes or forward slashes in the JSON string."
+        },
+        {
+          "type": "h3",
+          "text": "Running remotely over HTTP"
+        },
+        {
+          "type": "p",
+          "md": "For a hosted server, swap the transport in FastMCP from `stdio` to `streamable-http`. The SDK starts an HTTP server you can deploy to any cloud runtime:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "# Remote HTTP server (FastMCP)\nif __name__ == \"__main__\":\n    mcp.run(\n        transport=\"streamable-http\",\n        host=\"0.0.0.0\",\n        port=8000,\n        path=\"/mcp\",  # endpoint the host connects to\n    )"
+        },
+        {
+          "type": "p",
+          "md": "The host config for a remote server uses a URL instead of a command:"
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "code": "{\n  \"mcpServers\": {\n    \"text-utils-remote\": {\n      \"url\": \"https://your-server.example.com/mcp\",\n      \"headers\": {\n        \"Authorization\": \"Bearer <your-token>\"\n      }\n    }\n  }\n}"
+        },
+        {
+          "type": "h3",
+          "text": "Testing before you connect a host"
+        },
+        {
+          "type": "p",
+          "md": "Before wiring your server into Claude or another host, test it with the **MCP Inspector** — a browser-based tool that connects to your server, lists every primitive, and lets you call tools by hand:"
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "code": "# run from your project directory\nnpx @modelcontextprotocol/inspector uv run server.py\n\n# or for Node/TypeScript\nnpx @modelcontextprotocol/inspector node build/index.js"
+        },
+        {
+          "type": "p",
+          "md": "The Inspector opens a UI at `localhost:5173` (by default) where you can see the tools list, fill in arguments, and inspect the raw JSON-RPC messages. Fix broken schemas here rather than inside a full agent loop."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "Writing great tool descriptions"
+        },
+        {
+          "type": "p",
+          "md": "Tool quality is mostly description quality. A model chooses which tool to call based on names and descriptions alone — it cannot inspect your code. Write descriptions as if briefing a new team member: what does the tool do, what are the gotchas, when should the model prefer this tool over a similar one. If a tool has side effects (writes, deletes, sends emails) say so explicitly — models are more cautious about side-effecting tools when they know."
+        },
+        {
+          "type": "h3",
+          "text": "Returning rich content"
+        },
+        {
+          "type": "p",
+          "md": "A tool handler returns a `content` array. Each item has a `type` of `text`, `image`, or `resource`. The text type is most common; image lets you return base64-encoded image data for vision models; resource embeds a resource URI the host can dereference. Returning an `isError: true` flag alongside a text description is the correct way to report tool failures — do not throw unhandled exceptions."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "# Returning a structured error from a tool (Python)\n@mcp.tool()\ndef divide(a: float, b: float) -> dict:\n    \"\"\"Divide a by b.\"\"\"\n    if b == 0:\n        return {\"isError\": True, \"content\": [{\"type\": \"text\", \"text\": \"Cannot divide by zero\"}]}\n    return {\"content\": [{\"type\": \"text\", \"text\": str(a / b)}]}"
+        },
+        {
+          "type": "h3",
+          "text": "Dynamic tool registration"
+        },
+        {
+          "type": "p",
+          "md": "Both SDKs support adding or removing tools after the server has started. When you add a tool at runtime, notify the host by sending a `notifications/tools/list_changed` message — the SDK does this automatically when you register via the server object. This powers patterns like enabling premium tools only for authenticated users, or loading available tools from a database at startup."
+        },
+        {
+          "type": "h3",
+          "text": "Security checklist"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Validate all inputs** — JSON Schema catches missing fields and wrong types, but business-logic validation (e.g. path traversal, SQL injection) is your responsibility.",
+            "**Scope credentials tightly** — the server process should hold only the API keys it actually needs. Use environment variables, never hardcode.",
+            "**Watch what you return** — a tool result lands verbatim in the model's context. Avoid returning raw secrets, PII, or large blobs that inflate the [context window](/learn/llm-fundamentals/context-windows/what-is-a-context-window).",
+            "**Use auth on remote servers** — an open HTTP endpoint is a public RCE risk. Always require a bearer token or OAuth flow before accepting tool calls.",
+            "**Audit tool permissions** — destructive tools (delete, send, deploy) should require explicit confirmation via [elicitation](https://modelcontextprotocol.io/docs/learn/server-concepts#elicitation) or be disabled by default."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Once your server is solid, the next horizon is composing multiple servers in a [multi-agent system](/learn/ai-agents/multi-agent-computer-use/what-is-multi-agent-system) or pairing it with a framework like the [Claude Agent SDK](/learn/agent-frameworks/provider-agent-sdks/what-is-claude-agent-sdk) for more complex orchestration. The MCP server you build today works in that future context without any changes — the protocol is the durable part."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Do I need to know JSON Schema to build an MCP server?",
+      "a": "Not with the high-level SDKs. FastMCP (Python) reads your type hints and docstrings to generate the JSON Schema automatically. The TypeScript SDK accepts Zod schemas and converts them. You only write raw JSON Schema if you use the lower-level SDK primitives or need schema features the high-level wrappers do not expose."
+    },
+    {
+      "q": "Can I build an MCP server without TypeScript or Python?",
+      "a": "Yes. The official MCP GitHub org ships SDKs for TypeScript, Python, Java, Kotlin, C#, Go, PHP, Ruby, Rust, and Swift. Any language that can speak JSON-RPC over stdio or HTTP can implement the protocol even without an official SDK, but the SDKs save significant boilerplate."
+    },
+    {
+      "q": "How do I connect my MCP server to Claude Desktop?",
+      "a": "Open Claude Desktop's config file (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS, `%APPDATA%\\Claude\\claude_desktop_config.json` on Windows). Add an entry under `mcpServers` with the command and absolute path to launch your server, then restart Claude Desktop. The hammer icon in the chat UI confirms tools are detected."
+    },
+    {
+      "q": "What is the difference between a tool and a resource in MCP?",
+      "a": "A tool is a function the model can *call* — it takes arguments, runs code, and returns a result. A resource is read-only data the *host* loads as context, similar to attaching a file. Use tools when the model needs to take an action or fetch dynamic data; use resources for stable background information (schemas, configs, docs) that the host can inject into the conversation."
+    },
+    {
+      "q": "Should I use stdio or HTTP for my MCP server?",
+      "a": "Use **stdio** if the server runs on the same machine as the host (local dev tools, file system access, personal scripts) — it is simpler, faster, and needs no auth. Use **Streamable HTTP** when you need the server accessible over a network, shared across a team, or deployed as a cloud service. The protocol and your tool code are identical either way; only the transport line changes."
+    },
+    {
+      "q": "How do I debug an MCP server that is not connecting?",
+      "a": "Start with the MCP Inspector (`npx @modelcontextprotocol/inspector`), which isolates the server from the host entirely. If the Inspector can connect and list tools, the problem is in the host config (wrong path, wrong command, missing env vars). If the Inspector also fails, check that your server starts without errors, that a stdio server writes nothing to stdout before the SDK takes over, and that all required dependencies are installed in the environment the host launches."
+    }
+  ],
+  "related": [
+    "what-is-mcp",
+    "what-is-tool-use",
+    "what-is-function-calling",
+    "what-is-an-ai-agent",
+    "what-is-claude-agent-sdk"
+  ],
+  "furtherReading": [
+    {
+      "title": "Build an MCP Server — official quickstart (modelcontextprotocol.io)",
+      "url": "https://modelcontextprotocol.io/docs/develop/build-server"
+    },
+    {
+      "title": "MCP Server Tutorial: How to Build and Manage Servers (TechTarget)",
+      "url": "https://www.techtarget.com/searchenterpriseai/tutorial/MCP-server-tutorial-How-to-build-and-manage-servers"
+    },
+    {
+      "title": "How to Build an MCP Server in Python (Data Science Collective)",
+      "url": "https://medium.com/data-science-collective/build-your-first-mcp-server-in-15-minutes-complete-code-d63f85c0ce79"
+    }
+  ]
+}

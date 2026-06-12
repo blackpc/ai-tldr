@@ -1,0 +1,377 @@
+{
+  "slug": "llm-tracing-explained",
+  "title": "What Is LLM Tracing?",
+  "seoTitle": "LLM Tracing Explained: Spans, Traces & Langfuse",
+  "metaDescription": "LLM tracing demystified: how spans, parent-child trees, and tools like Langfuse, LangSmith, and OpenTelemetry give you a step-by-step record of every AI request.",
+  "keywords": [
+    "llm tracing explained",
+    "what is llm tracing",
+    "langfuse tracing spans",
+    "opentelemetry llm spans",
+    "distributed tracing ai agents",
+    "langsmith traces"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Understand how traces and spans turn a multi-step AI pipeline into a debuggable tree you can replay step by step.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When your app calls an LLM, a lot happens before the answer arrives: a user message is received, a system prompt is assembled, a vector database is queried, a few documents are ranked, the full context is built, the model is called, the reply is post-processed, and the result is returned. LLM tracing is the practice of recording *every one of those steps* as a structured event, then linking the events together so you can replay the entire pipeline for any single request."
+        },
+        {
+          "type": "p",
+          "md": "The unit of tracing is a **span** — a named, timed record of one discrete operation. Each span carries metadata: what it did, how long it took, what went in, what came out. Spans are connected by **parent-child relationships** that form a tree. The root of the tree is the user's request; leaves are individual operations like \"query vector DB\" or \"call GPT-4o\". The complete tree is the **trace**."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like a call stack, but persisted to a database you can query later. Where a call stack disappears when the function returns, a trace stays around so you can ask questions like: *Which step cost the most tokens? Where did latency spike on that slow request? What retrieval results did the model actually see?*"
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Tracing is one pillar of [LLM observability](/learn/production-llmops/observability-monitoring/what-is-llm-observability) — the broader practice of logging, tracing, and metrics for AI apps. The observability article covers what fields to record; this article explains how traces are *structured* and why the tree shape matters."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A log line tells you that something happened. A trace tells you *where inside a pipeline* it happened and *what the pipeline looked like around it*. For an app that makes four to ten model and tool calls per user request — a [RAG](/learn/rag/rag-fundamentals/what-is-rag) pipeline, an [agent](/learn/ai-agents/agent-fundamentals/what-is-an-ai-agent), a multi-step chain — that difference is the gap between debugging in minutes versus hours."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Root-cause chains.** A bad final answer can be caused by bad retrieval, a truncated context, a misconfigured system prompt, or a model error — all three steps back from the visible output. A trace shows you the exact branch where it went wrong.",
+            "**Latency attribution.** Your API responds in 4 seconds. Is that the vector search, the LLM round-trip, or the post-processing? Collapsed spans with durations answer that question instantly.",
+            "**Cost per step.** Token spend is invisible at the log level but explicit in a trace — each LLM span carries input and output token counts, so you can see which part of your pipeline burns the most money.",
+            "**Multi-service debugging.** A real AI app is often several services: a Go API, a Python RAG service, a separate tool-execution worker. A distributed trace follows the request across all of them under one trace ID, even across async boundaries.",
+            "**Regression comparison.** Tracing platforms let you select two traces for the same query — one from last week, one from today — and diff them side by side. This is how you catch silent model-behavior changes after a provider update."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Tracing pays back fastest when debugging agent loops. Without it, you only see the final response. With it, you can open any agent run and see exactly how many tool calls it made, what each tool returned, and where the reasoning went sideways."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every trace starts with a **root span** created when your app receives a user request. As execution flows through your code, child spans are opened and closed around each operation. When a child span ends it reports its duration and attributes to the tracing backend; the parent span's record shows the child nested inside it. The result is a tree that mirrors how your code actually ran."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "A RAG agent trace tree",
+            "root": { "label": "Root span", "sub": "user request — trace ID assigned" },
+            "children": [
+              { "label": "Embedding span", "sub": "query → vector, ~10ms" },
+              { "label": "Retrieval span", "sub": "vector DB search, top-5 docs" },
+              { "label": "Reranker span", "sub": "cross-encoder re-scores docs" },
+              { "label": "LLM span", "sub": "model call — tokens + latency" },
+              { "label": "Tool span", "sub": "optional: external API called" }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Span anatomy"
+        },
+        {
+          "type": "p",
+          "md": "Every span records a standard envelope of fields regardless of what kind of operation it represents."
+        },
+        {
+          "type": "table",
+          "headers": ["Field", "Example value", "Purpose"],
+          "rows": [
+            ["`trace_id`", "`a3f8...`", "Same for every span in one request — the glue"],
+            ["`span_id`", "`c9d1...`", "Unique ID for this span"],
+            ["`parent_span_id`", "`b2e0...` or null", "Null on the root span; links children to parents"],
+            ["`name`", "`\"retrieve_documents\"`", "Human-readable label shown in the UI"],
+            ["`start_time` / `end_time`", "ISO timestamps", "Duration and sequence"],
+            ["`status`", "`OK` / `ERROR`", "Did the operation succeed?"],
+            ["`attributes`", "model, tokens, prompt…", "Operation-specific metadata"]
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Span kinds"
+        },
+        {
+          "type": "p",
+          "md": "The **OpenInference** specification (published by Arize, Apache 2.0) defines a taxonomy of `openinference.span.kind` values that every major LLM tracing tool now uses. Each kind unlocks specialized attribute namespaces and AI-aware UI rendering."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**CHAIN** — an orchestration step that coordinates other spans; the root span is usually a CHAIN",
+            "**LLM** — a single model inference call; carries `llm.model_name`, `llm.input_messages`, `llm.output_messages`, and token counts",
+            "**RETRIEVER** — a document retrieval operation; carries the query and the ranked list of retrieved documents",
+            "**EMBEDDING** — embedding generation; carries input text and the resulting vector dimensions",
+            "**TOOL** — an external tool or function call made by the agent; carries tool name and the JSON arguments",
+            "**RERANKER** — a cross-encoder re-scoring step; carries the input list and the reranked output list",
+            "**AGENT** — an autonomous decision-making loop; its children are the individual CHAIN/TOOL/LLM iterations"
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Context propagation"
+        },
+        {
+          "type": "p",
+          "md": "For spans to form a tree, each child must know its parent's `span_id`. In a single process this is usually handled automatically via thread-local or async-context storage — the tracer injects the current span into context so any nested call can pick it up. For **distributed traces** (spans crossing HTTP or queue boundaries), the trace ID and parent span ID are forwarded as HTTP headers (the standard W3C `traceparent` header) or message metadata, letting the downstream service attach its spans to the same tree even though it runs in a separate process or language runtime."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Distributed trace across two services",
+            "steps": [
+              { "label": "API service (Go)", "sub": "root span, sets trace-id header" },
+              { "label": "HTTP request →", "sub": "W3C traceparent header propagates trace-id" },
+              { "label": "RAG service (Python)", "sub": "joins trace, opens child spans for retrieval + LLM" },
+              { "label": "Tool worker (Node)", "sub": "joins same trace, opens tool span" },
+              { "label": "Tracing backend", "sub": "assembles all spans into one tree" }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "instrumentation-in-practice",
+      "title": "Instrumentation in practice",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "There are three levels of instrumentation effort, and you usually move through them in order as your app grows."
+        },
+        {
+          "type": "h3",
+          "text": "Level 1 — Auto-instrumentation"
+        },
+        {
+          "type": "p",
+          "md": "The fastest path: add one import and your framework is traced. Langfuse, LangSmith, and Phoenix all ship auto-instrumentation packages for popular SDKs (OpenAI, Anthropic, LangChain, LlamaIndex). They monkey-patch the SDK client so every call emits spans automatically, with no changes to your business logic."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "# Langfuse auto-instrumentation for OpenAI\nimport os\nos.environ[\"LANGFUSE_PUBLIC_KEY\"] = \"pk-...\"\nos.environ[\"LANGFUSE_SECRET_KEY\"] = \"sk-...\"\n\nfrom langfuse.openai import openai   # drop-in replacement\n\nresponse = openai.chat.completions.create(\n    model=\"gpt-4o\",\n    messages=[{\"role\": \"user\", \"content\": \"Explain transformers\"}],\n)\n# A trace with an LLM span is sent to Langfuse automatically."
+        },
+        {
+          "type": "h3",
+          "text": "Level 2 — Decorator / context-manager API"
+        },
+        {
+          "type": "p",
+          "md": "Auto-instrumentation captures model calls but doesn't know about *your* pipeline steps. Decorate your functions with `@observe()` (Langfuse) or `@traceable` (LangSmith) to create custom CHAIN spans that wrap the auto-instrumented model spans inside them. The decorator handles span open/close and parent linking automatically."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "from langfuse.decorators import observe, langfuse_context\n\n@observe()              # creates a CHAIN span for the whole RAG pipeline\ndef answer_question(user_query: str) -> str:\n    docs = retrieve_docs(user_query)   # will nest inside this span\n    answer = call_llm(docs, user_query)\n    langfuse_context.update_current_observation(\n        metadata={\"retrieved_doc_count\": len(docs)}\n    )\n    return answer\n\n@observe(name=\"retrieve_documents\")   # CHAIN span named explicitly\ndef retrieve_docs(query: str) -> list[str]:\n    # ... vector DB call ...\n    return docs\n\n@observe(name=\"llm_call\")\ndef call_llm(docs: list[str], query: str) -> str:\n    # ... openai.chat.completions.create() ...\n    return response.choices[0].message.content"
+        },
+        {
+          "type": "h3",
+          "text": "Level 3 — Manual tracing"
+        },
+        {
+          "type": "p",
+          "md": "For dynamic pipelines where you don't know the structure at import time — agent loops that iterate until done, branching tool-use chains — you open and close spans manually. This gives you full control over names, attributes, and the parent-child links."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "from langfuse import Langfuse\n\nlf = Langfuse()\n\ntrace = lf.trace(name=\"agent_run\", user_id=\"u_123\")\n\nfor step_n, tool_name in enumerate(agent_steps):\n    span = trace.span(\n        name=f\"tool_call_{step_n}\",\n        input={\"tool\": tool_name, \"args\": tool_args},\n    )\n    result = execute_tool(tool_name, tool_args)\n    span.end(output={\"result\": result})\n\ntrace.update(output={\"final_answer\": final_answer})"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Start with Level 1 to get immediate visibility. Graduate to Level 2 once you want pipeline-level spans. Only reach for Level 3 when your pipeline structure is genuinely dynamic — agent loops, branching decision trees, runtime-determined tool chains."
+        }
+      ]
+    },
+    {
+      "id": "platform-comparison",
+      "title": "Langfuse, LangSmith, and OpenTelemetry compared",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Three names come up constantly when teams choose a tracing platform. They're not interchangeable — they sit at different layers of the stack."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Tracing platform comparison",
+            "columns": [
+              {
+                "title": "Langfuse",
+                "items": [
+                  "Open-source (MIT), self-hostable",
+                  "Built on OpenTelemetry",
+                  "Works with any framework or SDK",
+                  "Includes prompt management + evals",
+                  "28 000+ GitHub stars"
+                ]
+              },
+              {
+                "title": "LangSmith",
+                "items": [
+                  "Hosted (LangChain team)",
+                  "Uses 'Run Tree' model internally",
+                  "Deepest LangChain/LangGraph integration",
+                  "Includes dataset + eval tooling",
+                  "Requires LangChain account"
+                ]
+              },
+              {
+                "title": "OpenTelemetry",
+                "items": [
+                  "Vendor-neutral open standard",
+                  "Not a storage backend",
+                  "GenAI semantic conventions",
+                  "Emits to any OTLP-compatible backend",
+                  "Future-proof instrumentation layer"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "**OpenTelemetry (OTel)** is the lowest layer — an open standard for how spans are shaped and exported. It now ships *GenAI semantic conventions*: agreed attribute names for LLM spans (`gen_ai.system`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`, and so on). Writing OTel-compliant spans lets you point traces at any compatible backend — Langfuse, Jaeger, Datadog, Phoenix — without changing instrumentation code."
+        },
+        {
+          "type": "p",
+          "md": "**Langfuse** consumes OTel traces as one of its input protocols, meaning you can instrument with the standard OTel Python SDK and ship to Langfuse. This is the most portable setup: your instrumentation code has zero Langfuse imports; only the export endpoint is Langfuse-specific."
+        },
+        {
+          "type": "p",
+          "md": "**LangSmith** uses its own `RunTree` data model (each step is a *run*, not a span) with native parent-child linking through the `RunTree` API. It's the right choice if your app is built on LangChain or LangGraph and you want the deepest possible native integration. For non-LangChain apps the instrumentation effort is higher."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The **OpenInference** specification (Arize, Apache 2.0) extends OTel with LLM-specific span kinds and attribute namespaces. It is what gives platforms like Phoenix and Langfuse the vocabulary to render retrieval spans differently from LLM spans, show token counts inline, and aggregate by span kind."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once traces are flowing, the next layer is using them to answer harder questions — ones that require understanding the *structure* of spans, not just individual fields."
+        },
+        {
+          "type": "h3",
+          "text": "Tracing agentic loops"
+        },
+        {
+          "type": "p",
+          "md": "An [AI agent](/learn/ai-agents/agent-fundamentals/what-is-an-ai-agent) that calls tools in a loop can produce a trace tree many levels deep with a variable number of children — you don't know at request time how many iterations the agent will take. Platforms like Langfuse handle this by keeping the trace open until you explicitly close it, letting you append child spans as the loop iterates. In the UI, agent traces render as a timeline where each iteration's spans are grouped under the same root, and you can see token spend and latency per iteration."
+        },
+        {
+          "type": "h3",
+          "text": "Parallel spans"
+        },
+        {
+          "type": "p",
+          "md": "Multi-agent systems and [multi-agent frameworks](/learn/ai-agents/multi-agent-computer-use/what-is-multi-agent-system) often fan out to several sub-agents in parallel. Each parallel branch produces its own child spans under the same parent. A tracing platform renders them as horizontal bars on a Gantt-style timeline, making it immediately visible whether the parallel branches actually ran concurrently or were serialized by a bottleneck."
+        },
+        {
+          "type": "h3",
+          "text": "Sampling strategies"
+        },
+        {
+          "type": "p",
+          "md": "High-traffic apps cannot afford to store every trace. The right strategy is *head-based* sampling (decide at the root span whether to record) combined with *tail-based* sampling that keeps 100% of error traces and traces exceeding a latency threshold, and samples the rest. Never let a random sampler drop error and slow traces — those are the exact cases you need most."
+        },
+        {
+          "type": "h3",
+          "text": "Attaching scores to traces"
+        },
+        {
+          "type": "p",
+          "md": "A trace records what happened; a *score* records whether it was good. Platforms like Langfuse and LangSmith let you attach numeric or categorical scores to a trace after the fact — from a human reviewer, a heuristic checker, or an [LLM-as-a-judge](/learn/evaluation-safety/llm-as-judge/llm-as-a-judge-explained). Once scores are attached you can query \"show me all traces that scored below 0.5 on faithfulness\" and replay exactly what went wrong. This is the bridge between passive tracing and active quality control, and it feeds [LLM evals](/learn/evaluation-safety/evaluation-basics/what-are-llm-evals) pipelines."
+        },
+        {
+          "type": "h3",
+          "text": "Privacy and PII in traces"
+        },
+        {
+          "type": "p",
+          "md": "LLM spans contain prompts, and prompts often contain user data. Storing full prompts verbatim is a compliance risk. Options: mask PII before the span attribute is set (cheapest), use a server-side redaction filter in your OTel collector pipeline (adds latency), or hash user-identifying values while keeping the structure. Whatever you choose, make the decision *before* you flip on tracing — retrofitting redaction after data is already in the backend is much harder."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Adopt the OTel GenAI semantic conventions from day one, even if you start with a hosted platform. If you ever need to switch backends — or add a second backend for compliance — you change one environment variable, not your instrumentation code."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is the difference between a trace and a span in LLM tracing?",
+      "a": "A span is a single timed operation — one LLM call, one vector DB query, one tool execution. A trace is the full tree of spans for one user request, linked by a shared trace ID and parent-child relationships. Spans are the atoms; the trace is the molecule."
+    },
+    {
+      "q": "What is LLM tracing vs LLM observability?",
+      "a": "Tracing is the structured, hierarchical recording of every step in a pipeline as linked spans. Observability is the broader practice that includes traces, logs, and metrics. Tracing is the richest and most useful signal for debugging AI apps, but observability also covers aggregate metrics (requests per second, error rate) and simple log lines."
+    },
+    {
+      "q": "How does Langfuse tracing work?",
+      "a": "Langfuse accepts spans via its own SDK (with @observe() decorators or manual trace/span calls) and via OpenTelemetry's OTLP protocol. Spans are stored in a PostgreSQL-backed backend you can self-host or use as a cloud service. The UI renders trace trees, lets you compare traces side by side, and lets you attach evaluation scores to any trace."
+    },
+    {
+      "q": "How does LangSmith tracing differ from Langfuse?",
+      "a": "LangSmith uses a 'Run Tree' data model native to the LangChain Expression Language, where each step is a 'run' with parent-child links. It's the deepest option if your app is built on LangChain or LangGraph. Langfuse is framework-agnostic, open-source, and built on OpenTelemetry, making it easier to adopt in non-LangChain stacks and to self-host."
+    },
+    {
+      "q": "Can I trace LLM apps that span multiple services or languages?",
+      "a": "Yes — that's what distributed tracing is for. Propagate the W3C traceparent header (or equivalent) on every HTTP request and queue message that crosses a service boundary. The downstream service reads the header, joins the existing trace, and attaches its spans to the same tree. All major tracing SDKs handle this automatically through their context-propagation layer."
+    },
+    {
+      "q": "What should I trace in a RAG pipeline?",
+      "a": "At minimum: the embedding generation step (query vector + latency), the retrieval step (query, retrieved doc IDs and scores), any re-ranking step, and the final LLM call (full prompt with injected context, completion, token counts, latency). Tagging the retrieval span with which documents were actually used lets you later audit whether the model was given the right context."
+    }
+  ],
+  "related": [
+    "what-is-llm-observability",
+    "what-is-llmops",
+    "what-are-llm-evals",
+    "llm-as-a-judge-explained",
+    "what-is-rag"
+  ],
+  "furtherReading": [
+    {
+      "title": "Langfuse — LLM Observability & Application Tracing (open source)",
+      "url": "https://langfuse.com/docs/observability/overview"
+    },
+    {
+      "title": "OpenInference Specification — span kinds and attribute namespaces for LLM tracing",
+      "url": "https://arize-ai.github.io/openinference/spec/"
+    },
+    {
+      "title": "OpenTelemetry GenAI Semantic Conventions",
+      "url": "https://opentelemetry.io/docs/specs/semconv/gen-ai/"
+    }
+  ]
+}

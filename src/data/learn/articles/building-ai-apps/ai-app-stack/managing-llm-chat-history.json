@@ -1,0 +1,326 @@
+{
+  "slug": "managing-llm-chat-history",
+  "title": "How to Manage Chat History: Trimming, Summarizing, and Sliding Windows",
+  "seoTitle": "Managing Chat History: Trim, Summarize, Slide",
+  "metaDescription": "Chat history grows until it blows the context window. Compare trimming, summarization, and sliding-window strategies for multi-turn LLM conversations.",
+  "keywords": [
+    "how to manage chat history llm",
+    "conversation summarization llm",
+    "sliding window chat memory",
+    "trimming chat history context window",
+    "multi-turn conversation context management"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Compare the three standard strategies for keeping long conversations inside the context window, and learn which one fits your app.",
+  "updated": "2026-06-11",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Here's the secret every chat app is built on: **the model remembers nothing**. Each API call is a blank slate. When ChatGPT or Claude appears to \"remember\" that you mentioned your dog three messages ago, it's because the app silently re-sent the *entire conversation* — every message from both sides — along with your new one. The model reads the whole transcript from scratch, every single turn."
+        },
+        {
+          "type": "p",
+          "md": "Imagine talking to a brilliant consultant with total amnesia. Before every reply, an assistant hands them a printed transcript of the conversation so far. Early on this works great. But the transcript grows with every exchange, and the consultant can only read so many pages before your meeting time runs out. Eventually you have three choices: throw away the oldest pages (**trimming**), only ever carry the most recent few pages (**sliding window**), or have someone rewrite the old pages as a one-page recap and staple it to the recent pages (**summarization**)."
+        },
+        {
+          "type": "p",
+          "md": "That's chat history management in a nutshell. It's one of the core jobs of [context engineering](/learn/prompt-engineering/context-engineering/what-is-context-engineering): deciding which parts of a growing conversation actually make it into the prompt, and what gets cut or compressed. Every production chat product — customer support bots, coding assistants, AI companions — runs one of these three strategies, or a hybrid of them."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "An unmanaged conversation fails in three escalating ways, and each one bites a different part of your app:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Hard failure.** Context windows are finite. Once the transcript plus the model's reply exceeds the limit, the API either rejects the request or cuts the response short. Your chatbot doesn't degrade gracefully — it errors out, usually on your most engaged users, because they're the ones with the longest conversations.",
+            "**Cost creep.** You pay per input token, and the whole history is input on *every* turn. A conversation that's twice as long costs roughly twice as much *per message*, so total cost grows quadratically with conversation length. Turn 50 of a chat can cost ten times what turn 5 did, for the same one-line question.",
+            "**Quality decay.** Even when everything fits, stuffing the window hurts. Models get measurably worse at recalling and using details as context grows — the *context rot* problem covered in prompt length vs quality. A 100-turn transcript full of small talk actively buries the three facts that matter."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who should care: anyone shipping a multi-turn experience. A single-shot tool (\"summarize this email\") never hits this problem. A support bot, tutoring app, agent, or anything users talk to for more than a few minutes hits it fast. And there's no built-in fallback to inherit — a naive implementation just appends messages to a list until something breaks. History management is the difference between a demo and a product."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Long context windows (200K+, even 1M tokens) made this *less urgent*, not solved. Cost and context rot scale with what you send. Bigger windows moved the cliff; they didn't remove it."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every chat app runs the same loop. Your code keeps an array of messages — a system prompt followed by alternating user and assistant turns. Each new user message is appended, a *history policy* decides what subset of the array gets sent, the model replies, and the reply is appended too. The policy step is where all three strategies live:"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "The multi-turn chat loop",
+            "steps": [
+              {
+                "label": "User sends message",
+                "sub": "appended to history array"
+              },
+              {
+                "label": "Apply history policy",
+                "sub": "trim / window / summarize",
+                "accent": true
+              },
+              {
+                "label": "Send to model",
+                "sub": "system prompt + surviving messages"
+              },
+              {
+                "label": "Append reply",
+                "sub": "history grows by one turn"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Strategy 1: Trimming"
+        },
+        {
+          "type": "p",
+          "md": "Set a token budget (say, 50K tokens). Before each call, count the tokens in your message array; while it's over budget, drop the oldest user/assistant pair. The system prompt is always exempt — it carries your instructions and must survive every cut. Trimming is reactive: short conversations are sent untouched, and cutting only starts when you'd otherwise overflow. It's the cheapest strategy (zero extra LLM calls) and the most lossy — dropped messages are simply gone, and the model will confidently deny that the early conversation ever happened."
+        },
+        {
+          "type": "h3",
+          "text": "Strategy 2: Sliding window"
+        },
+        {
+          "type": "p",
+          "md": "Always send only the last *N* turns (or last *K* tokens), no matter how long the conversation gets. It's trimming with a fixed-size view instead of a triggered one. The win is predictability: every request has roughly the same size, cost, and latency, which makes capacity planning trivial. The loss is the same as trimming — anything that slides out of the window is forgotten — but it happens earlier and constantly, not just near the limit."
+        },
+        {
+          "type": "h3",
+          "text": "Strategy 3: Summarization"
+        },
+        {
+          "type": "p",
+          "md": "When the history gets long, make a separate LLM call: \"summarize this conversation, keeping names, decisions, constraints, and open questions.\" Replace the old messages with that summary (usually injected as a single message near the top), and keep the recent turns verbatim. Now the model still \"knows\" the user's name from turn 2, even at turn 80. The trade-offs: every compaction costs an extra LLM call and a latency spike, and summaries are lossy in a sneakier way — the summarizer decides what was important, and it will sometimes guess wrong."
+        },
+        {
+          "type": "p",
+          "md": "In practice, production systems converge on a **hybrid**: a running summary of everything old, plus the last 5–10 turns verbatim. Recent context stays crisp (exact wording matters for follow-ups like \"change that to blue\"), while the long tail is compressed instead of deleted. This is exactly the pattern frameworks like LangChain ship as built-in summarization memory, and what chat products do under labels like \"compacting conversation.\""
+        }
+      ]
+    },
+    {
+      "id": "choosing-a-strategy",
+      "title": "Choosing a strategy",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "There is no universally correct answer — the right policy depends on whether old details ever matter again in *your* app. A quick decision table:"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "",
+            "Trimming",
+            "Sliding window",
+            "Summarization"
+          ],
+          "rows": [
+            [
+              "Memory of old turns",
+              "None once dropped",
+              "None outside window",
+              "Gist preserved, details lossy"
+            ],
+            [
+              "Extra LLM calls",
+              "Zero",
+              "Zero",
+              "One per compaction"
+            ],
+            [
+              "Cost per turn",
+              "Capped at budget",
+              "Flat and predictable",
+              "Lowest at high turn counts"
+            ],
+            [
+              "Implementation effort",
+              "~20 lines",
+              "~5 lines",
+              "Prompt + edge cases"
+            ],
+            [
+              "Failure mode",
+              "\"What dog?\" amnesia",
+              "Same, but constant",
+              "Summary silently drops a constraint"
+            ],
+            [
+              "Best for",
+              "Tools, short tasks",
+              "High-volume, stateless-ish bots",
+              "Companions, support, agents"
+            ]
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "What the model actually sees at turn 60",
+            "columns": [
+              {
+                "title": "Trimming",
+                "items": [
+                  "System prompt",
+                  "Turns 41–60 verbatim",
+                  "Turns 1–40: gone"
+                ]
+              },
+              {
+                "title": "Sliding window",
+                "items": [
+                  "System prompt",
+                  "Last 10 turns verbatim",
+                  "Everything else: gone"
+                ]
+              },
+              {
+                "title": "Hybrid summary",
+                "accent": true,
+                "items": [
+                  "System prompt",
+                  "Summary of turns 1–52",
+                  "Turns 53–60 verbatim"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Rule of thumb: if a user would be annoyed that the bot forgot something from 30 minutes ago, you need summarization. If each exchange mostly stands alone — quick lookups, one-off Q&A — a window is fine and far simpler to debug."
+        }
+      ]
+    },
+    {
+      "id": "hands-on-example",
+      "title": "Hands-on: trim and summarize in Python",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Both strategies fit in a small file with no framework. The only provider-specific part is the actual model call, stubbed here as `call_llm` — plug in whichever SDK you use. Note the two non-obvious details: the system prompt is never dropped, and trimming always removes *whole user/assistant pairs* so the history never starts with an orphaned assistant reply."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "chat_history.py",
+          "code": "def estimate_tokens(text: str) -> int:\n    # Rough heuristic: ~4 characters per token for English text.\n    # Swap in your provider's tokenizer for exact counts.\n    return len(text) // 4\n\n\ndef message_tokens(msg: dict) -> int:\n    return estimate_tokens(msg[\"content\"]) + 4  # small per-message overhead\n\n\ndef trim_history(messages: list[dict], budget: int) -> list[dict]:\n    \"\"\"Drop oldest turns until the history fits the token budget.\n    messages[0] is the system prompt and is never dropped.\"\"\"\n    system, rest = messages[0], list(messages[1:])\n    total = message_tokens(system) + sum(message_tokens(m) for m in rest)\n    while rest and total > budget:\n        total -= message_tokens(rest.pop(0))\n        # Never leave an orphaned assistant reply at the front.\n        if rest and rest[0][\"role\"] == \"assistant\":\n            total -= message_tokens(rest.pop(0))\n    return [system] + rest\n\n\ndef summarize_history(messages: list[dict], call_llm,\n                      keep_recent: int = 6,\n                      budget: int = 8000) -> list[dict]:\n    \"\"\"Fold older turns into a recap; keep recent turns verbatim.\"\"\"\n    system, rest = messages[0], list(messages[1:])\n    if sum(message_tokens(m) for m in rest) <= budget:\n        return messages  # under budget: send as-is\n\n    old, recent = rest[:-keep_recent], rest[-keep_recent:]\n    transcript = \"\\n\".join(f\"{m['role']}: {m['content']}\" for m in old)\n    summary = call_llm(\n        \"Summarize this conversation so it can replace the transcript. \"\n        \"Keep names, decisions, hard constraints, and open questions. \"\n        \"Be terse.\\n\\n\" + transcript\n    )\n    recap = {\"role\": \"user\",\n             \"content\": \"[Summary of earlier conversation]\\n\" + summary}\n    return [system, recap] + recent"
+        },
+        {
+          "type": "p",
+          "md": "Wire either function in right before the API call in your chat loop, and keep the *full* history in your database regardless — the policy controls what the model sees per request, not what you store. That separation matters later: you can change strategies, re-summarize with a better prompt, or debug \"why did it forget X\" only if the raw transcript still exists."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "**Trimming away the system prompt.** A naive \"drop oldest message\" loop eventually deletes message zero, and your bot's persona, rules, and safety instructions vanish mid-conversation. Always pin it.",
+            "**Splitting a tool-call pair.** If your assistant uses tools, a tool call and its result are a matched set. Trim one without the other and most chat APIs reject the request outright. Treat call+result as one atomic unit when cutting.",
+            "**Summarizing away hard constraints.** \"User is allergic to penicillin\" or \"budget is $500, firm\" must survive every compaction. Tell the summarizer explicitly to preserve constraints — and consider keeping a separate, never-summarized list of pinned facts.",
+            "**Killing your prompt cache.** Providers cache the shared prefix of repeated requests and discount it heavily. Trimming one message off the *front* each turn changes the prefix every time, so nothing ever hits the cache. Counterintuitive result: aggressive trimming can *raise* your bill. Fix: trim in large chunks, rarely, so the prefix stays stable between compactions.",
+            "**Counting tokens by vibes.** A characters-divided-by-four estimate is fine far from the limit but will eventually overflow on code, URLs, or non-English text. Near the budget edge, use your provider's real tokenizer or token-counting endpoint.",
+            "**Letting injected content ride forever.** If documents pasted into the conversation stay in history, one 30K-token PDF dominates the window for the rest of the chat. Drop or summarize bulky attachments independently of the chat turns."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**Check what your provider does server-side before building.** This problem is common enough that it's moving into the API layer. Anthropic, for example, offers server-side *compaction* — the API summarizes earlier conversation automatically when you approach the limit — plus *context editing* options like clearing old tool results. Reasoning models add a wrinkle here too: their thinking traces are typically stripped from prior turns automatically, so they don't compound your history growth. A strategy you hand-roll today may be a flag you flip tomorrow; the concepts in this article are what those flags implement."
+        },
+        {
+          "type": "p",
+          "md": "**Hierarchical memory treats context like RAM.** The [MemGPT paper](https://arxiv.org/abs/2310.08560) framed the context window as an operating system's main memory, with the full conversation history paged out to external storage. The model itself decides — via tool calls — what to page in, what to write to its long-term store, and what to evict. This turns history management from a fixed policy in your code into a skill the model exercises, and it's the lineage behind agent memory systems like Letta."
+        },
+        {
+          "type": "p",
+          "md": "**Retrieval-based memory is the other escape hatch.** Instead of compressing old turns, embed them and store them in a vector database; on each new message, retrieve the handful of past exchanges most relevant to it and inject only those. Memory becomes RAG over your own transcript. It scales to months of conversation history and recalls verbatim detail that summaries lose — at the price of a retrieval pipeline, and a new failure mode: the relevant memory exists but doesn't get retrieved."
+        },
+        {
+          "type": "p",
+          "md": "**Summarization quality is an eval problem, not a prompt problem.** A compaction prompt that works in testing will eventually drop something that mattered. Production systems test for this directly: build a set of long conversations with known critical facts, run compaction, then ask questions that depend on those facts. Track the recall rate like any regression metric, and re-run it whenever you touch the summarizer prompt or change models. Structured summaries help — forcing the recap into fixed fields like *facts / decisions / open questions* makes omissions visible and diffable."
+        },
+        {
+          "type": "p",
+          "md": "**The open problem is salience.** Every strategy above must decide what's important *before* knowing what the user will ask next. A throwaway remark in turn 3 (\"oh, we're based in Germany\") can become load-bearing in turn 90 when the conversation turns to shipping or privacy law. Humans handle this with cheap, vast, associative memory; LLM systems approximate it with summaries, retrieval, and pinned-fact lists — each a different bet on what future-you will need. Getting that bet right is most of the craft."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "How do I keep an LLM conversation going past the context window limit?",
+      "a": "You can't send more than the window holds, so you send less: trim the oldest messages, keep only a sliding window of recent turns, or summarize older turns into a short recap and send that plus the recent messages. Most production apps use the hybrid — running summary plus the last 5–10 turns verbatim. The full transcript stays in your database; only the model's per-request view shrinks."
+    },
+    {
+      "q": "Should I trim chat history or summarize it?",
+      "a": "Trim (or use a sliding window) when old turns genuinely stop mattering — quick lookups, one-off Q&A, high-volume bots. Summarize when users expect the bot to remember things from earlier — support tickets, tutoring, companions, agents. Summarization costs an extra LLM call per compaction but preserves the gist; trimming is free but the dropped turns are simply gone."
+    },
+    {
+      "q": "Does trimming chat history break prompt caching?",
+      "a": "It can, badly. Prompt caches match on the shared prefix of consecutive requests. If you shave one message off the front of the history every turn, the prefix changes every time and you get zero cache hits — so a strategy meant to cut costs can increase them. The fix is to compact rarely and in big chunks: let the history grow untouched (cache-friendly), then cut a large slice at once when you near the budget."
+    },
+    {
+      "q": "How many recent messages should I keep verbatim when summarizing?",
+      "a": "Five to ten turns is the common starting range. The recent tail must be verbatim because follow-ups depend on exact wording — \"make it shorter\" or \"change that to blue\" are meaningless against a summary. Keep enough turns that pronouns resolve, but not so many that the summary never kicks in; tune by replaying real conversations."
+    },
+    {
+      "q": "Why does my chatbot forget the user's name halfway through a conversation?",
+      "a": "Almost always because the message where the name was mentioned got trimmed out of the window, or a summarization pass dropped it. Models don't gradually forget — a fact is either in the context or it isn't. Fixes: instruct your summarizer to always preserve names and constraints, or maintain a small pinned-facts block (name, preferences, hard constraints) that is injected every turn and never subject to trimming."
+    }
+  ],
+  "related": [
+    "what-is-context-engineering",
+    "what-is-system-prompt"
+  ],
+  "furtherReading": [
+    {
+      "title": "Anthropic docs: Context windows",
+      "url": "https://platform.claude.com/docs/en/docs/build-with-claude/context-windows"
+    },
+    {
+      "title": "LangChain docs: Short-term memory (trimming and summarizing messages)",
+      "url": "https://docs.langchain.com/oss/python/langchain/short-term-memory"
+    },
+    {
+      "title": "MemGPT: Towards LLMs as Operating Systems (arXiv)",
+      "url": "https://arxiv.org/abs/2310.08560"
+    }
+  ]
+}

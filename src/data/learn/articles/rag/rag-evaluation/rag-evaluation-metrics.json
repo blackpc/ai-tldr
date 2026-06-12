@@ -1,0 +1,377 @@
+{
+  "slug": "rag-evaluation-metrics",
+  "title": "RAG Evaluation Metrics Explained",
+  "seoTitle": "RAG Evaluation Metrics: RAGAS Faithfulness & Recall",
+  "metaDescription": "Deep dive into the four RAGAS metrics — faithfulness, answer relevance, context precision, and context recall — what each measures and exactly how it is computed.",
+  "keywords": [
+    "RAGAS metrics explained",
+    "faithfulness RAG evaluation",
+    "context precision context recall RAG",
+    "answer relevance RAG metric",
+    "RAGAS framework tutorial"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You will understand exactly what each of the four core RAGAS metrics measures, how the score is computed step by step, and which part of a broken RAG pipeline each metric points to.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**RAGAS** (Retrieval-Augmented Generation Assessment) is a framework that puts four numbers on a [RAG pipeline](/learn/rag/rag-fundamentals/what-is-rag): **faithfulness**, **answer relevance**, **context precision**, and **context recall**. Together they answer two questions: *Did the retriever find the right chunks?* (precision and recall) and *Did the generator use them correctly?* (faithfulness and answer relevance)."
+        },
+        {
+          "type": "p",
+          "md": "What makes RAGAS useful is that most of it is **reference-free** — you do not need a human to write the ideal answer for every test question. Faithfulness and answer relevance judge the output against the *retrieved context* and the *original question*, so you can run them on live production traffic. Only context recall needs a ground-truth reference answer to compare against."
+        },
+        {
+          "type": "p",
+          "md": "Each metric is a number from 0 to 1. Higher is always better. But the real value is in the *pattern*: high context recall with low faithfulness means the right chunks are there and the model is ignoring or distorting them. Low context recall with high faithfulness means the model is being careful with what it got — but it didn't get enough. The combination of all four tells a diagnostic story."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This article digs into the computation mechanics of each RAGAS metric. If you want the broader picture of RAG evaluation strategy — building a test set, tool landscape, dev-loop integration — read [How Do You Evaluate a RAG System?](/learn/rag/rag-evaluation/how-to-evaluate-rag) first."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The four metrics matter because they give you **decomposed accountability**. A RAG pipeline has at least two independent failure modes: the retriever pulling wrong chunks, and the generator hallucinating beyond what the chunks say. A single end-to-end score (\"answer correctness\") hides which one broke. RAGAS separates them."
+        },
+        {
+          "type": "p",
+          "md": "The second reason is **scalability**. Human review of 500 chatbot answers per day is impossible. RAGAS turns that into an automated pipeline — an LLM judge runs the faithfulness check in milliseconds, and the scores flow into a dashboard. The human reads summaries and drills into anomalies, rather than grading every response."
+        },
+        {
+          "type": "h3",
+          "text": "What each metric tells you to fix"
+        },
+        {
+          "type": "table",
+          "headers": ["If this score is low…", "The likely cause", "What to change"],
+          "rows": [
+            ["**Context precision**", "Retriever returns irrelevant chunks, diluting the good ones", "Tune embedding model, raise similarity threshold, add a reranker"],
+            ["**Context recall**", "Retriever misses chunks that contain the answer", "Increase `top_k`, change [chunking strategy](/learn/rag/chunking-and-ingestion/what-is-chunking-in-rag), improve query rewriting"],
+            ["**Faithfulness**", "Generator adds claims not grounded in the retrieved context", "Tighten the system prompt, use a more instruction-following model"],
+            ["**Answer relevance**", "Generator wanders or gives incomplete answers to the question", "Revise the prompt to focus on the specific question, trim context noise"]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Low faithfulness with high context recall is the most dangerous combination: the right information was in the context, the model had everything it needed, and it still hallucinated. That is a generation problem, not a retrieval problem, and it usually means the model is over-confident or the prompt is too permissive."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How each metric is computed",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Each RAGAS metric goes through a specific algorithmic pipeline, usually involving one or more LLM calls. Here is the data flow for a single evaluation sample:"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "RAGAS evaluation flow for one sample",
+            "steps": [
+              { "label": "Input", "sub": "question + context chunks + answer" },
+              { "label": "LLM judge calls", "sub": "decompose, verify, generate", "accent": true },
+              { "label": "Score computation", "sub": "ratios and cosine similarity" },
+              { "label": "Four scores", "sub": "faithfulness, relevance, precision, recall", "accent": true }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Faithfulness"
+        },
+        {
+          "type": "p",
+          "md": "**Faithfulness** measures what fraction of the claims in the generated answer are actually supported by the retrieved context. It catches the generator hallucinating details not present in the chunks."
+        },
+        {
+          "type": "p",
+          "md": "The computation has two LLM steps. First, an LLM decomposes the answer into **atomic statements** — short, self-contained claims. The sentence \"Paris has a population of 2.1 million and is home to the Eiffel Tower\" becomes two statements. Second, for each atomic statement, the LLM checks whether the statement can be inferred from the retrieved context. The final score is the ratio of supported statements to total statements:"
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "code": "Faithfulness = (number of supported statements) / (total statements in answer)\n\nExample:\n  Answer decomposed into 5 atomic statements\n  4 of 5 are supported by the retrieved context\n  Faithfulness = 4 / 5 = 0.80"
+        },
+        {
+          "type": "p",
+          "md": "A score of 1.0 means every claim in the answer traces to the context. A score of 0.6 means 40% of the answer is ungrounded — the model invented or extrapolated those facts. Because faithfulness only uses the retrieved context (not a gold answer), it runs **reference-free**: you can compute it on every production query."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Faithfulness is only as good as the statement decomposition step. If the LLM merges two claims into one statement and verifies the combined statement as true, it can miss a hallucinated sub-claim. Using a capable model for the judge (not the smallest/cheapest option) is important for accurate faithfulness scoring."
+        },
+        {
+          "type": "h3",
+          "text": "Answer relevance"
+        },
+        {
+          "type": "p",
+          "md": "**Answer relevance** measures whether the generated answer actually addresses the user's question — not whether it is factually correct, but whether it is *on topic* and complete. An answer that drifts into tangentially related information, or that only partially responds, gets a lower score."
+        },
+        {
+          "type": "p",
+          "md": "The computation uses a clever **reverse-generation trick**. An LLM generates *N* candidate questions (typically 3–5) that the given answer could plausibly have been written to answer. Each candidate question is embedded as a vector, and the mean cosine similarity between those candidate questions and the original question is the relevance score:"
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "code": "Answer Relevance = (1/N) * Σ cosine_similarity(embed(generated_q_i), embed(original_q))\n\nExample:\n  Original question: \"What are the side effects of ibuprofen?\"\n  Answer generated by RAG pipeline\n  LLM reverse-generates 3 questions from the answer:\n    Q1: \"What are the adverse effects of ibuprofen?\"           → sim = 0.97\n    Q2: \"How does ibuprofen affect the stomach?\"               → sim = 0.82\n    Q3: \"What medications have gastrointestinal side effects?\" → sim = 0.61\n  Answer Relevance = (0.97 + 0.82 + 0.61) / 3 = 0.80"
+        },
+        {
+          "type": "p",
+          "md": "The intuition: if the answer truly addresses the original question, an LLM should be able to reconstruct that original question from the answer. High cosine similarity between reconstructed questions and the real question means the answer is on-topic. If the answer wandered, the reconstructed questions will point in a different direction, lowering the score."
+        },
+        {
+          "type": "h3",
+          "text": "Context precision"
+        },
+        {
+          "type": "p",
+          "md": "**Context precision** measures the *signal-to-noise ratio* in the retrieved chunks. When you retrieve `top_k` chunks, some are relevant and some are distractors. Context precision asks: of everything the retriever returned, what fraction was actually useful?"
+        },
+        {
+          "type": "p",
+          "md": "The precision calculation is **rank-aware** — chunks returned earlier (rank 1, 2, 3…) are weighted more heavily than chunks returned at rank 10. This reflects reality: models and users pay more attention to what comes first in the context window. The formula is a mean of precision-at-k values, computed only at positions where a relevant chunk appears:"
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "code": "Context Precision@K = Σ (Precision@k * relevance_k) / (total relevant chunks)\n\nwhere Precision@k = (relevant chunks in top-k) / k\nand   relevance_k = 1 if chunk at rank k is relevant, else 0\n\nExample (top_k = 4, relevant chunks at ranks 1 and 3):\n  Precision@1 = 1/1 = 1.0  (relevant)\n  Precision@2 = 1/2 = 0.5  (irrelevant — doesn't count)\n  Precision@3 = 2/3 = 0.67 (relevant)\n  Precision@4 = 2/4 = 0.5  (irrelevant — doesn't count)\n  Context Precision = (1.0 + 0.67) / 2 = 0.83"
+        },
+        {
+          "type": "p",
+          "md": "A score of 1.0 means every retrieved chunk was relevant (or at least: relevant chunks came first). A low score means the model had to extract a useful answer from a pile of irrelevant material — which increases hallucination risk and can trigger the [lost-in-the-middle](/learn/llm-fundamentals/context-windows/lost-in-the-middle) problem."
+        },
+        {
+          "type": "h3",
+          "text": "Context recall"
+        },
+        {
+          "type": "p",
+          "md": "**Context recall** measures coverage: did the retriever surface *all* the information needed to answer the question? A precision of 1.0 with recall of 0.5 means every chunk you retrieved was relevant, but you only got half of what you needed — the answer is going to be incomplete."
+        },
+        {
+          "type": "p",
+          "md": "Context recall is the one metric that **requires a reference answer** (ground truth). The LLM decomposes the reference answer into atomic claims, then checks each claim against the retrieved context. The score is the fraction of reference claims that the context can support:"
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "code": "Context Recall = (claims in reference answer supported by retrieved context)\n                  / (total claims in reference answer)\n\nExample:\n  Reference answer decomposes into 4 claims:\n    Claim 1: \"The Eiffel Tower is in Paris\"         → found in context ✓\n    Claim 2: \"It was built in 1889\"                 → found in context ✓\n    Claim 3: \"It is 330 metres tall\"                → found in context ✓\n    Claim 4: \"It was originally a temporary structure\" → NOT in context ✗\n  Context Recall = 3 / 4 = 0.75"
+        },
+        {
+          "type": "p",
+          "md": "A recall of 0.75 here means the retriever missed the chunk about the Eiffel Tower's original purpose. The model either skips that fact (incomplete answer) or invents something (hallucination). Either way, the fix is in the retriever: look for better embedding coverage, a different chunking boundary, or a higher `top_k`."
+        }
+      ]
+    },
+    {
+      "id": "running-ragas-in-code",
+      "title": "Running RAGAS in code",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "RAGAS ships as a Python library. Each metric is a class. You assemble a `Dataset` of evaluation samples and call `evaluate()`. The library handles all the LLM judge calls internally."
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "code": "pip install ragas"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "from ragas import evaluate\nfrom ragas.metrics import (\n    faithfulness,\n    answer_relevancy,\n    context_precision,\n    context_recall,\n)\nfrom datasets import Dataset\n\n# Each sample needs: question, answer, contexts, ground_truth\n# ground_truth is only required for context_recall\ndata = {\n    \"question\": [\n        \"What year was the Eiffel Tower built?\",\n        \"How does HTTPS encryption work?\",\n    ],\n    \"answer\": [\n        \"The Eiffel Tower was built in 1889.\",\n        \"HTTPS uses TLS to encrypt the connection between browser and server.\",\n    ],\n    \"contexts\": [\n        [\"The Eiffel Tower, completed in 1889, stands in Paris.\"],\n        [\n            \"TLS (Transport Layer Security) encrypts data in transit.\",\n            \"HTTPS is HTTP over a TLS connection.\",\n        ],\n    ],\n    \"ground_truth\": [\n        \"The Eiffel Tower was constructed in 1889.\",\n        \"HTTPS uses TLS to encrypt traffic between client and server.\",\n    ],\n}\n\ndataset = Dataset.from_dict(data)\nresults = evaluate(\n    dataset,\n    metrics=[faithfulness, answer_relevancy, context_precision, context_recall],\n)\nprint(results)"
+        },
+        {
+          "type": "p",
+          "md": "RAGAS uses **OpenAI models by default** for the LLM judge calls. You can swap in any LiteLLM-compatible model including Claude or local models. The library exposes a `LangchainLLM` wrapper and an `llm` parameter on each metric class for this purpose."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "from ragas.llms import LangchainLLMWrapper\nfrom langchain_anthropic import ChatAnthropic\n\n# Use Claude as the RAGAS judge instead of OpenAI\njudge_llm = LangchainLLMWrapper(ChatAnthropic(model=\"claude-sonnet-4-5\"))\n\nfaithfulness.llm = judge_llm\nanswer_relevancy.llm = judge_llm\ncontext_recall.llm = judge_llm"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The choice of judge model matters. RAGAS scores are only as reliable as the LLM making the judgment calls. A larger, more capable model produces more consistent and accurate verdicts on faithfulness and recall — and is worth the extra cost when you are building a production eval pipeline, not just a one-off experiment."
+        },
+        {
+          "type": "p",
+          "md": "For **production monitoring**, you can drop `ground_truth` from the dataset and skip `context_recall` — the three reference-free metrics (faithfulness, answer relevance, context precision) still run. Log every query and its scores, and alert when your 7-day rolling faithfulness average drops below your threshold."
+        }
+      ]
+    },
+    {
+      "id": "interpreting-the-scores",
+      "title": "Interpreting scores together",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Individual metric values are less informative than patterns across all four. Here are the most common diagnostic patterns:"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Common RAGAS score patterns and what they mean",
+            "columns": [
+              {
+                "title": "Retrieval problem",
+                "items": [
+                  "Context recall: LOW",
+                  "Context precision: LOW",
+                  "Faithfulness: medium–high",
+                  "Answer relevance: low",
+                  "Fix: chunking, top_k, embeddings"
+                ]
+              },
+              {
+                "title": "Generation problem",
+                "items": [
+                  "Context recall: HIGH",
+                  "Context precision: HIGH",
+                  "Faithfulness: LOW",
+                  "Answer relevance: medium",
+                  "Fix: system prompt, model choice"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "A **healthy RAG pipeline** typically shows context recall above 0.80, context precision above 0.70, faithfulness above 0.85, and answer relevance above 0.80. These are rough baselines — the right targets depend heavily on domain and user tolerance for error. Medical or legal RAG demands much tighter thresholds than a general FAQ bot."
+        },
+        {
+          "type": "h3",
+          "text": "The precision–recall trade-off"
+        },
+        {
+          "type": "p",
+          "md": "Context precision and context recall naturally pull against each other. Increasing `top_k` from 4 to 10 almost always improves recall (more chances to grab the right chunk) but hurts precision (more irrelevant chunks mixed in). Adding a **reranker** is the primary tool for pushing both up at once — it re-orders the top_k results by relevance before they reach the generator, so the most useful chunks come first and irrelevant ones land at the end where they have less influence."
+        },
+        {
+          "type": "h3",
+          "text": "When faithfulness and answer relevance disagree"
+        },
+        {
+          "type": "p",
+          "md": "High faithfulness with low answer relevance usually means the model is being *too literal* — it found a relevant chunk and paraphrased it accurately, but the user's question had a different framing or scope. The fix is a prompt that asks the model to explicitly address the question structure, not just surface what the chunk says. Low faithfulness with high answer relevance is the red flag: the answer sounds perfect but contains invented claims. This is the classic hallucination pattern and the most important one to catch."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The four core metrics cover most RAG quality dimensions, but there are important edge cases and extensions worth knowing."
+        },
+        {
+          "type": "h3",
+          "text": "Limitations of LLM-judged metrics"
+        },
+        {
+          "type": "p",
+          "md": "Faithfulness and context recall both rely on an LLM to decompose answers/references into atomic claims and verify them. This introduces **judge variance**: the same answer can score slightly differently on two runs. RAGAS scores have statistical noise of roughly ±0.03–0.05 on small datasets. Treat a move from 0.81 to 0.83 as noise; treat 0.80 to 0.90 as a real improvement. Run enough samples (50+) before acting on a metric shift."
+        },
+        {
+          "type": "h3",
+          "text": "Faithfulness vs. factual correctness"
+        },
+        {
+          "type": "p",
+          "md": "Faithfulness is **not** the same as factual accuracy. An answer is faithful if it matches the retrieved context — even if the context itself is wrong. If your knowledge base contains an outdated document claiming the API rate limit is 100 requests/minute when it was raised to 500, a faithful answer will confidently state the wrong number. Faithfulness catches model hallucinations; it does not audit the quality of your document corpus. For factual correctness you also need a ground-truth reference and an [answer correctness](/learn/evaluation-safety/evaluation-basics/what-are-llm-evals) check."
+        },
+        {
+          "type": "h3",
+          "text": "Newer RAGAS metrics"
+        },
+        {
+          "type": "p",
+          "md": "The RAGAS library has expanded beyond the original four. **Noise sensitivity** measures how much the answer changes when irrelevant chunks are added or removed. **Response conciseness** penalises answers that pad with unnecessary context. **Topic adherence** is useful for multi-turn conversations. The [official RAGAS documentation](https://docs.ragas.io/en/stable/concepts/metrics/available_metrics/) lists all current metrics with detailed computation notes."
+        },
+        {
+          "type": "h3",
+          "text": "Integrating RAGAS into CI"
+        },
+        {
+          "type": "p",
+          "md": "The practical end-game is RAGAS running in your CI pipeline: every pull request that changes chunking logic, retrieval parameters, or generation prompts triggers an automated eval run. A score regression blocks the merge. A score improvement gets highlighted in the PR summary. This keeps [LLMOps](/learn/production-llmops/llmops-fundamentals/what-is-llmops) discipline close to the development loop rather than relegated to quarterly audits."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Start with a **golden set of 30–50 questions** drawn from real user queries. Run all four metrics. Identify the lowest scorer and fix only that component. Re-run. This targeted loop is faster than tuning everything simultaneously and avoids the trap of optimising one metric while silently regressing another."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What are the four RAGAS metrics?",
+      "a": "Faithfulness (fraction of answer claims supported by retrieved context), answer relevance (how well the answer addresses the question), context precision (proportion of retrieved chunks that are relevant, rank-weighted), and context recall (fraction of reference answer claims present in retrieved context)."
+    },
+    {
+      "q": "How is RAGAS faithfulness score calculated?",
+      "a": "An LLM decomposes the generated answer into atomic statements, then verifies each statement against the retrieved context. Faithfulness equals the number of supported statements divided by the total number of statements. A score of 1.0 means every claim in the answer is grounded in the retrieved chunks."
+    },
+    {
+      "q": "Does RAGAS require a reference answer?",
+      "a": "Only for context recall, which compares retrieved context against the claims in a ground-truth answer. The other three metrics — faithfulness, answer relevance, and context precision — are reference-free and can be run on live production traffic without any pre-labelled answers."
+    },
+    {
+      "q": "What is the difference between context precision and context recall in RAG?",
+      "a": "Context precision measures signal-to-noise: of the chunks you retrieved, how many were relevant? Context recall measures coverage: of the relevant information that exists, how much did you retrieve? You can have high precision with low recall (retrieved a small perfect set that misses key facts) or high recall with low precision (retrieved everything including a lot of junk)."
+    },
+    {
+      "q": "How does RAGAS answer relevance work without a reference answer?",
+      "a": "It uses a reverse-generation trick: an LLM generates N candidate questions that the answer could have been written to answer, then measures the average cosine similarity between those candidate questions and the original question. If the answer is on-topic, the reconstructed questions will closely match the original question."
+    },
+    {
+      "q": "What RAGAS scores should I target in production?",
+      "a": "Rough baselines: faithfulness above 0.85, answer relevance above 0.80, context recall above 0.80, context precision above 0.70. Exact targets depend on domain and risk tolerance — a medical or legal RAG system should demand tighter thresholds than a general FAQ bot. Track trends over time, not just absolute values."
+    }
+  ],
+  "related": [
+    "how-to-evaluate-rag",
+    "what-is-rag",
+    "what-is-a-retriever",
+    "what-are-llm-evals",
+    "llm-as-a-judge-explained"
+  ],
+  "furtherReading": [
+    {
+      "title": "RAGAS official docs — available metrics",
+      "url": "https://docs.ragas.io/en/stable/concepts/metrics/available_metrics/"
+    },
+    {
+      "title": "Ragas: Automated Evaluation of Retrieval Augmented Generation (arXiv paper)",
+      "url": "https://arxiv.org/abs/2309.15217"
+    },
+    {
+      "title": "Evaluating RAG Systems in 2025: RAGAS Deep Dive",
+      "url": "https://cohorte.co/blog/evaluating-rag-systems-in-2025-ragas-deep-dive-giskard-showdown-and-the-future-of-context"
+    }
+  ]
+}

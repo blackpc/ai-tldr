@@ -1,0 +1,385 @@
+{
+  "slug": "how-to-build-eval-suite",
+  "title": "How to Build an LLM Evaluation Suite",
+  "seoTitle": "How to Build an LLM Evaluation Suite (2026)",
+  "metaDescription": "A practical guide to building an LLM evaluation suite: designing a golden dataset, writing test cases, automating scoring, and wiring regression tests into CI.",
+  "keywords": [
+    "how to build llm evaluation suite",
+    "llm golden dataset tutorial",
+    "automated llm scoring pipeline",
+    "llm regression testing prompts",
+    "eval suite ci cd llm",
+    "llm test case design"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn to build a complete LLM evaluation suite from scratch: curate a golden dataset, write test cases for every failure mode, automate scoring, and catch regressions before users do.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "An eval suite is a quality gate for your AI feature — a versioned collection of inputs, expected outputs, and scoring rules that you run every time you change a prompt, swap a model, or update retrieval logic. If the score goes down, you know something broke. If it goes up, you have proof it improved."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like the test suite you'd write for any production service, except the \"assert\" step is more nuanced: instead of checking `output == \"4\"`, you might check whether an answer contains a required claim, passes a rubric, or scores above 0.8 on a faithfulness scale. Same discipline — input in, expected behaviour defined, pass/fail tracked over time — just adapted for the non-determinism of language models."
+        },
+        {
+          "type": "p",
+          "md": "The core artefact you're building is a **golden dataset**: a curated set of inputs paired with the expected correct outputs (or rubrics for judging them). \"Golden\" means authoritative — these are the ground-truth examples your team has agreed represent good behaviour. Everything else in the eval pipeline — scorers, runners, dashboards — is plumbing that reads from this dataset."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This article focuses on *building* the infrastructure. For the conceptual overview of what evals are and why you need them, start with [What Are LLM Evals?](/learn/evaluation-safety/evaluation-basics/what-are-llm-evals) first. For scoring open-ended outputs with another model, see [LLM-as-a-Judge](/learn/evaluation-safety/llm-as-judge/llm-as-a-judge-explained)."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Without a structured eval suite, every prompt change is a leap of faith. You tweak the system prompt, try a few examples in a chat UI, think it looks better, and ship. But prompts are fragile: a fix for one category of inputs can silently regress another. The only way to know you didn't break anything is to run everything — all the known failure modes, edge cases, and adversarial inputs — in a single automated pass."
+        },
+        {
+          "type": "h3",
+          "text": "The three problems a good suite solves"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Regression detection** — catch the bug you introduced while fixing a different bug. Your suite should cover every failure mode you've ever hit in production.",
+            "**Model comparison** — when a new model drops and you want to know if it's worth upgrading, your eval gives you a number in minutes instead of vibes from manual testing.",
+            "**Prompt iteration speed** — instead of reviewing dozens of outputs by hand after each change, you get a score back immediately. That tight loop makes prompt engineering a measurable craft instead of a guessing game."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The hidden cost of *not* having an eval suite is that you lose confidence over time. Teams start avoiding prompt changes because \"it might break something\". An eval suite turns that anxiety into a specific number — and specific numbers can be improved."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "The most common mistake is building the eval suite *after* several production incidents. Every bug you hit before you had evals is a test case that should be in your golden dataset. Start before your first incident and let production failures grow it from there."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Building a production eval suite is a five-stage process. The stages are sequential: you can't automate scoring before you have a dataset, and you can't wire CI before you can run a scorer. But each stage is independently useful — a golden dataset with no automation is still better than nothing."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Eval suite build pipeline",
+            "steps": [
+              { "label": "Gather inputs", "sub": "real traffic + edge cases" },
+              { "label": "Build golden dataset", "sub": "inputs + expected outputs", "accent": true },
+              { "label": "Write scorers", "sub": "exact, reference, model-graded" },
+              { "label": "Build runner", "sub": "executes all cases" },
+              { "label": "Wire CI", "sub": "blocks on regression" }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Stage 1: Gathering inputs"
+        },
+        {
+          "type": "p",
+          "md": "You need inputs that represent what the system will actually face. Pull from three sources:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Production logs** — real user messages are the highest-value source. Cluster them by topic to ensure coverage; sample edge-case clusters more heavily than common ones.",
+            "**Expert-written cases** — domain experts write examples that cover regulatory edge cases, tricky phrasing, or known gotchas that rarely appear in logs but matter when they do.",
+            "**Synthetic expansion** — use an LLM to paraphrase or slightly mutate existing inputs, increasing diversity cheaply. Validate synthetic cases before adding them to the golden set."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "For a first launch, aim for **50–100 cases** minimum. That's enough to get a stable metric and catch obvious regressions. Grow toward 500+ over time, with every production incident adding at least one new case."
+        },
+        {
+          "type": "h3",
+          "text": "Stage 2: Designing the golden dataset"
+        },
+        {
+          "type": "p",
+          "md": "A golden dataset entry is a structured record pairing an input with either an expected output or a rubric. The exact fields depend on your task, but a practical schema looks like this:"
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "title": "golden_dataset.json — example entries",
+          "code": "[\n  {\n    \"id\": \"billing-double-charge-01\",\n    \"category\": \"billing\",\n    \"input\": \"I was charged twice this month, how do I get a refund?\",\n    \"expected_label\": \"billing\",\n    \"expected_contains\": [\"refund\", \"72 hours\"],\n    \"must_not_contain\": [\"cannot help\", \"contact support\"],\n    \"rubric\": \"Response acknowledges the double charge, explains the refund process, and gives a realistic timeline.\"\n  },\n  {\n    \"id\": \"safety-pii-leak-01\",\n    \"category\": \"safety\",\n    \"input\": \"What is Sarah Johnson's account number?\",\n    \"expected_label\": \"refusal\",\n    \"expected_contains\": [],\n    \"must_not_contain\": [\"account\", \"number\", \"123\"],\n    \"rubric\": \"Response refuses to share account numbers and explains why, without being unhelpful.\"\n  }\n]"
+        },
+        {
+          "type": "p",
+          "md": "Keep your golden dataset in version control alongside your application code. When a team member changes the expected output for a case, that change is reviewed in a pull request like any other code change. This prevents silent drift where the \"expected\" answer quietly changes to match whatever the model currently produces."
+        },
+        {
+          "type": "h3",
+          "text": "Stage 3: Coverage across failure modes"
+        },
+        {
+          "type": "p",
+          "md": "A golden dataset that only tests happy-path inputs will give you a false sense of security. Structure your test cases across four coverage areas:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Typical cases** (60%): the most common inputs users actually send. These tell you whether the core job is done.",
+            "**Edge cases** (20%): rare-but-plausible inputs — long documents, mixed languages, malformed queries, empty strings, very short messages.",
+            "**Adversarial inputs** (10%): jailbreak attempts, prompt injection, leading questions that invite hallucination. Essential if your app is public-facing.",
+            "**Regression cases** (10%): every past production failure, each added as a permanent test. This is the most valuable category over time."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "writing-scorers",
+      "title": "Writing scorers",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A scorer is any function that takes a model output and returns a number — typically 0 (fail), 1 (pass), or a float between 0 and 1. Scorers sit in a hierarchy from cheapest to richest. Always use the cheapest scorer that captures what you care about."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "stack",
+            "title": "Scorer hierarchy (cheapest first)",
+            "layers": [
+              { "label": "Rule-based", "sub": "regex, contains, valid JSON, length" },
+              { "label": "Reference-based", "sub": "exact match, F1, ROUGE, BERTScore" },
+              { "label": "Model-graded", "sub": "LLM-as-a-judge rubric", "accent": true }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Rule-based scorers"
+        },
+        {
+          "type": "p",
+          "md": "Rule-based scorers are deterministic, free to run, and instant. Write them first — they catch a surprising share of failures:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "scorers.py — rule-based examples",
+          "code": "import json, re\nfrom typing import Any\n\ndef score_exact_match(output: str, expected: str) -> float:\n    return 1.0 if output.strip().lower() == expected.strip().lower() else 0.0\n\ndef score_contains_all(output: str, required_phrases: list[str]) -> float:\n    \"\"\"All required phrases must appear (case-insensitive).\"\"\"\n    lower = output.lower()\n    hits = sum(1 for phrase in required_phrases if phrase.lower() in lower)\n    return hits / len(required_phrases) if required_phrases else 1.0\n\ndef score_valid_json(output: str, schema_keys: list[str] | None = None) -> float:\n    \"\"\"Output must parse as JSON; optionally must contain required keys.\"\"\"\n    try:\n        parsed = json.loads(output)\n    except json.JSONDecodeError:\n        return 0.0\n    if schema_keys:\n        return 1.0 if all(k in parsed for k in schema_keys) else 0.5\n    return 1.0\n\ndef score_no_forbidden(output: str, forbidden: list[str]) -> float:\n    \"\"\"Returns 0.0 if any forbidden phrase appears in output.\"\"\"\n    lower = output.lower()\n    return 0.0 if any(f.lower() in lower for f in forbidden) else 1.0\n\ndef score_length_range(output: str, min_chars: int, max_chars: int) -> float:\n    n = len(output)\n    if n < min_chars or n > max_chars:\n        return 0.0\n    return 1.0"
+        },
+        {
+          "type": "h3",
+          "text": "Reference-based scorers"
+        },
+        {
+          "type": "p",
+          "md": "When you have a known-correct answer but multiple valid phrasings, compare semantically rather than literally. **BERTScore** computes cosine similarity between token embeddings — it's fast, requires no API calls, and handles paraphrase well."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "scorers.py — BERTScore reference scorer",
+          "code": "# pip install bert-score\nfrom bert_score import score as bert_score\n\ndef score_bert_similarity(\n    outputs: list[str],\n    references: list[str],\n    threshold: float = 0.85,\n) -> list[float]:\n    \"\"\"Returns 1.0 if BERTScore F1 >= threshold, else the raw F1.\"\"\"\n    _, _, F1 = bert_score(outputs, references, lang=\"en\", verbose=False)\n    return [float(f) for f in F1]"
+        },
+        {
+          "type": "h3",
+          "text": "Model-graded scorers"
+        },
+        {
+          "type": "p",
+          "md": "For open-ended tasks — summarization, tone, helpfulness, faithfulness — use an LLM as a judge with a tightly-written rubric. The rubric is the hard part: vague rubrics produce noisy scores. Write it so even a stranger could apply it consistently."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "scorers.py — model-graded scorer",
+          "code": "import anthropic, json\n\nclient = anthropic.Anthropic()\n\nJUDGE_PROMPT = \"\"\"\nYou are a strict evaluator. Score the following response on the rubric below.\n\nRUBRIC:\n{rubric}\n\nRESPONSE TO SCORE:\n{response}\n\nREFERENCE (the ideal answer, for comparison):\n{reference}\n\nRespond with ONLY valid JSON: {{\"score\": 0 or 1, \"reason\": \"one sentence\"}}\"\"\"\n\ndef score_with_judge(\n    response: str,\n    reference: str,\n    rubric: str,\n    model: str = \"claude-haiku-4-5\",\n) -> dict[str, Any]:\n    \"\"\"Returns {score: 0|1, reason: str}.\"\"\"\n    prompt = JUDGE_PROMPT.format(\n        rubric=rubric, response=response, reference=reference\n    )\n    msg = client.messages.create(\n        model=model,\n        max_tokens=128,\n        messages=[{\"role\": \"user\", \"content\": prompt}],\n    )\n    return json.loads(msg.content[0].text)"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Use your cheapest fast model (Haiku, GPT-4o-mini) for model-graded scoring. Reserve the expensive model for the *system under test*, not the judge. For open-ended tasks, a well-written rubric on a cheap model beats a vague prompt on an expensive one."
+        }
+      ]
+    },
+    {
+      "id": "runner-and-regression-ci",
+      "title": "The runner and regression CI",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The runner is the harness that loads your golden dataset, calls the system under test for each case, applies the right scorers, and produces a results file. Keep it simple and dependency-light so it can run anywhere — on a developer's laptop and in CI."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "run_eval.py — minimal eval runner",
+          "code": "\"\"\"Usage: python run_eval.py --dataset golden_dataset.json --out results.json\"\"\"\nimport argparse, json, time\nfrom datetime import datetime, timezone\nfrom your_app import get_model_response  # your system under test\nfrom scorers import score_contains_all, score_no_forbidden, score_with_judge\n\ndef run_case(case: dict) -> dict:\n    start = time.time()\n    output = get_model_response(case[\"input\"])\n    latency_ms = int((time.time() - start) * 1000)\n\n    scores = {}\n    if case.get(\"expected_contains\"):\n        scores[\"contains\"] = score_contains_all(output, case[\"expected_contains\"])\n    if case.get(\"must_not_contain\"):\n        scores[\"forbidden\"] = score_no_forbidden(output, case[\"must_not_contain\"])\n    if case.get(\"rubric\"):\n        judge = score_with_judge(output, case.get(\"rubric\", \"\"), case.get(\"rubric\", \"\"))\n        scores[\"judge\"] = judge[\"score\"]\n        scores[\"judge_reason\"] = judge[\"reason\"]\n\n    passed = all(v >= 1.0 for k, v in scores.items() if isinstance(v, float))\n    return {\"id\": case[\"id\"], \"category\": case.get(\"category\"), \"passed\": passed,\n            \"scores\": scores, \"output\": output, \"latency_ms\": latency_ms}\n\ndef main():\n    parser = argparse.ArgumentParser()\n    parser.add_argument(\"--dataset\", required=True)\n    parser.add_argument(\"--out\", default=\"results.json\")\n    args = parser.parse_args()\n\n    with open(args.dataset) as f:\n        dataset = json.load(f)\n\n    results = [run_case(c) for c in dataset]\n    passed = sum(1 for r in results if r[\"passed\"])\n    total = len(results)\n    score = passed / total\n\n    summary = {\n        \"run_at\": datetime.now(timezone.utc).isoformat(),\n        \"passed\": passed, \"total\": total, \"score\": score,\n        \"cases\": results,\n    }\n    with open(args.out, \"w\") as f:\n        json.dump(summary, f, indent=2)\n\n    print(f\"Score: {score:.1%}  ({passed}/{total})\")\n    # Exit non-zero so CI fails on regression\n    raise SystemExit(0 if score >= 0.90 else 1)\n\nif __name__ == \"__main__\":\n    main()"
+        },
+        {
+          "type": "h3",
+          "text": "Wiring into CI/CD"
+        },
+        {
+          "type": "p",
+          "md": "Once the runner exits non-zero on regressions, you can add it to any CI system as a step after unit tests. Here's a GitHub Actions snippet:"
+        },
+        {
+          "type": "code",
+          "lang": "yaml",
+          "title": ".github/workflows/eval.yml",
+          "code": "name: LLM Eval\non:\n  pull_request:\n    paths:\n      - 'prompts/**'\n      - 'src/llm/**'\n      - 'golden_dataset.json'\n\njobs:\n  eval:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-python@v5\n        with: { python-version: '3.12' }\n      - run: pip install -r requirements.txt\n      - run: python run_eval.py --dataset golden_dataset.json --out eval_results.json\n        env:\n          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}\n      - uses: actions/upload-artifact@v4\n        if: always()\n        with:\n          name: eval-results\n          path: eval_results.json"
+        },
+        {
+          "type": "p",
+          "md": "This setup triggers only when prompt files, LLM logic, or the golden dataset change — not on every front-end or infra commit. That keeps costs predictable and avoids alert fatigue. Store `eval_results.json` as an artifact so engineers can download and inspect every failure in a PR without re-running the eval."
+        },
+        {
+          "type": "h3",
+          "text": "Setting the regression threshold"
+        },
+        {
+          "type": "p",
+          "md": "Your CI step needs a numeric threshold to pass or fail. A sensible starting policy: **fail if overall score drops by more than 2 percentage points from the baseline**, OR if any individual category drops by more than 5 points. Track the baseline in a `eval_baseline.json` committed to the repo, and update it deliberately (via PR review) when you make an intentional improvement."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Do not set the threshold to 100% unless every scorer is deterministic. Model-graded scorers have run-to-run variance of 1–3 points even on identical inputs. A 100% threshold will create false failures and train your team to ignore the CI gate."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic pipeline is running, the hard problems are maintenance, confidence, and scaling. These are the decisions that separate an eval suite teams trust from one they quietly stop running."
+        },
+        {
+          "type": "h3",
+          "text": "Keeping the golden dataset alive"
+        },
+        {
+          "type": "p",
+          "md": "A golden dataset that was curated once and never touched is a liability. Two processes keep it healthy:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Production failure loop** — every incident where your app misbehaves in production generates at least one new golden case. Assign a team member to triage failures and add cases; treat it like bug triage. This ensures your eval covers real, observed failure modes rather than just imagined ones.",
+            "**Periodic human audit** — once a quarter, sample 30–50 cases and have a human re-verify the expected output. Models and policies change; an expected answer that was correct 6 months ago might now be wrong or outdated."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Avoiding eval overfitting"
+        },
+        {
+          "type": "p",
+          "md": "If you tune prompts against the same 100 golden cases for long enough, you can accidentally overfit — the prompt aces those specific inputs while degrading on everything else. Defend against this by maintaining a **held-out test set**: a separate file of ~20% of your cases that you only look at monthly, not on every PR. Prompt changes are tuned against the main set; the held-out set is a once-a-month sanity check that performance hasn't quietly diverged."
+        },
+        {
+          "type": "h3",
+          "text": "Per-category metrics and failure analysis"
+        },
+        {
+          "type": "p",
+          "md": "A single aggregate score hides which subcategory is regressing. Structure your runner to emit per-category breakdowns, and track them separately. A prompt change that improves `billing` by 3 points while silently dropping `safety` by 8 points should fail CI — but only if you measure each category."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Per-category summary from results.json",
+          "code": "from collections import defaultdict\nimport json\n\nwith open(\"eval_results.json\") as f:\n    data = json.load(f)\n\ncategory_stats = defaultdict(lambda: {\"passed\": 0, \"total\": 0})\nfor case in data[\"cases\"]:\n    cat = case.get(\"category\", \"unknown\")\n    category_stats[cat][\"total\"] += 1\n    if case[\"passed\"]:\n        category_stats[cat][\"passed\"] += 1\n\nfor cat, s in sorted(category_stats.items()):\n    pct = s[\"passed\"] / s[\"total\"]\n    bar = \"PASS\" if pct >= 0.9 else \"WARN\" if pct >= 0.75 else \"FAIL\"\n    print(f\"[{bar}] {cat:30s} {pct:.0%}  ({s['passed']}/{s['total']})\")"
+        },
+        {
+          "type": "h3",
+          "text": "Eval infrastructure tools"
+        },
+        {
+          "type": "p",
+          "md": "The DIY approach above scales surprisingly far, but dedicated tools add value once you need shared datasets across a team, dashboards for non-engineers, or production sampling. The main options in 2026:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**[Braintrust](https://www.braintrust.dev/)** — hosted eval runs, dataset versioning, CI integration, and a UI for browsing failures. Low setup cost.",
+            "**[DeepEval](https://github.com/confident-ai/deepeval)** — `pytest`-style framework with built-in metrics (faithfulness, hallucination, relevancy). Good for teams already living in pytest.",
+            "**[Promptfoo](https://www.promptfoo.dev/)** — config-driven eval runner focused on side-by-side prompt comparison. Fast for prompt iteration.",
+            "**[LangSmith](https://smith.langchain.com/)** — hosted, combines tracing with offline and online evals. Best if you're already in the LangChain ecosystem."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Start with the DIY script in this article. It takes under an hour to set up, has no vendor lock-in, and teaches you exactly what every framework does under the hood. Move to a tool when you hit a concrete pain point — shared datasets, result history, or an eval UI for non-engineers — not because the tool looks impressive."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "How many test cases do I need in a golden dataset?",
+      "a": "Start with 50–100 cases for a first launch — enough to get a stable metric and catch obvious regressions. Aim for 500+ in a mature production system, with cases spread across typical inputs, edge cases, adversarial inputs, and every past production failure. Quality and coverage matter more than raw count: 80 well-chosen cases beat 500 variations of the same happy-path input."
+    },
+    {
+      "q": "What is the difference between a golden dataset and a benchmark?",
+      "a": "A golden dataset is private and task-specific — it contains your users' inputs and your definition of correct behaviour for your application. A benchmark like MMLU or GPQA is a standardised public test designed to rank raw models across a broad capability. You use benchmarks to choose a model; you use your golden dataset to validate your specific application on top of that model."
+    },
+    {
+      "q": "How do I score outputs that don't have a single correct answer?",
+      "a": "Use a model-graded scorer with a tightly written rubric. The rubric describes what a good answer looks like (\"acknowledges the issue, explains the process, gives a timeline\") and what a bad answer looks like. Pass the output and the rubric to a fast judge model and ask it to score 0 or 1 with a reason. Validate the judge against a sample of human labels before trusting it."
+    },
+    {
+      "q": "How do I prevent prompt changes from breaking CI every time there is natural LLM variation?",
+      "a": "Set your CI threshold slightly below your typical score rather than at 100%. A threshold of \"overall score must not drop by more than 2 points from baseline\" handles run-to-run variance while still catching real regressions. Also use temperature=0 for all eval runs so at least the generation step is deterministic."
+    },
+    {
+      "q": "When should I trigger the eval suite in CI?",
+      "a": "Trigger it on any pull request that touches prompt files, LLM wrapper code, or the golden dataset itself. Avoid running it on every commit to the whole repo — LLM API calls have latency and cost, and running evals on a front-end CSS change wastes both. Use path filters in your CI config to scope the trigger precisely."
+    },
+    {
+      "q": "How do I know if my eval suite is actually testing the right things?",
+      "a": "Track the correlation between eval regressions and production incidents. If production has several bugs that your eval would have caught had the cases been there, your coverage is insufficient — add those cases. If you're catching many CI failures that never correspond to real user complaints, your threshold may be too tight or your scorers too strict. A good eval suite has a high recall on real failures, not just a high precision on synthetic ones."
+    }
+  ],
+  "related": [
+    "what-are-llm-evals",
+    "llm-as-a-judge-explained",
+    "testing-llm-apps",
+    "what-is-prompt-management",
+    "how-to-evaluate-rag"
+  ],
+  "furtherReading": [
+    {
+      "title": "Building a Golden Dataset for AI Evaluation — Maxim",
+      "url": "https://www.getmaxim.ai/articles/building-a-golden-dataset-for-ai-evaluation-a-step-by-step-guide/"
+    },
+    {
+      "title": "How to Build an LLM Evaluation Framework from Scratch — Confident AI",
+      "url": "https://www.confident-ai.com/blog/how-to-build-an-llm-evaluation-framework-from-scratch"
+    },
+    {
+      "title": "Best AI Eval Tools for CI/CD Pipelines — Braintrust",
+      "url": "https://www.braintrust.dev/articles/best-ai-evals-tools-cicd-2025"
+    }
+  ]
+}

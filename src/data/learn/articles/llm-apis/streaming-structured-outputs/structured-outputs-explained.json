@@ -1,0 +1,329 @@
+{
+  "slug": "structured-outputs-explained",
+  "title": "What Are Structured Outputs in LLMs?",
+  "seoTitle": "Structured Outputs in LLMs: JSON Mode Explained",
+  "metaDescription": "Learn how structured outputs force LLMs to return valid JSON that matches your schema. Covers JSON mode, response_format, Pydantic, and provider differences.",
+  "keywords": [
+    "llm structured outputs",
+    "json mode llm",
+    "response_format json schema",
+    "force llm to return json",
+    "openai structured outputs",
+    "pydantic llm output"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Understand how JSON mode and schema-constrained generation let you treat an LLM's response as reliable structured data your code can directly consume.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you ask an LLM a question in a chat window, a natural-language answer is perfect. But when your **code** needs to consume the answer — parse it, store it in a database, pass it to another function — a paragraph of prose is a nightmare. You need a predictable shape: a JSON object with specific keys, specific value types, and no surprises."
+        },
+        {
+          "type": "p",
+          "md": "**Structured outputs** is the collective name for features that force the model to emit text that fits a machine-readable format you specify. The most common target is JSON. Instead of hoping the model writes valid JSON on its own (it usually does, but not always), you hand the API a schema — a precise description of every field and its type — and the API guarantees the response matches it."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like ordering a sandwich at a counter with a form versus shouting your order at a chef. With the form, every box must be filled in correctly before the order goes through. With the shout, you might get close — but sometimes the chef hears \"no onions\" as \"extra onions\" and your code breaks at 2 AM."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Structured outputs are an evolution of the older **JSON mode** option (often just `\"response_format\": {\"type\": \"json_object\"}`). JSON mode tells the model to produce *valid JSON*, but doesn't say what shape. Structured outputs add a full schema so the model is constrained to a specific set of fields and types — a much stronger guarantee."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "LLMs are excellent at reasoning and generating text, but their outputs are naturally unstructured. When an LLM drives application logic — extracting data from a document, classifying support tickets, generating form values — you need to parse its output before anything else happens. Without structured outputs, that parsing is fragile."
+        },
+        {
+          "type": "p",
+          "md": "Common failure modes without structured outputs include: missing keys the model \"forgot\", hallucinated enum values that aren't in your allowlist, nested fields that appear sometimes but not always, and trailing prose after the closing brace that breaks `JSON.parse`. Each requires defensive code and retries that cost time and money."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Free-form JSON vs. schema-constrained output",
+            "columns": [
+              {
+                "title": "Prompt asks for JSON (no schema)",
+                "items": [
+                  "Model guesses the shape",
+                  "Keys may be missing or renamed",
+                  "Enum values can be invented",
+                  "Sometimes adds commentary text",
+                  "Your parser needs try/catch + retries"
+                ]
+              },
+              {
+                "title": "Structured outputs with schema",
+                "accent": true,
+                "items": [
+                  "API enforces your exact schema",
+                  "Every required key is always present",
+                  "Enum values are constrained to your list",
+                  "Output is valid JSON, nothing extra",
+                  "Parse once, no retries needed"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The business impact is real. Predictable output schemas eliminate entire classes of runtime errors in production pipelines, reduce retry costs, and make it safe to skip defensive parsing boilerplate. Teams at Shopify, Zapier, and Retool reported 90%+ reductions in API parsing errors after adopting structured outputs, according to OpenAI's case studies."
+        },
+        {
+          "type": "p",
+          "md": "Structured outputs also unlock a whole category of use cases: data extraction pipelines, automated form filling, multi-step [agent workflows](/learn/ai-agents/agent-fundamentals/what-is-an-ai-agent) that pass structured results between steps, and [function calling](/learn/llm-apis/function-calling/what-is-function-calling) where tool arguments need to match an exact interface. In all of these, a schema guarantee is the difference between a reliable product and a fragile prototype."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "There are two complementary mechanisms used to produce structured outputs: **constrained decoding** on the server side, and **schema validation** on the client side. Understanding both helps you pick the right approach and debug failures."
+        },
+        {
+          "type": "h3",
+          "text": "Constrained decoding"
+        },
+        {
+          "type": "p",
+          "md": "At each step, an LLM produces a probability distribution over all possible next [tokens](/learn/llm-fundamentals/tokens-and-tokenization/what-is-a-token). Normally the sampler picks freely from that distribution. With constrained decoding, the inference engine masks out any token that would make the output violate the schema. If the schema says the next value must be `true` or `false`, tokens like `\"hello\"` are zeroed out of the distribution before sampling. The model never even gets to try an invalid value."
+        },
+        {
+          "type": "p",
+          "md": "This is implemented via a **formal grammar** derived from the JSON schema. The grammar tracks what characters are valid at every position in the output — after `{\"status\":` the grammar knows only a string or number can follow, so no other token is ever sampled. The result is that the output is structurally valid *by construction*, not by post-hoc filtering."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "How constrained decoding works at inference time",
+            "steps": [
+              { "label": "Your JSON schema", "sub": "field names, types, enums, required keys" },
+              { "label": "Grammar compiler", "sub": "converts schema to a token-level finite automaton" },
+              { "label": "Token logits", "sub": "raw probabilities over the full vocabulary" },
+              { "label": "Masking step", "sub": "invalid tokens zeroed out before sampling", "accent": true },
+              { "label": "Valid token sampled", "sub": "only schema-legal tokens are ever chosen" },
+              { "label": "Valid JSON output", "sub": "guaranteed to match schema, every time" }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "API surface: response_format"
+        },
+        {
+          "type": "p",
+          "md": "On the API side, you pass your schema in the `response_format` parameter. OpenAI's approach (available on GPT-4o and newer) uses `type: \"json_schema\"` with a full JSON Schema object:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "OpenAI Python SDK — schema-constrained output",
+          "code": "from openai import OpenAI\nimport json\n\nclient = OpenAI()  # reads OPENAI_API_KEY from env\n\nresponse = client.chat.completions.create(\n    model=\"gpt-4o\",\n    messages=[\n        {\"role\": \"system\", \"content\": \"Extract the event details from the user message.\"},\n        {\"role\": \"user\", \"content\": \"Team standup on Friday at 10am in the Hudson room.\"}\n    ],\n    response_format={\n        \"type\": \"json_schema\",\n        \"json_schema\": {\n            \"name\": \"Event\",\n            \"strict\": True,\n            \"schema\": {\n                \"type\": \"object\",\n                \"properties\": {\n                    \"title\":    {\"type\": \"string\"},\n                    \"day\":      {\"type\": \"string\"},\n                    \"time\":     {\"type\": \"string\"},\n                    \"location\": {\"type\": \"string\"}\n                },\n                \"required\": [\"title\", \"day\", \"time\", \"location\"],\n                \"additionalProperties\": False\n            }\n        }\n    }\n)\n\nevent = json.loads(response.choices[0].message.content)\nprint(event)  # {\"title\": \"Team standup\", \"day\": \"Friday\", ...}"
+        },
+        {
+          "type": "h3",
+          "text": "Pydantic and Zod: schema from your types"
+        },
+        {
+          "type": "p",
+          "md": "Writing JSON Schema by hand is tedious and error-prone. The official SDKs let you declare the schema using the type system you're already using. In Python, pass a **Pydantic** model class directly; the SDK serialises it to JSON Schema automatically. In TypeScript, use **Zod**. The output comes back already parsed and type-safe — no `JSON.parse` needed:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "OpenAI + Pydantic — type-safe structured output",
+          "code": "from openai import OpenAI\nfrom pydantic import BaseModel\n\nclient = OpenAI()\n\nclass Event(BaseModel):\n    title: str\n    day: str\n    time: str\n    location: str\n\n# parse() sends the schema and parses the response in one call.\nresponse = client.beta.chat.completions.parse(\n    model=\"gpt-4o\",\n    messages=[\n        {\"role\": \"system\", \"content\": \"Extract event details.\"},\n        {\"role\": \"user\",   \"content\": \"Team standup on Friday at 10am in the Hudson room.\"}\n    ],\n    response_format=Event,\n)\n\nevent: Event = response.choices[0].message.parsed\nprint(event.title, event.day)  # already typed — no dict key access needed"
+        },
+        {
+          "type": "h3",
+          "text": "Anthropic: tool use as structured output"
+        },
+        {
+          "type": "p",
+          "md": "Anthropic's Claude API supports structured outputs via two routes. The first is forcing a [tool call](/learn/llm-apis/function-calling/what-is-function-calling): define a tool whose input schema is your desired JSON shape, then set `tool_choice` to force the model to call it. The tool arguments are the structured output — always valid JSON, always matching the schema. The second route is a dedicated beta header (`anthropic-beta: structured-outputs-2025-11-13`) that enables `response_format` similar to OpenAI's approach for direct JSON output."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Anthropic Python SDK — forced tool call as structured output",
+          "code": "import anthropic, json\n\nclient = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from env\n\nextract_tool = {\n    \"name\": \"extract_event\",\n    \"description\": \"Extract event details from the message.\",\n    \"input_schema\": {\n        \"type\": \"object\",\n        \"properties\": {\n            \"title\":    {\"type\": \"string\"},\n            \"day\":      {\"type\": \"string\"},\n            \"time\":     {\"type\": \"string\"},\n            \"location\": {\"type\": \"string\"}\n        },\n        \"required\": [\"title\", \"day\", \"time\", \"location\"]\n    }\n}\n\nmessage = client.messages.create(\n    model=\"claude-opus-4-5\",\n    max_tokens=1024,\n    tools=[extract_tool],\n    tool_choice={\"type\": \"tool\", \"name\": \"extract_event\"},  # force the call\n    messages=[{\"role\": \"user\", \"content\": \"Team standup on Friday at 10am in the Hudson room.\"}]\n)\n\nevent = message.content[0].input  # already a dict, not raw JSON string\nprint(event[\"title\"], event[\"day\"])"
+        }
+      ]
+    },
+    {
+      "id": "provider-comparison",
+      "title": "Provider comparison and limitations",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every major LLM provider supports some form of structured output, but the guarantees and syntax differ. Knowing the gaps prevents surprises in production."
+        },
+        {
+          "type": "table",
+          "headers": ["Provider", "Feature name", "Mechanism", "Schema format", "Strict guarantee?"],
+          "rows": [
+            ["OpenAI GPT-4o+", "Structured Outputs", "Constrained decoding", "JSON Schema via `response_format`", "Yes, with `strict: true`"],
+            ["Anthropic Claude", "Tool use / structured outputs beta", "Constrained decoding (beta) or forced tool call", "JSON Schema as tool input", "Yes (beta) / Yes (tool use)"],
+            ["Google Gemini", "Controlled generation", "Constrained decoding", "JSON Schema via `response_mime_type`", "Yes"],
+            ["Mistral", "JSON mode", "Sampling guidance", "`response_format: json_object`", "Valid JSON, no schema"],
+            ["Cohere", "Structured Outputs", "Constrained decoding", "JSON Schema via `response_format`", "Yes"]
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Schema constraints to know"
+        },
+        {
+          "type": "p",
+          "md": "Not all JSON Schema features are supported by every provider's constrained decoder. Common limitations to watch out for:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**`additionalProperties: false` is usually required** — without it, OpenAI's strict mode won't activate.",
+            "**Recursive schemas** (e.g. a tree node referencing itself) may be rejected or have depth limits.",
+            "**`anyOf` / `oneOf` / `if-then-else`** are partially supported; check provider docs before relying on them.",
+            "**All properties must be listed under `required`** when using OpenAI's `strict: true` — optional fields must use a union with `null` instead.",
+            "**`$ref` and `$defs`** for shared sub-schemas work on OpenAI but may not be supported elsewhere."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "OpenAI's `strict: true` mode requires **every** property to appear in the `required` array. To model an optional field, add `\"type\": [\"string\", \"null\"]` — not just omitting it from `required`. This surprises most developers the first time."
+        },
+        {
+          "type": "h3",
+          "text": "Structured outputs vs. function calling"
+        },
+        {
+          "type": "p",
+          "md": "The two features overlap but serve different purposes. **Structured outputs** (direct `response_format`) produce a JSON response in the `content` field — useful when you just want data back. **Function calling** (tool use) models the LLM as an agent that *calls a function* with structured arguments — useful when the model decides *which* action to take and with what parameters. Under the hood, many providers implement structured outputs *using* the same constrained decoding engine as function calling. The conceptual split is: do you want data extraction (structured outputs) or action dispatch ([function calling](/learn/llm-apis/function-calling/what-is-function-calling))?"
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "Performance tradeoffs"
+        },
+        {
+          "type": "p",
+          "md": "Constrained decoding adds a small overhead to each token step — the grammar automaton must be evaluated to compute the token mask. For simple flat schemas this is negligible. For deeply nested schemas with many enum values, the automaton can become large and first-token latency increases measurably. In practice, the overhead is far smaller than the cost of a retry caused by invalid output; the tradeoff almost always favours schema enforcement."
+        },
+        {
+          "type": "h3",
+          "text": "When structured outputs hurt reasoning"
+        },
+        {
+          "type": "p",
+          "md": "Forcing tight structure can cut off the model's ability to reason through a problem. A model that must immediately produce `{\"answer\": \"...\"}` has no room to think step by step before committing. The established pattern is **chain-of-thought first, schema last**: ask the model to reason in a free-text `reasoning` field (or a separate message), then produce the structured answer. Some schemas include a `reasoning` string field explicitly for this. The [chain-of-thought](/learn/prompt-engineering/reasoning-techniques/chain-of-thought-prompting) pattern pairs naturally with structured outputs precisely because you can make thinking itself a schema field."
+        },
+        {
+          "type": "h3",
+          "text": "Streaming and partial JSON"
+        },
+        {
+          "type": "p",
+          "md": "You can combine [streaming](/learn/llm-apis/streaming-structured-outputs/llm-streaming-explained) with structured outputs — the model emits the JSON token by token. The tradeoff is that a partially-received JSON object is not valid JSON and cannot be parsed until the stream completes. Some libraries (like `instructor` for Python) implement incremental JSON parsers that emit partially-complete objects as fields arrive, enabling progressive UI updates. This is an advanced pattern; for most use cases, collect the full stream before parsing."
+        },
+        {
+          "type": "h3",
+          "text": "The instructor library"
+        },
+        {
+          "type": "p",
+          "md": "For Python developers, the open-source **instructor** library wraps the OpenAI and Anthropic clients to make structured outputs even more ergonomic. It handles schema serialisation, sends the request, parses the response, and automatically retries with validation error feedback if the model's output doesn't match (useful for providers without native constrained decoding). It's widely adopted and a good starting point if you're doing heavy data extraction work."
+        },
+        {
+          "type": "h3",
+          "text": "Schema design best practices"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Keep schemas flat when possible** — nested objects multiply the chance of constrained-decoding edge cases.",
+            "**Use enums for categorical fields** — enums are fully constrained; free strings can still hallucinate unexpected values.",
+            "**Add `description` to every field** — the model reads field descriptions as instructions; they steer quality even with constrained decoding.",
+            "**Test with adversarial inputs** — complex schemas may trigger latency spikes or refusals; probe them before production.",
+            "**Version your schemas** — as your application evolves, old stored outputs may not match a new schema; plan for migration."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Add a `description` property to each field in your JSON Schema. Even though the model is constrained to the correct *type*, a helpful description (e.g. `\"ISO 8601 date string, e.g. 2025-04-01\"`) dramatically improves the *value* the model fills in. Schema descriptions are model instructions — use them."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is the difference between JSON mode and structured outputs?",
+      "a": "JSON mode (the older `\"response_format\": {\"type\": \"json_object\"}`) tells the model to produce syntactically valid JSON, but doesn't constrain what keys or types appear. Structured outputs go further: you supply a JSON Schema, and the API guarantees the response matches it exactly — correct field names, correct types, no missing required keys. Structured outputs are strictly stronger."
+    },
+    {
+      "q": "How do I force an LLM to return JSON?",
+      "a": "With OpenAI, pass `response_format={\"type\": \"json_schema\", \"json_schema\": {...}}` in your API call with `strict: true`. With Anthropic, either define a tool whose input schema is your desired shape and force the model to call it with `tool_choice`, or use the structured-outputs beta header. With Gemini, set `response_mime_type` to `application/json` and provide a schema. All three approaches guarantee valid, schema-matching JSON."
+    },
+    {
+      "q": "Does structured output work with Pydantic or Zod?",
+      "a": "Yes. The OpenAI Python SDK has a `client.beta.chat.completions.parse()` method that accepts a Pydantic model class directly — it serialises the class to JSON Schema, sends the request, and returns the response already parsed as a typed Pydantic object. The TypeScript SDK does the same with Zod schemas. This is the recommended path for production use."
+    },
+    {
+      "q": "Can structured outputs handle optional fields?",
+      "a": "Yes, but the syntax is counterintuitive. With OpenAI's `strict: true`, every property must be in the `required` array. To make a field optional in practice, declare its type as `[\"string\", \"null\"]` (a union with null) — then the model can emit `null` when the value is absent. Leaving a field out of `required` is not allowed in strict mode."
+    },
+    {
+      "q": "Does using structured outputs hurt the model's reasoning quality?",
+      "a": "It can, if you force the model to emit a tightly-structured answer immediately. The fix is to include a `reasoning` field (type: string) as the *first* property in your schema so the model can think before committing to the final answer fields. Alternatively, use a two-call pattern: first call generates free-text reasoning, second call produces the structured extraction from that reasoning."
+    },
+    {
+      "q": "Can I stream structured outputs token by token?",
+      "a": "Yes, technically — the model emits the JSON characters one token at a time. But a partially-received JSON string is invalid and unparseable until the stream completes. For most use cases you should wait for the full response. If you need progressive UI updates, use a library like `instructor` that implements incremental JSON parsing, or design your schema so meaningful fields come early in the object."
+    }
+  ],
+  "related": [
+    "what-is-function-calling",
+    "llm-streaming-explained",
+    "what-is-llm-api",
+    "chain-of-thought-prompting",
+    "what-is-an-ai-agent"
+  ],
+  "furtherReading": [
+    {
+      "title": "OpenAI — Structured Outputs guide",
+      "url": "https://developers.openai.com/api/docs/guides/structured-outputs"
+    },
+    {
+      "title": "Agenta — The guide to structured outputs and function calling with LLMs",
+      "url": "https://agenta.ai/blog/the-guide-to-structured-outputs-and-function-calling-with-llms"
+    },
+    {
+      "title": "Cohere — How do Structured Outputs Work?",
+      "url": "https://docs.cohere.com/docs/structured-outputs"
+    }
+  ]
+}
