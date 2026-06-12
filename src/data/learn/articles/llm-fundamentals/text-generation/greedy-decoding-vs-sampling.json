@@ -1,0 +1,374 @@
+{
+  "slug": "greedy-decoding-vs-sampling",
+  "title": "Token Sampling vs Greedy Decoding: How an LLM Picks the Next Token",
+  "seoTitle": "Token Sampling vs Greedy Decoding Explained",
+  "metaDescription": "Token sampling vs greedy decoding, explained for builders: how an LLM picks each token, the determinism vs diversity trade-off, beam search, and when to use each.",
+  "keywords": [
+    "token sampling vs greedy decoding",
+    "greedy decoding",
+    "llm sampling",
+    "decoding strategies",
+    "argmax decoding",
+    "beam search llm",
+    "deterministic vs creative llm output"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Greedy decoding always takes the most likely token; sampling rolls the dice for diversity. Learn the trade-off and when to use each.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every time a language model writes a word, it does not actually *know* the answer. It produces a probability for every possible next token, and then a separate piece of logic, the **decoding strategy**, picks one. The whole debate of **token sampling vs greedy decoding** is just two answers to one question: given those probabilities, which token do we actually choose?"
+        },
+        {
+          "type": "p",
+          "md": "Picture ordering at a restaurant you visit every week. **Greedy decoding** is the friend who always orders the single dish they rate highest, every single time. Predictable, safe, occasionally boring. **Sampling** is the friend who picks roughly in proportion to how much they like each dish: usually the favourite, but sometimes the third-best, just for variety. Same menu, same preferences, completely different dinners."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Decoding sits *after* the model has done its thinking. The neural network produces the numbers; the decoder turns those numbers into one concrete token. Swapping the strategy changes the output without changing the model at all."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "If you have ever asked the same model the same question twice and gotten two different answers, you have met sampling. If you have ever wanted a model to return the *exact* same JSON every run for a test, you wanted greedy. Decoding is the dial between **reproducible and creative**, and as a builder you control it directly."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Reliability**: structured output, code, and classification usually want one stable, defensible answer. That is greedy (or near-greedy) territory.",
+            "**Diversity**: brainstorming, marketing copy, dialogue, and storytelling die without variety. Pure greedy makes them flat and repetitive.",
+            "**Cost and latency**: some strategies (like beam search) generate several candidate sequences at once, using more compute for each token.",
+            "**Debugging**: a deterministic decode makes a bug reproducible. Random sampling can hide a flaky prompt behind 'it worked the last three times'."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Decoding is also a common source of confusion with [hallucination](/learn/llm-fundamentals/sampling-and-hallucination/why-llms-hallucinate). Sampling does not invent facts on its own, but by occasionally choosing a lower-probability token it can wander off a confident path onto a shakier one. Understanding the strategy helps you reason about *why* an answer drifted."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "LLMs generate one token at a time, feeding each choice back in to predict the next. That loop is [autoregressive generation](/learn/llm-fundamentals/text-generation/autoregressive-generation). At each step the model outputs a vector of raw scores called [logits](/learn/llm-fundamentals/text-generation/logits-explained), one per vocabulary token. A softmax turns those logits into a probability distribution. Decoding is what happens next."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "From logits to one chosen token",
+            "steps": [
+              {
+                "label": "Model forward pass",
+                "sub": "reads the prompt + tokens so far"
+              },
+              {
+                "label": "Logits",
+                "sub": "one raw score per token"
+              },
+              {
+                "label": "Softmax",
+                "sub": "scores to probabilities"
+              },
+              {
+                "label": "Decoding strategy",
+                "sub": "greedy or sampling",
+                "accent": true
+              },
+              {
+                "label": "Next token",
+                "sub": "appended, loop repeats"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "**Greedy decoding** ignores the distribution's shape and simply takes the single highest-probability token. In code that is one operation: `argmax`. Same input, same weights, same output, every time. It is fully deterministic and the default strategy in many libraries."
+        },
+        {
+          "type": "p",
+          "md": "**Sampling** treats the distribution as a weighted lottery and *draws* a token from it. A token with probability 0.6 is chosen about 60% of the time; a token with 0.05 still gets chosen about 1 time in 20. This is sometimes called multinomial sampling. Run it twice and you typically get two different continuations."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Token",
+            "Probability",
+            "Greedy picks?",
+            "Sampling picks?"
+          ],
+          "rows": [
+            [
+              "\" sunny\"",
+              "0.55",
+              "Yes (always)",
+              "~55% of the time"
+            ],
+            [
+              "\" cloudy\"",
+              "0.30",
+              "No",
+              "~30% of the time"
+            ],
+            [
+              "\" raining\"",
+              "0.10",
+              "No",
+              "~10% of the time"
+            ],
+            [
+              "\" purple\"",
+              "0.05",
+              "No",
+              "~5% of the time"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Greedy is just sampling with all the randomness removed. Both read the same probability table; greedy stops at the top row, sampling rolls a weighted die across all rows."
+        }
+      ]
+    },
+    {
+      "id": "the-repetition-trap",
+      "title": "The repetition trap of pure greedy",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Greedy sounds like it should give the *best* text, since it always picks the most likely token. In practice, for long open-ended generation, it does the opposite: it gets stuck in loops. This was documented in the influential 2019 paper *The Curious Case of Neural Text Degeneration*, which showed that always maximizing likelihood produces bland, strangely repetitive output."
+        },
+        {
+          "type": "p",
+          "md": "The mechanism is a feedback loop. Once a phrase appears, the model raises the probability of repeating it, which makes greedy pick it again, which raises the probability further. You get the classic failure mode:"
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "title": "Greedy decoding degenerating on a long generation",
+          "code": "Prompt: Write about your weekend.\n\nI had a great weekend. I had a great weekend. I had a\ngreat weekend. I had a great weekend. I had a great weekend..."
+        },
+        {
+          "type": "p",
+          "md": "Modern libraries fight this with a *repetition penalty* or *no-repeat n-gram* setting that down-weights tokens already used. But the cleaner fix is often to reintroduce some randomness through sampling, which breaks the loop before it starts. This is exactly why most chat-style outputs use sampling rather than raw greedy."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Greedy is great for *short*, factual outputs. The repetition trap mainly bites on *long*, open-ended generation. The longer the output, the more pure greedy tends to degrade."
+        }
+      ]
+    },
+    {
+      "id": "where-beam-search-fits",
+      "title": "Where beam search fits in",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Greedy commits to the best token at *every* step and never reconsiders, like a hiker who always takes the steepest next step and can miss the higher summit one valley over. **Beam search** is a middle path: instead of keeping one running sequence, it keeps the top *k* sequences (the 'beams', often 3 to 6) and at each step expands all of them, then prunes back to the best *k* by total sequence probability."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "Beam search keeps several candidate sequences alive",
+            "root": {
+              "label": "Prompt",
+              "sub": "decode begins"
+            },
+            "children": [
+              {
+                "label": "Beam 1",
+                "sub": "highest running probability",
+                "accent": true
+              },
+              {
+                "label": "Beam 2",
+                "sub": "lower first token, may win overall"
+              },
+              {
+                "label": "Beam 3",
+                "sub": "pruned if it falls behind"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Because it looks across whole sequences, beam search can find a high-probability sentence that *starts* with a less likely token, something greedy would have thrown away on step one. It shines on **input-grounded** tasks with a fairly constrained correct answer: machine translation, speech recognition, image captioning."
+        },
+        {
+          "type": "p",
+          "md": "The catch: beam search is still maximization-based, so on open-ended creative text it produces the same bland, repetitive feel as greedy, only more confidently. It also costs more, since you decode several beams in parallel. That is why general-purpose chat assistants overwhelmingly default to **sampling**, not beam search."
+        }
+      ]
+    },
+    {
+      "id": "choosing-a-strategy",
+      "title": "Choosing a strategy: a decision table",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "There is no single best strategy, only a best fit for the task. The rough rule: the more *one right answer* exists, the more you lean deterministic; the more *good answers* exist, the more you lean toward sampling."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Task",
+            "Strategy",
+            "Why"
+          ],
+          "rows": [
+            [
+              "Structured output / JSON",
+              "Greedy or very low temperature",
+              "Stability and parseability beat variety"
+            ],
+            [
+              "Code generation",
+              "Greedy or low temperature",
+              "Usually one correct-ish answer; reproducibility helps"
+            ],
+            [
+              "Classification / extraction",
+              "Greedy",
+              "You want the single most confident label"
+            ],
+            [
+              "Q&A with a factual answer",
+              "Greedy or low-temp sampling",
+              "Reduce drift onto unlikely tokens"
+            ],
+            [
+              "Chat assistant (general)",
+              "Sampling, moderate temperature",
+              "Natural, non-repetitive, still coherent"
+            ],
+            [
+              "Brainstorming / creative writing",
+              "Sampling, higher temperature",
+              "Diversity is the whole point"
+            ],
+            [
+              "Translation / transcription",
+              "Beam search",
+              "Constrained answer; look-ahead boosts quality"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Notice the table mentions *temperature*. That is the headline knob that shapes how aggressive sampling is, and it deserves its own page rather than a paragraph here, see [LLM temperature explained](/learn/llm-fundamentals/sampling-and-hallucination/llm-temperature-explained). Temperature 0 collapses sampling back into greedy; higher values flatten the distribution so unlikely tokens get picked more often."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Same model, two strategies (Hugging Face Transformers)",
+          "code": "# Greedy: deterministic, argmax at every step (the default)\nout = model.generate(**inputs, max_new_tokens=50, do_sample=False)\n\n# Sampling: draw from the distribution for diverse output\nout = model.generate(\n    **inputs,\n    max_new_tokens=50,\n    do_sample=True,      # turn sampling on\n    temperature=0.8,     # how flat the distribution becomes\n    top_p=0.9,           # nucleus sampling, see linked page\n)\n\n# Beam search: keep several candidate sequences alive\nout = model.generate(**inputs, max_new_tokens=50, num_beams=4)"
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Most hosted APIs do not expose raw greedy, but setting `temperature=0` is the practical equivalent: it makes the model pick the top token almost every time. It is widely used for *near-deterministic* output, though exact reproducibility across runs is not always guaranteed at the infrastructure level."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "Greedy is not the globally optimal sequence"
+        },
+        {
+          "type": "p",
+          "md": "A common misconception: greedy decoding returns the *most probable sequence*. It does not. Picking the highest-probability token at each step is a *local* choice. The product of those locally best tokens can be lower than a sequence that took a slightly worse first step. Finding the truly highest-probability sequence is intractable to brute-force, which is exactly the gap beam search tries to narrow, and still only approximates."
+        },
+        {
+          "type": "h3",
+          "text": "Why token sampling vs greedy decoding is really a spectrum"
+        },
+        {
+          "type": "p",
+          "md": "It is tempting to frame this as two camps, but they are endpoints of one continuum controlled by temperature. At temperature 0 you have greedy. As temperature rises, the same sampling code spreads probability mass toward less likely tokens. Truncation methods then trim the long tail before you draw, so you keep variety without letting genuinely bad tokens sneak in, covered in [top-p vs top-k](/learn/llm-fundamentals/sampling-and-hallucination/top-p-vs-top-k)."
+        },
+        {
+          "type": "h3",
+          "text": "Truncation: why pure sampling needs guardrails"
+        },
+        {
+          "type": "p",
+          "md": "Raw multinomial sampling has a weakness: even with a tiny probability, a wildly off-topic token *can* be drawn, and there are tens of thousands of such tokens in the tail. Their combined probability is small but non-zero, so over a long generation the odds of one slipping through add up. Top-k sampling fixes this by keeping only the *k* most likely tokens; top-p (nucleus) sampling keeps the smallest set of tokens whose probabilities sum to *p*, adapting to how confident the model is at each step. Both cut the unreliable tail before the dice are rolled."
+        },
+        {
+          "type": "h3",
+          "text": "Determinism in production reasoning systems"
+        },
+        {
+          "type": "p",
+          "md": "Reproducibility matters more than ever for agents and evals, where a flaky decode means a flaky test. Near-greedy decoding (temperature 0) is the standard for [LLM evals](/learn/evaluation-safety/evaluation-basics/what-are-llm-evals) and for any pipeline that must be debuggable. The trade-off is real: lock down randomness and you also lock out the diversity that makes brainstorming and creative tasks shine. Choosing a decoding strategy is, in the end, choosing where you want to sit on the line between *the same answer every time* and *a fresh answer every time*."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is the difference between token sampling vs greedy decoding?",
+      "a": "Greedy decoding always picks the single highest-probability token (argmax), so it is deterministic and gives the same output every run. Sampling draws a token at random in proportion to the probabilities, so it is varied and more creative but not reproducible. Greedy is best for stable, short, structured outputs; sampling is best for natural, diverse, open-ended text."
+    },
+    {
+      "q": "Why does greedy decoding sometimes repeat itself?",
+      "a": "On long open-ended generation, greedy can fall into a feedback loop: once a phrase appears, the model raises the probability of repeating it, greedy keeps picking it, and the probability climbs further. This text-degeneration effect was documented by Holtzman et al. in 2019. Repetition penalties help, but introducing some sampling usually breaks the loop more cleanly."
+    },
+    {
+      "q": "Is temperature 0 the same as greedy decoding?",
+      "a": "Effectively yes. Temperature 0 collapses the sampling distribution so the model almost always selects the top token, which matches greedy's argmax behaviour. Many hosted APIs do not expose raw greedy, so temperature 0 is the standard way to get near-deterministic output, though exact reproducibility across runs is not always guaranteed at the infrastructure level."
+    },
+    {
+      "q": "Where does beam search fit between greedy and sampling?",
+      "a": "Beam search keeps the top few candidate sequences alive and prunes by total sequence probability, so it can find a high-probability sentence that starts with a less likely token. It excels on input-grounded tasks like translation and speech recognition, but since it still maximizes likelihood, it produces bland, repetitive text on creative tasks and costs more compute than greedy."
+    },
+    {
+      "q": "When should I use sampling instead of greedy decoding?",
+      "a": "Use sampling whenever variety matters and there are many acceptable answers: chat, brainstorming, marketing copy, dialogue, and creative writing. Use greedy or temperature 0 when you want one stable, reproducible answer: structured JSON, classification, extraction, and most code or eval pipelines."
+    }
+  ],
+  "related": [
+    "llm-temperature-explained",
+    "top-p-vs-top-k",
+    "autoregressive-generation",
+    "logits-explained",
+    "why-llms-hallucinate"
+  ],
+  "furtherReading": [
+    {
+      "title": "Hugging Face: Generation strategies (greedy, sampling, beam search)",
+      "url": "https://huggingface.co/docs/transformers/generation_strategies"
+    },
+    {
+      "title": "How to generate text: using different decoding methods (Hugging Face blog)",
+      "url": "https://huggingface.co/blog/how-to-generate"
+    },
+    {
+      "title": "The Curious Case of Neural Text Degeneration (Holtzman et al., 2019)",
+      "url": "https://arxiv.org/abs/1904.09751"
+    }
+  ]
+}

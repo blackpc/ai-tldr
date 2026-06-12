@@ -1,0 +1,345 @@
+{
+  "slug": "logits-explained",
+  "title": "Logits in an LLM: Raw Scores to a Logits Probability Distribution",
+  "seoTitle": "Logits Explained: The Logits Probability Distribution",
+  "metaDescription": "Logits are the raw scores an LLM gives every token. See how softmax turns them into a logits probability distribution, plus logprobs and temperature.",
+  "keywords": [
+    "logits probability distribution",
+    "what are logits in an llm",
+    "logits to probabilities",
+    "softmax logits",
+    "logprobs explained",
+    "temperature scales logits",
+    "raw token scores"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Logits are the raw, unnormalized scores an LLM assigns to every token, which softmax turns into a probability distribution.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A **logit** is the raw, unnormalized score a language model gives to a single candidate next token before that score becomes a probability. After the model reads your prompt, its final layer produces *one logit for every token in its vocabulary* - a long list of plain numbers, each saying \"here's how strongly I favour this particular token right now.\""
+        },
+        {
+          "type": "p",
+          "md": "Think of a panel of judges scoring contestants. Each judge holds up a number - say 8.4, or -2.1, or 11.9. Those raw scores are the logits. They aren't percentages and they don't add up to anything tidy; bigger just means *more favoured*. To turn that pile of raw scores into something you can act on - \"contestant A has a 62% chance of winning\" - you run them through a normalizing step called **softmax**. The output of softmax is a genuine **probability distribution** over the whole vocabulary."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Two-sentence version: logits are the model's raw opinion, one number per possible token. Softmax converts that raw opinion into a clean probability distribution that sums to 1."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every word a model writes starts as a logit vector. Understanding logits demystifies the whole generation loop: the model doesn't \"choose words\" directly, it scores all of them, normalizes the scores, then samples one. This is the heart of [next-token prediction](/learn/llm-fundamentals/text-generation/next-token-prediction) and the engine inside [how LLMs work](/learn/llm-fundamentals/llm-basics/how-llms-work)."
+        },
+        {
+          "type": "p",
+          "md": "Logits also explain knobs you already use. **Temperature** doesn't add randomness from nowhere - it literally rescales the logits before softmax. The choice between always taking the highest-scoring token (argmax) and rolling the dice (sampling) is a choice about how to *read* the distribution that logits produce. And when an API hands back **logprobs**, it's letting you peek at those scores so you can measure how confident the model really was."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Confidence**: a token's logprob tells you how sure the model was - useful for classification thresholds and catching shaky answers.",
+            "**Control**: temperature, top-p, and top-k all operate on the logit vector or the distribution it becomes.",
+            "**Debugging**: when output looks weird, inspecting the runner-up logits often shows the model nearly picked something better."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The transformer stack ends in a final linear layer (often called the *language-model head*) that projects the model's last hidden state onto the vocabulary. If the vocabulary has, say, 100,000 tokens, this layer outputs a vector of 100,000 numbers - the logits. Each entry is the dot product of the hidden state with that token's output embedding, which is why a logit can be any real number from negative to positive infinity."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "From hidden state to chosen token",
+            "steps": [
+              {
+                "label": "Hidden state",
+                "sub": "context vector after all layers"
+              },
+              {
+                "label": "LM head (linear)",
+                "sub": "projects onto the vocabulary"
+              },
+              {
+                "label": "Logit vector",
+                "sub": "one raw score per token (-inf to +inf)",
+                "accent": true
+              },
+              {
+                "label": "Softmax",
+                "sub": "normalize to probabilities summing to 1"
+              },
+              {
+                "label": "Probability distribution",
+                "sub": "argmax or sample one token"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "From a logit vector to the logits probability distribution"
+        },
+        {
+          "type": "p",
+          "md": "**Softmax** does the conversion. For each token *i* with logit *z_i*, the probability is the exponential of that logit divided by the sum of exponentials over all tokens: `p_i = exp(z_i) / sum_j exp(z_j)`. Because it exponentiates and then normalizes, every output lands strictly between 0 and 1, and the whole vector sums to exactly 1 - the definition of a probability distribution. (The full mechanics live in [softmax explained](/learn/llm-fundamentals/text-generation/softmax-explained); here we just need that it maps a logit vector to a distribution.)"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Token",
+            "Logit (z)",
+            "exp(z)",
+            "Probability after softmax"
+          ],
+          "rows": [
+            [
+              "\" Paris\"",
+              "8.0",
+              "2980.96",
+              "0.8438"
+            ],
+            [
+              "\" London\"",
+              "6.0",
+              "403.43",
+              "0.1142"
+            ],
+            [
+              "\" Rome\"",
+              "5.0",
+              "148.41",
+              "0.0420"
+            ],
+            [
+              "\" banana\"",
+              "-1.0",
+              "0.37",
+              "0.0001"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Notice softmax cares only about *differences* between logits, not their absolute size. Adding 10 to every logit changes nothing after normalization - the exp factors out. That property is exactly what lets temperature reshape the distribution by scaling the gaps."
+        }
+      ]
+    },
+    {
+      "id": "logprobs-what-and-why",
+      "title": "Logprobs: reading the model's confidence",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A **logprob** is the natural logarithm of a token's probability: `logprob = ln(p)`. Since probabilities sit between 0 and 1, their logs run from negative infinity up to `0.0`, where `0.0` means 100% certain. A logprob of `-0.028` is roughly 97% probability; a logprob of `-4.6` is about 1%. To go back to a plain probability you exponentiate: `p = exp(logprob)`."
+        },
+        {
+          "type": "p",
+          "md": "Why expose the log instead of the raw probability? Two reasons. First, probabilities of long sequences are tiny products of many small numbers - multiplying them underflows to zero, but *adding* their logs stays numerically stable. Second, logs make confidence comparisons linear and easy to threshold. Major APIs let you request them: set a `logprobs` flag, and optionally `top_logprobs` (an integer, capped at 5 on the OpenAI Chat Completions API) to also see the most likely alternative tokens the model weighed at each position."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "logprob <-> probability",
+          "code": "import math\n\n# An API returns the chosen token plus its logprob\nlogprob = -0.0513          # natural log of the probability\nprob = math.exp(logprob)   # convert back to a probability\nprint(round(prob, 4))      # 0.95  -> the model was ~95% sure\n\n# Going the other way\np = 0.95\nprint(round(math.log(p), 4))  # -0.0513"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Confidence gating**: only auto-accept a classification when its top logprob clears a threshold.",
+            "**Hallucination signals**: a low-confidence answer (logprobs far below 0) is a flag to verify or abstain.",
+            "**Perplexity**: averaging negative logprobs across tokens gives a standard measure of how surprised the model was."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "temperature-and-sampling",
+      "title": "Temperature scales logits before softmax",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**Temperature** is a single number *T* that divides every logit before softmax runs: `p_i = exp(z_i / T) / sum_j exp(z_j / T)`. It never touches the model weights - it just reshapes the gaps in the logit vector. Because softmax exponentiates, even small changes to those gaps cause large swings in the final probabilities."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Same logits, different temperature",
+            "columns": [
+              {
+                "title": "Low T (e.g. 0.5)",
+                "accent": true,
+                "items": [
+                  "Divides by a small number -> gaps grow",
+                  "Top token dominates even more",
+                  "Sharper, near-deterministic distribution",
+                  "Good for factual, repeatable answers"
+                ]
+              },
+              {
+                "title": "High T (e.g. 2.0)",
+                "items": [
+                  "Divides by a larger number -> gaps shrink",
+                  "Lower-ranked tokens gain probability",
+                  "Flatter, more uniform distribution",
+                  "Good for brainstorming and variety"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Run our earlier example through different temperatures and watch the gap between \"Paris\" and the rest stretch or compress:"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Token",
+            "T = 0.5",
+            "T = 1.0",
+            "T = 2.0"
+          ],
+          "rows": [
+            [
+              "\" Paris\"",
+              "0.9796",
+              "0.8438",
+              "0.6242"
+            ],
+            [
+              "\" London\"",
+              "0.0179",
+              "0.1142",
+              "0.2296"
+            ],
+            [
+              "\" Rome\"",
+              "0.0024",
+              "0.0420",
+              "0.1393"
+            ],
+            [
+              "\" banana\"",
+              "~0.0000",
+              "0.0001",
+              "0.0069"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Once you have the distribution, you still choose *how* to pick. **Argmax** (greedy) always takes the single highest-probability token - deterministic, but repetitive. **Sampling** draws a token at random according to the probabilities, optionally filtered by [top-p or top-k](/learn/llm-fundamentals/sampling-and-hallucination/top-p-vs-top-k). That argmax-vs-sampling decision is its own topic - see [greedy decoding vs sampling](/learn/llm-fundamentals/text-generation/greedy-decoding-vs-sampling) and [temperature explained](/learn/llm-fundamentals/sampling-and-hallucination/llm-temperature-explained) - but it always operates on the distribution that logits produced."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Setting temperature to exactly 0 is a special case: it's mathematically undefined (division by zero), so frameworks treat `T = 0` as a shortcut for pure argmax rather than literally dividing the logits."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "Logits, embeddings, and the dot product"
+        },
+        {
+          "type": "p",
+          "md": "Each logit is a dot product between the final hidden state and a token's output embedding. Geometrically, a token gets a high logit when its embedding points in roughly the same direction as the hidden state. Many models *tie* the input and output embedding matrices to save parameters, so the same vectors that turn tokens into inputs also score them as outputs. This dot-product structure has consequences: the paper [Stolen Probability](https://arxiv.org/abs/2005.02433) shows that tokens sitting inside the convex hull of the embedding space have their maximum achievable probability bounded by tokens on the hull - a structural quirk of computing logits this way."
+        },
+        {
+          "type": "h3",
+          "text": "Logit bias: nudging scores directly"
+        },
+        {
+          "type": "p",
+          "md": "Some APIs accept a `logit_bias` map that adds a fixed offset to specific tokens' logits *before* softmax. A large positive bias makes a token almost certain; a large negative bias effectively bans it. Because the adjustment happens at the logit stage, it composes cleanly with temperature and sampling that come afterward."
+        },
+        {
+          "type": "h3",
+          "text": "Why you rarely see the full logit vector"
+        },
+        {
+          "type": "p",
+          "md": "The complete logit vector is vocabulary-sized - tens of thousands of floats per token - so providers expose only the top few logprobs rather than the raw array. Internally, the softmax over that huge vocabulary is also a real compute cost, which is one reason [LLMs lean on GPUs](/learn/llm-fundamentals/llm-basics/why-llms-need-gpus). Open-weight models you run locally give you the entire logit tensor, which is handy for research, constrained decoding, and custom sampling."
+        },
+        {
+          "type": "h3",
+          "text": "A note on numerical stability"
+        },
+        {
+          "type": "p",
+          "md": "Real implementations don't compute `exp(z_i)` on raw logits - a logit of 50 would overflow. Instead they subtract the maximum logit from every entry first (the *log-sum-exp* trick). Since softmax depends only on differences between logits, subtracting a constant changes nothing in the result while keeping every exponential safely small."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What are logits in an LLM?",
+      "a": "Logits are the raw, unnormalized scores the model's final layer assigns to every token in its vocabulary - one number per token, ranging from negative to positive infinity. They are the model's pre-probability opinion about what comes next. Softmax then turns the logit vector into a probability distribution."
+    },
+    {
+      "q": "How does softmax turn logits into a logits probability distribution?",
+      "a": "Softmax exponentiates each logit and divides by the sum of all exponentiated logits, written as p_i = exp(z_i) / sum_j exp(z_j). Every result falls between 0 and 1, and the whole vector sums to exactly 1, which is the definition of a probability distribution."
+    },
+    {
+      "q": "What is the difference between a logit and a logprob?",
+      "a": "A logit is the raw score before normalization (any real number). A logprob is the natural log of a token's probability after softmax, so it ranges from negative infinity up to 0.0. Convert a logprob back to a probability with exp(logprob)."
+    },
+    {
+      "q": "How does temperature change logits?",
+      "a": "Temperature T divides every logit before softmax: p_i = exp(z_i / T) / sum_j exp(z_j / T). T below 1 stretches the gaps and sharpens the distribution toward the top token; T above 1 shrinks the gaps and flattens it, giving more varied output."
+    },
+    {
+      "q": "Why do LLM APIs let you see logprobs?",
+      "a": "Logprobs reveal how confident the model was in each token. Developers use them for classification confidence thresholds, hallucination detection, perplexity measurement, and to inspect the alternative tokens the model nearly chose. APIs typically cap the number of alternatives (for example up to 5 top_logprobs)."
+    }
+  ],
+  "related": [
+    "softmax-explained",
+    "llm-temperature-explained",
+    "next-token-prediction",
+    "greedy-decoding-vs-sampling",
+    "how-llms-work",
+    "top-p-vs-top-k"
+  ],
+  "furtherReading": [
+    {
+      "title": "Softmax function (Wikipedia)",
+      "url": "https://en.wikipedia.org/wiki/Softmax_function"
+    },
+    {
+      "title": "Using logprobs (OpenAI Cookbook)",
+      "url": "https://developers.openai.com/cookbook/examples/using_logprobs"
+    },
+    {
+      "title": "Stolen Probability: A Structural Weakness of Neural Language Models (arXiv)",
+      "url": "https://arxiv.org/abs/2005.02433"
+    }
+  ]
+}

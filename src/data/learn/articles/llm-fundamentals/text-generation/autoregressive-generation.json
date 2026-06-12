@@ -1,0 +1,412 @@
+{
+  "slug": "autoregressive-generation",
+  "title": "What Is Autoregressive Generation? How LLMs Write One Token at a Time",
+  "seoTitle": "What Is Autoregressive Generation in LLMs?",
+  "metaDescription": "Autoregressive generation is how LLMs write one token at a time, feeding each output back as input. Learn prefill/decode, the KV cache, and why it's latency-bound.",
+  "keywords": [
+    "autoregressive generation",
+    "what is autoregressive generation",
+    "autoregressive decoding",
+    "kv cache explained",
+    "prefill vs decode",
+    "non-autoregressive text generation",
+    "why llm generation is sequential"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "How LLMs generate text strictly left-to-right, one token at a time, by feeding each output back in as the next input.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**Autoregressive generation** is how almost every large language model writes: it produces text *one token at a time*, and every token it writes gets fed right back in as part of the input for the next token. The word breaks down nicely: *auto* means **self**, and *regress* means **to feed back on**. So the model literally regresses on its own output, conditioning each new step on everything it has said so far."
+        },
+        {
+          "type": "p",
+          "md": "Picture someone telling a story they're making up on the spot. They say one word, hear it out loud, and that word shapes the next word they choose. They can never un-say a word or skip ahead to the ending and fill in the middle later. They move strictly forward, left to right, each word committing them a little further. That is exactly what an [LLM](/learn/llm-fundamentals/llm-basics/what-is-an-llm) does, just with sub-word *tokens* instead of whole words."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "If you've read about [next-token prediction](/learn/llm-fundamentals/text-generation/next-token-prediction), autoregressive generation is the *loop* that turns that single prediction into a full paragraph. Next-token prediction is the step; autoregression is the rule for how steps chain together."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Autoregression is the single design choice that explains the most surprising things about how LLMs behave in practice, and understanding it changes how you build with them."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**It explains the latency.** Because each token depends on the one before it, the model genuinely cannot compute your 200-token answer in one shot. It must take 200 sequential steps. This is why long answers take longer, and why streaming responses appear word by word rather than all at once.",
+            "**It explains cost shape.** Input tokens and output tokens are priced and processed differently. The whole prompt can be read in parallel, but every output token costs its own sequential step, which is why output tokens are usually more expensive. See [LLM API pricing](/learn/llm-apis/cost-caching-rate-limits/llm-api-pricing).",
+            "**It explains why early mistakes snowball.** Once the model commits to a wrong token, that token becomes part of the input for everything after it. A small slip early on can derail a whole answer, a phenomenon closely tied to [why LLMs hallucinate](/learn/llm-fundamentals/sampling-and-hallucination/why-llms-hallucinate).",
+            "**It explains streaming.** [LLM streaming](/learn/llm-apis/streaming-structured-outputs/llm-streaming-explained) exists precisely because tokens are produced one at a time, so the API can hand you each token the instant it's ready."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Once you internalize 'the model is latency-bound by the number of output tokens it must generate sequentially,' a lot of optimization advice clicks into place: shorter outputs are faster, and the biggest speed wins come from generating *fewer sequential steps*, not from a bigger GPU."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How autoregressive generation works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "At each step the model runs a full forward pass over a [transformer](/learn/llm-fundamentals/transformers-and-attention/what-is-a-transformer), producing a score for every token in its vocabulary. Those raw scores are called [logits](/learn/llm-fundamentals/text-generation/logits-explained). A sampling rule (greedy, or temperature/top-p sampling) picks one token from that distribution. That chosen token is then **appended to the input**, and the whole thing runs again. The output of step *N* becomes part of the input to step *N+1*. That feedback loop is the entire mechanism."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "The autoregressive feedback loop",
+            "steps": [
+              {
+                "label": "Current sequence",
+                "sub": "prompt + tokens so far"
+              },
+              {
+                "label": "Forward pass",
+                "sub": "transformer computes logits",
+                "accent": true
+              },
+              {
+                "label": "Pick one token",
+                "sub": "sample from the distribution"
+              },
+              {
+                "label": "Append it",
+                "sub": "output becomes next input"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "In real inference engines this loop is split into two distinct phases with very different performance profiles: **prefill** and **decode**."
+        },
+        {
+          "type": "h3",
+          "text": "Prefill vs decode"
+        },
+        {
+          "type": "p",
+          "md": "**Prefill** processes your entire prompt *in parallel*. Because all the prompt tokens already exist, the model can compute attention over all of them in one big batched pass on the GPU. This phase is compute-bound and fast per token. **Decode** is the generation phase: it produces new tokens one at a time, each requiring its own forward pass. Decode is inherently sequential, so it's memory-bandwidth-bound and dominates the latency of long answers."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Two phases of inference",
+            "steps": [
+              {
+                "label": "Prompt",
+                "sub": "your input tokens"
+              },
+              {
+                "label": "Prefill",
+                "sub": "read whole prompt in parallel",
+                "accent": true
+              },
+              {
+                "label": "First token",
+                "sub": "time-to-first-token"
+              },
+              {
+                "label": "Decode loop",
+                "sub": "one token per step, sequential",
+                "accent": true
+              },
+              {
+                "label": "Full answer"
+              }
+            ]
+          }
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Property",
+            "Prefill",
+            "Decode"
+          ],
+          "rows": [
+            [
+              "Tokens handled",
+              "All prompt tokens at once",
+              "One new token per step"
+            ],
+            [
+              "Parallelism",
+              "Highly parallel",
+              "Strictly sequential"
+            ],
+            [
+              "Bottleneck",
+              "Compute (matmuls)",
+              "Memory bandwidth"
+            ],
+            [
+              "Drives",
+              "Time to first token",
+              "Time between tokens"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This is why two latency numbers matter: **time-to-first-token** (mostly prefill) and **inter-token latency** (the decode loop). A long prompt slows the first; a long answer slows the rest."
+        }
+      ]
+    },
+    {
+      "id": "the-kv-cache",
+      "title": "The KV cache: making decode affordable",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Here's the problem the **KV cache** solves. Attention works by comparing the current token's *query* vector against a *key* and *value* vector for every prior token. Naively, at each decode step the model would recompute the keys and values for the entire sequence from scratch. Across a full answer that's repeated work that grows quadratically (roughly O(n²) in sequence length), which would make generation painfully slow."
+        },
+        {
+          "type": "p",
+          "md": "The insight: for any token that's already in the sequence, its key and value vectors **never change** on later steps. So compute them once and store them. That store is the KV cache. On each new decode step the model computes only the *new* token's query, key, and value, appends the new key/value to the cache, and attends against everything cached. The per-step work becomes roughly constant instead of growing with the sequence, turning total decode cost from O(n²) down to O(n)."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "With vs without a KV cache",
+            "columns": [
+              {
+                "title": "No cache (naive)",
+                "items": [
+                  "Recompute K and V for ALL prior tokens every step",
+                  "Work per step grows with sequence length",
+                  "Total decode cost ~ O(n squared)",
+                  "Wastes the GPU on repeated math"
+                ]
+              },
+              {
+                "title": "KV cache",
+                "accent": true,
+                "items": [
+                  "Compute K and V for each token exactly once",
+                  "Store them, reuse on every later step",
+                  "Total decode cost ~ O(n)",
+                  "Only the new token's Q, K, V are computed"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "The KV cache trades compute for **memory**. Its size grows with batch size, number of layers, and sequence length, and for long [context windows](/learn/llm-fundamentals/context-windows/what-is-a-context-window) it can consume more GPU memory than the model weights. That memory pressure is what techniques like paged attention, multi-query/grouped-query attention, and KV-cache quantization exist to relieve."
+        }
+      ]
+    },
+    {
+      "id": "a-worked-example",
+      "title": "A worked example",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Let's watch the loop run on a tiny prompt. Suppose the prompt is `The cat sat on the` and the model generates three tokens. Each row is one decode step; the new token is appended and becomes input for the next step."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Step",
+            "Input the model sees",
+            "Top prediction",
+            "New cache entry"
+          ],
+          "rows": [
+            [
+              "Prefill",
+              "The cat sat on the",
+              "mat",
+              "K,V for 5 prompt tokens"
+            ],
+            [
+              "Decode 1",
+              "The cat sat on the mat",
+              "and",
+              "K,V for 'mat'"
+            ],
+            [
+              "Decode 2",
+              "The cat sat on the mat and",
+              "fell",
+              "K,V for 'and'"
+            ],
+            [
+              "Decode 3",
+              "The cat sat on the mat and fell",
+              "`<eos>`",
+              "K,V for 'fell'"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Notice three things. The input *grows* by exactly one token each step. The model never revisits or rewrites earlier tokens. And generation stops when it emits a special end-of-sequence token (or hits your max-tokens limit). Below is a minimal pseudo-implementation of the same loop."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "autoregressive_loop.py",
+          "code": "tokens = tokenizer.encode(\"The cat sat on the\")\ncache = None  # KV cache: empty at first\n\nfor step in range(max_new_tokens):\n    # Forward pass. On step 0 this is prefill (all tokens);\n    # afterward only the last token is new (decode).\n    logits, cache = model.forward(tokens, kv_cache=cache)\n\n    # Look only at the LAST position: that's the next-token prediction.\n    next_logits = logits[-1]\n\n    # Sampling rule turns logits into one chosen token.\n    next_token = sample(next_logits, temperature=0.7)\n\n    if next_token == EOS:\n        break\n\n    tokens.append(next_token)   # output becomes next input\n\nprint(tokenizer.decode(tokens))"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The `sample()` step is where decoding *strategy* lives. Greedy decoding always takes the top token; temperature and [top-p vs top-k](/learn/llm-fundamentals/sampling-and-hallucination/top-p-vs-top-k) sampling add controlled randomness. The autoregressive loop is identical either way, the only difference is how each token is chosen. See [greedy decoding vs sampling](/learn/llm-fundamentals/text-generation/greedy-decoding-vs-sampling)."
+        }
+      ]
+    },
+    {
+      "id": "non-autoregressive-alternatives",
+      "title": "Autoregressive generation vs non-autoregressive and diffusion alternatives",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Autoregression's strength (each token sees all prior tokens) is also its bottleneck (steps can't run in parallel). Researchers have long chased ways to break the sequential chain so that hardware can fill in multiple tokens at once."
+        },
+        {
+          "type": "p",
+          "md": "**Non-autoregressive (NAR)** generation tries to predict many output positions simultaneously rather than left-to-right. The catch is that, without seeing what it just wrote, the model can produce locally fluent but globally inconsistent text. **Diffusion language models** take a different route: they start from a sequence of masked or noised tokens and *iteratively refine* the whole sequence over several denoising steps, in principle updating many positions per step. Google DeepMind's experimental **Gemini Diffusion**, shown at Google I/O in May 2025, is a high-profile example, pitched as generating text several times faster than a comparable autoregressive model by refining noise step by step rather than emitting one token at a time."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Autoregressive vs diffusion-style text generation",
+            "columns": [
+              {
+                "title": "Autoregressive",
+                "accent": true,
+                "items": [
+                  "One token per step, strictly left-to-right",
+                  "Each token conditions on all prior tokens",
+                  "Sequential: latency scales with output length",
+                  "Mature, dominant, strong quality"
+                ]
+              },
+              {
+                "title": "Diffusion / non-AR",
+                "items": [
+                  "Refines many positions per step",
+                  "Bidirectional context across the sequence",
+                  "Parallel: can decouple latency from length",
+                  "Newer; quality and reasoning still maturing"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Reality check: recent research (2025-2026) finds that fast diffusion text models often *drift back toward* left-to-right, AR-like decoding in practice, especially on reasoning tasks, because the training data itself is deeply sequential. Truly parallel text generation that matches AR quality remains an open problem, not a solved one. For now, autoregression is still the workhorse behind essentially every production chatbot."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "Why decode is memory-bound, not compute-bound"
+        },
+        {
+          "type": "p",
+          "md": "During decode the model processes a single new token but must load the *entire* set of model weights (and read the growing KV cache) from GPU memory for each step. The arithmetic per step is tiny relative to the bytes moved, so the GPU's compute units sit idle waiting on memory. That's why decode is **memory-bandwidth-bound**: you're limited by how fast you can move data, not how fast you can multiply. It's also why batching many requests together helps so much, you amortize one weight-load across many sequences, raising GPU utilization. This is part of [why LLMs need GPUs](/learn/llm-fundamentals/llm-basics/why-llms-need-gpus) with high memory bandwidth, not just high raw FLOPs."
+        },
+        {
+          "type": "h3",
+          "text": "Speculative decoding: cheating the sequential limit"
+        },
+        {
+          "type": "p",
+          "md": "One clever way to speed up the sequential decode loop without abandoning autoregression is **speculative decoding**. A small, fast 'draft' model proposes several tokens ahead; the large target model then verifies all of them in a single parallel forward pass and accepts the longest correct prefix. When the draft guesses well, you get multiple tokens for roughly the cost of one big-model step, while the output stays mathematically identical to plain autoregressive decoding. It exploits the fact that *verification* can be parallel even when *generation* can't."
+        },
+        {
+          "type": "h3",
+          "text": "Exposure bias and error accumulation"
+        },
+        {
+          "type": "p",
+          "md": "Models are trained on perfect ground-truth prefixes (a setup called teacher forcing) but at inference they must condition on their *own* possibly-flawed outputs. This mismatch is called **exposure bias**: once the model strays off the kind of text it saw in training, errors can compound step after step. It's one structural reason long generations can wander, and it connects autoregression directly to reliability concerns like [hallucination](/learn/llm-fundamentals/sampling-and-hallucination/why-llms-hallucinate)."
+        },
+        {
+          "type": "h3",
+          "text": "The causal mask: how training stays autoregressive"
+        },
+        {
+          "type": "p",
+          "md": "Decoder-only LLMs enforce the left-to-right rule with a **causal attention mask** that blocks each position from attending to any future position. This lets the model train on a whole sequence in parallel (predicting every next token at once) while guaranteeing that, at any given position, it only ever 'sees' tokens to its left, exactly the constraint it must obey at inference time. The same mask that makes training efficient is what makes generation autoregressive. To see the broader picture of training and inference, read [how LLMs work](/learn/llm-fundamentals/llm-basics/how-llms-work)."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is autoregressive generation in simple terms?",
+      "a": "It's the way LLMs write text one token at a time, strictly left to right. Each token the model produces is fed back in as part of the input for predicting the next token, so the model conditions every new step on everything it has written so far."
+    },
+    {
+      "q": "Why is autoregressive generation slow?",
+      "a": "Because it's inherently sequential. Each output token depends on the previous one, so the model genuinely cannot compute a long answer in a single shot; it must take one forward pass per token. Latency scales with the number of output tokens, which makes long answers slower and the process latency-bound."
+    },
+    {
+      "q": "What is the difference between prefill and decode?",
+      "a": "Prefill reads your entire prompt in parallel in one batched pass and produces the first token, driving time-to-first-token. Decode then generates new tokens one at a time, each requiring its own forward pass; it's sequential and memory-bandwidth-bound, and it dominates the latency of long responses."
+    },
+    {
+      "q": "What does the KV cache do?",
+      "a": "It stores the key and value vectors for tokens already in the sequence so the model doesn't recompute them on every decode step. Since those vectors never change once a token exists, caching them turns total decode cost from roughly O(n squared) down to O(n), at the price of extra GPU memory."
+    },
+    {
+      "q": "Is non-autoregressive or diffusion text generation faster?",
+      "a": "It can be, because diffusion and non-autoregressive models refine many positions per step instead of one token at a time, decoupling latency from output length. But as of 2026, matching autoregressive quality, especially on reasoning, remains an open problem, and fast diffusion text models often drift back toward left-to-right decoding."
+    }
+  ],
+  "related": [
+    "next-token-prediction",
+    "how-llms-work",
+    "logits-explained",
+    "what-is-a-transformer",
+    "greedy-decoding-vs-sampling",
+    "llm-streaming-explained"
+  ],
+  "furtherReading": [
+    {
+      "title": "Hugging Face Transformers: KV cache strategies",
+      "url": "https://huggingface.co/docs/transformers/en/kv_cache"
+    },
+    {
+      "title": "Google DeepMind: Gemini Diffusion",
+      "url": "https://blog.google/innovation-and-ai/models-and-research/google-deepmind/gemini-diffusion/"
+    },
+    {
+      "title": "A Survey on Parallel Text Generation: From Parallel Decoding to Diffusion Language Models (arXiv)",
+      "url": "https://arxiv.org/html/2508.08712"
+    }
+  ]
+}
