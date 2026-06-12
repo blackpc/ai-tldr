@@ -1,0 +1,474 @@
+{
+  "slug": "defining-function-schemas",
+  "title": "How to Define a Function Schema: JSON Schema for Tool Calls",
+  "seoTitle": "Function Schemas: JSON Schema for LLM Tool Calls",
+  "metaDescription": "A function schema tells the model what your tool does and what arguments it takes. Learn to write JSON Schema definitions the model actually follows.",
+  "keywords": [
+    "how to define a function schema llm",
+    "json schema for tool calls",
+    "tool description best practices llm",
+    "function calling parameters schema",
+    "required vs optional tool arguments"
+  ],
+  "difficulty": "beginner",
+  "oneLiner": "Write tool definitions — names, descriptions, and JSON Schema parameters — that the model reads correctly and calls with valid arguments.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Before a model can call one of your tools, it needs to know three things: **what the tool is called**, **what it does**, and **what arguments to pass**. A *function schema* is the small JSON document you write to answer all three questions. Think of it as the instruction card you hand a new intern before sending them to handle a task: the card names the task, explains its purpose in a sentence, and lists every piece of information they must gather (and which pieces are truly required versus nice-to-have)."
+        },
+        {
+          "type": "p",
+          "md": "The model never reads your source code. It only reads the schema you provide at request time. Everything the model knows about your tool — its capabilities, its constraints, the names and types of its inputs — comes entirely from what you write in that schema. If the schema is vague, the model fills in the blanks with guesses. If the schema is precise, the model passes exactly the arguments your code expects."
+        },
+        {
+          "type": "p",
+          "md": "The parameter section of a schema is a standard **JSON Schema** object — the same format used by API validators, code generators, and form libraries. JSON Schema defines types (`string`, `number`, `boolean`, `array`, `object`), constraints (`enum`, `minimum`, `maximum`, `pattern`), and a `required` array that lists which fields must be present. You don't need to know all of JSON Schema to write good tool definitions; the subset used for function calling is small and learnable in an afternoon."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "OpenAI calls this a *function definition* inside a `tools` array. Anthropic calls the parameter section `input_schema`. The structure is nearly identical across both providers — a `name`, a `description`, and a JSON Schema object for the parameters."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The schema is the model's only map to your tool. If the map is wrong, the model will call the tool incorrectly — or not at all. There are two failure modes that show up constantly in practice. The first is **wrong arguments**: the model passes a string where you expected a number, or omits a field it should have included, because the schema didn't make the constraint clear. The second is **wrong tool selection**: the model picks the wrong tool from a list of several, or skips calling a tool entirely, because the description wasn't clear enough about what the tool does."
+        },
+        {
+          "type": "p",
+          "md": "Research on tool-augmented models has found that precise parameter descriptions can improve the accuracy of argument values by more than 30% compared to vague descriptions. That's not a small margin — it's the difference between a tool that works reliably in production and one that requires constant babysitting."
+        },
+        {
+          "type": "p",
+          "md": "Well-written schemas also reduce the number of follow-up turns. If the model knows a parameter is required and understands its format, it will gather that information before calling the tool rather than calling with incomplete arguments and getting an error back. This keeps your agentic loops short and your users happy."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Think of schema writing as documentation that a *non-human reader* will parse under time pressure. The model doesn't skim — it weights every word in your description when deciding what to do. Put the most important constraint in the first sentence."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A function schema has three top-level fields: `name`, `description`, and `parameters`. The `parameters` field is itself a JSON Schema object — always `\"type\": \"object\"` at the top level, with a `properties` map and a `required` array."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "stack",
+            "title": "Anatomy of a function schema",
+            "layers": [
+              {
+                "label": "name",
+                "sub": "Unique snake_case identifier the model emits when calling the tool"
+              },
+              {
+                "label": "description",
+                "sub": "Natural-language explanation of what the tool does and when to use it"
+              },
+              {
+                "label": "parameters.properties",
+                "sub": "One JSON Schema entry per argument: type, description, enum, constraints"
+              },
+              {
+                "label": "parameters.required",
+                "sub": "Array of property names that must always be present in the call"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Here is a minimal but complete example for a weather-lookup tool, written in the format both OpenAI and Anthropic accept (OpenAI wraps it in `{\"type\": \"function\", \"function\": {...}}`; Anthropic uses it directly with `input_schema` instead of `parameters`):"
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "title": "Minimal function schema — weather lookup",
+          "code": "{\n  \"name\": \"get_weather\",\n  \"description\": \"Returns the current temperature and weather condition for a city. Use this when the user asks about current weather.\",\n  \"parameters\": {\n    \"type\": \"object\",\n    \"properties\": {\n      \"city\": {\n        \"type\": \"string\",\n        \"description\": \"City name, e.g. Tokyo or London\"\n      },\n      \"unit\": {\n        \"type\": \"string\",\n        \"enum\": [\"celsius\", \"fahrenheit\"],\n        \"description\": \"Temperature unit. Defaults to celsius.\"\n      }\n    },\n    \"required\": [\"city\"],\n    \"additionalProperties\": false\n  }\n}"
+        },
+        {
+          "type": "p",
+          "md": "In this schema, `city` is required — the model must include it, and the API will reject the call if it doesn't. The `unit` parameter is optional: it's declared in `properties` but absent from `required`. The model may include it if the user specified a preference, but it can safely omit it and let your code apply a default."
+        },
+        {
+          "type": "h3",
+          "text": "How the model uses the schema"
+        },
+        {
+          "type": "p",
+          "md": "When you include a `tools` array in your API request, the provider converts your schema definitions into a special instruction block that becomes part of the model's context — you don't write this prompt yourself, the API constructs it. The model reads it the same way it reads a system prompt, understanding the available tools and their signatures before it starts generating a response."
+        },
+        {
+          "type": "p",
+          "md": "When the model decides to call a tool, it emits a structured **tool call object** — not prose — containing the tool name and a JSON object of arguments that should conform to your schema. The API returns this as a special message role (`tool_calls` in OpenAI's format, `tool_use` content block in Anthropic's). Your code intercepts it, runs the actual function, and returns the result in a follow-up message. The model then continues generating its response using that result."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Request-to-call flow",
+            "steps": [
+              {
+                "label": "You send request",
+                "sub": "messages + tools array with schema"
+              },
+              {
+                "label": "Model reads schema",
+                "sub": "name, description, parameters injected into context"
+              },
+              {
+                "label": "Model emits tool call",
+                "sub": "JSON object: {name, arguments}"
+              },
+              {
+                "label": "Your code runs the tool",
+                "sub": "arguments validated against schema"
+              },
+              {
+                "label": "You return result",
+                "sub": "tool result message appended"
+              },
+              {
+                "label": "Model writes final reply",
+                "sub": "incorporates real tool output"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "schema-field-reference",
+      "title": "Field-by-field reference",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "The name field"
+        },
+        {
+          "type": "p",
+          "md": "Use a concise `snake_case` identifier that describes the action: `get_weather`, `search_documents`, `send_email`. OpenAI limits function names to 64 characters. Avoid generic names like `tool1` or `helper` — the name appears in the model's context and influences tool selection when multiple tools are available. Action verbs first: `get_`, `search_`, `create_`, `update_`, `delete_`."
+        },
+        {
+          "type": "h3",
+          "text": "The description field"
+        },
+        {
+          "type": "p",
+          "md": "This is the single most impactful field for correct behavior. Start with an action verb: *\"Fetches the current temperature...\"*, *\"Searches a product catalog...\"*, *\"Sends an email to...\"*. Include **when to use it** — especially if you have multiple similar tools. If the tool has important limitations, state them here: *\"Only covers current conditions, not forecasts.\"* Aim for two to four sentences."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Do NOT duplicate your tool's description in the system prompt. Redundant descriptions can confuse the model about which instruction takes priority. Put the description once, in the schema."
+        },
+        {
+          "type": "h3",
+          "text": "Parameter types"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "JSON Schema type",
+            "Use for",
+            "Example"
+          ],
+          "rows": [
+            [
+              "`string`",
+              "Text, identifiers, dates as text",
+              "`\"city\": {\"type\": \"string\"}`"
+            ],
+            [
+              "`number`",
+              "Any numeric value including decimals",
+              "`\"temperature\": {\"type\": \"number\"}`"
+            ],
+            [
+              "`integer`",
+              "Whole numbers only",
+              "`\"page\": {\"type\": \"integer\", \"minimum\": 1}`"
+            ],
+            [
+              "`boolean`",
+              "True/false flags",
+              "`\"include_details\": {\"type\": \"boolean\"}`"
+            ],
+            [
+              "`array`",
+              "Lists of values",
+              "`\"tags\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}}`"
+            ],
+            [
+              "`object`",
+              "Nested structured data",
+              "`\"address\": {\"type\": \"object\", ...}`"
+            ]
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Constraining values with enum"
+        },
+        {
+          "type": "p",
+          "md": "Whenever a parameter has a fixed set of valid values, use `enum`. This is the most reliable way to prevent the model from inventing a value. Instead of asking for a `string` named `sort_order` and hoping the model writes `\"asc\"` or `\"desc\"`, declare `\"enum\": [\"asc\", \"desc\"]` and the model will always pick one of those two values."
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "title": "Using enum to constrain a parameter",
+          "code": "\"status\": {\n  \"type\": \"string\",\n  \"enum\": [\"open\", \"in_progress\", \"closed\"],\n  \"description\": \"Filter tickets by status. Use 'open' for unresolved issues.\"\n}"
+        },
+        {
+          "type": "h3",
+          "text": "Required vs optional parameters"
+        },
+        {
+          "type": "p",
+          "md": "List every parameter that your function cannot operate without in the `required` array. Parameters that have sensible defaults or are truly optional should be omitted from `required`. Make the split deliberate: if a parameter is omitted from `required`, the model may skip it even when the user's request would benefit from it — so only mark things optional when your code can handle the absence gracefully."
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "title": "required vs optional",
+          "code": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"query\":       { \"type\": \"string\", \"description\": \"The search query text\" },\n    \"max_results\": { \"type\": \"integer\", \"description\": \"Max items to return (default 10)\", \"minimum\": 1, \"maximum\": 50 },\n    \"language\":    { \"type\": \"string\", \"enum\": [\"en\", \"fr\", \"de\", \"ja\"], \"description\": \"Filter results by language\" }\n  },\n  \"required\": [\"query\"],\n  \"additionalProperties\": false\n}"
+        }
+      ]
+    },
+    {
+      "id": "provider-differences",
+      "title": "OpenAI vs Anthropic schema format",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The JSON Schema content is essentially identical across providers, but the wrapper structure differs slightly. Knowing the exact shape each provider expects saves debugging time when you first wire up a new API."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "OpenAI — tools array format",
+          "code": "import openai\n\nclient = openai.OpenAI()\n\ntools = [\n    {\n        \"type\": \"function\",\n        \"function\": {\n            \"name\": \"get_weather\",\n            \"description\": \"Returns current weather for a city.\",\n            \"parameters\": {\n                \"type\": \"object\",\n                \"properties\": {\n                    \"city\": {\n                        \"type\": \"string\",\n                        \"description\": \"City name, e.g. Paris\"\n                    },\n                    \"unit\": {\n                        \"type\": \"string\",\n                        \"enum\": [\"celsius\", \"fahrenheit\"]\n                    }\n                },\n                \"required\": [\"city\"],\n                \"additionalProperties\": False\n            },\n            \"strict\": True\n        }\n    }\n]\n\nresponse = client.chat.completions.create(\n    model=\"gpt-4o\",\n    messages=[{\"role\": \"user\", \"content\": \"What's the weather in Tokyo?\"}],\n    tools=tools\n)"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Anthropic — input_schema format",
+          "code": "import anthropic\n\nclient = anthropic.Anthropic()\n\ntools = [\n    {\n        \"name\": \"get_weather\",\n        \"description\": \"Returns current weather for a city.\",\n        \"input_schema\": {\n            \"type\": \"object\",\n            \"properties\": {\n                \"city\": {\n                    \"type\": \"string\",\n                    \"description\": \"City name, e.g. Paris\"\n                },\n                \"unit\": {\n                    \"type\": \"string\",\n                    \"enum\": [\"celsius\", \"fahrenheit\"]\n                }\n            },\n            \"required\": [\"city\"]\n        }\n    }\n]\n\nresponse = client.messages.create(\n    model=\"claude-opus-4-5\",\n    max_tokens=1024,\n    tools=tools,\n    messages=[{\"role\": \"user\", \"content\": \"What's the weather in Tokyo?\"}]\n)"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Feature",
+            "OpenAI",
+            "Anthropic (Claude)"
+          ],
+          "rows": [
+            [
+              "Wrapper key",
+              "`function` inside `{\"type\":\"function\",...}`",
+              "Tool object directly"
+            ],
+            [
+              "Schema key",
+              "`parameters`",
+              "`input_schema`"
+            ],
+            [
+              "Strict mode",
+              "`\"strict\": true` on the function",
+              "Not required; `additionalProperties` optional"
+            ],
+            [
+              "Strict requires all fields in `required`",
+              "Yes, when `strict: true`",
+              "No"
+            ],
+            [
+              "Name limit",
+              "64 characters",
+              "64 characters"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "When targeting OpenAI with `\"strict\": true`, every field in `properties` must appear in `required`, and `\"additionalProperties\": false` is mandatory on every nested object. This is the most common cause of `400 Bad Request` errors when enabling strict mode."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Most function-calling bugs trace back to one of five mistakes in the schema. Each one is easy to prevent once you know to look for it."
+        },
+        {
+          "type": "h3",
+          "text": "Vague descriptions"
+        },
+        {
+          "type": "p",
+          "md": "A description like *\"Does the thing\"* or *\"Handles user requests\"* gives the model nothing to work with. The model uses your description to decide both *whether* to call the tool and *how* to populate the arguments. Descriptions like *\"Fetches live stock price for a ticker symbol. Use this when the user asks for a current price or recent quote, not for historical data.\"* are unambiguous and tell the model exactly when the tool applies."
+        },
+        {
+          "type": "h3",
+          "text": "Omitting description on parameters"
+        },
+        {
+          "type": "p",
+          "md": "Every parameter should have its own `description` field inside `properties`. The type alone is not enough. A string named `date` could mean today's date, a past date, a future date, an ISO 8601 timestamp, or a relative expression like *\"last week\"*. Write the description: *\"Date in YYYY-MM-DD format, e.g. 2025-03-15. Use today's date if the user doesn't specify.\"*"
+        },
+        {
+          "type": "h3",
+          "text": "Over-nesting the schema"
+        },
+        {
+          "type": "p",
+          "md": "Deeply nested objects slow down the model and make argument construction more error-prone. If you find yourself writing `parameters.filters.date_range.start`, consider flattening: `date_start` and `date_end` as top-level strings are easier for the model to reason about and easier for your code to validate."
+        },
+        {
+          "type": "h3",
+          "text": "Not setting additionalProperties: false"
+        },
+        {
+          "type": "p",
+          "md": "Without `\"additionalProperties\": false`, the model can include extra fields that your code doesn't expect. This is especially problematic when you pass the arguments directly to a database query or external API. Setting `additionalProperties: false` closes the schema and prevents unexpected keys. It's also **required** when you enable strict mode on OpenAI."
+        },
+        {
+          "type": "h3",
+          "text": "Too many tools at once"
+        },
+        {
+          "type": "p",
+          "md": "Providing a large list of tools increases the chance of wrong tool selection. As a rule of thumb, a model can reliably choose among five to ten well-described tools. If you have more, group related tools, use an agent architecture that routes to specialized sub-agents, or dynamically inject only the relevant tools for each user message."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Avoid giving two tools descriptions so similar that the model can't tell them apart. If you have `search_orders` and `search_invoices`, make the description of each crystal clear about the data source: *\"Searches the orders table in the ERP system — not invoices.\"*"
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you've mastered the basics, a few advanced techniques let you squeeze more reliability and flexibility out of your schemas."
+        },
+        {
+          "type": "h3",
+          "text": "Generating schemas from types"
+        },
+        {
+          "type": "p",
+          "md": "Maintaining JSON schemas by hand is tedious and error-prone. In Python, the **Pydantic** library can generate a JSON Schema from a `BaseModel` definition: `MyModel.model_json_schema()`. In TypeScript, **Zod** does the same: `zodToJsonSchema(mySchema)`. This means your function signature and your schema definition stay in sync automatically — change the Python type hint and the schema updates with it."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Auto-generate a schema from a Pydantic model",
+          "code": "from pydantic import BaseModel, Field\nfrom typing import Literal\n\nclass WeatherParams(BaseModel):\n    city: str = Field(description=\"City name, e.g. Tokyo\")\n    unit: Literal[\"celsius\", \"fahrenheit\"] = Field(\n        default=\"celsius\",\n        description=\"Temperature unit\"\n    )\n\n# Use in your tools array:\nschema = WeatherParams.model_json_schema()\nprint(schema)\n# => {\"properties\": {\"city\": {...}, \"unit\": {...}}, \"required\": [\"city\"], ...}"
+        },
+        {
+          "type": "h3",
+          "text": "Strict mode and its requirements"
+        },
+        {
+          "type": "p",
+          "md": "OpenAI introduced `\"strict\": true` on function definitions starting with `gpt-4o-2024-08-06`. When strict mode is on, the API uses constrained decoding to guarantee that the model's output *exactly* matches your schema — no extra keys, no wrong types. The trade-off: every field in `properties` must be in `required`, all nested objects must also have `\"additionalProperties\": false`, and some less-common JSON Schema keywords (like `if`/`then`) are not supported. For most production use cases the guarantee is worth the constraint."
+        },
+        {
+          "type": "h3",
+          "text": "Tool choice control"
+        },
+        {
+          "type": "p",
+          "md": "Both OpenAI and Anthropic let you control whether the model is forced to use a tool. OpenAI's `tool_choice` parameter accepts `\"auto\"` (model decides), `\"none\"` (no tool calls), or `{\"type\": \"function\", \"function\": {\"name\": \"...\"}}` (force a specific function). Anthropic's equivalent is `tool_choice` with `{\"type\": \"auto\"}`, `{\"type\": \"any\"}`, or `{\"type\": \"tool\", \"name\": \"...\"}`. Forcing a specific tool is useful when you want structured data extraction: define a tool for the schema you want, force the model to call it, and ignore the tool-call mechanics — you're just using the schema as a parsing harness."
+        },
+        {
+          "type": "h3",
+          "text": "Parallel tool calls"
+        },
+        {
+          "type": "p",
+          "md": "Modern frontier models can emit multiple tool call objects in a single response turn — for example, calling `get_weather(city=\"Tokyo\")` and `get_weather(city=\"London\")` simultaneously. Your code should handle an array of tool calls, run them in parallel when possible, and return all results before the model continues. This is enabled by default on OpenAI and can be disabled with `\"parallel_tool_calls\": false` if your tools have ordering dependencies."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Use parallel tool calls to cut latency in agentic pipelines. If the model asks for three independent pieces of data, fetching them in parallel instead of sequentially can cut round-trip time by 60–70%."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is the difference between parameters and input_schema in tool definitions?",
+      "a": "`parameters` is OpenAI's key name; `input_schema` is Anthropic's. Both hold exactly the same JSON Schema object — `{\"type\": \"object\", \"properties\": {...}, \"required\": [...]}`. The JSON Schema content inside is interchangeable; only the wrapper key differs between providers."
+    },
+    {
+      "q": "Does every parameter need a description, or just the tool itself?",
+      "a": "Every parameter should have its own `description` field inside `properties`. The parameter name and type alone are rarely enough — the model uses the description to understand acceptable values, formats (e.g. ISO 8601 for dates), and when to include the argument at all. Missing parameter descriptions are a leading cause of wrong argument values."
+    },
+    {
+      "q": "What happens if I put a parameter in properties but not in required?",
+      "a": "The model treats it as optional and may omit it from the call. Your code must handle the case where the key is absent from the arguments object. If the parameter has a sensible default, omitting it from `required` is fine — just document the default in the description. If the function genuinely cannot run without it, add it to `required`."
+    },
+    {
+      "q": "How do I stop the model from inventing values for an enum parameter?",
+      "a": "Declare `\"enum\": [\"value1\", \"value2\"]` directly on the property. The model is constrained to the values you list and will not generate anything outside that set. This is the most reliable guard against hallucinated parameter values."
+    },
+    {
+      "q": "When should I use strict mode on OpenAI?",
+      "a": "Use strict mode whenever you need a hard guarantee that the arguments match your schema exactly — production pipelines, database writes, external API calls. The cost is that all properties must be in `required` and `additionalProperties` must be `false` on every nested object. It's almost always worth enabling for reliability."
+    },
+    {
+      "q": "Can I define a tool that takes no parameters?",
+      "a": "Yes. Set `\"parameters\": {\"type\": \"object\", \"properties\": {}}` with an empty properties object and an empty `required` array. The model will call the tool with an empty arguments object. A common use case is a `get_current_datetime` tool that always returns the current server time with no inputs needed."
+    }
+  ],
+  "related": [
+    "what-is-function-calling",
+    "what-is-llm-api",
+    "messages-roles-turns",
+    "sdk-vs-raw-http",
+    "api-keys-explained"
+  ],
+  "furtherReading": [
+    {
+      "title": "Function calling — OpenAI API documentation",
+      "url": "https://platform.openai.com/docs/guides/function-calling"
+    },
+    {
+      "title": "Tool use (function calling) — Anthropic documentation",
+      "url": "https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/implement-tool-use"
+    },
+    {
+      "title": "Understanding JSON Schema — official reference",
+      "url": "https://json-schema.org/understanding-json-schema"
+    }
+  ]
+}

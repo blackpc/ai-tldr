@@ -1,0 +1,388 @@
+{
+  "slug": "agent-loop-explained",
+  "title": "How Does the Agent Loop Work? Think, Act, Observe, Repeat",
+  "seoTitle": "The Agent Loop Explained: Think, Act, Observe",
+  "metaDescription": "Step through the think-act-observe loop that powers every AI agent, with a concrete example of one full iteration from prompt to finished task.",
+  "keywords": [
+    "how does the agent loop work",
+    "ai agent loop explained",
+    "think act observe loop",
+    "llm agent execution loop",
+    "agent loop example"
+  ],
+  "difficulty": "beginner",
+  "oneLiner": "Walk through one full iteration of the loop at the heart of every agent and see exactly what the model receives and returns at each step.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every AI agent — whether it books a flight, debugs code, or runs a research sweep — runs on the same basic engine: a **loop**. The model looks at what it knows, decides on one action, executes it, reads the result, and then starts again. Rinse and repeat until the job is done."
+        },
+        {
+          "type": "p",
+          "md": "A good analogy is a sous chef working through a recipe while the head chef is away. They read the recipe card (think), start chopping onions (act), smell whether the pan is hot enough (observe), then glance at the recipe again to decide what's next (think again). Each lap around the kitchen is one iteration of the loop. The chef doesn't need the head chef standing over them — they adapt to whatever they find at each step."
+        },
+        {
+          "type": "p",
+          "md": "In technical terms this pattern is called the **Think → Act → Observe** cycle, or sometimes the **reason–act loop**. It was formalized in the **ReAct** paper (Yao et al., 2023), which showed that interleaving reasoning traces with tool calls dramatically outperformed either approach alone."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Remove the loop and you have a chatbot: one question, one answer, done. Add the loop and the exact same LLM becomes an agent that can finish real multi-step tasks by itself."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A language model that only does one turn can *describe* what to do. An agent can *do* it. That gap is enormous in practice: the model can look up live data, run a shell command, call an API, read the error it gets back, correct itself, and try again — all without a human in the middle."
+        },
+        {
+          "type": "p",
+          "md": "Before the agent loop became mainstream, building anything that required more than one step meant a developer hand-wiring every transition: copy the model's output, paste it into the next tool, bring the result back, call the model again. The loop automates all of that scaffolding. That's why the same coding assistant that once gave you one snippet can now edit a whole repository: it loops until each test passes."
+        },
+        {
+          "type": "h3",
+          "text": "What the loop enables that a single prompt cannot"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Error recovery** — the model sees the stack trace and retries with a fix.",
+            "**Progressive information gathering** — each tool call unlocks facts the model didn't have when it started.",
+            "**Dynamic planning** — the model can change its plan mid-task if an early step returns unexpected results.",
+            "**Long-horizon tasks** — tasks too big for one context window are broken into sequential steps, each building on the last."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Every iteration is another LLM call, so costs and latency multiply. A task that takes 10 loop turns costs roughly 10x the token spend of a single prompt. Always ask whether the task genuinely needs a loop before reaching for an agent framework."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The agent loop is a **while loop** controlled by the LLM: keep going as long as the model returns a tool call; stop when it returns plain text without a tool call. The runtime never decides when the task is done — the model does, by choosing not to call another tool."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "The Agent Loop",
+            "steps": [
+              {
+                "label": "Think",
+                "sub": "LLM reasons about next step"
+              },
+              {
+                "label": "Act",
+                "sub": "Runtime executes tool call"
+              },
+              {
+                "label": "Observe",
+                "sub": "Tool result added to context"
+              },
+              {
+                "label": "Done?",
+                "sub": "No tool call → return answer"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Step 1 — Think"
+        },
+        {
+          "type": "p",
+          "md": "At the start of each turn the runtime assembles the **full context window** and sends it to the LLM. That context includes: the system prompt (rules, persona, available tools), the original user request, and the complete history of every previous assistant message and tool result from this session."
+        },
+        {
+          "type": "p",
+          "md": "The model reads all of that and produces a reasoning trace — sometimes visible to the developer as a `thought` field, sometimes hidden inside the model. Based on that reasoning it either calls a tool or decides the task is complete and writes a final answer."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Context grows with every turn. In production systems, tool results alone account for roughly **68% of total tokens consumed** across a multi-step agent session. This is why token budgets matter for agents far more than for single-turn prompts."
+        },
+        {
+          "type": "h3",
+          "text": "Step 2 — Act"
+        },
+        {
+          "type": "p",
+          "md": "When the model chooses a tool it doesn't run code itself — it emits a **structured tool-call object** that your runtime executes. The object names the tool and provides typed arguments. A typical JSON representation looks like this:"
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "title": "Tool call emitted by the model",
+          "code": "{\n  \"tool\": \"web_search\",\n  \"arguments\": {\n    \"query\": \"AAPL closing price June 11 2026\"\n  }\n}"
+        },
+        {
+          "type": "p",
+          "md": "The runtime receives that object, looks up the `web_search` function, calls it with the given arguments, and captures whatever it returns. The model is paused and waiting — it plays no role in the actual execution."
+        },
+        {
+          "type": "h3",
+          "text": "Step 3 — Observe"
+        },
+        {
+          "type": "p",
+          "md": "The runtime wraps the tool's return value in a **tool-result message** and appends it to the conversation history. On the next think step the model will see that result as part of its context and can reason about what it means."
+        },
+        {
+          "type": "p",
+          "md": "Crucially, the assistant message containing the tool call *must* be appended to history before the tool result is added. Reversing that order breaks the message threading because the tool-result message references the `tool_call_id` of the preceding assistant message — if that message isn't already in history, the reference is invalid and the API will reject it."
+        },
+        {
+          "type": "h3",
+          "text": "Termination"
+        },
+        {
+          "type": "p",
+          "md": "The loop exits naturally when the model produces a text-only response with no tool calls — the model is signaling \"I have enough information to answer.\" Frameworks also add hard safety limits: a maximum iteration count (typically 15–25 steps), a wall-clock timeout (~300 seconds), and sometimes a cost budget cap. If the iteration cap is hit, a common pattern is to inject a final message asking the model to synthesize whatever it has gathered so the user still gets a useful response."
+        }
+      ]
+    },
+    {
+      "id": "one-full-iteration",
+      "title": "A concrete example: one full iteration",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Abstract descriptions only go so far. Here is a complete single iteration — from user prompt to the model's tool call and back — using a simple stock-price lookup task."
+        },
+        {
+          "type": "h3",
+          "text": "Turn 1: what the model receives"
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "title": "Messages sent to the LLM at the start of turn 1",
+          "code": "[\n  {\n    \"role\": \"system\",\n    \"content\": \"You are a financial research assistant. Use the tools provided to answer questions accurately.\"\n  },\n  {\n    \"role\": \"user\",\n    \"content\": \"What was Apple's closing stock price yesterday and how does it compare to a month ago?\"\n  }\n]"
+        },
+        {
+          "type": "h3",
+          "text": "Turn 1: what the model returns"
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "title": "Model response — a tool call",
+          "code": "{\n  \"role\": \"assistant\",\n  \"content\": null,\n  \"tool_calls\": [\n    {\n      \"id\": \"call_abc123\",\n      \"type\": \"function\",\n      \"function\": {\n        \"name\": \"get_stock_price\",\n        \"arguments\": \"{\\\"ticker\\\": \\\"AAPL\\\", \\\"date\\\": \\\"2026-06-11\\\"}\"\n      }\n    }\n  ]\n}"
+        },
+        {
+          "type": "h3",
+          "text": "Runtime appends the tool result"
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "title": "Tool result appended to message history",
+          "code": "{\n  \"role\": \"tool\",\n  \"tool_call_id\": \"call_abc123\",\n  \"content\": \"{\\\"ticker\\\": \\\"AAPL\\\", \\\"date\\\": \\\"2026-06-11\\\", \\\"close\\\": 211.42}\"\n}"
+        },
+        {
+          "type": "h3",
+          "text": "Turn 2: the model reasons and acts again"
+        },
+        {
+          "type": "p",
+          "md": "Now the context contains the system prompt, the user question, the first tool call, and its result. The model sees that it only has the current price and still needs the price from a month ago, so it calls the tool a second time with a different date. The loop runs again."
+        },
+        {
+          "type": "p",
+          "md": "After the second tool result is appended, the model has all the data it needs. On turn 3 it produces a plain-text response comparing the two prices — no tool call this time — and the runtime exits the loop and returns that answer to the user."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Three turns to finish the task",
+            "steps": [
+              {
+                "label": "Turn 1",
+                "sub": "Think → call get_stock_price(AAPL, today)"
+              },
+              {
+                "label": "Observe",
+                "sub": "Price: $211.42"
+              },
+              {
+                "label": "Turn 2",
+                "sub": "Think → call get_stock_price(AAPL, month ago)"
+              },
+              {
+                "label": "Observe",
+                "sub": "Price: $198.17"
+              },
+              {
+                "label": "Turn 3",
+                "sub": "Think → no tool call → final answer"
+              }
+            ]
+          }
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Notice what the model *never* knew in advance: how many turns it would need. It decided to call the tool a second time only after seeing that the first result was incomplete for the user's question. That **dynamic decision-making** is what separates an agent loop from a hard-coded pipeline."
+        }
+      ]
+    },
+    {
+      "id": "loop-pitfalls",
+      "title": "Common loop pitfalls",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The agent loop is simple in concept but surprisingly tricky in production. These are the failure modes that catch most builders off guard."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Pitfall",
+            "What happens",
+            "How to guard against it"
+          ],
+          "rows": [
+            [
+              "Infinite loop",
+              "The model keeps calling the same tool with the same arguments because the tool keeps returning an error it doesn't know how to resolve.",
+              "Set a hard max-iterations cap (15–25). Detect consecutive identical tool calls and break early."
+            ],
+            [
+              "Context explosion",
+              "Each turn adds tokens. After 20 turns of verbose tool results, the context window fills up and the model loses earlier steps.",
+              "Summarize or truncate old tool results. Use a rolling window or external memory store."
+            ],
+            [
+              "Premature exit",
+              "The model produces a confident-sounding final answer after turn 1, skipping verification steps.",
+              "Add explicit instructions in the system prompt: 'Always verify your answer with a second tool call before responding.'."
+            ],
+            [
+              "Hallucinated tool calls",
+              "The model invents a tool name or passes arguments with the wrong shape, causing a runtime error.",
+              "Validate tool-call arguments against the schema before executing. Return a structured error message so the model can self-correct."
+            ],
+            [
+              "Silent cost blowout",
+              "A task the developer expected to take 3 turns takes 30, burning 10x the expected budget.",
+              "Log turn count and token spend per session. Add a cost-budget stop condition alongside the iteration cap."
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you understand the basic loop, three directions open up: variations on the loop structure, what lives inside the \"Think\" step, and how multiple loops can collaborate."
+        },
+        {
+          "type": "h3",
+          "text": "ReAct vs Plan-and-Execute"
+        },
+        {
+          "type": "p",
+          "md": "The loop described here is **ReAct-style**: the model decides what to do one step at a time, based on what it just observed. An alternative is **Plan-and-Execute**: a planner model creates a full task list upfront, then an executor model works through each item. Plan-and-Execute is more predictable and cheaper for well-defined tasks; ReAct adapts better when the path to the goal is unknown. Most production agents start with ReAct and add a planner layer only when they hit reliability limits."
+        },
+        {
+          "type": "h3",
+          "text": "The chain-of-thought inside Think"
+        },
+        {
+          "type": "p",
+          "md": "The \"Think\" step isn't just routing logic — it's where the model's reasoning happens. Modern reasoning models (like o3 or Claude's extended thinking mode) can spend many tokens on internal chain-of-thought before committing to a tool call. That scratchpad is invisible to the user but directly affects which tool gets called and with what arguments. Better reasoning in the Think step compounds across every iteration."
+        },
+        {
+          "type": "h3",
+          "text": "Memory across loops"
+        },
+        {
+          "type": "p",
+          "md": "A plain agent loop is stateless between sessions — the context is cleared when the conversation ends. For agents that need to remember past work, builders add **external memory**: a vector database of past observations, a structured key-value store, or a summarized scratchpad that gets injected into the system prompt at the start of each new session. Memory turns a one-shot loop into an agent that improves over time."
+        },
+        {
+          "type": "h3",
+          "text": "Multi-agent loops"
+        },
+        {
+          "type": "p",
+          "md": "Nothing stops one agent from calling another agent as a tool. An **orchestrator** agent decomposes a large task and dispatches sub-tasks to specialist **subagent** loops. Each subagent runs its own think-act-observe cycle and returns a result to the orchestrator, which folds it into its own context and continues. This is the architecture behind frameworks like LangGraph and multi-agent setups in the Anthropic Agent SDK."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The agent loop is deliberately minimal by design. Its power comes not from complexity but from **composability**: any tool, any model, any memory system can plug in at the Act and Observe edges without changing the loop itself."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "How is the agent loop different from a regular chatbot?",
+      "a": "A chatbot makes one LLM call and returns the response. The agent loop calls the LLM, checks whether the model wants to use a tool, executes it if so, feeds the result back, and calls the LLM again. That cycle repeats until the model decides it has a final answer. A chatbot is a single step; an agent loop is a while loop."
+    },
+    {
+      "q": "What stops the agent loop from running forever?",
+      "a": "The loop exits naturally when the model returns a plain-text response with no tool call. In production you always add hard limits on top: a maximum iteration count (typically 15–25), a wall-clock timeout, and optionally a token or cost budget. If the iteration cap fires, a common pattern is to prompt the model one final time without tools so it synthesizes whatever it has gathered."
+    },
+    {
+      "q": "Does the model see every previous tool result every turn?",
+      "a": "Yes. By default the full message history — including every prior tool call and result — is included in the context on each turn. This is what lets the model reason about accumulated evidence. The downside is that context grows with every step, so long-running agents need strategies like result summarization or a rolling window to avoid filling the context window."
+    },
+    {
+      "q": "What is the ReAct pattern and how does it relate to the agent loop?",
+      "a": "ReAct (Reasoning + Acting, Yao et al. 2023) is the research paper that popularized interleaving explicit reasoning traces with tool calls. The think-act-observe loop is essentially a practical implementation of ReAct. The main insight of the paper was that combining reasoning *and* acting in the same loop outperforms either pure chain-of-thought (reasoning only) or pure action selection."
+    },
+    {
+      "q": "Can the agent loop call multiple tools at once?",
+      "a": "Some LLM APIs support **parallel tool calls** — the model can return several tool-call objects in a single response, and the runtime executes them concurrently. This is useful when two lookups are independent (e.g., fetching yesterday's and last month's prices in one turn instead of two). Parallel calls reduce total turns but require the runtime to handle concurrent execution and merge the results."
+    },
+    {
+      "q": "Why do I sometimes see 'agent stopped due to max iterations'?",
+      "a": "This error means the agent reached its iteration cap without producing a final answer. Common causes include a tool that keeps returning errors the model can't resolve, a goal that's genuinely too complex for the allotted steps, or a system prompt that encourages excessive verification. Increase the cap only after diagnosing why the extra turns are needed — blindly raising the limit often just delays the same outcome."
+    }
+  ],
+  "related": [
+    "what-is-an-ai-agent",
+    "react-agent-pattern",
+    "what-is-tool-use",
+    "agentic-workflow-patterns",
+    "do-you-need-an-agent"
+  ],
+  "furtherReading": [
+    {
+      "title": "ReAct: Synergizing Reasoning and Acting in Language Models (Yao et al., 2023)",
+      "url": "https://arxiv.org/abs/2210.03629"
+    },
+    {
+      "title": "Hugging Face Agents Course — Agent Steps and Structure",
+      "url": "https://huggingface.co/learn/agents-course/en/unit1/agent-steps-and-structure"
+    },
+    {
+      "title": "Anthropic Agent SDK — How the Agent Loop Works",
+      "url": "https://code.claude.com/docs/en/agent-sdk/agent-loop"
+    }
+  ]
+}

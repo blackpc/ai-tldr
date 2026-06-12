@@ -1,0 +1,385 @@
+{
+  "slug": "vector-metadata-filtering",
+  "title": "What Is Metadata Filtering in Vector Search? (and Why It's Tricky)",
+  "seoTitle": "Metadata Filtering in Vector Search, Explained",
+  "metaDescription": "Combining 'similar to this' with 'where category = X' is harder than it looks. Learn pre- vs post-filtering and how vector databases solve it.",
+  "keywords": [
+    "metadata filtering vector search",
+    "pre filtering vs post filtering vector database",
+    "filtered ann search explained",
+    "qdrant filtering vs pinecone metadata",
+    "why is filtered vector search slow"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Understand why bolting a WHERE clause onto similarity search breaks naive indexes, and the strategies real databases use instead.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you search a library catalog for books *similar* to the one you just loved, you're doing vector search — matching meaning and vibe. But what you actually type is: \"science fiction novels published after 2020 by an author I haven't read.\" That's vector search *plus* a metadata filter. The similarity part finds *relevant* books; the metadata part restricts the answer to *valid* ones. Metadata filtering is the mechanism that bolts those two requirements together."
+        },
+        {
+          "type": "p",
+          "md": "In a vector database, every stored vector can carry a payload — a JSON-like blob of structured fields: `category`, `user_id`, `date`, `language`, `price`, `is_archived`. A metadata filter is a condition on those fields: `category = \"legal\"`, `date > 2024-01-01`, `tenant_id = \"acme\"`. Simple enough in a relational database. **The complication is that vector databases don't search rows in a table — they search a graph or an index built for geometry, not equality.** Tacking a `WHERE` clause onto that structure isn't free."
+        },
+        {
+          "type": "p",
+          "md": "Think of the vector index as a city map optimised for walking — every node connects to its nearest geographic neighbors so you can reach any destination in a few short hops. A metadata filter is like saying \"walk to the nearest coffee shop, but it must be open at 6 a.m. and cost under $5.\" If most of the nearby shops fail those conditions, your map's shortcuts break down and you end up wandering blocks farther than expected. The more restrictive the filter, the more the map lets you down."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Metadata filtering is sometimes called **payload filtering** (Qdrant's terminology) or **attribute filtering**. The idea is the same: restrict a similarity search to vectors whose attached structured data matches a condition."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Unfiltered vector search is a prototype feature. Production search is almost always filtered. Here's why every real system needs it:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Multi-tenancy.** Each user or organization should only see their own documents. `tenant_id = \"acme\"` must be enforced at query time, not hoped for in a prompt.",
+            "**Recency.** An AI assistant answering questions about your codebase should search only files from the current branch, not deprecated snapshots. `branch = \"main\" AND modified_after = \"2025-01-01\"`.",
+            "**Access control.** Role-based or document-level permissions — `clearance_level >= user.clearance` — must be hard filters, not soft re-ranking signals.",
+            "**Domain restriction in RAG.** A customer-support bot should retrieve from the `product_docs` namespace, not from internal HR documents that happen to be semantically adjacent.",
+            "**Content type routing.** A multimodal search over a mixed corpus of PDFs, videos, and code files needs `content_type = \"pdf\"` to return only the right kind of result."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The naive mental model is that adding a filter *speeds things up* — you're searching fewer items, right? In a relational database, that's true: an index on `category` lets the engine skip irrelevant rows before touching anything else. In a vector database, the opposite can happen. **Adding a filter often slows the search down or degrades its accuracy**, because the filter disrupts the index structure the similarity search depends on. Understanding why — and how databases work around it — is what separates a prototype from a production-ready system."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The standard index behind fast vector search is **HNSW** (Hierarchical Navigable Small World) — a layered graph where each node connects to its closest neighbors. To find the nearest vectors to a query, you enter the graph at the top layer and greedily hop toward the query until you converge. Speed comes from those shortcuts: each hop covers ground fast, so you reach the answer neighborhood in `O(log n)` hops instead of scanning everything."
+        },
+        {
+          "type": "p",
+          "md": "Now apply a filter. Suppose you want the 10 nearest vectors where `category = \"legal\"`. Only 2% of your corpus matches that condition. The HNSW traversal starts hopping as usual — but most nodes it visits are non-legal documents it must skip. Two things go wrong: the graph's shortcuts were built to connect *all* nearby points, not just the legal ones, so the legal subgraph may be sparsely connected or even fragmented. The traversal can get stuck in a legal-document desert with no path to other legal documents nearby, and return far fewer than 10 results — or none at all."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "The filtered HNSW problem",
+            "steps": [
+              {
+                "label": "Query vector",
+                "sub": "find top-10 similar"
+              },
+              {
+                "label": "HNSW traversal",
+                "sub": "hop via nearest neighbors"
+              },
+              {
+                "label": "Filter check",
+                "sub": "skip nodes where category != legal"
+              },
+              {
+                "label": "Graph fragmentation",
+                "sub": "shortcuts skip over legal subgraph"
+              },
+              {
+                "label": "Fewer than k results",
+                "sub": "or worse recall",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Strategy 1 — Post-filtering (search first, then filter)"
+        },
+        {
+          "type": "p",
+          "md": "The simplest approach: run a normal unfiltered ANN search to get a large candidate set (say, the top 500 vectors), then discard any that fail the metadata condition, keeping the top 10 survivors. This preserves the HNSW graph's full connectivity and keeps search fast. The problem is *result count*: if the filter is highly selective (only 2% of vectors qualify), you might retrieve 500 candidates and find only 2 legal documents in there. You asked for 10, you got 2. To reliably get 10 results under a tight filter, you'd need to over-fetch so aggressively that you're scanning a large fraction of the entire corpus — defeating the purpose of approximate search."
+        },
+        {
+          "type": "h3",
+          "text": "Strategy 2 — Pre-filtering (filter first, then search)"
+        },
+        {
+          "type": "p",
+          "md": "The alternative: first enumerate all vectors that satisfy the metadata condition (using a separate inverted index or bitmap index on the payload field), then run similarity search only within that subset. For a highly selective filter (`tenant_id = \"acme\"` matching 0.1% of the corpus), this can be *faster* than unfiltered search — the ANN index operates on a tiny slice. But when the filter matches a large fraction of the corpus, pre-filtering degenerates into near-brute-force: you hand the ANN a huge subset, it can't use its graph shortcuts across the fragment boundaries, and latency climbs. Additionally, if the filtered subset is very small, the graph within it may be too sparse for accurate ANN — some databases fall back to a linear scan in that case."
+        },
+        {
+          "type": "h3",
+          "text": "The selectivity sweet spots"
+        },
+        {
+          "type": "p",
+          "md": "Neither naive strategy dominates across all selectivity levels. The right choice depends on what fraction of the corpus the filter matches — called the filter's **selectivity**. A query planner in a smart vector database measures this at query time and routes accordingly."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Filter selectivity",
+            "% of corpus matching",
+            "Best naive strategy",
+            "Why"
+          ],
+          "rows": [
+            [
+              "Highly selective",
+              "< 1%",
+              "Pre-filter (brute-force scan)",
+              "Subset so small, linear scan beats HNSW overhead"
+            ],
+            [
+              "Moderate",
+              "1%–20%",
+              "Filtered HNSW or hybrid",
+              "Neither naive strategy is efficient; need graph-aware filtering"
+            ],
+            [
+              "Broad",
+              "20%–80%",
+              "Post-filter or standard HNSW",
+              "Most results pass anyway; light over-fetch suffices"
+            ],
+            [
+              "Nearly all",
+              "> 80%",
+              "Unfiltered HNSW, apply filter last",
+              "Filter barely restricts; ANN graph works almost normally"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "database-approaches",
+      "title": "How real databases solve it",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Modern vector databases don't pick one strategy and hope for the best. They adapt at query time based on estimated filter cardinality. Here's how three major engines handle it:"
+        },
+        {
+          "type": "h3",
+          "text": "Qdrant — Filterable HNSW"
+        },
+        {
+          "type": "p",
+          "md": "Qdrant builds **subgraphs per payload value** inside the main HNSW index. If you index the `category` field, Qdrant maintains extra edges that keep the `category = \"legal\"` subgraph internally connected — so traversal within the legal subset doesn't get stranded. At query time, a built-in query planner estimates filter cardinality and routes to one of three modes: standard HNSW traversal with skipping (broad filter), filterable HNSW subgraph (moderate filter), or a full linear scan (highly selective filter where brute force beats index overhead). Crucially, **Qdrant does not index payload fields by default** — you must call `create_payload_index` on any field you plan to filter on, before or after data upload."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Qdrant — create a payload index and run a filtered search",
+          "code": "from qdrant_client import QdrantClient\nfrom qdrant_client.models import (\n    Distance, VectorParams, PayloadSchemaType,\n    Filter, FieldCondition, MatchValue, SearchRequest\n)\n\nclient = QdrantClient(url=\"http://localhost:6333\")\n\n# Step 1: index the field you want to filter on\nclient.create_payload_index(\n    collection_name=\"docs\",\n    field_name=\"category\",\n    field_schema=PayloadSchemaType.KEYWORD,\n)\n\n# Step 2: run a filtered similarity search\nresults = client.search(\n    collection_name=\"docs\",\n    query_vector=query_embedding,   # list[float]\n    query_filter=Filter(\n        must=[\n            FieldCondition(\n                key=\"category\",\n                match=MatchValue(value=\"legal\")\n            )\n        ]\n    ),\n    limit=10,\n    with_payload=True,\n)"
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "If you forget to call `create_payload_index` on the filtered field in Qdrant, the engine still runs the query — but it falls back to a full collection scan on every filtered request, which is much slower at scale."
+        },
+        {
+          "type": "h3",
+          "text": "Weaviate — ACORN"
+        },
+        {
+          "type": "p",
+          "md": "Weaviate introduced the **ACORN** (ANN Constraint-Optimized Retrieval Network) algorithm in version 1.27 (late 2024). ACORN addresses a specific failure mode: when the filter has *low correlation with the query vector* — meaning the relevant documents are in a part of the HNSW graph far from where the query vector lands. ACORN uses a **multi-hop expansion** strategy: instead of evaluating only immediate graph neighbors, it looks two hops out and evaluates their filter membership, allowing the traversal to jump across non-matching regions and reach a connected cluster of matching vectors. It also seeds entry points randomly rather than starting from a single fixed point, speeding convergence to the filtered zone."
+        },
+        {
+          "type": "h3",
+          "text": "Pinecone — slab-based partitioning"
+        },
+        {
+          "type": "p",
+          "md": "Pinecone's serverless architecture partitions vectors into non-overlapping **slabs** — each slab contains a vector index and a metadata index that can be evaluated independently. For a filter query, Pinecone identifies which slabs have any matching metadata at all, searches only those slabs, and merges the per-slab results. This approach was detailed at the ICML 2025 Vector Databases Workshop and was shown to improve recall on high-cardinality metadata — fields with many distinct values like `user_id` or `document_id` — without the memory overhead of maintaining per-value subgraphs."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Filtering strategies at a glance",
+            "columns": [
+              {
+                "title": "Post-filter",
+                "items": [
+                  "ANN search runs unfiltered",
+                  "Apply metadata condition to results",
+                  "Fast when filter is broad",
+                  "Fails with tight filters: too few results",
+                  "Simple to implement anywhere"
+                ]
+              },
+              {
+                "title": "Pre-filter",
+                "items": [
+                  "Enumerate matching vectors first",
+                  "ANN search over the subset",
+                  "Accurate when filter is very selective",
+                  "Slow when filter matches large fraction",
+                  "Risk of fragmented subgraph"
+                ]
+              },
+              {
+                "title": "Adaptive (Qdrant / ACORN)",
+                "accent": true,
+                "items": [
+                  "Query planner picks strategy per query",
+                  "Filter-aware graph edges or multi-hop expansion",
+                  "Robust across all selectivity levels",
+                  "Requires payload indexes to be created",
+                  "Best recall-vs-latency in production"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "Pitfall 1 — High-cardinality fields bloat the index"
+        },
+        {
+          "type": "p",
+          "md": "Fields like `user_id` (millions of distinct values) or `timestamp_ms` (essentially unique per document) create an inverted index entry for every value. For a filterable HNSW implementation that builds per-value subgraphs, this means thousands of tiny subgraphs that collectively cost more RAM than the vector data itself. The mitigation: don't index fields with unbounded cardinality as keyword indexes. Use range indexes for timestamps, and avoid indexing true unique identifiers unless you have a compelling reason."
+        },
+        {
+          "type": "h3",
+          "text": "Pitfall 2 — Low-cardinality fields with skewed distribution"
+        },
+        {
+          "type": "p",
+          "md": "A `status` field with values `active` / `deleted` might look low-cardinality, but if 99% of documents are `active`, then filtering on `status = \"active\"` is effectively unfiltered — post-filtering handles it fine. But filtering on `status = \"deleted\"` is highly selective — you want pre-filtering or a brute-force scan. A static strategy locked in at schema design time can't serve both correctly; this is why adaptive query planners exist."
+        },
+        {
+          "type": "h3",
+          "text": "Pitfall 3 — Applying filters after retrieval in your app layer"
+        },
+        {
+          "type": "p",
+          "md": "A common anti-pattern: fetch the top-100 from the vector database unfiltered, then filter the list in Python or TypeScript before sending results to the model. This seems simple and works fine at toy scale. Under a tight filter (only 1 in 50 results qualify), you need to fetch 500 candidates to reliably get 10 — and you're now pulling 50x more data over the network, running 50x more embedding comparisons, and still getting degraded recall. Push the filter into the database engine where it belongs."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "**Security filters must always be server-side.** Never implement `tenant_id` or `clearance_level` filtering in client code or a prompt instruction — a user can bypass application-layer filtering. Enforce access-control conditions as hard server-side predicates at the vector database query layer."
+        },
+        {
+          "type": "h3",
+          "text": "Pitfall 4 — Forgetting to create payload indexes in Qdrant"
+        },
+        {
+          "type": "p",
+          "md": "Qdrant's default collection configuration does not index any payload fields. If you run a filtered query on an un-indexed field, the engine performs a full collection scan — accurate, but O(n) slow. Create a payload index for every field you plan to filter on. The index type matters: use `KEYWORD` for categorical strings, `INTEGER` or `FLOAT` for numeric ranges, `DATETIME` for temporal filters, and `FULL_TEXT` for free-text substring matching."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "The query planner and cardinality estimation"
+        },
+        {
+          "type": "p",
+          "md": "A production vector database's query planner operates much like a relational query planner: it estimates the **cardinality** of the filter (how many vectors pass it) before choosing a strategy. In Qdrant, this estimate is per-segment; if different segments have different distributions of the filtered field, different segments may take different paths in the same query. The planner consults thresholds like `full_scan_threshold` — if the estimated matching count is below this, a brute-force scan over the matching subset is cheaper than graph traversal. These thresholds are tunable, and mistuning them (e.g., setting `full_scan_threshold` too high on a large collection) is a common source of unexplained latency spikes."
+        },
+        {
+          "type": "h3",
+          "text": "Compound filters and filter planning"
+        },
+        {
+          "type": "p",
+          "md": "Real queries often compose multiple conditions: `category = \"legal\" AND date > 2024-01-01 AND NOT is_archived`. The query planner must estimate the joint cardinality — how many documents satisfy *all* conditions simultaneously. If the database has per-field statistics, it can estimate this with reasonable accuracy. Without statistics, it falls back to conservative estimates that may pick a slower-than-necessary strategy. Compound `OR` filters are harder still: `category = \"legal\" OR category = \"compliance\"` requires either maintaining a subgraph for the union, running two separate queries and merging, or falling back to a scan. Research papers like *PathFinder* (2025) address conjunctions and disjunctions in filtered ANN specifically."
+        },
+        {
+          "type": "h3",
+          "text": "Graph isolation and the connectivity guarantee"
+        },
+        {
+          "type": "p",
+          "md": "The deepest problem with filtered HNSW is **graph connectivity under the filter**. A graph is connected if you can reach any node from any other node. In an unfiltered HNSW graph, connectivity is guaranteed by construction. The filtered subgraph — only the nodes that satisfy your predicate — may not be connected. If vector A and vector B both match your filter but are in disconnected components of the filtered subgraph, standard HNSW traversal will never find one from the other. Filterable HNSW (Qdrant) mitigates this by adding extra edges during index construction to maintain connectivity per payload value. ACORN (Weaviate) mitigates it at query time via multi-hop exploration that bridges gaps. Neither approach is free: extra edges cost RAM; multi-hop exploration costs CPU cycles per query."
+        },
+        {
+          "type": "h3",
+          "text": "Filtering and quantization"
+        },
+        {
+          "type": "p",
+          "md": "Many production deployments use **scalar quantization** or **product quantization** to compress vectors from 32-bit floats to 8-bit integers or binary, trading a small accuracy loss for a 4–16x reduction in RAM. Filtering interacts with quantization in a subtle way: quantized distances are approximate, so the planner's candidate set is already slightly degraded before the filter is applied. Under a tight filter, the combination of quantization noise and post-filter discard can compound recall losses. The practical fix is to enable re-scoring on the original vectors for the final shortlist — most databases support this as an option alongside quantization."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The open research benchmark for filtered ANN is the **Filtered ANN benchmark** maintained in the ANN-Benchmarks suite. It tests engines under varying filter selectivities on standard datasets — useful for understanding *shapes* of trade-offs, not for crowning a winner for your specific workload."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Why does adding a metadata filter sometimes make vector search slower?",
+      "a": "Vector databases use graph-based indexes (HNSW) where speed comes from traversing pre-built shortcuts between nearby vectors. A metadata filter restricts traversal to a subset of nodes, breaking those shortcuts. If the filter is highly selective, the remaining nodes form a sparse or disconnected subgraph, and the engine must explore much more of the graph — or fall back to a brute-force scan — to find enough qualifying results."
+    },
+    {
+      "q": "What is the difference between pre-filtering and post-filtering in vector search?",
+      "a": "Pre-filtering identifies all vectors that satisfy the metadata condition first, then runs similarity search only on that subset. Post-filtering runs similarity search first to get a large candidate pool, then discards candidates that fail the condition. Pre-filtering works well for highly selective filters (small subsets); post-filtering works well for broad filters. Modern databases like Qdrant use an adaptive query planner that chooses between the two — and a filterable HNSW graph — based on estimated cardinality."
+    },
+    {
+      "q": "Do I need to create indexes on metadata fields in Qdrant?",
+      "a": "Yes. Qdrant does not index payload fields by default. If you run a filter on an un-indexed field, Qdrant performs a full collection scan for every filtered query, which is correct but O(n) slow. Call `create_payload_index` on each field you plan to filter on, using the type appropriate for the data: KEYWORD for strings, INTEGER or FLOAT for numerics, DATETIME for timestamps."
+    },
+    {
+      "q": "What is ACORN and why did Weaviate introduce it?",
+      "a": "ACORN (ANN Constraint-Optimized Retrieval Network) is a filtered search algorithm introduced in Weaviate 1.27. It uses a multi-hop graph expansion strategy to bridge gaps in the filtered subgraph — nodes that match the filter but are not directly connected in the standard HNSW graph. It is especially beneficial when the filter has low correlation with the query vector, meaning matching vectors are in a part of the graph far from the query's natural landing zone."
+    },
+    {
+      "q": "Is it safe to implement access-control filters in application code instead of the vector database?",
+      "a": "No. Filters enforced in application code — or worse, embedded in a prompt — can be bypassed by an adversarial user or a prompt injection attack. `tenant_id`, `clearance_level`, and similar security predicates must be enforced as hard server-side conditions at the vector database query layer, where they cannot be overridden by user input."
+    },
+    {
+      "q": "How does filter selectivity affect which strategy a vector database should use?",
+      "a": "For very selective filters (under ~1% of the corpus matches), a linear scan over the matching subset is often faster than navigating the full HNSW graph. For moderate selectivity (1-20%), a filterable HNSW subgraph or multi-hop expansion gives the best balance of speed and recall. For broad filters (most of the corpus matches), standard HNSW traversal with post-filter discard works well. Production databases estimate selectivity at query time and route automatically."
+    }
+  ],
+  "related": [
+    "what-are-embeddings",
+    "what-is-semantic-search",
+    "how-text-embeddings-work",
+    "how-to-choose-embedding-model"
+  ],
+  "furtherReading": [
+    {
+      "title": "A Complete Guide to Filtering in Vector Search — Qdrant",
+      "url": "https://qdrant.tech/articles/vector-search-filtering/"
+    },
+    {
+      "title": "How We Speed Up Filtered Vector Search with ACORN — Weaviate",
+      "url": "https://weaviate.io/blog/speed-up-filtered-vector-search"
+    },
+    {
+      "title": "Accurate and Efficient Metadata Filtering in Pinecone's Serverless Vector Database — Pinecone Research",
+      "url": "https://www.pinecone.io/research/accurate-and-efficient-metadata-filtering-in-pinecones-serverless-vector-database/"
+    }
+  ]
+}

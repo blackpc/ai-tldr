@@ -1,0 +1,420 @@
+{
+  "slug": "how-to-ab-test-prompts",
+  "title": "How to A/B Test a Prompt Change",
+  "seoTitle": "How to A/B Test a Prompt Change",
+  "metaDescription": "A step-by-step guide to A/B testing prompt changes: building an eval set, picking metrics, avoiding noisy comparisons, and rolling out the winner.",
+  "keywords": [
+    "how to ab test prompts",
+    "prompt a/b testing",
+    "comparing two prompt versions",
+    "measuring prompt performance",
+    "prompt regression testing"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn to compare two prompt versions with a real eval set and honest metrics instead of eyeballing three outputs and shipping a regression.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**A/B testing a prompt** means running two versions of the same prompt — call them A (current) and B (candidate) — against the same set of test inputs, scoring both, and letting the numbers decide which one ships. The alternative is what most people do: rewrite the prompt, try it on a handful of hand-picked inputs in a playground, think \"yeah that looks better,\" and push it live. That's not iteration — that's luck. And luck fails silently when B improves one scenario while quietly breaking three others you didn't check."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like a kitchen tasting panel. The head chef wants to change the sauce recipe. She doesn't serve the new version to every table on Tuesday night and read Yelp reviews on Wednesday. She prepares both sauces, gives the same 30 dishes to a panel of tasters, has them score each dish blind, and only rolls out the new recipe if it wins convincingly — and doesn't lose on any dish type she cares about. The eval set is the panel. The scoring criteria are the metrics. The rollout decision is the final step, not the first."
+        },
+        {
+          "type": "p",
+          "md": "Everything that follows is a disciplined version of that same idea: build a representative panel of test inputs, pick metrics that actually reflect quality, run both prompt versions against the same panel, read the results carefully, and then — and only then — decide what ships."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Prompts are brittle in a specific way: changes that look small produce effects that are large, non-obvious, and directionally unpredictable. Adding an instruction to be concise can make the model skip required fields. Dropping one few-shot example can break handling of edge cases you never thought were load-bearing. The fundamental challenge with prompt development is that changes have unpredictable effects, where adding an example might improve one scenario while breaking another. Without a structured comparison, you can't separate real wins from noise."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Regressions ship invisibly.** The model doesn't throw an exception when quality drops. Users just get worse answers, and nobody connects that to the prompt edit from last Thursday.",
+            "**Playground testing is not testing.** Three inputs chosen because you expect them to work is selection bias, not evidence. Prompts fail on the inputs you didn't try.",
+            "**Noise masquerades as signal.** LLM outputs are non-deterministic. A prompt that \"looks better\" on five playground runs may just be lucky. Real differences require real sample sizes.",
+            "**You can't roll back what you can't measure.** If you don't know which version is better on which cases, a rollback just trades one unknown for another.",
+            "**Costs creep in the wrong direction.** A prompt that improves quality by 3% while doubling token usage and response latency is not a net improvement — but you'll never know unless you measure both dimensions together."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "A proper A/B test gives you three things a playground doesn't: coverage (you ran both versions on the same inputs, not different ones), measurement (numbers, not impressions), and regression detection (you'll see if B wins overall but loses on a critical subset). That combination is what separates shippable confidence from hopeful guessing."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Prompt A/B testing has two phases: **offline** (run both versions against a stored eval set, compare scores) and **online** (run the winner against real user traffic, compare live metrics). Most teams need offline testing every time; online testing is worth adding once real users depend on the output."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Prompt A/B test lifecycle",
+            "steps": [
+              {
+                "label": "Build eval set",
+                "sub": "50+ representative inputs"
+              },
+              {
+                "label": "Pick metrics",
+                "sub": "quality + cost + latency"
+              },
+              {
+                "label": "Run both versions",
+                "sub": "same inputs, same scorer"
+              },
+              {
+                "label": "Compare results",
+                "sub": "aggregate + per-case diff"
+              },
+              {
+                "label": "Decision gate",
+                "sub": "B wins on primary metric, no critical regressions"
+              },
+              {
+                "label": "Canary rollout",
+                "sub": "5-10% of live traffic",
+                "accent": true
+              },
+              {
+                "label": "Full promotion",
+                "sub": "or rollback if live metrics drift"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Step 1: Build a real eval set"
+        },
+        {
+          "type": "p",
+          "md": "The eval set is everything. A weak set gives you false confidence; a strong set catches real regressions. Start with **50 inputs minimum** — aim for 100-200 once your application matures. Sources: real user inputs from production logs (sample broadly, not just the happy path), inputs that caused problems in the past (these are gold), and a handful of synthetic edge cases you care about (empty input, very long input, adversarial phrasing)."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Every time the current prompt produces a bad output in production, add that exact input as a test case before you fix anything. After six months your eval set is a museum of every real failure — and none of them can regress silently again."
+        },
+        {
+          "type": "p",
+          "md": "For each input, you need a way to judge the output. This is your **scorer**. There are three kinds, and you'll usually want all three:"
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Deterministic assertions** — cheap, fast, and reliable. Does the output contain required text? Is it valid JSON? Is it under 300 tokens? Catch mechanical regressions for fractions of a cent.",
+            "**LLM-as-judge** — use a capable model (e.g., GPT-4o or Claude 3.5 Sonnet) to score outputs against a rubric you define. Good for fuzzy qualities: helpfulness, tone, factual consistency, instruction following. Costs more; validate the judge's grades against human labels before trusting it.",
+            "**Human review** — expensive, slow, and the ground truth. Reserve it for calibrating your LLM-as-judge and for borderline decisions on high-stakes prompts. Aim for at least 150-250 human-labeled examples to validate your automated scorer."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Step 2: Pick your primary and guard-rail metrics"
+        },
+        {
+          "type": "p",
+          "md": "Define one **primary metric** — the number that determines whether B beats A. This is usually a quality score: average pass rate on the LLM-as-judge rubric, or the percentage of test cases that hit all deterministic assertions. Then define **guard-rail metrics** — numbers B is not allowed to lose on, even if it wins overall. Common guard rails: latency, cost per call, refusal rate (the model shouldn't start refusing more), and pass rate on any critical subset of cases (safety inputs, a specific user segment)."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Metric type",
+            "Examples",
+            "How to measure"
+          ],
+          "rows": [
+            [
+              "Primary quality",
+              "Rubric pass rate, helpfulness score",
+              "LLM-as-judge or human labels"
+            ],
+            [
+              "Guard rail: cost",
+              "Avg tokens per call, cost per 1K requests",
+              "Token counter in eval runner"
+            ],
+            [
+              "Guard rail: latency",
+              "Median + p95 response time",
+              "Timer around each API call"
+            ],
+            [
+              "Guard rail: safety",
+              "Pass rate on adversarial subset",
+              "Deterministic or judge scorer"
+            ],
+            [
+              "Guard rail: regression",
+              "Pass rate on known-failing inputs",
+              "Deterministic assertions on golden cases"
+            ]
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Step 3: Run both versions, compare carefully"
+        },
+        {
+          "type": "p",
+          "md": "Run prompt A and prompt B against **exactly the same eval set**, using the same scorer, at the same temperature setting. Do not compare A on Monday's run against B on Tuesday's run — the model may have changed, the judge may behave differently, and the difference you measure won't be the one you caused. Paired evaluation is essential: for each input, you have an A score and a B score, so you can compute per-case differences, not just aggregate averages."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "LLM outputs are non-deterministic. A single eval run can be misleading. For important decisions, run each version 3-5 times on the same inputs and score the **pass rate across runs**, not the result of a single sample. This is especially important when your scorer is also an LLM — the judge itself introduces variance."
+        }
+      ]
+    },
+    {
+      "id": "reading-results",
+      "title": "Reading results without fooling yourself",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The most common mistake after running an eval is misreading a noisy difference as a real one. A 2-point improvement in average quality score across 50 test cases is not reliably meaningful — it may just be variance in LLM outputs or in the judge. You need three things before declaring B the winner:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**A large enough sample.** With 50 test cases and a binary pass/fail scorer, you need roughly a 10-15 percentage point difference to be confident the result isn't noise. With 200 cases you can detect differences as small as 5-7 points. If your eval set is tiny, the test can tell you B is catastrophically bad but it can't tell you B is a little better.",
+            "**A per-case breakdown, not just averages.** A prompt that gains +8 points on creative inputs but loses -6 points on factual inputs may still average to a win. Aggregate scores hide directional regressions. Review the per-case diff: which specific inputs got better, which got worse, and are the regressions in a category you care about?",
+            "**Bootstrap confidence intervals for important decisions.** Because LLM eval score distributions are rarely normal, bootstrap resampling is the right statistical tool. Resample your test cases with replacement 500-1,000 times and compute a 95% CI on the score difference. If the interval includes zero, you don't have evidence B is better — you have noise.",
+            "**Separate the scorers.** A prompt might win on the LLM-as-judge dimension while losing on token count. Treat each metric independently before combining them into a go/no-go decision."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "A practical decision rule that works well: **B ships if it wins on the primary metric by a meaningful margin AND does not regress on any guard-rail metric AND loses on fewer than X% of the individual test cases** (where X is a threshold you set in advance, not after seeing the results). Setting the threshold after you see the results is p-hacking — the prompt equivalent of declaring victory on whichever subset happened to look good."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "When B is ambiguously better — it wins slightly on quality but also costs slightly more — that is a product decision, not an eval decision. Flag the tradeoff explicitly and let the relevant people decide. Don't let the eval process be hijacked into making a business call it wasn't designed to make."
+        }
+      ]
+    },
+    {
+      "id": "tooling-and-workflow",
+      "title": "Tooling and a minimal working workflow",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You don't need a paid platform to run a solid prompt A/B test. [promptfoo](https://www.promptfoo.dev/docs/intro/) is a free, open-source CLI that runs both prompt versions against a shared test suite and generates a side-by-side comparison. Here is a minimal config:"
+        },
+        {
+          "type": "code",
+          "lang": "yaml",
+          "code": "# promptfooconfig.yaml\nprompts:\n  - id: version-a\n    raw: |\n      Summarize the article below in 2-3 sentences.\n      Article: {{article}}\n  - id: version-b\n    raw: |\n      Summarize the article below in exactly 2-3 sentences.\n      Be specific: include the key figure or outcome mentioned.\n      Article: {{article}}\n\nproviders:\n  - openai:gpt-4o-mini\n\ntests:\n  - vars:\n      article: \"The Fed raised rates by 0.25 points on Wednesday, the ninth hike in 18 months, citing persistent core inflation of 3.4%.\"\n    assert:\n      - type: icontains\n        value: \"rate\"\n      - type: llm-rubric\n        value: \"Covers the key figure (0.25 points or 3.4%) and is 2-3 sentences\"\n\n  - vars:\n      article: \"A new study of 12,000 patients found that daily aspirin does not reduce first-time heart attacks in healthy adults over 70.\"\n    assert:\n      - type: icontains\n        value: \"aspirin\"\n      - type: llm-rubric\n        value: \"Accurately reflects the finding without overstating it, 2-3 sentences\""
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "code": "# run the eval and open the comparison UI\nnpx promptfoo@latest eval\nnpx promptfoo@latest view"
+        },
+        {
+          "type": "p",
+          "md": "promptfoo's output matrix shows each prompt version as a column and each test input as a row. You can see at a glance which cases B won, which it tied, and which it lost. The aggregate scores are at the bottom — but the per-case view is where you'll catch the subtle regression."
+        },
+        {
+          "type": "p",
+          "md": "If your team is already on a platform like **Braintrust** or **Langfuse**, both have native eval comparison built in. Braintrust provides a GitHub Action that runs evaluations on every commit and posts a score comparison as a pull-request comment — so prompt A/B testing becomes part of your normal code review workflow, with a merge block if quality degrades past a configured threshold. Langfuse's A/B testing feature lets you label two prompt versions (e.g., `prod-a` and `prod-b`), randomly serve them in production, and compare their real-traffic metrics in the analytics dashboard."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Tool",
+            "Type",
+            "Best for"
+          ],
+          "rows": [
+            [
+              "promptfoo",
+              "Open-source CLI",
+              "Engineers; offline eval; CI integration"
+            ],
+            [
+              "Braintrust",
+              "SaaS platform",
+              "Teams wanting CI/CD eval gates + observability"
+            ],
+            [
+              "Langfuse",
+              "Open-source + cloud",
+              "Online A/B testing with trace-linked metrics"
+            ],
+            [
+              "LangSmith",
+              "SaaS platform",
+              "Teams in the LangChain ecosystem"
+            ],
+            [
+              "PromptLayer",
+              "SaaS platform",
+              "Simple replay-based comparison; non-engineers"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Start with the free tier of promptfoo for offline testing, even if you plan to graduate to a platform. Running evals locally before you pay for an eval platform forces you to write explicit test cases and scorers — that discipline is the real value, and it transfers directly to any tool."
+        }
+      ]
+    },
+    {
+      "id": "online-rollout",
+      "title": "Rolling out the winner safely",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Passing the offline eval is necessary but not sufficient. An offline eval is a controlled experiment on a curated dataset. Real production traffic is messier: more diverse, more surprising, and subject to distribution shift you didn't anticipate. The safe way to promote a winning prompt to production is a **canary rollout**."
+        },
+        {
+          "type": "p",
+          "md": "A canary routes a small percentage of real traffic to the new prompt version while the rest continues to see the old version. Typical starting point: **5-10% of traffic**. Run this for at least 24-48 hours. Watch for:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "Quality signals from your production scoring pipeline (if you have one) or user feedback events (thumbs down, corrections, escalations)",
+            "Latency and cost per call — the online numbers should match the offline measurements; a gap means the prompt behaves differently on real inputs",
+            "Refusal or error rate — a prompt that starts refusing more or erroring more on real traffic has a real-world distribution mismatch with your eval set",
+            "Business metrics if you can tie them — conversion, task completion, support ticket rate"
+          ]
+        },
+        {
+          "type": "p",
+          "md": "If the canary looks healthy after 24-48 hours, ramp to 50%, wait another day, then ramp to 100%. If any metric drifts in the wrong direction, roll back immediately — move the version label back to A. A rollback should take seconds, not minutes; if it takes longer, that's a tooling problem worth fixing separately."
+        },
+        {
+          "type": "p",
+          "md": "**Shadow testing** is an even safer alternative when you can't afford to expose any users to a potentially weaker prompt. In shadow mode you run prompt B in the background on every real request alongside prompt A, score both, but only serve prompt A's output to users. You collect real-distribution evidence with zero user exposure. The downside is cost: you're paying for two LLM calls per request. It's worth it for high-stakes applications."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Canary vs. shadow testing",
+            "columns": [
+              {
+                "title": "Canary (5-10% live)",
+                "items": [
+                  "Some users see prompt B",
+                  "Real outcomes measurable",
+                  "Standard rollout pattern",
+                  "Low added cost",
+                  "Some exposure to regressions"
+                ]
+              },
+              {
+                "title": "Shadow (0% live)",
+                "accent": true,
+                "items": [
+                  "No users see prompt B",
+                  "Outputs scored offline",
+                  "Zero risk to users",
+                  "2x LLM cost per request",
+                  "Best for high-stakes apps"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**The eval set is a living artifact, not a one-time build.** A dataset created today reflects today's traffic distribution. As your user base grows, shifts, or your application scope changes, the eval set drifts out of alignment with production. Best practice is to sample 5-10% of real production traffic continuously, run it through your automated scorer, and flag inputs that score poorly for potential inclusion in the eval set. This keeps the eval set representative and catches distribution shifts before they cause silent regressions."
+        },
+        {
+          "type": "p",
+          "md": "**Validate your judge before trusting it.** Using an LLM to judge an LLM means they may share systematic biases — the judge may consistently favor verbose answers, or be overly permissive on a failure mode your users actually care about. Before running large-scale A/B tests, calibrate your judge prompt against a set of 150-250 human-labeled examples and check that judge grades agree with human grades at least 80% of the time. Run those same examples periodically: if you upgrade the judge model, the agreement rate may shift."
+        },
+        {
+          "type": "p",
+          "md": "**Test the whole config, not just the text.** A prompt's behavior is determined by the template, the model identifier, the temperature, any tool definitions, the output schema, and the few-shot examples. If your A/B test changes only the text but the model upgrades between runs, you haven't controlled the experiment. In practice this means stamping each eval run with the full generation config — not just the prompt version — so you can tell whether a score change came from the text edit or from something else."
+        },
+        {
+          "type": "p",
+          "md": "**Automatic prompt optimization closes the loop.** Once you have a repeatable eval pipeline — a fixed set of inputs, a calibrated scorer, a defined primary metric — you can hand the search process to an optimizer. Tools like [DSPy](https://dspy.ai/) treat the prompt as a learnable parameter and run gradient-free optimization against your eval metric, proposing and scoring candidate versions automatically. The A/B test framework you built is exactly the evaluation harness these systems need. Manual A/B testing and automated optimization are not competing approaches — manual gives you the ground truth that makes automated optimization trustworthy."
+        },
+        {
+          "type": "p",
+          "md": "**Regression testing is A/B testing with one version pinned.** Once you have a versioned prompt and an eval suite, every pull request that touches the prompt, the model, or any retrieval or tool configuration should trigger an eval run against the current production version as Variant A. The candidate is B. Any PR that regresses the primary metric past a configured threshold does not merge. This is the same statistical discipline applied as a continuous gate rather than a one-time comparison, and it's what separates teams that ship reliably from teams that ship hopefully."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "How many test cases do I need to A/B test a prompt?",
+      "a": "A minimum of 50, aiming for 100-200 as your application matures. With fewer than 50 cases you can detect catastrophic regressions but not small improvements — the noise from LLM non-determinism and judge variance swamps the signal. Critically, the 50 inputs must be representative of real production traffic, not cherry-picked happy-path examples."
+    },
+    {
+      "q": "How do I measure prompt quality when there is no single right answer?",
+      "a": "Use an LLM-as-judge: provide a rubric describing what a good output looks like for your task, then have a capable model score each output against the rubric. Combine this with deterministic assertions (does the output contain required fields? Is it valid JSON? Is it under a length limit?) to catch mechanical failures cheaply. Always validate the judge against a set of human-labeled examples before trusting it at scale."
+    },
+    {
+      "q": "Is a 5% improvement in eval score worth shipping?",
+      "a": "It depends on your eval set size and whether the difference is statistically meaningful. With 50 test cases, a 5-point difference may just be noise. Use bootstrap resampling (500-1,000 resamples) to compute a 95% confidence interval on the score difference — if the interval includes zero, you don't have reliable evidence of improvement. A 5% win on 200+ cases with a tight confidence interval is real. A 5% win on 30 cases is probably not."
+    },
+    {
+      "q": "What is the difference between offline eval and online A/B testing?",
+      "a": "Offline eval runs both prompt versions against a stored dataset in a controlled setting — same inputs, same scorer, no users affected. It proves a prompt *can* work on representative inputs. Online A/B testing routes real user traffic to both versions and compares live metrics like quality signals, latency, cost, and business outcomes. It proves a prompt *does* work on the actual distribution of real inputs. Both are valuable; offline testing comes first."
+    },
+    {
+      "q": "Can I A/B test a prompt change and a model upgrade at the same time?",
+      "a": "Technically yes, but you won't be able to attribute the result. If B (new prompt + new model) beats A (old prompt + old model), you don't know whether the prompt, the model, or the combination drove the win. Best practice is to change one variable at a time. If you need to upgrade both simultaneously, run a third condition: old prompt + new model, so you can isolate each effect."
+    },
+    {
+      "q": "What should I do when the eval results are ambiguous — B is slightly better on quality but slightly worse on cost?",
+      "a": "Flag the tradeoff explicitly and escalate it as a product decision, not a technical one. Include the exact numbers: \"B improves rubric pass rate from 72% to 76% (+4 points) and increases average token cost by 18%.\" Someone with context on user value and budget should make the call. Do not let the eval framework make a business decision it was not designed to make."
+    }
+  ],
+  "related": [
+    "what-is-prompt-engineering",
+    "what-is-system-prompt",
+    "zero-shot-vs-few-shot",
+    "does-role-prompting-work",
+    "structure-prompts-xml-markdown"
+  ],
+  "furtherReading": [
+    {
+      "title": "A/B testing for LLM prompts: A practical guide",
+      "url": "https://www.braintrust.dev/articles/ab-testing-llm-prompts"
+    },
+    {
+      "title": "A/B Testing — Langfuse Prompt Management Docs",
+      "url": "https://langfuse.com/docs/prompt-management/features/a-b-testing"
+    },
+    {
+      "title": "promptfoo: Open-source LLM eval and red-teaming",
+      "url": "https://www.promptfoo.dev/docs/intro/"
+    }
+  ]
+}

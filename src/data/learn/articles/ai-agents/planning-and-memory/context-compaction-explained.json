@@ -1,0 +1,387 @@
+{
+  "slug": "context-compaction-explained",
+  "title": "What Is Context Compaction? Keeping Long-Running Agents Sane",
+  "seoTitle": "Context Compaction for Long-Running AI Agents",
+  "metaDescription": "Long-running agents overflow their context window. Compaction summarizes old turns into a smaller form so the loop can keep going. Here's how.",
+  "keywords": [
+    "what is context compaction",
+    "agent context window full",
+    "summarize conversation history llm",
+    "context management ai agents",
+    "compaction claude code"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn how agents summarize their own history to stay under the context limit without forgetting what matters mid-task.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In Plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every large-language model has a **context window** — a hard ceiling on how many tokens it can hold in memory at once. For a single question-and-answer exchange that limit is rarely a problem. But a long-running agent is different. It reads files, calls tools, reasons step by step, and accumulates that entire history in the window as it goes. Eventually, the window fills up. Without a strategy, the agent simply crashes or silently drops the oldest messages — either way, it loses track of what it was doing."
+        },
+        {
+          "type": "p",
+          "md": "**Context compaction** is the technique of automatically summarizing the older portion of that history into a compact form, then replacing the raw transcript with the summary. The agent's memory shrinks dramatically, but the key facts — decisions made, files changed, constraints in force — survive. The loop can keep running."
+        },
+        {
+          "type": "h3",
+          "text": "The sticky-note analogy"
+        },
+        {
+          "type": "p",
+          "md": "Imagine a contractor renovating a house. They start the day with a blank notepad and scribble every measurement, every client request, every problem they hit. By noon the pad is full. Rather than buying a new pad from scratch — and losing context about the project — they spend ten minutes writing a single summary page: \"Kitchen: backsplash chosen, plumbing moved left 6 inches, still need to order hardware.\" They tear out the old pages, clip in the summary, and keep working. That summary page is a compacted context."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Compaction is not the same as forgetting. A good compaction preserves **what the agent still needs to act correctly** — active constraints, open tasks, key decisions — while discarding the exploratory reasoning that led to those decisions."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why It Matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Modern frontier models offer context windows in the range of 128K to 200K tokens. That sounds large until you run a coding agent on a real codebase. A single large file can consume tens of thousands of tokens. Add tool-call results, chain-of-thought reasoning, and a long back-and-forth with the user and you will hit the ceiling in an afternoon's session. Without compaction, the options are bleak:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Hard stop**: the API returns an error and the agent halts mid-task.",
+            "**Silent truncation**: the oldest messages are dropped, causing the agent to forget earlier instructions or repeat work it already completed.",
+            "**Sliding window**: only the most recent N turns are kept, which works for shallow chat but destroys long-horizon task state."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Beyond the raw token limit, there is a subtler problem called **context rot**: as the window grows, model performance degrades before the hard ceiling is reached. Studies from 2025 found that nearly 65% of enterprise AI task failures were attributed to context drift or memory loss during multi-step reasoning — not outright context exhaustion. Compaction also fights context rot by replacing a sprawling, noisy history with a clean, structured summary that the model attends to more reliably."
+        },
+        {
+          "type": "p",
+          "md": "For builders specifically, context compaction means you can ship agents that handle hours-long tasks — repository migrations, multi-file refactors, long research sessions — without artificially scoping down the work or hand-rolling brittle context management code."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How It Works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The compaction loop has three phases: **detect**, **summarize**, and **resume**."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Context Compaction — the Three-Phase Loop",
+            "steps": [
+              {
+                "label": "Agent runs normally",
+                "sub": "Each turn appends to the context"
+              },
+              {
+                "label": "Threshold crossed",
+                "sub": "Token count reaches ~80% of window limit"
+              },
+              {
+                "label": "Summarize",
+                "sub": "LLM (same or smaller) condenses old turns into a structured summary"
+              },
+              {
+                "label": "Swap",
+                "sub": "Raw history replaced with summary block in the context"
+              },
+              {
+                "label": "Resume",
+                "sub": "Agent continues with a smaller, clean context"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Detection: when to trigger"
+        },
+        {
+          "type": "p",
+          "md": "Most systems trigger compaction when the context reaches a fraction of the model's maximum — typically between 75% and 95% full. Triggering too late (at 99%) leaves almost no room for the summary itself and risks a lossy emergency compress. Claude Code triggers compaction at roughly 80% of the window (~160K tokens out of 200K). The Anthropic Messages API compaction feature (beta header `compact-2026-01-12`) defaults to a 150K-token trigger threshold, with a minimum floor of 50K tokens to avoid unnecessary thrashing on short sessions."
+        },
+        {
+          "type": "h3",
+          "text": "Summarization: what gets kept"
+        },
+        {
+          "type": "p",
+          "md": "The summarizer — either the same model or a smaller, faster one — receives the accumulated history and produces a structured document. Research and production systems converge on preserving:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**The original user goal** — the mission statement that constrains every downstream decision.",
+            "**Key decisions and rationale** — e.g., \"chose approach B over A because the API doesn't support X\".",
+            "**Files or resources modified** — a concise list, not the full diffs.",
+            "**Open tasks and pending items** — what is still undone.",
+            "**Active constraints** — rules the agent must not violate going forward.",
+            "**Error history** — mistakes already made, so the agent does not repeat them."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "What the summarizer can safely discard: raw tool output that has already been acted upon, redundant intermediate reasoning steps, exploratory dead-ends that did not affect the final state, and verbose multi-turn confirmations."
+        },
+        {
+          "type": "h3",
+          "text": "The compaction block"
+        },
+        {
+          "type": "p",
+          "md": "In Anthropic's API implementation, the summarizer's output is inserted as a special **compaction block** at the start of the new messages array. Subsequent turns append after it normally. Because the block is clearly marked, downstream tooling (observability dashboards, cost calculators, post-compaction hooks) can identify exactly which tokens are original content versus summary."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Enabling compaction via the Anthropic Messages API (beta)",
+          "code": "import anthropic\n\nclient = anthropic.Anthropic()\n\nresponse = client.messages.create(\n    model=\"claude-sonnet-4-6\",\n    max_tokens=8096,\n    # Enable compaction with the beta header\n    betas=[\"compact-2026-01-12\"],\n    # Optional: override the default 150K-token trigger threshold\n    context_management={\n        \"edits\": [\n            {\n                \"strategy\": \"compact_20260112\",\n                \"trigger_threshold\": 100_000  # min 50 000\n            }\n        ]\n    },\n    messages=conversation_history  # your accumulated list of turns\n)"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Claude Code's `/compact` slash command lets you trigger compaction manually at any point — useful when you know a large file read is coming and want to start it with a clean context."
+        }
+      ]
+    },
+    {
+      "id": "compaction-vs-other-strategies",
+      "title": "Compaction vs. Other Context Strategies",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Compaction is one tool in the context-management kit. Understanding where it fits — and where it falls short — helps you pick the right strategy for your agent."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Strategy",
+            "What it does",
+            "Best for",
+            "Weakness"
+          ],
+          "rows": [
+            [
+              "Sliding window",
+              "Keeps only the most recent N turns",
+              "Short-lived chat assistants",
+              "Forgets early instructions that still matter"
+            ],
+            [
+              "Context compaction",
+              "Summarizes old turns; keeps decisions and state",
+              "Long-running task agents",
+              "Summary can miss rare but critical details"
+            ],
+            [
+              "External memory (RAG)",
+              "Stores facts in a DB; retrieves on demand",
+              "Knowledge bases, cross-session recall",
+              "Adds retrieval latency and infra complexity"
+            ],
+            [
+              "Sub-agent delegation",
+              "Offloads bounded tasks; returns only a compact result",
+              "Parallelism, scoped sub-tasks",
+              "Orchestration overhead; needs good interfaces"
+            ],
+            [
+              "Prompt caching",
+              "Reuses expensive prefix tokens across turns",
+              "Stable system-prompt heavy workloads",
+              "Does not reduce context size — only cost"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "In practice, production systems **layer** these strategies. A long-running research agent might use compaction to manage in-session history, RAG to answer questions about a large knowledge base, and sub-agent delegation to handle discrete sub-tasks — returning only their conclusions back to the orchestrator."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Sliding Window vs. Compaction",
+            "columns": [
+              {
+                "title": "Sliding Window",
+                "items": [
+                  "Drops oldest turns completely",
+                  "Simple to implement",
+                  "Loses early instructions",
+                  "Good for chat, bad for tasks",
+                  "Zero additional LLM cost"
+                ]
+              },
+              {
+                "title": "Compaction",
+                "accent": true,
+                "items": [
+                  "Condenses old turns into a summary",
+                  "Requires a summarizer call",
+                  "Preserves key decisions and constraints",
+                  "Good for long-horizon task agents",
+                  "Small extra token cost per compaction event"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "pitfalls-and-gotchas",
+      "title": "Pitfalls and Gotchas",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Compaction is not a free lunch. Builders who rely on it hit predictable failure modes."
+        },
+        {
+          "type": "h3",
+          "text": "Compaction thrashing"
+        },
+        {
+          "type": "p",
+          "md": "If the agent's first action after compaction is to re-read a massive file or re-request a huge tool output, the window fills back up almost immediately and triggers another compaction. Each compaction cycle introduces a small loss of fidelity; back-to-back cycles compound the problem. The fix: after compaction, prefer to summarize or reference large artifacts instead of re-ingesting them in full."
+        },
+        {
+          "type": "h3",
+          "text": "Subtle detail loss"
+        },
+        {
+          "type": "p",
+          "md": "Summarizers are good at retaining the main storyline but can drop low-salience details that turn out to matter later — a specific flag passed to a CLI tool, an edge-case the user mentioned once, a version number buried in a long output. The mitigation is to explicitly mark critical facts at the time they appear (e.g., in a structured working-notes section of the system prompt that the agent updates incrementally) so the summarizer finds them easily."
+        },
+        {
+          "type": "h3",
+          "text": "Late compaction = emergency mode"
+        },
+        {
+          "type": "p",
+          "md": "Triggering compaction at 99% capacity leaves almost no tokens for the summary itself, forcing a very aggressive — and lossy — compression. Always set the trigger well before the limit. A 75–80% trigger gives the summarizer room to write a thorough, structured output."
+        },
+        {
+          "type": "h3",
+          "text": "What CLAUDE.md survives — and what doesn't"
+        },
+        {
+          "type": "p",
+          "md": "In Claude Code specifically, the project-root `CLAUDE.md` file is re-injected after compaction because it is part of the system prompt, not the conversation history. But nested `CLAUDE.md` files, skills invoked earlier in the session, and user preferences stated only in chat can be summarized away. Important project rules should live in `CLAUDE.md`, not buried in conversation."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Never assume that a constraint you stated in a chat message will survive multiple compaction cycles. If a rule must hold for the entire task, put it in the system prompt or a CLAUDE.md file — not the conversation history."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going Deeper",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "Custom compaction prompts"
+        },
+        {
+          "type": "p",
+          "md": "Advanced users of Claude Code can override the default compaction prompt via `--compact-prompt` or in the project config. A domain-specific compaction prompt can instruct the summarizer to preserve artifacts that the default summary would elide — for example, in a data-pipeline build, you might direct it to always retain the current schema definitions and migration status in the summary, even if they haven't been touched in a while."
+        },
+        {
+          "type": "h3",
+          "text": "Post-compaction hooks"
+        },
+        {
+          "type": "p",
+          "md": "Claude Code exposes a `PostCompact` hook in its configuration. This fires right after a compaction event, giving you a window to inject fresh context — re-reading a status file, pulling the latest git log, or re-stating a critical constraint — before the agent takes its next action. Hooks are the clean way to fight context rot without having to stuff the system prompt with content that is only relevant at compaction boundaries."
+        },
+        {
+          "type": "h3",
+          "text": "Hierarchical and multi-pass compaction"
+        },
+        {
+          "type": "p",
+          "md": "Some frameworks implement tiered compaction: a first pass creates a detailed summary, a second pass condenses that summary further if space is still tight, and a third pass might produce only a bullet-point skeleton. Each tier trades fidelity for space. The research community (notably the JetBrains 2025 study) showed that **observation masking** — replacing tool outputs with a one-line placeholder while keeping the reasoning trace intact — can cut token usage by 50%+ with minimal performance loss, because the reasoning chain often contains the same information as the raw tool output in a more compact form."
+        },
+        {
+          "type": "h3",
+          "text": "Evaluating compaction quality"
+        },
+        {
+          "type": "p",
+          "md": "How do you know if your compaction strategy is good? The key metric is **task-completion rate on long-horizon benchmarks** — does the agent still finish correctly after one, two, or three compaction events? A proxy metric is **detail survival rate**: seed the conversation with a set of low-salience but task-critical details, run the task through compaction, and check how many the agent can still recall. Monitoring compaction events in your observability stack (recording when they fire, how many tokens they freed, and whether errors increased afterwards) is essential for production systems."
+        },
+        {
+          "type": "code",
+          "lang": "typescript",
+          "title": "PostCompact hook — re-inject a status file after compaction (Claude Code)",
+          "code": "// .claude/settings.json\n// \"hooks\": { \"PostCompact\": [{ \"type\": \"command\", \"command\": \"cat .claude/status.md\" }] }\n\n// Alternatively, write a script that the hook runs:\n// scripts/post-compact.ts\nimport { readFileSync } from \"fs\";\n\nconst status = readFileSync(\".claude/status.md\", \"utf8\");\n// Output is injected into the context before the next agent turn\nprocess.stdout.write(`\\n## Re-injected project status\\n\\n${status}\\n`);"
+        },
+        {
+          "type": "p",
+          "md": "The field is still maturing. Expect first-party compaction support to spread to more model providers through 2026, and watch for agent frameworks to expose finer-grained controls — per-section retention policies, automatic working-notes scaffolds, and structured summaries that double as human-readable audit logs."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What happens to my conversation if Claude Code runs out of context window?",
+      "a": "Claude Code automatically triggers compaction when the context reaches roughly 80% full. It summarizes the accumulated conversation into a structured block that preserves your goals, key decisions, and open tasks, then continues from that summary. You can also trigger it manually with the `/compact` command before hitting the limit."
+    },
+    {
+      "q": "Does context compaction lose important information?",
+      "a": "A well-designed compaction preserves the facts the agent still needs — active constraints, decisions made, files modified, and pending work. What gets lost is the raw reasoning trace: intermediate steps, exploratory dead-ends, and redundant tool outputs. For critical rules (like \"never modify these files\"), store them in your system prompt or CLAUDE.md rather than relying on conversation history surviving compaction."
+    },
+    {
+      "q": "How is context compaction different from a sliding window?",
+      "a": "A sliding window simply drops the oldest turns, with no regard for what they contained. Compaction replaces old turns with a summary that tries to preserve the information content. For task-oriented agents where early decisions constrain later work, compaction is significantly safer than a sliding window."
+    },
+    {
+      "q": "Can I control when compaction triggers in the Anthropic API?",
+      "a": "Yes. The compaction feature (beta header `compact-2026-01-12`, available on Claude Opus 4.6 and Claude Sonnet 4.6) lets you set a custom `trigger_threshold` in tokens. The default is 150K tokens and the minimum is 50K. Setting a lower threshold triggers compaction earlier, giving the summarizer more room and producing a higher-quality summary."
+    },
+    {
+      "q": "Is compaction only for Claude, or do other frameworks support it?",
+      "a": "The concept is universal — any agent that runs long enough will need it. Claude Code and the Anthropic Messages API offer first-party compaction. Other ecosystems implement it in the scaffolding layer: LangGraph, AutoGen, and OpenCode all have context management utilities that can summarize history before re-inserting it into the next call."
+    },
+    {
+      "q": "What is context rot and how does compaction help?",
+      "a": "Context rot is the gradual degradation in model reasoning quality as the context window fills with a long, noisy history — even before hitting the hard token limit. The model's attention spreads thin across hundreds of turns, weakening its grip on early instructions. Compaction helps by replacing that noisy history with a clean, structured summary the model can attend to more reliably."
+    }
+  ],
+  "related": [
+    "what-is-an-ai-agent",
+    "types-of-agent-memory",
+    "agentic-workflow-patterns",
+    "what-is-agent-planning",
+    "agents-vs-workflows-vs-chatbots"
+  ],
+  "furtherReading": [
+    {
+      "title": "Compaction — Anthropic API Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/compaction"
+    },
+    {
+      "title": "Context Compaction for AI Agents: A Complete Guide — Redis Blog",
+      "url": "https://redis.io/blog/context-compaction/"
+    },
+    {
+      "title": "Automatic Context Compaction — Claude Cookbook",
+      "url": "https://platform.claude.com/cookbook/tool-use-automatic-context-compaction"
+    }
+  ]
+}

@@ -1,0 +1,397 @@
+{
+  "slug": "llm-batch-api",
+  "title": "What Is a Batch API? Half-Price LLM Calls for Non-Urgent Work",
+  "seoTitle": "What Is a Batch API? Half-Price LLM Calls",
+  "metaDescription": "Batch APIs run LLM requests asynchronously at a 50% discount. Learn how to submit a batch job, when the tradeoff makes sense, and which workloads fit.",
+  "keywords": [
+    "what is the batch api",
+    "llm batch api 50 percent discount",
+    "asynchronous llm requests",
+    "batch api vs realtime api",
+    "bulk llm processing cheap"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Trade latency for a 50% discount: learn how batch endpoints work and which jobs — evals, backfills, classification — belong there.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you call an LLM API in the normal way, you are standing at the front of a fast-food counter: you place an order, the kitchen drops everything to make it, and you get your burger in two minutes. That speed costs money — the provider has to keep hot servers idle, ready to respond to your next request in milliseconds."
+        },
+        {
+          "type": "p",
+          "md": "A **batch API** works like a catering order instead. You hand over a list of a thousand requests — classify these reviews, summarise these documents, score these responses — and the provider says: \"we'll process all of this whenever we have spare capacity, and have it ready for you within 24 hours.\" Because the provider can schedule your job during off-peak hours and pack requests together efficiently, they pass half the savings on to you: **50% off**, every token, every model."
+        },
+        {
+          "type": "p",
+          "md": "The tradeoff is simple: you give up real-time responses in exchange for a flat price cut. If your workload can wait — and many workloads genuinely can — a batch API is the single largest cost reduction available from any major LLM provider today."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "OpenAI, Anthropic, and Google all launched batch APIs with an identical 50% discount and a 24-hour completion window. The APIs differ in format details, but the economic promise is the same across all three providers."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Most AI engineering work has two very different demand patterns sitting inside the same application: a **latency-sensitive path** (a user is waiting for an answer right now) and a **latency-tolerant path** (nightly enrichment, weekly evals, a one-time data migration). Routing every request through the same real-time endpoint is the most common source of unnecessary LLM spend."
+        },
+        {
+          "type": "h3",
+          "text": "What a 50% cut actually means at scale"
+        },
+        {
+          "type": "p",
+          "md": "Suppose you run a weekly pipeline that re-classifies 200,000 product descriptions using `claude-sonnet-4-6` (input $3.00/MTok, output $15.00/MTok). Each description averages 300 input tokens and 50 output tokens."
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "code": "Realtime API (weekly):\n  Input:  200,000 x 300 tokens = 60M tokens × $3.00/M  = $180.00\n  Output: 200,000 x  50 tokens = 10M tokens × $15.00/M = $150.00\n  Weekly total: $330.00   →   Annual: $17,160\n\nBatch API (same job, 50% off):\n  Input:  60M tokens × $1.50/M  = $90.00\n  Output: 10M tokens × $7.50/M  = $75.00\n  Weekly total: $165.00   →   Annual: $8,580\n\nAnnual saving: $8,580 — just by changing the endpoint."
+        },
+        {
+          "type": "p",
+          "md": "That calculation does not require any prompt engineering, model downgrade, or quality trade-off. The only thing that changes is the delivery time."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Evaluation pipelines** — running LLM judges over test sets, which always run overnight anyway",
+            "**Historical backfills** — enriching records that existed before an LLM feature was added",
+            "**Content classification at scale** — tagging, moderation, sentiment scoring on large corpora",
+            "**Bulk summarisation** — generating digests, abstracts, or SEO meta descriptions in bulk",
+            "**Synthetic data generation** — producing fine-tuning examples or training annotations",
+            "**Nightly feature engineering** — extracting structured fields from unstructured text for downstream ML",
+            "**RAG pre-processing** — generating embeddings or cleaning documents before indexing"
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Rate limits are separate for batch and realtime endpoints. Batch jobs draw from a dedicated queue that does **not** count against your interactive tokens-per-minute limit. Running heavy batch jobs no longer risks throttling your production app."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every batch API follows the same four-step lifecycle regardless of provider. You prepare a file of requests, upload it, poll for completion, and download the results. Requests are identified by a `custom_id` you assign — the results come back in **arbitrary order**, so the `custom_id` is how you reunite each result with the original input."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Batch API lifecycle",
+            "steps": [
+              {
+                "label": "Prepare input file",
+                "sub": "JSONL: one request object per line, each with a unique custom_id"
+              },
+              {
+                "label": "Upload & submit",
+                "sub": "POST the file to the batch endpoint; receive a batch_id"
+              },
+              {
+                "label": "Provider processes",
+                "sub": "Requests scheduled asynchronously — typical turnaround minutes to hours, SLA 24h"
+              },
+              {
+                "label": "Poll for status",
+                "sub": "Check batch status until it transitions to completed / ended"
+              },
+              {
+                "label": "Download results",
+                "sub": "Retrieve output JSONL; match each line to your original request via custom_id"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "OpenAI Batch API walkthrough"
+        },
+        {
+          "type": "p",
+          "md": "OpenAI's batch endpoint accepts up to **50,000 requests** per batch file with a maximum file size of **200 MB**. Each line in the JSONL file is a self-contained API call including the endpoint path and request body."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "from openai import OpenAI\nimport json\n\nclient = OpenAI()\n\n# Step 1: build the JSONL input file\nrequests = [\n    {\n        \"custom_id\": f\"item-{i}\",\n        \"method\": \"POST\",\n        \"url\": \"/v1/chat/completions\",\n        \"body\": {\n            \"model\": \"gpt-4.1-mini\",\n            \"messages\": [\n                {\"role\": \"system\", \"content\": \"Classify sentiment as positive, negative, or neutral.\"},\n                {\"role\": \"user\", \"content\": review_text}\n            ],\n            \"max_tokens\": 10\n        }\n    }\n    for i, review_text in enumerate(reviews)  # reviews is a list of strings\n]\n\nwith open(\"batch_input.jsonl\", \"w\") as f:\n    for req in requests:\n        f.write(json.dumps(req) + \"\\n\")\n\n# Step 2: upload the file\nbatch_file = client.files.create(\n    file=open(\"batch_input.jsonl\", \"rb\"),\n    purpose=\"batch\"\n)\n\n# Step 3: create the batch job\nbatch = client.batches.create(\n    input_file_id=batch_file.id,\n    endpoint=\"/v1/chat/completions\",\n    completion_window=\"24h\"\n)\nprint(f\"Batch submitted: {batch.id}\")\n\n# Step 4: poll for completion\nimport time\nwhile True:\n    batch = client.batches.retrieve(batch.id)\n    print(f\"Status: {batch.status} — {batch.request_counts.completed}/{batch.request_counts.total}\")\n    if batch.status in (\"completed\", \"failed\", \"expired\", \"cancelled\"):\n        break\n    time.sleep(60)\n\n# Step 5: download and parse results\nif batch.output_file_id:\n    content = client.files.content(batch.output_file_id).text\n    results = {}\n    for line in content.strip().split(\"\\n\"):\n        row = json.loads(line)\n        results[row[\"custom_id\"]] = row[\"response\"][\"body\"][\"choices\"][0][\"message\"][\"content\"]"
+        },
+        {
+          "type": "h3",
+          "text": "Anthropic Message Batches API walkthrough"
+        },
+        {
+          "type": "p",
+          "md": "Anthropic's equivalent is the **Message Batches API**, which accepts up to **10,000 requests** per batch. Unlike OpenAI's file-upload approach, Anthropic takes the list of requests directly in the POST body as a JSON array."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "import anthropic\nimport time\n\nclient = anthropic.Anthropic()\n\n# Step 1: build request list\nrequests = [\n    anthropic.types.beta.messages.MessageBatchRequestParam(\n        custom_id=f\"doc-{i}\",\n        params={\n            \"model\": \"claude-haiku-4-5\",\n            \"max_tokens\": 256,\n            \"messages\": [{\"role\": \"user\", \"content\": f\"Summarise in one sentence: {doc}\"}]\n        }\n    )\n    for i, doc in enumerate(documents)\n]\n\n# Step 2: submit the batch\nbatch = client.beta.messages.batches.create(requests=requests)\nprint(f\"Batch ID: {batch.id}\")\n\n# Step 3: poll until processing_status == 'ended'\nwhile True:\n    batch = client.beta.messages.batches.retrieve(batch.id)\n    if batch.processing_status == \"ended\":\n        break\n    time.sleep(60)\n\n# Step 4: stream results and reconcile via custom_id\nfor result in client.beta.messages.batches.results(batch.id):\n    if result.result.type == \"succeeded\":\n        text = result.result.message.content[0].text\n        print(f\"{result.custom_id}: {text}\")"
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Results are delivered in **arbitrary order** from all providers. Never rely on line position to identify a result — always match on `custom_id`. A good convention is `custom_id = \"{job_name}-{row_id}\"` so you can decode both context and identity from the string alone."
+        }
+      ]
+    },
+    {
+      "id": "batch-vs-realtime",
+      "title": "Batch vs. realtime: choosing the right path",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Not every job belongs in a batch queue. The central question is whether the result is **on the critical user path**. If a human or a downstream system is waiting synchronously for the answer, use the realtime endpoint. If the answer will be stored and consumed later — by a dashboard, a database, a model trainer, or a report — batch is almost always the right choice."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Signal",
+            "Use realtime",
+            "Use batch"
+          ],
+          "rows": [
+            [
+              "User is waiting",
+              "Yes — interactive chat, copilots, live Q&A",
+              "No — user sees the result later"
+            ],
+            [
+              "Latency requirement",
+              "< 5 seconds",
+              "Minutes to hours is acceptable"
+            ],
+            [
+              "Request volume",
+              "Variable, bursty, low per-session count",
+              "High and predictable (hundreds to millions)"
+            ],
+            [
+              "Request timing",
+              "Triggered by live events",
+              "Scheduled: nightly, weekly, on-demand backfill"
+            ],
+            [
+              "Examples",
+              "Chatbot, code autocomplete, API copilot",
+              "Evals, classification, enrichment, fine-tune data gen"
+            ],
+            [
+              "Cost sensitivity",
+              "Latency cost already baked into product SLA",
+              "Cost is a first-class concern; saving 50% is meaningful"
+            ]
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "The middle ground: async with a tight deadline"
+        },
+        {
+          "type": "p",
+          "md": "Some workloads fall between the two extremes — for example, generating a personalised report that a user expects within 10 minutes of requesting it. Batch APIs are not the right fit here because the 24-hour window is too loose. Instead, consider **async task queues** (Celery, BullMQ, Temporal) with realtime API calls, or a smaller provider with dedicated throughput tiers. The 50% batch discount is specifically for jobs that can genuinely wait."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Batch jobs are not guaranteed to finish faster than their completion window. During high-load periods, Anthropic and OpenAI process batch requests on best-effort scheduling. Most small batches complete within minutes, but mission-critical pipelines should not depend on a specific sub-24h turnaround."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls and how to avoid them",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "Partial failures"
+        },
+        {
+          "type": "p",
+          "md": "A batch job can partially fail — some requests succeed, others hit token limits, content policy filters, or transient errors. OpenAI provides a separate `error_file_id` alongside `output_file_id`; Anthropic marks individual results with `result.type == \"errored\"`. Always parse both outputs and implement retry logic for failed rows rather than treating the batch as all-or-nothing."
+        },
+        {
+          "type": "h3",
+          "text": "Forgetting to persist the batch ID"
+        },
+        {
+          "type": "p",
+          "md": "If your process crashes after submitting but before receiving results, you need the `batch_id` to resume polling. Store it durably — in a database, a file, or a task queue — immediately after submission. Losing the ID does not lose the work (the batch still runs), but it makes recovery significantly harder."
+        },
+        {
+          "type": "h3",
+          "text": "Not budgeting for enqueued tokens"
+        },
+        {
+          "type": "p",
+          "md": "Both OpenAI and Anthropic track **enqueued token limits** separately from per-minute rate limits. If you submit 20 million tokens in a batch, those tokens count against your batch queue until the job completes. Submitting multiple large batches simultaneously can exhaust this quota and cause subsequent submissions to be rejected. Stagger large jobs or check your remaining queue capacity before submitting."
+        },
+        {
+          "type": "h3",
+          "text": "Using batch for streaming-dependent features"
+        },
+        {
+          "type": "p",
+          "md": "Batch APIs deliver results only after the entire request completes — there is no streaming of partial tokens. Any feature that relies on progressive rendering (showing words as they appear) must use the realtime endpoint. Batch is purely a store-and-forward model."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Combine the batch API with **prompt caching** for maximum savings on jobs that share a long system prompt. The cache write happens on the first batch request processed, and subsequent requests in the same batch that share the prefix hit the cache at 10× lower cost — even inside an async batch job."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The 50% batch discount is table stakes — all three major providers (OpenAI, Anthropic, Google) match it. As you scale batch usage, several more advanced patterns become relevant."
+        },
+        {
+          "type": "h3",
+          "text": "Provider comparison at a glance"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Provider",
+            "API name",
+            "Max requests/batch",
+            "Completion window",
+            "Supported models"
+          ],
+          "rows": [
+            [
+              "OpenAI",
+              "Batch API",
+              "50,000 requests / 200 MB",
+              "24 hours",
+              "GPT-4.1, o3, o4-mini, embeddings, and more"
+            ],
+            [
+              "Anthropic",
+              "Message Batches API",
+              "10,000 requests",
+              "24 hours",
+              "Claude 3.5 / 3 / Haiku family"
+            ],
+            [
+              "Google",
+              "Gemini Batch API (Vertex AI)",
+              "No per-job limit published",
+              "24 hours",
+              "Gemini 2.5 Pro, 2.5 Flash, and others"
+            ]
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Anthropic's 300K output token extension"
+        },
+        {
+          "type": "p",
+          "md": "Anthropic's batch endpoint supports an extended output limit unavailable on the synchronous API. By adding the header `anthropic-beta: output-300k-2026-03-24`, individual batch requests can return up to **300,000 output tokens** — useful for generating very long documents, complete codebases, or exhaustive reports in a single request. This feature is batch-only and is one of the few cases where a batch API offers a capability the realtime API lacks."
+        },
+        {
+          "type": "h3",
+          "text": "Orchestrating large batch pipelines"
+        },
+        {
+          "type": "p",
+          "md": "For jobs with millions of rows, a single batch submission is rarely sufficient. Common patterns include: **fan-out** (split the corpus into chunks of 10,000–50,000 rows, submit parallel batches, merge results); **pipeline chaining** (the output of batch job A feeds batch job B as a downstream enrichment step); and **workflow orchestration** (tools like Temporal, Prefect, or Airflow checkpoint batch IDs to survive process restarts and retry failed shards independently)."
+        },
+        {
+          "type": "h3",
+          "text": "Cost stack: combining batch with other savings"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Batch + smaller model**: Use a cheap model (Haiku, GPT-4.1-nano) for a first-pass classification pass, then batch only the uncertain or high-stakes cases to a stronger model. Can cut costs by 90%+ versus running everything through GPT-4.1.",
+            "**Batch + prompt caching**: Long shared system prompts are cached across requests in the same batch window, compounding the 50% batch discount with a 10× cache-read saving on the repeated prefix.",
+            "**Batch + structured output**: Constraining responses to JSON saves output tokens — shorter completions mean lower cost per request, multiplied across the entire batch.",
+            "**Batch + compression**: For document-heavy jobs, summarise or chunk documents before batching rather than sending raw 100K-token inputs. Reducing average input length often has a bigger impact than the discount itself."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Monitoring batch health in production"
+        },
+        {
+          "type": "p",
+          "md": "In production, treat batch jobs like database migrations: track submission time, expected completion, actual completion, partial failure rate, and cost per request. A batch that silently completes with a 20% error rate looks like a success from the outside but produces a corrupted downstream dataset. Log the `request_counts.errored` / `request_counts.completed` ratio on every completed batch and alert when it exceeds a threshold."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "OpenAI's Batch API was launched in April 2024. Anthropic's Message Batches API followed in late 2024. Google's Gemini Batch API (via Google AI Studio and Vertex AI) launched in July 2025. All three converged on the same 50% discount and 24-hour window independently, which signals this is now the stable industry-standard tradeoff for async LLM work."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Does the batch API produce lower-quality responses than the realtime API?",
+      "a": "No. The same model runs the same inference — batch scheduling only changes *when* the request is processed, not *how*. The outputs are identical in quality to realtime calls on the same model with the same parameters."
+    },
+    {
+      "q": "How long does a batch job actually take in practice?",
+      "a": "The SLA is 24 hours, but most small batches (under a few thousand requests) complete within minutes to an hour. Larger jobs or periods of high provider load can push turnaround toward the full 24-hour window. Do not hard-code sub-hour expectations into production pipelines."
+    },
+    {
+      "q": "What happens to requests that fail inside a batch?",
+      "a": "Partial failures are normal and expected. OpenAI puts failed rows in a separate `error_file_id`; Anthropic marks individual results with `result.type == \"errored\"`. Your code should always check for errors, collect failed `custom_id`s, and resubmit them in a follow-up batch or via the realtime API."
+    },
+    {
+      "q": "Can I cancel a batch job after submitting it?",
+      "a": "Yes. OpenAI and Anthropic both expose a cancel endpoint. Requests already completed before cancellation are still billed; in-flight and queued requests are cancelled without charge. This is useful if you submit a job with bad input and want to avoid wasting the full budget."
+    },
+    {
+      "q": "Do batch API calls count against my realtime rate limits?",
+      "a": "No — batch requests draw from a separate enqueued-token quota that is independent of your per-minute realtime limit. This means you can run heavy batch jobs without throttling your live production traffic. However, the enqueued quota itself has a limit, so submitting very large batches back-to-back can temporarily block new batch submissions."
+    },
+    {
+      "q": "Is there a minimum batch size to get the discount?",
+      "a": "No. Even a single-request batch submitted to the batch endpoint receives the 50% discount. In practice, submitting single requests this way only makes sense if you genuinely do not need the response for up to 24 hours — but there is no minimum enforced by the providers."
+    }
+  ],
+  "related": [
+    "what-is-llm-api",
+    "api-keys-explained",
+    "sdk-vs-raw-http",
+    "how-to-choose-llm-model",
+    "messages-roles-turns"
+  ],
+  "furtherReading": [
+    {
+      "title": "OpenAI Batch API Guide",
+      "url": "https://developers.openai.com/api/docs/guides/batch"
+    },
+    {
+      "title": "Anthropic Message Batches API — Claude Documentation",
+      "url": "https://www.anthropic.com/news/message-batches-api"
+    },
+    {
+      "title": "Gemini Batch Mode — Google AI for Developers",
+      "url": "https://ai.google.dev/gemini-api/docs/batch-api"
+    }
+  ]
+}

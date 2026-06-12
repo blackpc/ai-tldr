@@ -1,0 +1,368 @@
+{
+  "slug": "add-ai-existing-app",
+  "title": "How to Add AI Features to an Existing App (Without a Rewrite)",
+  "seoTitle": "Add AI Features to an Existing App (No Rewrite)",
+  "metaDescription": "Add AI features to an existing app without a rewrite: where LLM calls fit your current architecture, feature flags, fallbacks, and cost control.",
+  "keywords": [
+    "add ai features to existing app",
+    "integrate llm into existing application",
+    "retrofit ai into legacy app",
+    "add ai to saas product safely"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "A pragmatic playbook for shipping your first AI feature inside the codebase you already have.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You have a working app — a SaaS product, an internal tool, a customer-facing service — and you want to ship an AI feature without blowing up everything that already works. The good news is that adding an LLM to an existing application is much closer to adding a new third-party API than it is to a rewrite. You call a URL, you get text back, you display it. The tricky part is everything around that call: keeping your app reliable when the AI is unavailable, controlling costs before they surprise you, and rolling out to real users without accidentally degrading the existing experience."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like installing a new appliance in a house. You don't tear down the walls — you find the right outlet, run a new circuit breaker for it, and make sure the rest of the house still works if that appliance trips. The appliance here is an LLM API. Your job is to wire it in cleanly: a dedicated integration layer, a circuit breaker that falls back gracefully, and a meter that tells you what it's costing to run."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The fastest path to your first AI feature is to find one isolated, non-critical workflow — an internal summary, an auto-draft, a tag suggestion — and add it as an *optional enhancement*. If the AI call fails, the app still works normally. Ship that first, then go bigger."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Most existing apps were built before reliable LLM APIs existed. That doesn't mean they need to be rewritten to benefit from AI. The same app that summarises support tickets, drafts email replies, extracts structured data from uploads, or generates first-draft content is more valuable than the version that doesn't — and all of those features can be added as thin AI layers on top of data flows that already exist."
+        },
+        {
+          "type": "p",
+          "md": "The risk isn't the AI code itself. The risk is treating an LLM call like a database query: always available, deterministic, instant, and free. LLM APIs are none of those things. They time out, return 429 rate-limit errors, produce different outputs for the same input, and can cost two orders of magnitude more per request than your current infra. Engineering for those realities from the start is what separates a production AI feature from a flaky demo."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Concern",
+            "What can go wrong",
+            "The mitigation"
+          ],
+          "rows": [
+            [
+              "Reliability",
+              "Provider outage or rate-limit breaks the feature",
+              "Fallback to cached result or non-AI path"
+            ],
+            [
+              "Cost",
+              "Viral usage spikes spend 10x overnight",
+              "Per-user token budgets and request rate limits"
+            ],
+            [
+              "Correctness",
+              "Model hallucinates, user trusts it",
+              "Show AI output as a suggestion, not ground truth"
+            ],
+            [
+              "Rollout",
+              "All users get the new feature at once",
+              "Feature flag with percentage rollout"
+            ],
+            [
+              "Latency",
+              "LLM takes 3-8 s, UI freezes",
+              "Async/streaming, optimistic UI, spinner with timeout"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The integration has four layers that sit between your existing application code and the LLM provider. Each layer has a single responsibility. Together they let you add AI features without touching the rest of your app."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "stack",
+            "title": "AI Feature Integration Layers",
+            "layers": [
+              {
+                "label": "Your Existing App",
+                "sub": "UI, business logic, database — unchanged"
+              },
+              {
+                "label": "Feature Flag Gate",
+                "sub": "LaunchDarkly / GrowthBook — controls who sees the feature"
+              },
+              {
+                "label": "AI Service Module",
+                "sub": "Prompt builder, response parser, fallback logic"
+              },
+              {
+                "label": "Gateway / SDK",
+                "sub": "LiteLLM, Portkey, or direct SDK — routing, retries, caching"
+              },
+              {
+                "label": "LLM Provider API",
+                "sub": "OpenAI, Anthropic Claude, Gemini, or self-hosted model"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Layer 1 — Feature flag gate"
+        },
+        {
+          "type": "p",
+          "md": "Gate every new AI feature behind a flag from day one. Tools like [LaunchDarkly](https://launchdarkly.com) and the open-source [GrowthBook](https://github.com/growthbook/growthbook) let you roll out to 1% of users, watch error rates and latency, and expand or kill the flag without a deployment. LaunchDarkly specifically added **AI Configs** (generally available in 2025) that let you swap prompt templates and model IDs at runtime — so you can A/B test whether GPT-4.1 or Claude Sonnet 4 produces better summaries without touching code."
+        },
+        {
+          "type": "h3",
+          "text": "Layer 2 — AI service module"
+        },
+        {
+          "type": "p",
+          "md": "Keep all AI logic in one module, not scattered across controllers. The module has three responsibilities: build the prompt from structured app data, call the gateway, and parse the response back into a typed structure your app can use. Isolating it here means you can swap models, change prompts, or disable the feature entirely without touching business logic."
+        },
+        {
+          "type": "code",
+          "lang": "typescript",
+          "code": "// ai/summarize-ticket.ts — a self-contained AI service module\nimport { openai } from './gateway'; // your gateway client\n\nexport async function summarizeTicket(\n  ticketBody: string\n): Promise<{ summary: string } | null> {\n  try {\n    const response = await openai.chat.completions.create({\n      model: 'gpt-4.1-mini',\n      messages: [\n        {\n          role: 'system',\n          content: 'Summarise the support ticket in 1-2 sentences. Be factual.',\n        },\n        { role: 'user', content: ticketBody },\n      ],\n      max_tokens: 120,\n      timeout: 8000, // 8 s hard cap\n    });\n    const text = response.choices[0]?.message?.content?.trim();\n    return text ? { summary: text } : null;\n  } catch {\n    return null; // graceful fallback — caller shows original text\n  }\n}"
+        },
+        {
+          "type": "h3",
+          "text": "Layer 3 — Gateway"
+        },
+        {
+          "type": "p",
+          "md": "[LiteLLM](https://docs.litellm.ai) is an open-source Python/proxy layer that accepts OpenAI-format requests and routes them to 100+ providers. You point your code at the LiteLLM proxy URL instead of `api.openai.com`; all retries, fallbacks, and cost tracking happen at the proxy without changing your application code. For Python-heavy teams it also ships as a drop-in SDK. [Portkey](https://portkey.ai) covers the same ground with a hosted option and semantic response caching — returning a cached reply for semantically similar prompts saves both latency and cost."
+        },
+        {
+          "type": "h3",
+          "text": "Layer 4 — Fallback strategy"
+        },
+        {
+          "type": "p",
+          "md": "Design every AI call so the app works normally if the call fails. The four standard resilience patterns for LLM integrations are: **retry with exponential backoff** (handles transient 429 and 5xx errors), **model fallback chain** (OpenAI down → route to Anthropic → route to smaller local model), **circuit breaker** (stop calling a provider that's been failing for 60 s, reopen after a probe succeeds), and **graceful degradation** (show the original content instead of the AI enhancement when all else fails)."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Fallback Decision Flow for an LLM Call",
+            "steps": [
+              {
+                "label": "App makes AI call",
+                "sub": "via gateway or SDK"
+              },
+              {
+                "label": "Success?",
+                "sub": "Return parsed result to UI"
+              },
+              {
+                "label": "Retryable error? (429/5xx)",
+                "sub": "Exponential backoff, up to 3 retries"
+              },
+              {
+                "label": "Primary provider down?",
+                "sub": "Fallback chain: try secondary model"
+              },
+              {
+                "label": "All providers failed?",
+                "sub": "Return null — app renders without AI enhancement"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "where-ai-fits",
+      "title": "Where AI actually fits in a typical app",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Most existing apps have a handful of natural seams where AI drops in without disrupting anything. The trick is spotting them. Look for any place where a user currently does repetitive text work, where you have structured data that users need to interpret, or where free-form input needs to be normalised."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "App area",
+            "AI feature to add",
+            "Integration point"
+          ],
+          "rows": [
+            [
+              "Support ticketing",
+              "Auto-summary + suggested reply draft",
+              "After ticket creation webhook"
+            ],
+            [
+              "Document uploads",
+              "Extract key fields into structured JSON",
+              "After file-processing step"
+            ],
+            [
+              "Search",
+              "Re-rank results with semantic relevance",
+              "After existing keyword search returns hits"
+            ],
+            [
+              "User onboarding",
+              "Generate a personalised welcome checklist",
+              "On first login, async background job"
+            ],
+            [
+              "Admin dashboard",
+              "Natural-language query over your own data",
+              "New /ask endpoint alongside existing REST API"
+            ],
+            [
+              "Email composer",
+              "Auto-draft based on CRM context",
+              "Before user hits Send — shown as editable suggestion"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Notice the pattern: in every case the AI feature is *additive*, not a replacement. The original data flow still exists. If the AI layer fails or is disabled, the app reverts to its pre-AI behaviour. This is the key mindset shift — AI as **progressive enhancement**, not a dependency."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The safest first feature is one that runs **asynchronously after the main action** — a background summariser, a tag suggester that fires after save. It never sits in the critical path, so a slow or failing LLM call cannot break the user's primary workflow."
+        }
+      ]
+    },
+    {
+      "id": "cost-control",
+      "title": "Keeping costs under control",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "LLM API pricing is token-based, and output tokens cost roughly 3-5x more than input tokens across most providers (as of mid-2026, GPT-4.1 Mini charges about $0.40/M input and $1.60/M output; Claude Haiku is in a similar range). A feature that averages 3,000 input tokens and 400 output tokens per call costs roughly $0.002 per request at those rates — negligible at 100 calls/day, but $600/month at 10,000 calls/day. Model the math before you ship."
+        },
+        {
+          "type": "h3",
+          "text": "Five levers to manage spend"
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Right-size the model.** Use a fast, cheap model (GPT-4.1 Mini, Claude Haiku, Gemini 2.0 Flash) for features that don't need deep reasoning. Save flagship models for cases where quality visibly matters to users.",
+            "**Cap `max_tokens` on every call.** An uncapped completion can return 4,000 tokens when you needed 100. Always set a hard ceiling matched to what the feature actually uses.",
+            "**Enable prompt caching.** Anthropic and OpenAI both offer prefix caching: if your system prompt is the same across calls (it usually is), the provider charges a fraction of the input cost for the cached prefix — typically 60-80% less.",
+            "**Rate-limit at the user level.** Give each user or tenant a daily token budget. Enforce it in your AI service module before making the API call. LiteLLM and Portkey both expose per-key spend limits; for a simpler setup, a Redis counter keyed to the user ID works fine.",
+            "**Batch non-urgent work.** OpenAI's Batch API and Anthropic's Message Batches API process jobs asynchronously with ~50% cost discounts. Background tasks (nightly summaries, bulk tag generation) are perfect candidates."
+          ]
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "# Simple per-user rate limiter using Redis\nimport redis\n\nr = redis.Redis()\nMAX_TOKENS_PER_DAY = 50_000  # tune to your budget\n\ndef check_and_reserve_tokens(user_id: str, estimated_tokens: int) -> bool:\n    key = f\"ai:tokens:{user_id}:{datetime.date.today()}\"\n    current = r.get(key)\n    used = int(current) if current else 0\n    if used + estimated_tokens > MAX_TOKENS_PER_DAY:\n        return False  # caller falls back to non-AI path\n    r.incrby(key, estimated_tokens)\n    r.expire(key, 86400)  # reset tomorrow\n    return True"
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "**Set a provider-level spend cap immediately.** OpenAI, Anthropic, and Google all let you configure a hard monthly spend limit in their dashboards. Do this before your first production deploy — a buggy loop that calls the API thousands of times will exhaust your limit rather than your bank account."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once your first AI feature is stable, two architectural decisions become worth revisiting: **observability** and **model portability**."
+        },
+        {
+          "type": "h3",
+          "text": "Observability: you can't optimise what you can't see"
+        },
+        {
+          "type": "p",
+          "md": "Instrument every AI call with structured logs that capture: the model used, prompt token count, completion token count, latency in milliseconds, and whether the call succeeded or fell back. This is the minimum you need to debug a regression, spot cost anomalies, and justify (or kill) the feature. Tools like [Helicone](https://www.helicone.ai), Portkey, and LiteLLM's proxy dashboard aggregate these metrics automatically if you route through them. If you're calling the provider SDK directly, emit the same fields to your existing logging pipeline."
+        },
+        {
+          "type": "h3",
+          "text": "Model portability: avoid vendor lock-in from day one"
+        },
+        {
+          "type": "p",
+          "md": "The LLM market moves fast. The model you ship with today may not be the best option in six months. Protect yourself by keeping the model name and provider in a config value (or a feature flag via LaunchDarkly AI Configs) rather than hardcoded in your service module. Use the OpenAI-compatible request format where possible — it's the de facto standard that Anthropic, Mistral, and dozens of others support via adapters or LiteLLM routing — so switching providers is a one-line config change."
+        },
+        {
+          "type": "h3",
+          "text": "When to upgrade from a thin integration to a proper AI layer"
+        },
+        {
+          "type": "p",
+          "md": "A single call returning freeform text is fine for a first feature. Signs that you've outgrown it: you need the model to call tools or look up data before answering (move to **function calling / tool use**), you're injecting your own documents into every prompt (move to **RAG with a vector store**), or you need multi-step reasoning with memory (consider an **agent framework** like LangGraph or the Anthropic Agent SDK). Each of these is a natural next rung — but you won't know which one your app actually needs until you've shipped the simple version and watched real users interact with it."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Run a **one-week AI feature review** after launch: check fallback rate, average latency, cost per user, and — most importantly — whether users are actually clicking the AI output or ignoring it. If the fallback rate is above 5%, fix reliability first. If users ignore it, the feature needs UX work, not more AI."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Do I need to rewrite my backend to use an LLM API?",
+      "a": "No. An LLM API is just an HTTP endpoint that accepts JSON and returns JSON. Any backend that can make an outbound HTTP request — Node, Python, Ruby, Java, Go — can call it with no architectural changes. Add a new service module, a new API route if needed, and wire them together."
+    },
+    {
+      "q": "What's the safest first AI feature to ship to production?",
+      "a": "An asynchronous, optional enhancement that runs *after* the user's primary action — a post-save summariser, a background tag suggester, or an auto-draft that shows up the next time the user opens an item. Because it's not in the critical path, a slow or failing LLM call cannot break the user's workflow."
+    },
+    {
+      "q": "How do I prevent the AI feature from costing too much if usage spikes?",
+      "a": "Set a hard spend cap in your provider's dashboard immediately. Then add per-user daily token limits enforced before each call, use `max_tokens` on every request, and use a cheap model for high-volume features. Batch non-urgent work through the provider's Batch API for ~50% savings."
+    },
+    {
+      "q": "What happens when the LLM API is down or rate-limited?",
+      "a": "Your app should fall back to the non-AI experience — show the original content, hide the AI widget, or queue the request for later. Implement retry with exponential backoff for transient errors (429, 503), and wrap the call so it returns `null` on final failure rather than throwing. Never let an LLM error propagate to a user-facing 500."
+    },
+    {
+      "q": "Should I use LiteLLM or call the provider SDK directly?",
+      "a": "For a single provider and a single model, calling the SDK directly is simpler and fine. Once you need fallback across providers, cost aggregation, or the ability to swap models without code changes, a gateway like LiteLLM (open-source, self-hosted) or Portkey (hosted, with semantic caching) earns its place. Both expose an OpenAI-compatible API, so the switch is minimal."
+    },
+    {
+      "q": "How do I roll out an AI feature safely to real users?",
+      "a": "Gate it behind a feature flag from day one. Start at 1-5% of users, monitor error rates, latency, and cost per request for 24-48 hours, then expand in steps. If anything looks wrong, turn the flag off instantly — no rollback deploy needed. Tools like LaunchDarkly and the open-source GrowthBook both support percentage rollouts out of the box."
+    }
+  ],
+  "related": [
+    "beginner-ai-project-ideas",
+    "build-first-ai-chatbot",
+    "modern-ai-app-stack"
+  ],
+  "furtherReading": [
+    {
+      "title": "LiteLLM — Getting Started",
+      "url": "https://docs.litellm.ai/docs/"
+    },
+    {
+      "title": "How to Design a Reliable Fallback System for LLM Apps (Portkey)",
+      "url": "https://portkey.ai/blog/how-to-design-a-reliable-fallback-system-for-llm-apps-using-an-ai-gateway/"
+    },
+    {
+      "title": "LaunchDarkly: Deployment and Release Strategies",
+      "url": "https://launchdarkly.com/docs/guides/infrastructure/deployment-strategies"
+    }
+  ]
+}

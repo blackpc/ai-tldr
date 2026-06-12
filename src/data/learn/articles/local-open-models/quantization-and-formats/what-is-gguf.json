@@ -1,0 +1,416 @@
+{
+  "slug": "what-is-gguf",
+  "title": "What Is GGUF? The File Format for Local Models Explained",
+  "seoTitle": "What Is GGUF? The Local Model File Format Explained",
+  "metaDescription": "GGUF is the standard file format for running models locally. Learn what's inside a GGUF file, how it differs from raw weights, and how to use one.",
+  "keywords": [
+    "what is gguf format",
+    "gguf file explained",
+    "how to use gguf models",
+    "convert model to gguf",
+    "gguf vs pytorch weights"
+  ],
+  "difficulty": "beginner",
+  "oneLiner": "You will know exactly what a GGUF file contains and why it became the universal currency of local models.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When a research lab finishes training a model, they end up with billions of numbers — the **weights** — saved across a folder of files. Those raw files are a bit like a disassembled engine shipped in crates: all the parts are there, but you need to know the exact model architecture, a separate tokenizer file, and a configuration JSON just to run inference. **GGUF** packages all of that into one self-contained binary file, ready to load and run immediately."
+        },
+        {
+          "type": "p",
+          "md": "Think of a GGUF file the way you think of a modern ebook. An EPUB bundles the prose, fonts, cover image, chapter list, and metadata into a single `.epub` archive. You hand it to any compatible reader and it just works — no separate stylesheet, no loose images, no config file. A GGUF file does the same thing for an AI model: weights, tokenizer vocabulary, architecture description, and quantization settings all live inside one portable blob."
+        },
+        {
+          "type": "p",
+          "md": "GGUF was introduced on **21 August 2023** by Georgi Gerganov (the creator of [llama.cpp](https://github.com/ggml-org/llama.cpp)) as a replacement for the older GGML format. The name originally stood for *GPT-Generated Unified Format* but is now treated as its own identity. It quickly became the de-facto standard for local model distribution — today there are over 180,000 GGUF models on Hugging Face alone."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "GGUF files almost always contain **quantized** weights — models compressed from 16-bit floats down to 4-bit or 8-bit integers. The format supports quantization natively, which is a big part of why it displaced earlier formats. But GGUF can also store full-precision (F16 or F32) weights; quantization and the format itself are separate concepts that happen to travel together."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Before GGUF, running a local model was genuinely painful. You needed the original PyTorch or SafeTensors checkpoint, a compatible version of the Transformers library, and a separate configuration file that described the architecture. If the model was large, you also needed enough GPU VRAM to load it in full precision — often 30 GB or more for a 7B parameter model. That locked out everyone without a high-end GPU."
+        },
+        {
+          "type": "p",
+          "md": "GGUF solves this in one move. Because it bundles everything and natively supports quantization, a single `.gguf` file is all you need. The file itself encodes how it should be loaded. Tools like Ollama, LM Studio, GPT4All, and llama.cpp read it directly without any extra plumbing. And because GGUF files are typically quantized to 4-bit, that same 7B model now fits in roughly **4 GB** instead of 14 GB — runnable on a laptop with integrated graphics or even a phone."
+        },
+        {
+          "type": "h3",
+          "text": "The problem it solved for the ecosystem"
+        },
+        {
+          "type": "p",
+          "md": "Before GGUF, llama.cpp went through three earlier formats (GGML, GGMF, GGJT) that each hard-coded model hyperparameters inside the loader. Adding a new model architecture meant code changes that broke compatibility with every existing file. As llama.cpp grew to support Mistral, Falcon, Phi, Qwen, and dozens more architectures in 2023–2024, a rigid format became untenable. GGUF switched to an **extensible key-value metadata system** — any field can be added without breaking older files or loaders. That architectural decision is what let the ecosystem scale."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**One file, no dependencies** — no separate tokenizer JSON, config.json, or special-purpose Python environment required.",
+            "**Runs on CPU** — quantized weights and llama.cpp's CPU kernels mean usable speed on ordinary hardware without a GPU.",
+            "**Tool-agnostic** — Ollama, LM Studio, GPT4All, Jan, koboldcpp, and llama.cpp itself all consume the same `.gguf` file.",
+            "**Portable** — copy or share a single file between machines; the whole model moves with it.",
+            "**Extensible** — new metadata fields can be added to the format without invalidating older files."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A GGUF file is a **binary file** laid out in four sequential regions. The loader reads them in order — header first, then metadata, then the tensor directory, then the raw weight data. Because everything is in a fixed order and all offsets are stored in the file itself, a loader can memory-map (`mmap`) the file and start inference almost instantly, with no unpacking step."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "stack",
+            "title": "GGUF file layout (top = start of file)",
+            "layers": [
+              {
+                "label": "Header",
+                "sub": "Magic bytes 0x47475546 (\"GGUF\") + version + tensor count + metadata count"
+              },
+              {
+                "label": "Metadata block",
+                "sub": "Key-value pairs: architecture, context length, tokenizer vocab, quantization type, …"
+              },
+              {
+                "label": "Tensor directory",
+                "sub": "Name, shape, data type, and byte offset for every tensor in the file"
+              },
+              {
+                "label": "Tensor data",
+                "sub": "Packed weight bytes — quantized integers + scaling factors, contiguous, 16-byte aligned"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "The header"
+        },
+        {
+          "type": "p",
+          "md": "The first four bytes are the ASCII string `GGUF` (hex `0x47475546`), which lets any tool identify the format instantly. They are followed by a 32-bit version integer and two 64-bit counts: how many tensors and how many metadata key-value pairs are in the file. The header is always the same size, so a loader knows exactly where the metadata block starts without scanning."
+        },
+        {
+          "type": "h3",
+          "text": "The metadata block"
+        },
+        {
+          "type": "p",
+          "md": "This is the section that makes GGUF special. It is a sequence of **typed key-value pairs** — strings, integers, floats, booleans, or arrays of any of those. Keys follow a namespaced convention like `llama.context_length` or `tokenizer.ggml.model`. The metadata block encodes everything a loader needs to reconstruct the model: layer counts, head counts, embedding dimension, context window size, the full tokenizer vocabulary with scores, special token IDs, and the quantization scheme used for each tensor group. Because the metadata is self-describing, the loader never needs an external config file."
+        },
+        {
+          "type": "h3",
+          "text": "The tensor directory and tensor data"
+        },
+        {
+          "type": "p",
+          "md": "After the metadata comes a directory entry for every tensor: its name (e.g., `blk.0.attn_q.weight`), number of dimensions and their sizes, data type (e.g., `Q4_K`, `F16`), and a 64-bit byte offset into the tensor data region. The tensor data itself is a contiguous block — all weights back-to-back, 16-byte aligned for optimal CPU cache and `mmap` performance. For quantized tensors, each block of weights is stored as packed integers plus per-block scaling factors that allow lossless reconstruction to approximate floats at inference time."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "All multi-byte values in a GGUF file are **little-endian**. If you are writing a custom loader or parser, you do not need to handle byte-swapping on any x86 or ARM machine — they are all little-endian natively."
+        }
+      ]
+    },
+    {
+      "id": "quantization-levels",
+      "title": "Quantization levels inside GGUF",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The most common reason to choose one GGUF file over another is the **quantization level** baked into it. A model is often distributed in several quantized variants, each trading memory and speed against output quality. The naming follows a convention set by llama.cpp. Here are the most common levels you will see on Hugging Face:"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Variant",
+            "Bits per weight",
+            "7B model size",
+            "Quality vs F16",
+            "Best for"
+          ],
+          "rows": [
+            [
+              "F16",
+              "16",
+              "~14 GB",
+              "100% (baseline)",
+              "Fine-tuning prep, research"
+            ],
+            [
+              "Q8_0",
+              "8",
+              "~7.7 GB",
+              "~99.5%",
+              "When you want near-lossless quality"
+            ],
+            [
+              "Q5_K_M",
+              "5",
+              "~5.5 GB",
+              "~97%",
+              "Strong quality-size balance"
+            ],
+            [
+              "Q4_K_M",
+              "4 (mixed)",
+              "~4.1 GB",
+              "~93-95%",
+              "Sweet spot for most users"
+            ],
+            [
+              "Q3_K_M",
+              "3 (mixed)",
+              "~3.0 GB",
+              "~88%",
+              "Tight RAM budgets"
+            ],
+            [
+              "Q2_K",
+              "2",
+              "~2.5 GB",
+              "~75-80%",
+              "Extreme space constraints only"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The **K-quant** variants (Q4_K_M, Q5_K_M, etc.) use a smarter compression scheme than the plain quants (Q4_0, Q5_0). Instead of quantizing every weight identically, K-quants group weights into blocks and allocate slightly higher precision to the weights that matter most — typically the attention layers. The `_M` suffix means \"medium\" within that family; `_S` is smaller and faster, `_L` is larger and more accurate. For most users, **Q4_K_M** is the recommended starting point: it delivers roughly 93–95% of full-precision quality at about a quarter of the memory."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "If you are unsure which GGUF variant to pick, start with **Q4_K_M**. It is the community default and almost every model page on Hugging Face lists it first. Only move to Q5_K_M or Q8_0 if you notice quality degradation on your specific task."
+        }
+      ]
+    },
+    {
+      "id": "gguf-vs-other-formats",
+      "title": "GGUF vs other model formats",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Understanding where GGUF fits requires knowing what the other formats are for. Three formats dominate the landscape: **SafeTensors** (the training/hub standard), **PyTorch `.bin`** (the legacy format), and **GGUF** (the local inference standard). They serve different stages of the model lifecycle."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Model format comparison",
+            "columns": [
+              {
+                "title": "SafeTensors / .bin",
+                "items": [
+                  "Training & fine-tuning checkpoints",
+                  "Full FP16 or BF16 precision",
+                  "Requires Transformers + Python",
+                  "Multiple files (config.json, tokenizer, shards)",
+                  "Safe to load (no code execution)",
+                  "Standard on Hugging Face Hub"
+                ]
+              },
+              {
+                "title": "GGUF",
+                "accent": true,
+                "items": [
+                  "Local inference, production serving",
+                  "Quantized (2–8 bit) or FP16",
+                  "Runs with llama.cpp (C/C++, no Python needed)",
+                  "Single self-contained file",
+                  "Tokenizer and config embedded",
+                  "Used by Ollama, LM Studio, GPT4All"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "A useful mental model: **SafeTensors is the source of truth; GGUF is the shipping container**. A model is typically trained and distributed on Hugging Face as SafeTensors. When someone wants to run it locally with minimal setup, they — or an automated script — convert it to GGUF. The GGUF copy is what Ollama bundles, what LM Studio displays in its model browser, and what you download when you `ollama pull llama3`."
+        },
+        {
+          "type": "p",
+          "md": "The older **GGML format** that GGUF replaced also stored weights and metadata together, but it hard-coded hyperparameters in the loader rather than the file. That meant adding support for a new architecture required changing the loader code in a way that broke compatibility with older files. GGUF's extensible key-value metadata section fixed this permanently — new fields are ignored by older loaders, and new loaders can always read older files."
+        }
+      ]
+    },
+    {
+      "id": "how-to-use-gguf",
+      "title": "How to use a GGUF file",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "There are three common paths to using a GGUF file, depending on how much control you want."
+        },
+        {
+          "type": "h3",
+          "text": "Option 1 — Ollama (easiest)"
+        },
+        {
+          "type": "p",
+          "md": "Ollama wraps llama.cpp in a one-command interface. For officially supported models, a single command downloads the GGUF and starts serving it:"
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "code": "ollama pull llama3.2\nollama run llama3.2"
+        },
+        {
+          "type": "p",
+          "md": "If you already have a `.gguf` file on disk, you can point Ollama at it directly using a `Modelfile`:"
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "code": "# Modelfile\nFROM ./my-model-q4_k_m.gguf\n\n# Then build and run:\nollama create my-model -f Modelfile\nollama run my-model"
+        },
+        {
+          "type": "h3",
+          "text": "Option 2 — llama.cpp directly"
+        },
+        {
+          "type": "p",
+          "md": "For lower-level control, llama.cpp's `llama-cli` binary loads a GGUF directly. This is useful for scripting, benchmarking, or embedding into a custom application:"
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "code": "# Download llama.cpp and build it, then:\n./llama-cli -m ./model-q4_k_m.gguf -p \"Explain GGUF in one sentence\" -n 100"
+        },
+        {
+          "type": "h3",
+          "text": "Option 3 — Convert your own model to GGUF"
+        },
+        {
+          "type": "p",
+          "md": "If you have fine-tuned a model and saved it as SafeTensors or HuggingFace format, llama.cpp ships a Python conversion script called `convert_hf_to_gguf.py`. The basic workflow is:"
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "code": "# Clone llama.cpp\ngit clone https://github.com/ggml-org/llama.cpp\ncd llama.cpp\npip install -r requirements.txt\n\n# Convert a HuggingFace model folder to FP16 GGUF first\npython convert_hf_to_gguf.py /path/to/hf-model --outfile model-f16.gguf --outtype f16\n\n# Then quantize to Q4_K_M using the llama-quantize binary\n./llama-quantize model-f16.gguf model-q4_k_m.gguf Q4_K_M"
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Not every model architecture is supported by `convert_hf_to_gguf.py`. If you get an error saying the architecture is unknown, check the llama.cpp GitHub issues for the model family — someone has usually filed a PR or workaround. Alternatively, [Unsloth](https://unsloth.ai/docs/basics/inference-and-deployment/saving-to-gguf) provides a higher-level API that handles conversion for many popular fine-tuned models."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you are comfortable picking and running GGUF files, there are several directions worth exploring."
+        },
+        {
+          "type": "h3",
+          "text": "Reading a GGUF file programmatically"
+        },
+        {
+          "type": "p",
+          "md": "The GGUF specification is published at [github.com/ggml-org/ggml/blob/master/docs/gguf.md](https://github.com/ggml-org/ggml/blob/master/docs/gguf.md). It is compact and readable — the entire binary layout fits in a few pages. The Hugging Face Hub also exposes a REST endpoint that returns parsed GGUF metadata as JSON without downloading the file, which is useful for building tooling around model discovery."
+        },
+        {
+          "type": "h3",
+          "text": "Importance matrix quantization (imatrix)"
+        },
+        {
+          "type": "p",
+          "md": "Standard K-quant quantization treats all weight values within a block equally. **Importance matrix quantization** (imatrix) goes further: it runs a small calibration dataset through the full-precision model first, measures which weights have the most impact on output, and uses that signal to allocate precision non-uniformly. An `IQ4_XS` GGUF built with a good imatrix calibration can match or exceed a `Q4_K_M` in quality while being slightly smaller. llama.cpp's `llama-imatrix` tool generates the calibration data."
+        },
+        {
+          "type": "h3",
+          "text": "Partial GPU offloading with -ngl"
+        },
+        {
+          "type": "p",
+          "md": "GGUF and llama.cpp support **layer offloading**: you can run some transformer layers on the GPU and the rest on CPU. The `-ngl` flag (number of GPU layers) lets you incrementally offload as much as your VRAM allows. A model that is too large to fit entirely in VRAM can still benefit from GPU acceleration on the layers that do fit — a useful option when you have 8 GB of VRAM but a 70B quantized model."
+        },
+        {
+          "type": "h3",
+          "text": "The GGUF ecosystem beyond llama.cpp"
+        },
+        {
+          "type": "p",
+          "md": "While llama.cpp is the canonical GGUF runtime, the format has been adopted well beyond it. Hugging Face's `transformers` library can now load GGUF files directly via the `gguf` library. Mobile inference engines targeting iOS and Android have also standardized on GGUF, with apps like Enclave AI browsing Hugging Face GGUF models directly from the device. The combination of a single portable file, no Python dependency, and quantization baked in has made GGUF the common language of the local-AI ecosystem."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The GGUF spec is versioned. Version 1 and 2 files are legacy; virtually all files you encounter today are version 3. A compliant loader will log a warning if it encounters an older version, but can generally still read it. If you maintain a loader, target version 3 and test that you handle unknown metadata keys gracefully by ignoring them — that is the spec's intended forward-compatibility mechanism."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Is a GGUF file safe to download and run?",
+      "a": "GGUF files contain only binary weight data and metadata — they cannot execute code when loaded. This makes them safer than PyTorch `.bin` files, which use Python pickle and can run arbitrary code on load. Always download GGUF files from trusted sources (official model authors or verified Hugging Face repos), but the format itself has no code-execution attack surface."
+    },
+    {
+      "q": "Do I need a GPU to use a GGUF file?",
+      "a": "No. One of GGUF's main selling points is that llama.cpp can run quantized models entirely on CPU. A 4-bit quantized 7B model (about 4 GB) can produce usable responses on a modern laptop CPU, typically at 5–15 tokens per second. A GPU accelerates inference significantly, but it is not required."
+    },
+    {
+      "q": "What is the difference between Q4_0 and Q4_K_M?",
+      "a": "Both use 4 bits per weight on average, but they use different quantization algorithms. `Q4_0` is the older, simpler scheme that quantizes all weights the same way. `Q4_K_M` is a K-quant that groups weights into blocks and gives higher precision to the most important ones, particularly in attention layers. In practice, `Q4_K_M` produces noticeably better output at the same file size — it is almost always the better choice."
+    },
+    {
+      "q": "Can I use a GGUF file for fine-tuning?",
+      "a": "GGUF is an inference format, not a training format. You cannot fine-tune directly from a GGUF file with standard tools because quantized integers are not differentiable in the usual sense. For fine-tuning, start from the original FP16 SafeTensors checkpoint. Tools like Unsloth can convert a fine-tuned model back to GGUF once training is complete."
+    },
+    {
+      "q": "How do I find GGUF models on Hugging Face?",
+      "a": "Filter by library at [huggingface.co/models?library=gguf](https://huggingface.co/models?library=gguf). As of 2025 there are over 180,000 compatible models. Many popular models also have dedicated GGUF repos — search for the model name plus `GGUF` and look for repos whose names end in `-GGUF`. The repo page usually lists all available quantization variants with their file sizes."
+    },
+    {
+      "q": "Why does the same model have multiple GGUF files?",
+      "a": "Each file represents a different quantization level — a tradeoff between file size, RAM usage, and output quality. The model creator typically publishes Q2_K through Q8_0 variants so users with different hardware can choose. A machine with 8 GB of RAM would pick Q4_K_M; one with 16 GB might pick Q5_K_M or Q8_0 for higher fidelity."
+    }
+  ],
+  "related": [
+    "what-is-local-llm",
+    "what-is-ollama",
+    "what-is-llama-cpp",
+    "lm-studio-vs-ollama"
+  ],
+  "furtherReading": [
+    {
+      "title": "GGUF specification (ggml-org/ggml on GitHub)",
+      "url": "https://github.com/ggml-org/ggml/blob/master/docs/gguf.md"
+    },
+    {
+      "title": "GGUF documentation — Hugging Face Hub",
+      "url": "https://huggingface.co/docs/hub/en/gguf"
+    },
+    {
+      "title": "convert_hf_to_gguf.py — llama.cpp",
+      "url": "https://github.com/ggml-org/llama.cpp/blob/master/convert_hf_to_gguf.py"
+    }
+  ]
+}

@@ -1,0 +1,470 @@
+{
+  "slug": "build-your-own-mcp-server",
+  "title": "How to Build Your Own MCP Server (Python and TypeScript)",
+  "seoTitle": "Build Your Own MCP Server: Python & TypeScript",
+  "metaDescription": "Build a working MCP server from scratch with the Python or TypeScript SDK: define tools, test locally, and connect it to a real AI client.",
+  "keywords": [
+    "build mcp server python",
+    "create mcp server typescript",
+    "mcp server sdk tutorial",
+    "how to make an mcp server",
+    "fastmcp example"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Write a small but real MCP server with the official SDKs, expose a tool, and connect it to a live AI client end to end.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "An **MCP server** is a small, long-running process that wraps a capability — a calculation, a database query, a file operation — and exposes it to any AI host (Claude Desktop, Cursor, your own agent loop) through a standard JSON-RPC protocol. Think of it like a USB-C adapter: your capability is the device, the MCP protocol is the port, and the AI host is the laptop. Once you have the adapter, the laptop can use the device without any custom drivers."
+        },
+        {
+          "type": "p",
+          "md": "This article is a hands-on walkthrough. You will install the official SDK, write a real tool function, run it locally over stdio, test it with the MCP Inspector, and wire it into Claude Desktop — all in about 30 minutes. By the end you will have a template you can extend with your own business logic. Both Python (with **FastMCP**) and TypeScript (with **McpServer**) are covered; follow the language you prefer."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Prerequisites: **Python 3.10+** and `uv` (or pip) for the Python path, or **Node.js 18+** and npm for the TypeScript path. You do not need prior MCP knowledge — but if you want the conceptual background first, read the What Is MCP article and return here."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why build your own server",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Hundreds of community MCP servers already exist for popular services — GitHub, Postgres, Google Drive, Slack, and more. The moment you need to connect an AI to *your own* system — an internal API, a proprietary database, a domain-specific calculation — you need to write your own server. The payoff is high: write it once, and every MCP-compatible AI host your team uses gets that capability automatically, with no further integration work."
+        },
+        {
+          "type": "p",
+          "md": "The other reason to build your own: control. Community servers are maintained by third parties, may log your data, and update on someone else's schedule. A server you own runs in your infrastructure, uses your credentials, and does exactly what you specify."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Internal APIs** — HR systems, billing data, CRMs, and internal knowledge bases that no public server covers",
+            "**Local tooling** — shell commands, file watchers, build system integration, dev-environment introspection",
+            "**Regulated or air-gapped environments** — data that must not leave your network",
+            "**Custom logic** — calculations, transformations, and validations specific to your domain that a generic server cannot express"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How an MCP server works end to end",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Before writing code, it helps to see the whole picture. When an AI host starts up, it launches your server as a subprocess (for stdio) or connects to it over HTTP. The two parties do a capability handshake, then the host asks your server what tools it offers. From that point on, whenever the model decides to call a tool, the host forwards the call to your server, your handler runs, and the result travels back to the model."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "End-to-end MCP tool call",
+            "steps": [
+              {
+                "label": "Host launches server",
+                "sub": "subprocess via stdio, or HTTP connect"
+              },
+              {
+                "label": "initialize handshake",
+                "sub": "protocol version + capability negotiation"
+              },
+              {
+                "label": "tools/list",
+                "sub": "server returns names, descriptions, JSON schemas"
+              },
+              {
+                "label": "Model picks a tool",
+                "sub": "based on task and tool descriptions"
+              },
+              {
+                "label": "Host sends tools/call",
+                "sub": "tool name + validated arguments"
+              },
+              {
+                "label": "Handler runs",
+                "sub": "your Python or TypeScript function executes"
+              },
+              {
+                "label": "Result returned",
+                "sub": "content array flows back to the model"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The SDK handles all of steps 1-4 for you. You only write the handler in step 6. Your tool's **name** and **description** are what the model reads when it decides whether to call it — treat the description like a mini-prompt."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "stack",
+            "title": "What you write vs. what the SDK handles",
+            "layers": [
+              {
+                "label": "Your handler function",
+                "sub": "business logic, returns a result"
+              },
+              {
+                "label": "Tool / resource / prompt registration",
+                "sub": "decorator or registerTool() call"
+              },
+              {
+                "label": "SDK (FastMCP / McpServer)",
+                "sub": "JSON-RPC framing, schema generation, lifecycle"
+              },
+              {
+                "label": "Transport",
+                "sub": "stdio (local subprocess) or Streamable HTTP (remote)"
+              }
+            ]
+          }
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The **stdio transport** is the right default for local development. The host launches your script as a subprocess, talks to it over stdin/stdout, and kills it when the host closes. No networking, no auth, no infrastructure — just a process."
+        }
+      ]
+    },
+    {
+      "id": "python-walkthrough",
+      "title": "Python walkthrough with FastMCP",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "FastMCP is the high-level layer built into the official `mcp` Python package. It turns a plain Python function into a fully described MCP tool with a single decorator — no JSON Schema to write by hand. The package is on PyPI and maintained by Anthropic."
+        },
+        {
+          "type": "h3",
+          "text": "Step 1: Install the SDK"
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "code": "# With uv (recommended — creates a virtual env automatically)\nuv init my-mcp-server\ncd my-mcp-server\nuv add \"mcp[cli]\"\n\n# Or with pip\npip install \"mcp[cli]\""
+        },
+        {
+          "type": "h3",
+          "text": "Step 2: Write the server"
+        },
+        {
+          "type": "p",
+          "md": "Create a file called `server.py`. The example below exposes one tool: `fetch_word_count`, which counts the words in a string. This is intentionally minimal — swap the function body for your own logic when you are ready."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "# server.py\nfrom mcp.server.fastmcp import FastMCP\n\n# Name is shown in the host's tools UI\nmcp = FastMCP(\"text-utils\")\n\n@mcp.tool()\ndef fetch_word_count(text: str) -> int:\n    \"\"\"Count the number of words in a block of text.\n\n    Use this when the user asks how many words are in a passage,\n    document excerpt, or any string they provide.\n\n    Args:\n        text: The text whose words should be counted.\n    \"\"\"\n    # FastMCP reads the type hint (str -> int) to build the JSON Schema.\n    # The docstring becomes the description the model sees.\n    return len(text.split())\n\nif __name__ == \"__main__\":\n    # transport=\"stdio\" is the default; explicit here for clarity\n    mcp.run(transport=\"stdio\")"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "FastMCP 3.x (the standalone package on PyPI as `fastmcp`, version 3.4.x as of mid-2026) is a superset of the built-in FastMCP included with the `mcp` package. For most projects the built-in `mcp.server.fastmcp.FastMCP` is all you need. Install the standalone `fastmcp` package only if you need its extra features such as OpenTelemetry instrumentation or OpenAPI bridging."
+        },
+        {
+          "type": "h3",
+          "text": "Step 3: Test with the MCP Inspector"
+        },
+        {
+          "type": "p",
+          "md": "Before connecting a real AI host, test your server with the **MCP Inspector** — a browser-based tool that connects to your server, lists its tools, and lets you invoke them without any Claude configuration. It is the fastest way to catch schema mistakes."
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "code": "# Run the Inspector and pass your server as the target\nnpx @modelcontextprotocol/inspector uv run server.py"
+        },
+        {
+          "type": "p",
+          "md": "The Inspector opens at `http://localhost:6274`. Click **Tools**, find `fetch_word_count`, enter a test string, and click **Run Tool**. You will see the raw JSON-RPC request and response alongside the result. Fix any errors here — it is much faster than debugging inside a full agent session."
+        },
+        {
+          "type": "h3",
+          "text": "Step 4: Connect to Claude Desktop"
+        },
+        {
+          "type": "p",
+          "md": "Open Claude Desktop's config file and add your server under `mcpServers`. The file is at `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS or `%APPDATA%\\Claude\\claude_desktop_config.json` on Windows."
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "code": "{\n  \"mcpServers\": {\n    \"text-utils\": {\n      \"command\": \"uv\",\n      \"args\": [\n        \"--directory\",\n        \"/absolute/path/to/my-mcp-server\",\n        \"run\",\n        \"server.py\"\n      ]\n    }\n  }\n}"
+        },
+        {
+          "type": "p",
+          "md": "Completely quit and relaunch Claude Desktop. A hammer icon in the chat input bar confirms tools were discovered. Ask Claude \"How many words are in this paragraph?\" and paste some text — it should call `fetch_word_count` automatically."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Always use **absolute paths** in the config. Relative paths break when the host launches your subprocess from a different working directory than you expect."
+        }
+      ]
+    },
+    {
+      "id": "typescript-walkthrough",
+      "title": "TypeScript walkthrough with McpServer",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The official TypeScript SDK (`@modelcontextprotocol/sdk`, version 1.11.x as of mid-2026) uses `McpServer` as the main class and Zod for input schema validation. Two project config settings trip up most people: you need `\"type\": \"module\"` in `package.json` and `moduleResolution: \"Node16\"` in `tsconfig.json`. Get those right and everything else is straightforward."
+        },
+        {
+          "type": "h3",
+          "text": "Step 1: Set up the project"
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "code": "mkdir my-mcp-server && cd my-mcp-server\nnpm init -y\nnpm install @modelcontextprotocol/sdk zod\nnpm install -D typescript @types/node"
+        },
+        {
+          "type": "p",
+          "md": "Edit `package.json` to add `\"type\": \"module\"` and a build script:"
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "code": "{\n  \"name\": \"my-mcp-server\",\n  \"version\": \"1.0.0\",\n  \"type\": \"module\",\n  \"scripts\": {\n    \"build\": \"tsc\",\n    \"start\": \"node dist/index.js\"\n  },\n  \"dependencies\": {\n    \"@modelcontextprotocol/sdk\": \"^1.11.0\",\n    \"zod\": \"^3.24.0\"\n  },\n  \"devDependencies\": {\n    \"typescript\": \"^5.7.0\",\n    \"@types/node\": \"^22.0.0\"\n  }\n}"
+        },
+        {
+          "type": "p",
+          "md": "Create `tsconfig.json`. The `module` and `moduleResolution` settings must both be `Node16` — the SDK uses `.js` extension imports internally and older settings cause compile errors:"
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "code": "{\n  \"compilerOptions\": {\n    \"target\": \"ES2022\",\n    \"module\": \"Node16\",\n    \"moduleResolution\": \"Node16\",\n    \"outDir\": \"./dist\",\n    \"rootDir\": \"./src\",\n    \"strict\": true,\n    \"esModuleInterop\": true,\n    \"skipLibCheck\": true\n  },\n  \"include\": [\"src/**/*\"]\n}"
+        },
+        {
+          "type": "h3",
+          "text": "Step 2: Write the server"
+        },
+        {
+          "type": "p",
+          "md": "Create `src/index.ts`. The same `fetch_word_count` example as Python, now in TypeScript. The input schema is written in Zod; the SDK converts it to JSON Schema before sending the tools list to the host."
+        },
+        {
+          "type": "code",
+          "lang": "typescript",
+          "code": "// src/index.ts\nimport { McpServer } from \"@modelcontextprotocol/sdk/server/mcp.js\";\nimport { StdioServerTransport } from \"@modelcontextprotocol/sdk/server/stdio.js\";\nimport { z } from \"zod\";\n\nconst server = new McpServer({\n  name: \"text-utils\",\n  version: \"1.0.0\",\n});\n\nserver.registerTool(\n  \"fetch_word_count\",\n  {\n    description:\n      \"Count the number of words in a block of text. \" +\n      \"Use this when the user asks how many words are in a passage.\",\n    inputSchema: {\n      text: z.string().describe(\"The text whose words should be counted.\"),\n    },\n  },\n  async ({ text }) => ({\n    content: [\n      {\n        type: \"text\",\n        text: String(text.trim().split(/\\s+/).filter(Boolean).length),\n      },\n    ],\n  })\n);\n\nasync function main() {\n  const transport = new StdioServerTransport();\n  await server.connect(transport);\n  // Use console.error (stderr) — NEVER console.log (stdout corrupts the transport)\n  console.error(\"text-utils MCP server started on stdio\");\n}\n\nmain().catch((err) => {\n  console.error(err);\n  process.exit(1);\n});"
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "**Never call `console.log()` in a stdio MCP server.** Stdout is the JSON-RPC channel — a stray log line corrupts message framing and silently breaks the connection. Use `console.error()` for all diagnostic output; it writes to stderr, which the host ignores."
+        },
+        {
+          "type": "h3",
+          "text": "Step 3: Build and test"
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "code": "npm run build\n\n# Test with the Inspector\nnpx @modelcontextprotocol/inspector node dist/index.js"
+        },
+        {
+          "type": "h3",
+          "text": "Step 4: Add to Claude Desktop"
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "code": "{\n  \"mcpServers\": {\n    \"text-utils\": {\n      \"command\": \"node\",\n      \"args\": [\"/absolute/path/to/my-mcp-server/dist/index.js\"]\n    }\n  }\n}"
+        },
+        {
+          "type": "p",
+          "md": "Restart Claude Desktop. The hammer icon appears when tools are detected. You can also add an `\"env\"` field alongside `\"command\"` to pass API keys or other secrets to your server process without hardcoding them."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls and how to avoid them",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Most MCP server failures fall into one of five categories. Knowing them up front saves hours of debugging:"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Pitfall",
+            "Symptom",
+            "Fix"
+          ],
+          "rows": [
+            [
+              "Stray stdout in TypeScript",
+              "Server connects but tools never return results; Inspector shows parse errors",
+              "Replace every console.log() with console.error()"
+            ],
+            [
+              "Relative path in host config",
+              "Claude Desktop shows no tools after restart",
+              "Use the absolute path to your project directory in the config JSON"
+            ],
+            [
+              "Missing \"type\": \"module\" (TS)",
+              "TypeScript compile fails with Cannot find module errors",
+              "Add \"type\": \"module\" to package.json and set module/moduleResolution to Node16 in tsconfig"
+            ],
+            [
+              "Vague tool description",
+              "Model calls the wrong tool or hallucinates arguments",
+              "Rewrite the description as a mini-prompt: what it does, what inputs mean, when to call it"
+            ],
+            [
+              "Server not restarted after config change",
+              "Old tools still appear / new tools missing in Claude Desktop",
+              "Completely quit and relaunch Claude Desktop after every config edit"
+            ]
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Debugging checklist"
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "Run `npx @modelcontextprotocol/inspector <your server command>` first — if Inspector can't connect, the bug is in your server, not the host config",
+            "If Inspector connects but tools are missing, check that you are registering tools before calling `mcp.run()` / `server.connect()`",
+            "If tools appear but calls fail, inspect the raw JSON-RPC tab in the Inspector for schema validation errors",
+            "If everything works in Inspector but not in Claude Desktop, compare the command in your host config against exactly what the Inspector used to launch the server",
+            "Check stderr output — FastMCP and McpServer both log startup errors there"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "Adding a second tool with real I/O"
+        },
+        {
+          "type": "p",
+          "md": "Once your first tool works, adding more follows the same pattern. Here is a Python example that fetches the HTTP status code of a URL — a slightly more realistic tool that makes a network call:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "import httpx\n\n@mcp.tool()\ndef check_url_status(url: str) -> int:\n    \"\"\"Return the HTTP status code for a given URL.\n\n    Use this to verify that a URL is reachable before citing it.\n    Returns 0 if the request times out or the host is unreachable.\n\n    Args:\n        url: The full URL to check, including https://\n    \"\"\"\n    try:\n        response = httpx.get(url, timeout=5, follow_redirects=True)\n        return response.status_code\n    except Exception:\n        return 0"
+        },
+        {
+          "type": "h3",
+          "text": "Exposing a resource"
+        },
+        {
+          "type": "p",
+          "md": "Resources are read-only data sources the host loads as context — think of them like attached files. They are not called by the model directly; the host decides when to include them. Register one in Python with `@mcp.resource()`:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "@mcp.resource(\"config://app/schema\")\ndef get_db_schema() -> str:\n    \"\"\"Current database schema (read-only, for context).\"\"\"\n    return open(\"schema.sql\").read()"
+        },
+        {
+          "type": "h3",
+          "text": "Using environment variables for secrets"
+        },
+        {
+          "type": "p",
+          "md": "Your server runs as a subprocess, so it inherits the environment variables you pass in the host config. Never hardcode API keys in source. Pass them through the `env` field in the host JSON config:"
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "code": "{\n  \"mcpServers\": {\n    \"my-api-server\": {\n      \"command\": \"uv\",\n      \"args\": [\"--directory\", \"/path/to/project\", \"run\", \"server.py\"],\n      \"env\": {\n        \"MY_API_KEY\": \"sk-...\"\n      }\n    }\n  }\n}"
+        },
+        {
+          "type": "p",
+          "md": "Read the key with `os.environ[\"MY_API_KEY\"]` (Python) or `process.env.MY_API_KEY` (TypeScript). The host injects the env vars into the subprocess environment before launch."
+        },
+        {
+          "type": "h3",
+          "text": "When to move to Streamable HTTP"
+        },
+        {
+          "type": "p",
+          "md": "The stdio transport is ideal for local, single-user servers. Switch to the **Streamable HTTP** transport when you need multiple users to share one server, the server must run in the cloud, or you need stateful connections. The HTTP+SSE transport from the 2024-11-05 spec was deprecated in March 2025; use Streamable HTTP (available since the 2025-03-26 spec) for all new remote servers. Your tool handler code is identical regardless of transport — only the `mcp.run()` call changes."
+        },
+        {
+          "type": "h3",
+          "text": "Security rules for production servers"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Validate all inputs** beyond what JSON Schema checks — path traversal, SQL injection, and other business-logic attacks pass schema validation cleanly",
+            "**Scope credentials tightly** — give the server's service account only the permissions it actually needs",
+            "**Return structured errors** with `isError: true` instead of throwing unhandled exceptions; unhandled exceptions can leak stack traces and internal paths",
+            "**Add bearer-token auth** on any Streamable HTTP server — an open HTTP endpoint is an unauthenticated remote execution risk",
+            "**Audit destructive tools** — tools that write, delete, or send should be clearly labelled in their description so the model knows to confirm with the user before calling them"
+          ]
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Which language is better for building an MCP server, Python or TypeScript?",
+      "a": "Both are fully supported by the official SDKs and work identically from the host's perspective. Python with FastMCP is the fastest to prototype — a decorator and a docstring are all you need. TypeScript is a natural fit if your team already works in Node.js or you want strict compile-time types on your tool schemas. Choose based on your team's existing stack."
+    },
+    {
+      "q": "Do I need to write JSON Schema manually?",
+      "a": "No. FastMCP (Python) generates JSON Schema automatically from your function's type hints and docstring. The TypeScript SDK accepts Zod schemas and converts them. You only need to write raw JSON Schema if you use the low-level SDK primitives or need schema features the high-level wrappers do not expose."
+    },
+    {
+      "q": "My server works in the MCP Inspector but not in Claude Desktop. What should I check?",
+      "a": "First verify the path in your host config is absolute and points to the correct project directory. Second, confirm the command and args in the config exactly match what you ran in the Inspector. Third, completely quit and relaunch Claude Desktop after every config change — a restart is required for changes to take effect. Finally, check stderr output for startup errors; FastMCP and McpServer both log there."
+    },
+    {
+      "q": "Can I run multiple tools in one server?",
+      "a": "Yes — you can register as many tools, resources, and prompts as you like in a single server instance. There is no limit. In practice, keep a server focused on one domain (e.g. one server for your CRM, another for your file system) so the tool list stays short and the model can choose accurately. A long, unfocused list of tools increases the chance of the model picking the wrong one."
+    },
+    {
+      "q": "What happens if my tool raises an exception?",
+      "a": "An unhandled exception causes the server to return an error to the host, which the model sees as a tool failure. The better pattern is to catch exceptions inside your handler and return a response with `isError: true` and a plain-English explanation. That way the model can tell the user what went wrong and, in an agentic loop, decide how to recover — rather than crashing the session."
+    },
+    {
+      "q": "Can I connect my MCP server to AI clients other than Claude Desktop?",
+      "a": "Yes. MCP is an open standard supported by Claude Desktop, Claude Code, Cursor, Windsurf, VS Code Copilot, and an increasing number of other hosts. A server you write today connects to any of them without changes — you just add it to each host's config file. That write-once, connect-anywhere property is the main value of building on the standard."
+    }
+  ],
+  "related": [
+    "what-is-an-ai-agent",
+    "react-agent-pattern",
+    "what-is-mcp"
+  ],
+  "furtherReading": [
+    {
+      "title": "Build an MCP Server — official quickstart (modelcontextprotocol.io)",
+      "url": "https://modelcontextprotocol.io/docs/develop/build-server"
+    },
+    {
+      "title": "FastMCP quickstart — gofastmcp.com",
+      "url": "https://gofastmcp.com/getting-started/quickstart"
+    },
+    {
+      "title": "MCP TypeScript SDK on GitHub",
+      "url": "https://github.com/modelcontextprotocol/typescript-sdk"
+    }
+  ]
+}

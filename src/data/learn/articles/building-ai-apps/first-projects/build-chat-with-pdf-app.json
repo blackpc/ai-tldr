@@ -1,0 +1,425 @@
+{
+  "slug": "build-chat-with-pdf-app",
+  "title": "How to Build a \"Chat with Your PDF\" App",
+  "seoTitle": "How to Build a Chat with Your PDF App (Guide)",
+  "metaDescription": "Step-by-step guide to building a chat-with-PDF app: extract text, chunk it, embed it, retrieve the right passages, and answer with citations.",
+  "keywords": [
+    "how to build chat with pdf app",
+    "chat with your documents tutorial",
+    "pdf question answering app llm",
+    "build document qa app for beginners"
+  ],
+  "difficulty": "beginner",
+  "oneLiner": "Build the classic beginner RAG project — an app that answers questions about any PDF you upload.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A \"chat with your PDF\" app lets you upload any document — a research paper, a legal contract, a product manual — and ask it questions in plain English. The app reads the file, figures out which parts are relevant to your question, and hands those passages to an LLM that writes a grounded answer. No more scrolling through 80 pages looking for the one paragraph you need."
+        },
+        {
+          "type": "p",
+          "md": "The analogy that makes this click: imagine you hire a research assistant. You hand them a stack of papers and tell them to answer your questions. A smart assistant doesn't re-read every page from scratch each time you ask something — they quickly scan the pile, pull out the most relevant paragraphs, and use those as the basis for their answer. That's exactly what this app does, except the \"scanning\" is a vector similarity search and the \"assistant writing the answer\" is an LLM."
+        },
+        {
+          "type": "p",
+          "md": "This pattern is called **RAG** — Retrieval-Augmented Generation. It's the most commonly built beginner AI project because it's genuinely useful, it teaches you how embeddings, vector stores, and LLMs fit together, and the core version is about 50 lines of Python. This guide walks you through every step."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "You don't need to understand the math behind embeddings to build this. You only need to understand *what* they do: turn a chunk of text into a list of numbers so that similar chunks end up close together in numerical space, making them easy to look up by meaning."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why this project matters for a builder",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "LLMs are trained on public internet text. They know nothing about your company's internal docs, your client's contract, or a paper published last week. Asking a plain chatbot about private or recent content gets you confident hallucinations — the model will invent plausible-sounding but wrong answers because it genuinely doesn't know."
+        },
+        {
+          "type": "p",
+          "md": "A chat-with-PDF app solves this by injecting the *actual text* from your document into the model's context window at query time. The LLM isn't guessing anymore — it's reading. This makes answers both more accurate and more verifiable, because you can show the user which passage the answer came from."
+        },
+        {
+          "type": "p",
+          "md": "Beyond this one project, the skills you learn here transfer directly to almost every document-heavy AI product: contract review tools, research assistants, customer support bots backed by a knowledge base, internal wikis you can query in natural language. They all run on the same five-step pipeline you're about to build."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Step in the pipeline",
+            "What you learn by building it"
+          ],
+          "rows": [
+            [
+              "Extract text from PDF",
+              "How to handle real-world document formats"
+            ],
+            [
+              "Chunk text into pieces",
+              "Why splitting strategy affects answer quality"
+            ],
+            [
+              "Embed chunks as vectors",
+              "What embeddings are and how similarity search works"
+            ],
+            [
+              "Retrieve relevant chunks",
+              "How RAG limits context to what's actually needed"
+            ],
+            [
+              "Generate answer with citations",
+              "How to ground LLM output in retrieved evidence"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How the pipeline works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "There are two phases. The **indexing phase** runs once when you load a new PDF — it extracts text, splits it into chunks, converts each chunk to a vector embedding, and stores those vectors in a vector store. The **query phase** runs each time you ask a question — it embeds the question, finds the most similar chunks, and sends those chunks plus the question to the LLM."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "The full RAG pipeline for PDF chat",
+            "steps": [
+              {
+                "label": "Load PDF",
+                "sub": "extract raw text with pypdf or PyMuPDF"
+              },
+              {
+                "label": "Chunk text",
+                "sub": "split into ~500-token overlapping windows",
+                "accent": true
+              },
+              {
+                "label": "Embed chunks",
+                "sub": "each chunk becomes a vector (e.g. 1536 floats)"
+              },
+              {
+                "label": "Store in vector DB",
+                "sub": "FAISS or Chroma, saved to disk"
+              },
+              {
+                "label": "User asks a question",
+                "sub": "embed the question too"
+              },
+              {
+                "label": "Similarity search",
+                "sub": "find top-k most relevant chunks",
+                "accent": true
+              },
+              {
+                "label": "LLM answers",
+                "sub": "reads retrieved chunks, writes grounded reply"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Step 1 — Extract text"
+        },
+        {
+          "type": "p",
+          "md": "The first job is pulling raw text out of the PDF. The two most popular libraries for this in Python are **pypdf** (pure Python, easy to install) and **PyMuPDF** (faster, better at preserving layout). For most beginner projects with native — not scanned — PDFs, either works fine. If your PDF is a scanned image, you'll need to add an OCR step (Tesseract or a vision-model based extractor)."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Extract text from a PDF with pypdf",
+          "code": "from pypdf import PdfReader\n\ndef extract_text(pdf_path: str) -> str:\n    reader = PdfReader(pdf_path)\n    pages = [page.extract_text() or \"\" for page in reader.pages]\n    return \"\\n\\n\".join(pages)  # join pages with double newline"
+        },
+        {
+          "type": "h3",
+          "text": "Step 2 — Chunk the text"
+        },
+        {
+          "type": "p",
+          "md": "You can't embed the whole document as one unit — it would be too large to embed, and you'd lose the ability to pinpoint which section answered the question. Instead, you split the text into smaller, overlapping chunks. The overlap is important: it prevents an answer from being split across two chunks that are never retrieved together."
+        },
+        {
+          "type": "p",
+          "md": "LangChain's `RecursiveCharacterTextSplitter` is the standard beginner choice. A 2026 benchmark of seven chunking strategies across 50 academic papers found that recursive 512-token splitting placed first at 69% retrieval accuracy — a good default. A chunk size of 500-1000 characters with 10-20% overlap covers most PDFs well."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Chunk text with LangChain",
+          "code": "from langchain.text_splitter import RecursiveCharacterTextSplitter\n\ndef chunk_text(text: str) -> list[str]:\n    splitter = RecursiveCharacterTextSplitter(\n        chunk_size=1000,    # characters per chunk\n        chunk_overlap=200,  # overlap between consecutive chunks\n        separators=[\"\\n\\n\", \"\\n\", \" \", \"\"]\n    )\n    return splitter.split_text(text)"
+        },
+        {
+          "type": "h3",
+          "text": "Step 3 — Embed and store"
+        },
+        {
+          "type": "p",
+          "md": "Each chunk gets converted into a vector — a list of numbers that captures its meaning. You then store those vectors in a vector database so you can search them by similarity. For local development, **Chroma** is the easiest choice: it persists to disk, requires no running server, and integrates directly with LangChain. **FAISS** (Facebook AI Similarity Search) is a fast alternative if you don't need persistence."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Embed chunks and store in Chroma",
+          "code": "from langchain_openai import OpenAIEmbeddings\nfrom langchain_chroma import Chroma\n\ndef build_vector_store(chunks: list[str], persist_dir: str = \"./chroma_db\") -> Chroma:\n    embeddings = OpenAIEmbeddings(model=\"text-embedding-3-small\")\n    vector_store = Chroma.from_texts(\n        texts=chunks,\n        embedding=embeddings,\n        persist_directory=persist_dir\n    )\n    return vector_store"
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "OpenAI's `text-embedding-3-small` costs $0.02 per million tokens — embedding an entire 100-page PDF typically uses well under 100,000 tokens, so the cost for indexing is usually a fraction of a cent."
+        },
+        {
+          "type": "h3",
+          "text": "Step 4 — Retrieve and generate"
+        },
+        {
+          "type": "p",
+          "md": "When a user asks a question, you embed the question using the same model, then ask the vector store for the top-k most similar chunks. Those chunks become the \"context\" you inject into the LLM's prompt alongside the question. The LLM reads the context and writes an answer grounded in the actual document text."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Retrieve chunks and answer a question",
+          "code": "from openai import OpenAI\n\nclient = OpenAI()\n\ndef answer_question(question: str, vector_store: Chroma, k: int = 4) -> str:\n    # 1. Find the most relevant chunks\n    results = vector_store.similarity_search(question, k=k)\n    context = \"\\n\\n---\\n\\n\".join(doc.page_content for doc in results)\n\n    # 2. Build the prompt\n    system = (\n        \"You are a precise assistant. Answer questions using ONLY the provided context. \"\n        \"If the context does not contain enough information to answer, say so clearly. \"\n        \"Cite the relevant passage by quoting a short excerpt.\"\n    )\n    user = f\"Context:\\n{context}\\n\\nQuestion: {question}\"\n\n    # 3. Call the LLM\n    response = client.chat.completions.create(\n        model=\"gpt-4o-mini\",\n        messages=[\n            {\"role\": \"system\", \"content\": system},\n            {\"role\": \"user\", \"content\": user}\n        ],\n        max_tokens=512,\n    )\n    return response.choices[0].message.content"
+        }
+      ]
+    },
+    {
+      "id": "putting-it-together",
+      "title": "Putting it all together: the complete app",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Here's a minimal but complete PDF chat app in Python. It extracts text from any PDF you provide, builds a vector store on the first run, and then opens an interactive loop where you can ask questions. On subsequent runs it reloads the existing vector store from disk so you don't have to re-embed the whole document."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "chat_pdf.py — complete working app",
+          "code": "import os\nfrom pypdf import PdfReader\nfrom langchain.text_splitter import RecursiveCharacterTextSplitter\nfrom langchain_openai import OpenAIEmbeddings\nfrom langchain_chroma import Chroma\nfrom openai import OpenAI\nfrom dotenv import load_dotenv\n\nload_dotenv()\n\nPDF_PATH = \"my_document.pdf\"   # <-- change this\nPERSIST_DIR = \"./chroma_db\"\n\ndef load_or_build_store(pdf_path: str, persist_dir: str) -> Chroma:\n    embeddings = OpenAIEmbeddings(model=\"text-embedding-3-small\")\n    if os.path.exists(persist_dir):\n        print(\"Loading existing vector store...\")\n        return Chroma(persist_directory=persist_dir, embedding_function=embeddings)\n\n    print(\"Building vector store from PDF...\")\n    reader = PdfReader(pdf_path)\n    full_text = \"\\n\\n\".join(p.extract_text() or \"\" for p in reader.pages)\n\n    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)\n    chunks = splitter.split_text(full_text)\n    print(f\"Created {len(chunks)} chunks.\")\n\n    return Chroma.from_texts(\n        texts=chunks,\n        embedding=embeddings,\n        persist_directory=persist_dir\n    )\n\ndef answer(question: str, store: Chroma) -> str:\n    docs = store.similarity_search(question, k=4)\n    context = \"\\n\\n---\\n\\n\".join(d.page_content for d in docs)\n    client = OpenAI()\n    resp = client.chat.completions.create(\n        model=\"gpt-4o-mini\",\n        messages=[\n            {\"role\": \"system\", \"content\": (\n                \"Answer using ONLY the provided context. \"\n                \"Cite a short excerpt to support your answer. \"\n                \"If the context is insufficient, say you don't know.\"\n            )},\n            {\"role\": \"user\", \"content\": f\"Context:\\n{context}\\n\\nQuestion: {question}\"}\n        ],\n        max_tokens=512,\n    )\n    return resp.choices[0].message.content\n\nif __name__ == \"__main__\":\n    store = load_or_build_store(PDF_PATH, PERSIST_DIR)\n    print(\"Ready! Ask questions about your PDF (Ctrl+C to quit).\\n\")\n    while True:\n        q = input(\"You: \").strip()\n        if q:\n            print(f\"Bot: {answer(q, store)}\\n\")"
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "title": "Install dependencies and run",
+          "code": "pip install openai langchain langchain-openai langchain-chroma pypdf chromadb python-dotenv\nexport OPENAI_API_KEY=\"sk-...\"  # or put it in a .env file\npython chat_pdf.py"
+        },
+        {
+          "type": "h3",
+          "text": "Add a simple web UI with Streamlit"
+        },
+        {
+          "type": "p",
+          "md": "Once your terminal version works, wrapping it in a Streamlit UI takes about 20 more lines. Streamlit gives you a file uploader, a chat history panel, and a text input box — all of the visual chrome a real PDF chat app needs, with zero HTML or CSS."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "streamlit_app.py — web UI for PDF chat",
+          "code": "import streamlit as st\nimport tempfile, os\nfrom pypdf import PdfReader\nfrom langchain.text_splitter import RecursiveCharacterTextSplitter\nfrom langchain_openai import OpenAIEmbeddings\nfrom langchain_chroma import Chroma\nfrom openai import OpenAI\n\nst.title(\"Chat with your PDF\")\n\nuploaded = st.file_uploader(\"Upload a PDF\", type=\"pdf\")\nif uploaded and \"store\" not in st.session_state:\n    with tempfile.NamedTemporaryFile(delete=False, suffix=\".pdf\") as f:\n        f.write(uploaded.read())\n        tmp_path = f.name\n    reader = PdfReader(tmp_path)\n    text = \"\\n\\n\".join(p.extract_text() or \"\" for p in reader.pages)\n    chunks = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200).split_text(text)\n    st.session_state.store = Chroma.from_texts(\n        texts=chunks, embedding=OpenAIEmbeddings(model=\"text-embedding-3-small\")\n    )\n    st.session_state.history = []\n    st.success(f\"Indexed {len(chunks)} chunks. Ask away!\")\n\nif \"store\" in st.session_state:\n    for msg in st.session_state.history:\n        with st.chat_message(msg[\"role\"]):\n            st.write(msg[\"content\"])\n\n    if q := st.chat_input(\"Ask a question about the PDF...\"):\n        st.session_state.history.append({\"role\": \"user\", \"content\": q})\n        docs = st.session_state.store.similarity_search(q, k=4)\n        ctx = \"\\n\\n---\\n\\n\".join(d.page_content for d in docs)\n        resp = OpenAI().chat.completions.create(\n            model=\"gpt-4o-mini\",\n            messages=[\n                {\"role\": \"system\", \"content\": \"Answer using only the provided context. Cite evidence.\"},\n                {\"role\": \"user\", \"content\": f\"Context:\\n{ctx}\\n\\nQuestion: {q}\"}\n            ],\n            max_tokens=512,\n        )\n        reply = resp.choices[0].message.content\n        st.session_state.history.append({\"role\": \"assistant\", \"content\": reply})\n        st.rerun()"
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common mistakes and how to avoid them",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Most PDF chat apps that \"don't work\" have the same handful of problems. Here are the most common ones and how to fix them."
+        },
+        {
+          "type": "h3",
+          "text": "Pitfall 1 — Chunks that are too large or too small"
+        },
+        {
+          "type": "p",
+          "md": "Very large chunks (2000+ characters) give the model too much irrelevant context and hurt retrieval precision — the similarity search latches on to the average meaning of a big chunk rather than the specific passage that matters. Very small chunks (under 200 characters) lose surrounding context, so the model can't make sense of the snippet in isolation. A starting point of 800-1000 characters with 15-20% overlap works for most PDFs. Adjust based on the document's structure."
+        },
+        {
+          "type": "h3",
+          "text": "Pitfall 2 — Not retrieving enough chunks"
+        },
+        {
+          "type": "p",
+          "md": "Retrieving only 1 or 2 chunks makes it easy to miss the answer when it spans multiple passages or when the document uses slightly different wording than your question. Retrieving 4-6 chunks is a good default. You can retrieve more and let the model ignore irrelevant ones — as long as your total context stays within the model's context window."
+        },
+        {
+          "type": "h3",
+          "text": "Pitfall 3 — Not instructing the model to say \"I don't know\""
+        },
+        {
+          "type": "p",
+          "md": "Without an explicit instruction, the LLM will try to answer even when the retrieved context doesn't contain the answer — and it will sound confident. Always include a line like *\"If the context does not contain enough information to answer the question, say 'The document does not appear to address this topic.'\"* in your system prompt. This is the single most important guardrail for a trustworthy PDF chat app."
+        },
+        {
+          "type": "h3",
+          "text": "Pitfall 4 — Scanned PDFs with no text layer"
+        },
+        {
+          "type": "p",
+          "md": "Some PDFs are just images of scanned pages. `pypdf` will return empty strings for these pages because there's no embedded text to extract. You can detect this (extracted text is blank or contains only whitespace) and fall back to **PyMuPDF + Tesseract OCR** or use a vision-capable model to extract text from the page images before chunking."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Always check how much text was actually extracted. If `extract_text()` returns an empty string for most pages, you're dealing with a scanned PDF and need an OCR step. Indexing empty strings and querying against them produces silent failures — the model just says it doesn't know."
+        },
+        {
+          "type": "h3",
+          "text": "Pitfall 5 — Re-embedding the document on every run"
+        },
+        {
+          "type": "p",
+          "md": "Embedding costs money and takes time. Persist your vector store to disk (Chroma does this automatically with `persist_directory`) and only re-embed when the PDF changes. For a multi-document app, store a hash of each PDF so you can detect when re-ingestion is needed."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once your basic PDF chat app works reliably, there are several directions you can take it. Each upgrade addresses a real limitation of the simple version."
+        },
+        {
+          "type": "h3",
+          "text": "Add metadata and page numbers to citations"
+        },
+        {
+          "type": "p",
+          "md": "Instead of storing plain text chunks, store them as `Document` objects with metadata — specifically the page number each chunk came from. When you retrieve chunks, include the page number in the context you pass to the LLM and ask it to cite page numbers in its answers. This makes the app much more trustworthy for professional use cases like legal or medical documents."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Store chunks with page-number metadata",
+          "code": "from langchain.schema import Document\nfrom pypdf import PdfReader\n\ndef extract_docs_with_metadata(pdf_path: str) -> list[Document]:\n    reader = PdfReader(pdf_path)\n    documents = []\n    for i, page in enumerate(reader.pages):\n        text = page.extract_text() or \"\"\n        if text.strip():\n            documents.append(Document(\n                page_content=text,\n                metadata={\"page\": i + 1, \"source\": pdf_path}\n            ))\n    return documents"
+        },
+        {
+          "type": "h3",
+          "text": "Switch from keyword-style to hybrid retrieval"
+        },
+        {
+          "type": "p",
+          "md": "Pure vector similarity search works well for semantic questions (\"what does the document say about liability?\") but can miss exact matches (\"find section 4.2.1\"). Hybrid retrieval combines vector similarity with keyword (BM25) search, then merges the results. LangChain's `EnsembleRetriever` lets you mix both approaches with a single line of configuration. This is worth adding once your basic retrieval is solid."
+        },
+        {
+          "type": "h3",
+          "text": "Reranking for higher precision"
+        },
+        {
+          "type": "p",
+          "md": "After retrieval you can run the candidate chunks through a **reranker** — a small model (Cohere's Rerank API or open-source `cross-encoder/ms-marco-MiniLM`) that scores each chunk against the question much more precisely than cosine similarity alone. A common pattern is to retrieve a wide set (k=20) cheaply with the vector store, then rerank to the top 4 before passing them to the LLM. This often improves answer quality noticeably without meaningfully increasing cost."
+        },
+        {
+          "type": "h3",
+          "text": "Scale to multiple documents"
+        },
+        {
+          "type": "p",
+          "md": "The same pipeline scales naturally to a folder of PDFs. Add a `source` field to your chunk metadata so the LLM can name which document it drew from. For larger collections (hundreds of documents), replace Chroma with a managed vector database like **Pinecone** or **pgvector** (PostgreSQL extension) so you don't have to keep the entire index in memory."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "The upgrade path: basic PDF chat to production document Q&A",
+            "steps": [
+              {
+                "label": "Single PDF, terminal UI",
+                "sub": "the version you just built"
+              },
+              {
+                "label": "Streamlit / Gradio UI",
+                "sub": "file uploader, chat panel"
+              },
+              {
+                "label": "Page citations + metadata",
+                "sub": "trust and verifiability"
+              },
+              {
+                "label": "Hybrid retrieval + reranking",
+                "sub": "better answer quality",
+                "accent": true
+              },
+              {
+                "label": "Multi-document + managed DB",
+                "sub": "production scale"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Use a vision model for complex PDFs"
+        },
+        {
+          "type": "p",
+          "md": "Native text extraction falls apart on PDFs with complex layouts — multi-column text, embedded tables, diagrams with captions. Vision-language models (GPT-4o, Claude, Gemini) can read a PDF page as an image and extract structured text including tables. For a document-heavy production app, running each page through a vision model at ingest time is increasingly the recommended approach, even though it costs more than plain text extraction."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Do I need to re-embed the PDF every time I restart the app?",
+      "a": "No. Use Chroma's `persist_directory` option to save your vector store to disk. On subsequent runs, load it with `Chroma(persist_directory=..., embedding_function=...)` and skip the ingestion step entirely. Only re-embed when the PDF changes."
+    },
+    {
+      "q": "Why does my app give wrong answers even though the answer is in the document?",
+      "a": "The most likely cause is that the relevant passage wasn't retrieved — either the chunk containing the answer scored lower than unrelated chunks, or the answer spans a chunk boundary. Try increasing `k` (retrieve more chunks), reducing chunk size, or adding chunk overlap. Also verify the passage is actually being extracted from the PDF by printing raw text before chunking."
+    },
+    {
+      "q": "How much does it cost to run a chat-with-PDF app using the OpenAI API?",
+      "a": "Indexing a 50-page PDF with `text-embedding-3-small` typically costs under $0.01. Each question answered with `gpt-4o-mini` costs roughly $0.001-0.003 depending on how much context you retrieve. For personal or low-volume use, monthly costs are usually under a dollar."
+    },
+    {
+      "q": "Can I build this without OpenAI — using a local or open-source model?",
+      "a": "Yes. Replace `OpenAIEmbeddings` with `HuggingFaceEmbeddings` (using a model like `sentence-transformers/all-MiniLM-L6-v2` from the `langchain-huggingface` package) and replace the OpenAI chat call with a local model via Ollama. The pipeline structure stays identical — only the model providers change."
+    },
+    {
+      "q": "My PDF is scanned and pypdf returns empty text. What do I do?",
+      "a": "Scanned PDFs have no embedded text layer — they're images. You need OCR. Install Tesseract and `pytesseract`, then render each PDF page to an image with PyMuPDF (`fitz.open(pdf_path)[page_num].get_pixmap()`) and pass the image to `pytesseract.image_to_string()`. Alternatively, use a vision-capable LLM to extract text from the page image."
+    },
+    {
+      "q": "How do I add source citations so users can verify the answer?",
+      "a": "Store each chunk as a `langchain.schema.Document` with `metadata={\"page\": page_number, \"source\": filename}`. When you retrieve chunks for a question, include the page numbers in the context you send to the LLM and ask it to cite them. You can also display the raw chunk text beneath the answer as a \"Sources\" section in your UI."
+    }
+  ],
+  "related": [
+    "beginner-ai-project-ideas",
+    "build-chatbot-llm-api",
+    "modern-ai-app-stack",
+    "python-vs-typescript-ai",
+    "ai-app-deployment-options"
+  ],
+  "furtherReading": [
+    {
+      "title": "LangChain — Build a RAG application",
+      "url": "https://python.langchain.com/docs/tutorials/rag/"
+    },
+    {
+      "title": "Chroma — Getting started",
+      "url": "https://docs.trychroma.com/docs/overview/getting-started"
+    },
+    {
+      "title": "OpenAI — Text embedding models",
+      "url": "https://platform.openai.com/docs/guides/embeddings"
+    }
+  ]
+}

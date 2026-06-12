@@ -1,0 +1,385 @@
+{
+  "slug": "continuous-batching",
+  "title": "What Is Continuous Batching? Why Modern Inference Is So Fast",
+  "seoTitle": "What Is Continuous Batching in LLM Inference?",
+  "metaDescription": "Continuous batching lets one GPU serve many users at once. Learn how it works, why it beats static batching, and what it means for throughput.",
+  "keywords": [
+    "what is continuous batching",
+    "continuous batching vs static batching",
+    "how llm batching works",
+    "in-flight batching llm",
+    "llm gpu throughput optimization"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You will understand the scheduling trick that lets a single GPU serve dozens of users at once without making anyone wait.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**Continuous batching** is the scheduling technique that allows a single GPU to serve many users simultaneously by treating the model's batch as a living, breathing queue rather than a locked room. Instead of waiting until every request in a group finishes before letting new ones in, the server swaps completed requests out and new ones in on every single token step. The GPU never sees an idle slot from finished work."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like a busy sushi conveyor belt restaurant. The old approach — **static batching** — seats a group of eight, waits until every single diner at the table has finished eating, then cleans the whole table and seats the next eight. If seven people finish quickly but one is a slow eater, the seven empty seats sit unused. The restaurant is never full, and waiting customers queue outside. Continuous batching is the smarter maître d' who clears each plate the moment it is empty and immediately seats the next guest in that chair — the table is always full, the kitchen never stops cooking, and the queue outside drains faster."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "You may also see this called **iteration-level scheduling**, **in-flight batching** (NVIDIA's preferred term), or **dynamic batching**. They all describe the same idea: adjusting the active batch at every token generation step rather than at request boundaries."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Before continuous batching, the only practical way to serve an LLM to many users was static batching: collect a fixed group of requests, run them all through the model together, and release results when the last one finished. This had a fatal flaw — LLM requests vary wildly in length. One user asks a two-sentence question; another asks for a 2 000-word essay. In a static batch, the short requests finish early but their GPU slots sit empty, wasting compute while waiting for the longest request to catch up."
+        },
+        {
+          "type": "p",
+          "md": "The practical consequence: GPU utilization typically hovered at **30–40%** under real-world static-batching deployments. The rest was wasted. Continuous batching, combined with efficient KV-cache memory management, pushes utilization to **80%+** on the same hardware — often delivering 4–8x more throughput with no hardware upgrade. In a production setting where a server-grade H100 GPU can cost several dollars per hour in the cloud, that difference determines whether a product is economically viable."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Higher throughput** — more total tokens served per second from the same GPU, directly lowering cost per answer.",
+            "**Lower average latency** — new requests enter the batch quickly instead of queuing outside until the current batch drains.",
+            "**Fairer scheduling** — short requests finish and return results promptly; long requests don't hold the entire batch hostage.",
+            "**Better GPU utilization** — the GPU processes useful work on every forward pass instead of spinning on padding tokens from completed slots."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Continuous batching is invisible to the caller. Whether you are using vLLM, Hugging Face Text Generation Inference (TGI), or NVIDIA TensorRT-LLM, the API looks identical. You get the throughput gains for free — no code change required in your application."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "To understand continuous batching you first need to understand what an LLM actually does at inference time. Every request goes through two distinct phases."
+        },
+        {
+          "type": "h3",
+          "text": "Prefill and decode: the two phases of generation"
+        },
+        {
+          "type": "p",
+          "md": "**Prefill** processes the entire input prompt in a single large parallel operation. All prompt tokens are fed through every layer of the model simultaneously — it is compute-intensive but fast. At the end of prefill, the model produces the first output token and has computed a **KV cache** (a set of attention keys and values) for every prompt token."
+        },
+        {
+          "type": "p",
+          "md": "**Decode** generates output tokens one at a time. Each forward pass of the model reads the accumulated KV cache, attends over every previous token, and produces exactly one new token. This repeats until the model emits a stop token or hits the maximum length. Decode is *memory-bandwidth-bound* — the GPU spends most of its time reading the KV cache rather than doing arithmetic — and it is inherently sequential, which is why LLMs feel slower than they theoretically should."
+        },
+        {
+          "type": "h3",
+          "text": "The static-batching failure mode"
+        },
+        {
+          "type": "p",
+          "md": "In static batching, the server groups requests into a batch of size N and runs all N through prefill together, then through decode together, one token step at a time. When any request generates its stop token, its slot in the batch goes idle. The other N-1 requests keep running, but the GPU is now doing wasted work on padding for every finished slot. Only when *every* request in the batch finishes can new requests enter. Under realistic traffic — where output lengths vary enormously — a single long request can stall dozens of shorter ones."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Static batching vs. continuous batching",
+            "columns": [
+              {
+                "title": "Static batching",
+                "items": [
+                  "Collect N requests, then start the batch",
+                  "All N run decode together step by step",
+                  "Short requests finish — slots sit idle",
+                  "GPU computes padding for empty slots",
+                  "Batch releases only when ALL finish",
+                  "New arrivals queue outside throughout"
+                ]
+              },
+              {
+                "title": "Continuous batching",
+                "items": [
+                  "Batch starts immediately, joins any step",
+                  "Scheduler runs after every token step",
+                  "Finished requests evicted instantly",
+                  "Their memory freed and reassigned",
+                  "Waiting requests admitted next step",
+                  "GPU stays saturated continuously"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Iteration-level scheduling: the core idea"
+        },
+        {
+          "type": "p",
+          "md": "Continuous batching, introduced in the 2022 **Orca** research paper (Yu et al., OSDI '22), solves this by making the batch mutable at every token step. After each decode step the scheduler checks: which sequences just emitted a stop token? They are immediately removed from the batch and their KV-cache memory is freed. Are there requests waiting in the queue? They are admitted into the now-empty slots and begin their prefill phase. On the very next token step, the GPU is processing a full, fresh batch."
+        },
+        {
+          "type": "p",
+          "md": "The Orca paper demonstrated this approach could reach up to **36.9x higher throughput** compared to existing static systems. Later, the vLLM team combined it with PagedAttention (non-contiguous KV-cache paging) to push throughput further, documenting **23x improvements** over naive serving in Anyscale's widely-cited 2023 benchmark."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "One token step in a continuous-batching scheduler",
+            "steps": [
+              {
+                "label": "Decode step N executes",
+                "sub": "model runs a forward pass over the active batch"
+              },
+              {
+                "label": "Finished sequences evicted",
+                "sub": "any sequence that emitted EOS is removed, KV pages freed"
+              },
+              {
+                "label": "Waiting queue checked",
+                "sub": "new requests admitted up to max batch size / memory limit"
+              },
+              {
+                "label": "New requests run prefill",
+                "sub": "their prompt tokens processed, KV cache initialized"
+              },
+              {
+                "label": "Decode step N+1 executes",
+                "sub": "full batch again — GPU sees no idle slots",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "What limits the batch size"
+        },
+        {
+          "type": "p",
+          "md": "The scheduler cannot admit unlimited requests. Each active sequence requires its own KV cache stored in GPU VRAM — one set of attention keys and values per layer per token generated so far. As context lengths grow, KV caches grow with them. The practical limit on batch size is therefore not compute but **VRAM**: how many KV caches can fit simultaneously. This is why KV-cache memory management (covered in the vLLM article) is inseparable from continuous batching — you cannot batch efficiently if you are wasting 60% of VRAM on fragmented, half-empty KV-cache allocations."
+        }
+      ]
+    },
+    {
+      "id": "continuous-batching-in-practice",
+      "title": "Continuous batching in production frameworks",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "By 2024 continuous batching had become the standard baseline across every serious LLM inference framework. Each implements it slightly differently."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Framework",
+            "Term used",
+            "KV-cache management",
+            "Notable addition"
+          ],
+          "rows": [
+            [
+              "vLLM",
+              "Continuous batching",
+              "PagedAttention (paged blocks)",
+              "Chunked prefill, prefix caching"
+            ],
+            [
+              "TGI (Hugging Face)",
+              "Continuous batching",
+              "Flash-attention + paged kernels",
+              "TGI v3 chunking, 13x speedup on long prompts"
+            ],
+            [
+              "TensorRT-LLM (NVIDIA)",
+              "In-flight batching",
+              "Custom CUDA kernel fusion",
+              "INT8/FP8 quantization, fastest on H100"
+            ],
+            [
+              "SGLang",
+              "Continuous batching",
+              "Radix-tree prefix cache",
+              "Structured generation, multi-call agents"
+            ],
+            [
+              "llama.cpp server",
+              "Continuous batching",
+              "Standard KV cache",
+              "Lightweight, CPU/Metal/CUDA support"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The practical takeaway: if you spin up a vLLM server or a TGI container today, continuous batching is on by default. You do not configure it — it simply runs. The scheduler handles admissions, evictions, and memory management transparently behind the OpenAI-compatible API endpoint."
+        },
+        {
+          "type": "h3",
+          "text": "Chunked prefill: solving the prefill stall problem"
+        },
+        {
+          "type": "p",
+          "md": "Continuous batching introduced a new edge case: a single very long prompt — say, a 50 000-token document for summarization — monopolizes the GPU during its prefill phase. While that prefill runs, every other request in the batch is blocked from generating its next decode token, spiking their latency. **Chunked prefill** addresses this by splitting long prefill operations into chunks of typically 512–2048 tokens each and interleaving them with decode steps. Long-prompt requests take more steps to complete prefill but no longer stall everyone else. vLLM and TGI v3 both implement chunked prefill; it is increasingly the default in 2025 deployments."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "If you are running vLLM and have users who send very long prompts alongside users who send short ones, enable chunked prefill with `--enable-chunked-prefill`. It reduces tail latency noticeably for the short-prompt users at no cost to throughput."
+        }
+      ]
+    },
+    {
+      "id": "tradeoffs-and-pitfalls",
+      "title": "Trade-offs and pitfalls",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Continuous batching is not free. Understanding its trade-offs helps you tune serving for your workload."
+        },
+        {
+          "type": "h3",
+          "text": "Throughput vs. time-to-first-token"
+        },
+        {
+          "type": "p",
+          "md": "Larger active batches produce more total tokens per second (better throughput) but increase **time to first token (TTFT)** for each individual request, because a newly admitted request must wait for its prefill turn in a crowded scheduler. The right operating point depends on your application: a real-time chatbot cares primarily about low TTFT; an offline document-processing pipeline wants maximum throughput. Most frameworks expose a `max_num_seqs` or equivalent setting to cap concurrency and defend TTFT when needed."
+        },
+        {
+          "type": "h3",
+          "text": "Memory pressure and KV-cache eviction"
+        },
+        {
+          "type": "p",
+          "md": "When VRAM fills up — because many long requests are in flight simultaneously — the scheduler cannot admit new requests even if compute is available. In vLLM, if the KV cache pool is exhausted and a running sequence cannot get the pages it needs, the scheduler **preempts** lower-priority sequences: their KV pages are swapped to CPU memory or simply discarded, forcing the sequence to re-run its prefill later. This is correct behavior, not a bug, but it does introduce latency spikes under heavy load. Set `--gpu-memory-utilization` conservatively (0.85–0.90) and monitor KV-cache utilization as a key metric."
+        },
+        {
+          "type": "h3",
+          "text": "Head-of-line blocking in naive implementations"
+        },
+        {
+          "type": "p",
+          "md": "A naive continuous-batching scheduler that always fills to maximum batch size can suffer **head-of-line blocking** at the prefill stage: if many requests all arrive simultaneously and each needs prefill, they queue behind each other and decode-phase requests do not progress. Chunked prefill is the primary mitigation. Frameworks like SGLang and newer vLLM versions also implement **priority-based scheduling** that can interleave prefill and decode work to minimize worst-case latency."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "**Do not confuse throughput benchmarks with production latency.** A benchmark that reports \"23x throughput\" is measuring total tokens per second at maximum concurrency. Under the same load, median latency often looks fine while **p99 latency** (the slowest 1% of requests) can be very high. Always measure the latency percentile your SLA cares about under realistic traffic, not just throughput under synthetic load."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Continuous batching is the foundation, but modern serving stacks layer several additional optimizations on top of it."
+        },
+        {
+          "type": "h3",
+          "text": "Prefix caching: skip redundant prefill"
+        },
+        {
+          "type": "p",
+          "md": "When many requests share a common prefix — a system prompt, a retrieved document, a fixed few-shot block — the KV cache for those prefix tokens is identical across all requests. **Prefix caching** (also called KV-cache reuse or prompt caching) computes those shared tokens once, stores the resulting KV pages, and reuses them for every subsequent request that shares the prefix. The prefill cost for the shared portion drops to near zero. vLLM implements this via a hash-keyed block table; SGLang uses a radix tree. Anyscale reports TTFT reductions from seconds to milliseconds for RAG workloads with stable system prompts."
+        },
+        {
+          "type": "h3",
+          "text": "Speculative decoding: more tokens per step"
+        },
+        {
+          "type": "p",
+          "md": "Decode is fundamentally sequential — one token per forward pass of the large model. **Speculative decoding** breaks this constraint by using a tiny draft model to guess several tokens ahead, then having the large model verify all guesses in a single batched pass. When guesses are correct (predictable tokens are often guessed right), you get multiple output tokens for the cost of one large-model forward pass. Typical gains are 2–3x lower decode latency at no quality cost. vLLM, TGI, and TensorRT-LLM all support speculative decoding."
+        },
+        {
+          "type": "h3",
+          "text": "Disaggregated prefill and decode"
+        },
+        {
+          "type": "p",
+          "md": "At large scale, prefill (compute-bound) and decode (memory-bandwidth-bound) have very different GPU resource profiles. **Disaggregated serving** runs them on separate pools of hardware: a prefill cluster of compute-optimized GPUs and a decode cluster of memory-bandwidth-optimized GPUs, with KV caches transferred between them over high-speed interconnects. This architecture, explored in the Splitwise and DistServe research papers and landing in production systems in 2025, lets operators scale each phase independently and achieve tighter SLA control at large traffic volumes."
+        },
+        {
+          "type": "h3",
+          "text": "KV-cache quantization"
+        },
+        {
+          "type": "p",
+          "md": "As context windows grow toward millions of tokens, the KV cache — not the model weights — becomes the dominant VRAM consumer. A 128K-token context on a 70B model can easily require tens of gigabytes per request. **KV-cache quantization** compresses each cache entry from BF16 to INT8 or FP8, roughly halving KV-cache memory with minimal accuracy impact. vLLM supports FP8 KV-cache quantization on Hopper GPUs (H100); TensorRT-LLM has INT8 KV support across its model set. This lets you fit larger batches — and thus run more concurrent users — from the same GPU."
+        },
+        {
+          "type": "h3",
+          "text": "Choosing the right serving stack"
+        },
+        {
+          "type": "p",
+          "md": "All major inference frameworks implement continuous batching, so the choice between them comes down to secondary factors. **vLLM** is the most flexible and widely documented — the default choice for most open-model deployments. **TensorRT-LLM** wins on raw throughput for NVIDIA hardware if you can afford the extra setup. **SGLang** outperforms both for structured-generation workloads and agentic pipelines with repeated model calls. **TGI** integrates tightly with Hugging Face tooling and is simpler to configure. Benchmark with your actual model, traffic shape, and latency target before committing — the framework that wins in a published benchmark may not be the right one for your specific workload."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The serving stack moves faster than almost any other area of AI infrastructure. Techniques that were research prototypes in 2023 (chunked prefill, prefix caching, speculative decoding) are production defaults in 2025. Check the release notes of your chosen framework every quarter — something you read a year ago may be superseded."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is continuous batching in LLM inference?",
+      "a": "Continuous batching is a GPU scheduling technique where the server adjusts which requests are in the active batch after every single token generation step. When a request finishes, it is immediately removed and a waiting request takes its slot — so the GPU is always processing a full, useful batch instead of waiting for a slow request to drag the whole group to a halt."
+    },
+    {
+      "q": "How much faster does continuous batching make LLM serving?",
+      "a": "In the Orca research paper, iteration-level scheduling showed up to 36.9x higher throughput versus naive static-batching systems. Anyscale's widely-cited 2023 benchmark showed vLLM achieving 23x the throughput of a basic HuggingFace serving setup. In practice, 4–8x throughput improvements over simple static batching under real concurrent traffic are common, and GPU utilization typically climbs from 30–40% to 80%+."
+    },
+    {
+      "q": "What is the difference between continuous batching and static batching?",
+      "a": "Static batching collects a fixed group of requests and runs them all together until every single one finishes — short requests sit idle waiting for long ones. Continuous batching evicts finished requests and admits new ones after every token step, keeping the batch continuously full. Continuous batching has lower average latency, higher throughput, and far better GPU utilization under variable-length requests."
+    },
+    {
+      "q": "Does continuous batching affect the quality of the model output?",
+      "a": "No. Continuous batching is purely a scheduling change — it only controls which requests are in the active batch at each step. The model's actual computation for each token is identical to running the request in isolation. Output quality, determinism (for a fixed seed), and token probabilities are unaffected."
+    },
+    {
+      "q": "What is the relationship between continuous batching and PagedAttention?",
+      "a": "They solve different problems but work together. Continuous batching is the scheduler that keeps the GPU's compute units busy by quickly cycling requests through the batch. PagedAttention is the memory manager that gives the scheduler room to admit more requests by reducing KV-cache memory waste from 60–80% down to under 4%. You need both to get the full throughput benefit — good scheduling without good memory management hits a ceiling quickly."
+    },
+    {
+      "q": "Is continuous batching the same as in-flight batching?",
+      "a": "Yes, they are the same technique under different names. NVIDIA and TensorRT-LLM documentation call it **in-flight batching**. The original Orca paper called it **iteration-level scheduling**. Hugging Face and vLLM call it **continuous batching**. All describe the same core idea: adjusting the active batch at every token generation step rather than waiting for a fixed batch to drain completely."
+    }
+  ],
+  "related": [
+    "what-is-local-llm",
+    "what-is-ollama",
+    "what-is-llama-cpp",
+    "lm-studio-vs-ollama",
+    "ollama-vs-vllm"
+  ],
+  "furtherReading": [
+    {
+      "title": "Orca: A Distributed Serving System for Transformer-Based Generative Models (OSDI 2022)",
+      "url": "https://www.usenix.org/conference/osdi22/presentation/yu"
+    },
+    {
+      "title": "How continuous batching enables 23x throughput in LLM inference (Anyscale)",
+      "url": "https://www.anyscale.com/blog/continuous-batching-llm-inference"
+    },
+    {
+      "title": "LLM Serving Optimization: Continuous Batching, PagedAttention, and Chunked Prefill on H100 (Spheron, 2026)",
+      "url": "https://www.spheron.network/blog/llm-serving-optimization-continuous-batching-paged-attention/"
+    }
+  ]
+}

@@ -1,0 +1,428 @@
+{
+  "slug": "ai-error-state-design",
+  "title": "What Should an AI App Show When the Model Fails? Error State Design",
+  "seoTitle": "AI Error States: What to Show When the Model Fails",
+  "metaDescription": "What should your AI app show when the model refuses, times out, or hallucinates? Error-state patterns: fallbacks, retries, honest empty states.",
+  "keywords": [
+    "ai app error state design",
+    "what to show when llm fails",
+    "handle llm refusal ux",
+    "fallback ui for ai errors",
+    "ai empty state design"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Design failure states so a bad model response costs you a shrug, not a user.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every AI app fails eventually. The model times out. The API returns a 429. The model refuses the request. The answer comes back as confident, fluent nonsense. The only question is: **what does the user see when that happens?**"
+        },
+        {
+          "type": "p",
+          "md": "**AI error state design** is the practice of deciding — deliberately, in advance — what your interface shows at each failure point. It covers the messages, layouts, retry controls, and fallback behaviours that appear whenever the model can't deliver a useful response."
+        },
+        {
+          "type": "p",
+          "md": "The analogy is a good waiter. A bad waiter disappears into the kitchen and returns five minutes later looking confused. A good waiter comes out quickly, says \"the kitchen is backed up — here's what I can offer you instead\", and gives you something to do while you wait. The kitchen (your model) may be equally slow in both cases. The *experience* is completely different. Your error states are that waiter."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Error states are not edge cases. LLM provider outages are routine — a December 2025 industry report tracked 47 incidents across major AI providers in a single month, with both OpenAI and Anthropic each logging over 180 hours of cumulative downtime impact. Your error states will be seen by real users."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Ordinary apps and AI apps fail in different ways, and the stakes are different too. When a \"Save\" button fails, the user knows exactly what didn't happen. When an AI feature fails, three worse things can happen: the app hangs silently, the user gets a cryptic system error, or — most insidiously — the app confidently displays a wrong answer with no indication that anything went wrong."
+        },
+        {
+          "type": "p",
+          "md": "Research on AI trust shows that it isn't earned by being error-free; it's built by how errors are handled. A 2025 study on user trust in AI systems found that **63% of users are more likely to continue relying on an AI system that displays confidence levels or explains its limitations** than one that gives black-box answers. The Google AI Overviews incident — where the system recommended adding glue to pizza sauce with the same confident tone as a correct answer — is the canonical example of what happens when error states are invisible: trust collapses entirely."
+        },
+        {
+          "type": "h3",
+          "text": "The three failure modes that cost you users"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Silent spinner** — the request never resolves, nothing tells the user why, and they close the tab. This is the worst outcome: you've burned the user's time and given them nothing.",
+            "**Raw API error** — dumping a `500 Internal Server Error` or a JSON error object directly into the UI. It signals the app is amateur-built and gives users no path forward.",
+            "**Invisible hallucination** — the model returns a wrong answer and the app presents it as fact. The user acts on it. Trust dies on the next conversation."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Well-designed error states prevent all three. They keep the user informed, offer a recovery path, and — when the model's output is unreliable — make the uncertainty visible rather than hiding it."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works: the error taxonomy and response map",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The first step is to recognise that \"the AI failed\" is not one thing. There are at least five distinct failure categories, each requiring a different UI response. Treating them the same produces generic, unhelpful error messages."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "LLM failure taxonomy",
+            "root": {
+              "label": "Model request",
+              "sub": "user submits prompt"
+            },
+            "children": [
+              {
+                "label": "Transient API error",
+                "sub": "5xx / timeout / 429"
+              },
+              {
+                "label": "Refusal",
+                "sub": "model declines to answer"
+              },
+              {
+                "label": "Hallucination",
+                "sub": "wrong answer, high confidence"
+              },
+              {
+                "label": "Partial failure",
+                "sub": "stream interrupted mid-response"
+              },
+              {
+                "label": "Empty / off-topic",
+                "sub": "vague or irrelevant output"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "1. Transient API errors (5xx, timeouts, 429s)"
+        },
+        {
+          "type": "p",
+          "md": "These are infrastructure failures — the provider is overloaded, rate-limited, or briefly down. They are *retryable*. The correct UI pattern is: show a progress state immediately on submit, attempt up to **2–3 automatic retries** with exponential backoff (start at 1 s, double each attempt, cap at ~30 s), and only surface an error to the user if all retries fail. For user-facing requests, 3 retries is the production consensus; background jobs can use 5–7."
+        },
+        {
+          "type": "p",
+          "md": "When you do surface the error, the message should explain the situation in plain language and give the user a manual retry button. \"Something went wrong — try again\" beats \"Error 503: upstream provider timeout\" every time."
+        },
+        {
+          "type": "h3",
+          "text": "2. Refusals"
+        },
+        {
+          "type": "p",
+          "md": "A refusal is when the model responds but declines to fulfill the request — usually for safety reasons, sometimes because the prompt was ambiguous. **Refusals are not errors; treat them as model output.** The correct UX is to display the refusal message clearly, then offer the user a path forward: a rephrasing suggestion, a scope adjustment, or a link to documentation about what the feature supports."
+        },
+        {
+          "type": "p",
+          "md": "Artificially high refusal rates (\"I can't do that\" responses to benign queries) are a calibration problem — track them in your observability layer. If your LLM judge flags that >5% of sessions end in a refusal for non-sensitive prompts, your system prompt or model choice needs tuning."
+        },
+        {
+          "type": "h3",
+          "text": "3. Hallucinations and low-confidence output"
+        },
+        {
+          "type": "p",
+          "md": "Hallucination is the hardest failure to catch because the model doesn't know it's happening — it returns a 200 status with a fluent, confident string. The UX layer can't detect a hallucination directly, but it can make uncertainty visible. **Practical mitigations**: show source citations whenever the model cites facts; let users flag a response as unhelpful; display a confidence caveat (\"AI can make mistakes — verify important information\") near outputs that involve dates, numbers, URLs, or named entities."
+        },
+        {
+          "type": "h3",
+          "text": "4. Partial / streaming failures"
+        },
+        {
+          "type": "p",
+          "md": "Streaming responses (token-by-token delivery via SSE) can fail mid-stream: the connection drops, the provider's idle timeout fires, or a network interruption cuts the response off. The UI must handle this state explicitly. Show a clear marker at the cut-off point (e.g. a \"Response cut off\" banner at the end of the partial text), retain whatever was received, and offer a one-click \"Continue\" or \"Retry\" action. Never silently display a truncated response as if it were complete."
+        },
+        {
+          "type": "h3",
+          "text": "5. Empty or off-topic responses"
+        },
+        {
+          "type": "p",
+          "md": "Sometimes the model responds but the output is empty, a single word, or clearly unrelated to the request. Detect this with a simple output validation step before rendering: check minimum length, check that the response matches the expected schema (for structured outputs), and route to a fallback message if it fails. \"I wasn't able to generate a useful response — here's what you can try\" is better than displaying a blank box."
+        }
+      ]
+    },
+    {
+      "id": "retry-and-fallback-patterns",
+      "title": "Retry and fallback patterns",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Retries and fallbacks are the backend counterpart to the UX error states. They determine what actually *happens* during the failure, while the error state determines what the user *sees*. They work together."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Retry and fallback decision flow",
+            "steps": [
+              {
+                "label": "Request fails",
+                "sub": "5xx, timeout, or 429"
+              },
+              {
+                "label": "Classify error",
+                "sub": "retryable vs. permanent"
+              },
+              {
+                "label": "Retry with backoff",
+                "sub": "up to 3 attempts, jitter added"
+              },
+              {
+                "label": "Circuit breaker open?",
+                "sub": "if failure threshold exceeded"
+              },
+              {
+                "label": "Provider fallback",
+                "sub": "switch to secondary model"
+              },
+              {
+                "label": "Surface error to user",
+                "sub": "with retry button + message"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Exponential backoff with jitter"
+        },
+        {
+          "type": "p",
+          "md": "Exponential backoff doubles the wait time between each retry attempt: first retry after 1 s, second after 2 s, third after 4 s. Adding **jitter** — a small random offset — prevents multiple concurrent users from all retrying at exactly the same moment, which would amplify the load on an already-struggling provider (the \"thundering herd\" problem). Cap the maximum delay at around 30 seconds for user-facing requests."
+        },
+        {
+          "type": "code",
+          "lang": "typescript",
+          "title": "Exponential backoff with jitter",
+          "code": "async function callWithRetry(\n  fn: () => Promise<string>,\n  maxRetries = 3,\n): Promise<string> {\n  let lastError: Error;\n  for (let attempt = 0; attempt <= maxRetries; attempt++) {\n    try {\n      return await fn();\n    } catch (err) {\n      lastError = err as Error;\n      if (attempt === maxRetries) break;\n      // Exponential backoff: 1s, 2s, 4s — capped at 30s\n      const base = Math.min(1000 * 2 ** attempt, 30_000);\n      // Add up to 20% jitter to prevent thundering herd\n      const jitter = Math.random() * base * 0.2;\n      await new Promise(r => setTimeout(r, base + jitter));\n    }\n  }\n  throw lastError!;\n}"
+        },
+        {
+          "type": "h3",
+          "text": "Circuit breakers"
+        },
+        {
+          "type": "p",
+          "md": "A circuit breaker monitors failure rates and temporarily stops sending requests to a provider that is consistently failing. It has three states: **Closed** (normal operation, failures tracked), **Open** (threshold exceeded, requests fail fast or route to fallback), and **Half-Open** (cooldown expired, a probe request tests if the provider has recovered). Production teams typically trip the circuit open after 5 consecutive failures, with a 60-second cooldown."
+        },
+        {
+          "type": "h3",
+          "text": "Provider fallback chains"
+        },
+        {
+          "type": "p",
+          "md": "When your primary provider is down and retries are exhausted, a fallback chain routes requests to a secondary model. A typical production chain looks like: **primary** (e.g. Claude Sonnet) → **cheaper same-provider** (e.g. Claude Haiku, for cost-saving on degraded mode) → **different provider** (e.g. GPT-4o) → **self-hosted model** (no external dependency). Each step in the chain should be transparent to the user: a subtle badge like \"Using backup model\" is honest and builds more trust than a silent swap."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Classify errors before retrying. A `400 Bad Request` (bad prompt, content policy violation) is **not retryable** — retrying it wastes tokens and delays the error message. Only retry `429 Too Many Requests`, `500`, `502`, `503`, and timeout errors."
+        }
+      ]
+    },
+    {
+      "id": "writing-honest-error-messages",
+      "title": "Writing honest error messages",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The words in your error states matter as much as the mechanics. Vague or patronising messages erode trust; honest, specific ones preserve it."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Failure type",
+            "Bad message",
+            "Better message"
+          ],
+          "rows": [
+            [
+              "Transient API error",
+              "Something went wrong.",
+              "The AI service is temporarily unavailable. Retrying... (attempt 2 of 3)"
+            ],
+            [
+              "Rate limit (429)",
+              "Error 429.",
+              "You've hit the usage limit. Try again in about 60 seconds."
+            ],
+            [
+              "Model refusal",
+              "I can't help with that.",
+              "I'm not able to answer this as asked. Try rephrasing, or ask a more specific question."
+            ],
+            [
+              "Stream interrupted",
+              "(blank / truncated output)",
+              "The response was cut off. What was received is shown above — tap Retry for a full answer."
+            ],
+            [
+              "Empty output",
+              "(blank box)",
+              "I wasn't able to generate a useful answer. Try adding more detail to your question."
+            ],
+            [
+              "Hallucination-prone topic",
+              "(confident wrong answer displayed as fact)",
+              "(answer shown) + 'AI responses about real-time data may be outdated or inaccurate — verify before acting.'"
+            ]
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Principles for error copy"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Name the problem** — say whether it's a network issue, a usage limit, or a model limitation. Users handle specifics better than vague apologies.",
+            "**Give a next step** — every error message should end with an action: retry, rephrase, contact support, or wait N seconds.",
+            "**Match the tone of your product** — a developer tool can say \"upstream API timeout\"; a consumer app should say \"the service is taking longer than usual\".",
+            "**Never blame the user** — even if the prompt triggered a refusal, phrase the message around the limitation of the system, not a mistake they made.",
+            "**Be honest about AI limitations** — a caveat like \"AI can make mistakes\" on a first output builds more lasting trust than discovering the mistake yourself."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Avoid \"transparency theatre\" — adding a lengthy explanation of why the model failed that is technically accurate but practically useless. The goal is a user who knows what happened and what to do next, not a user who has read a whitepaper on model calibration."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once basic error states are in place, the next layer is **observability and automated quality monitoring**. Production teams sample a fraction of sessions — typically 5–10% — through an asynchronous LLM judge that grades outputs against an offline rubric. The judge tracks refusal rate, hallucination rate (measured against a ground-truth set), and empty-output rate. When any metric breaches a threshold, the system pages on-call. This is the only scalable way to catch quality degradation before users do."
+        },
+        {
+          "type": "h3",
+          "text": "Quality-aware circuit breakers"
+        },
+        {
+          "type": "p",
+          "md": "Traditional circuit breakers trip on HTTP errors. LLM circuit breakers need to go further: they should also trip on **quality degradation signals** — a spike in refusals, a run of empty outputs, or a drop in LLM-judge scores. This is the difference between knowing your provider is *down* and knowing your model is *behaving badly*. The former is an infrastructure problem; the latter often indicates a silent model update or a prompt injection attack."
+        },
+        {
+          "type": "h3",
+          "text": "Structured output validation gates"
+        },
+        {
+          "type": "p",
+          "md": "If your app uses structured outputs (JSON schemas, typed responses), add a **validation gate** between the model's raw response and your rendering layer. Parse and validate against the expected schema before displaying anything. On validation failure, trigger the empty-output fallback path rather than crashing or showing malformed data. Libraries like Zod (TypeScript) or Pydantic (Python) make this a one-liner."
+        },
+        {
+          "type": "code",
+          "lang": "typescript",
+          "title": "Zod validation gate for structured LLM output",
+          "code": "import { z } from \"zod\";\n\nconst SummarySchema = z.object({\n  headline: z.string().min(1).max(120),\n  bullets: z.array(z.string()).min(1).max(5),\n});\n\nasync function getSummary(text: string) {\n  const raw = await callLLM(text); // raw JSON string from model\n  const parsed = SummarySchema.safeParse(JSON.parse(raw));\n  if (!parsed.success) {\n    // Route to fallback UI — do NOT render raw output\n    return { error: \"invalid_output\" };\n  }\n  return parsed.data;\n}"
+        },
+        {
+          "type": "h3",
+          "text": "Graceful degradation levels"
+        },
+        {
+          "type": "p",
+          "md": "The most resilient AI apps define explicit degradation levels rather than a binary working/broken state. A three-level model is common in production:"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "stack",
+            "title": "Graceful degradation levels",
+            "layers": [
+              {
+                "label": "Level 1 — Full AI",
+                "sub": "primary model, full capability"
+              },
+              {
+                "label": "Level 2 — Reduced AI",
+                "sub": "cheaper/faster fallback model, feature subset"
+              },
+              {
+                "label": "Level 3 — Degraded mode",
+                "sub": "static content, search, or manual workflow"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Level 3 is the key insight: **the app still works without the model**. A document editor whose AI summary feature is unavailable can fall back to showing the word count and a manual summary field. A search feature powered by an LLM can fall back to keyword search. Users tolerate degraded features; they don't tolerate broken apps."
+        },
+        {
+          "type": "h3",
+          "text": "User-facing confidence signals"
+        },
+        {
+          "type": "p",
+          "md": "Beyond error states, advanced AI UX surfaces *uncertainty* proactively — not just when the model fails, but on outputs where failure is likely. Patterns include: a \"Verify this\" badge on responses that contain dates, numbers, or URLs; inline citations that link to the source the model used; and a \"How confident is the AI?\" affordance on high-stakes outputs. These are not error states in the traditional sense — they are **honest empty-state patterns** that acknowledge the limits of the model before the user discovers them the hard way."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What should I show when the LLM API returns a 500 error?",
+      "a": "Show a brief, plain-language message explaining the service is temporarily unavailable, attempt 2–3 automatic retries with exponential backoff in the background, and display a manual retry button if all attempts fail. Never expose the raw HTTP status code or error stack to the user."
+    },
+    {
+      "q": "How do I handle a model refusal gracefully in my app?",
+      "a": "Treat the refusal as model output, not a crash — display the model's message clearly, and follow it with a suggested path forward: a rephrasing hint, a scope note, or a link to what your feature supports. Track refusal rates in your analytics; an unusually high rate for non-sensitive prompts signals a prompt engineering problem, not a UX one."
+    },
+    {
+      "q": "What is the difference between a retry and a fallback?",
+      "a": "A retry resends the same request to the same provider after a short delay, hoping the transient problem has resolved. A fallback routes the request to a different provider or model when the primary one is consistently unavailable. Use retries first (2–3 attempts), then trigger a fallback if all retries fail."
+    },
+    {
+      "q": "Should I tell users when a fallback model is being used?",
+      "a": "Yes, with a light touch. A small badge like \"Using backup model\" or \"Response quality may vary\" is honest and builds trust. Silently swapping models without disclosure can confuse users who notice a change in response style — and discovery feels like deception."
+    },
+    {
+      "q": "How can I detect a hallucination before it reaches the user?",
+      "a": "You can't detect hallucinations directly from the model's output — a hallucinated response looks identical to a correct one at the API level. Mitigate with retrieval-augmented generation (RAG) to ground answers in verified sources, add an output validation step for structured data, and show a visible uncertainty caveat near outputs involving specific facts, numbers, or URLs."
+    },
+    {
+      "q": "What should an AI app show during a streaming response that is interrupted?",
+      "a": "Keep the partial response visible — do not clear it. Append a clear \"Response cut off\" marker at the truncation point, and show a Retry or Continue button. Never display a truncated response as if it were complete, since users will read to the end and trust an answer that stops mid-thought."
+    }
+  ],
+  "related": [
+    "beginner-ai-project-ideas",
+    "modern-ai-app-stack",
+    "add-ai-existing-app",
+    "python-vs-typescript-ai"
+  ],
+  "furtherReading": [
+    {
+      "title": "Retries, fallbacks, and circuit breakers in LLM apps (Portkey)",
+      "url": "https://portkey.ai/blog/retries-fallbacks-and-circuit-breakers-in-llm-apps/"
+    },
+    {
+      "title": "Transparency is not trust: How AI UX keeps getting this wrong (Stefan Klocek)",
+      "url": "https://fieldlines.substack.com/p/transparency-is-not-trust-how-ai"
+    },
+    {
+      "title": "Monitoring LLM behavior: Drift, retries, and refusal patterns (VentureBeat)",
+      "url": "https://venturebeat.com/infrastructure/monitoring-llm-behavior-drift-retries-and-refusal-patterns"
+    }
+  ]
+}

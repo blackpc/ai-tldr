@@ -1,0 +1,472 @@
+{
+  "slug": "ai-app-deployment-options",
+  "title": "Where to Deploy an AI App: Serverless vs Containers vs Edge",
+  "seoTitle": "Where to Deploy an AI App: Serverless, Containers, Edge",
+  "metaDescription": "Serverless, containers, or edge for your AI app? Compare cold starts, streaming support, timeouts, and cost so long LLM calls don't get killed.",
+  "keywords": [
+    "where to deploy an ai app",
+    "serverless vs containers for llm app",
+    "serverless timeout llm streaming",
+    "best hosting for ai application",
+    "deploy llm app on edge functions"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Pick a deployment target that survives 60-second streaming responses without bankrupting you.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In Plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You've built an AI app that calls an LLM, streams tokens back to the user, and sometimes runs for 30-60 seconds per request. Now you need somewhere to run it. The three main hosting families — **serverless functions**, **containers**, and **edge functions** — were each designed for a different era of workloads, and LLM apps stress-test all of them in different ways."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like choosing a restaurant model. **Serverless** is a ghost kitchen: someone else owns the building, the staff appear only when an order arrives, and you pay purely per meal. **Containers** are a leased restaurant space: you control the kitchen layout, the stove stays warm between customers, and you pay a monthly rent whether anyone eats or not. **Edge functions** are a chain of pop-up stalls placed in every neighborhood: each stall is tiny and cheap, but you can only sell items that don't need a full kitchen."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This article is about **deploying the app layer** — the API route that calls your LLM provider. It does not cover hosting the LLM weights themselves (that is a separate GPU infrastructure problem)."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why It Matters for AI Apps",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Traditional web requests finish in under a second. LLM-powered requests are different in three ways that matter enormously for infrastructure:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Duration**: a single streamed GPT-4o response can take 20-60 seconds end-to-end. An agentic loop with five tool calls multiplies that further.",
+            "**Streaming**: users expect tokens to appear as they are generated, not after a long blank wait. Buffering the full response and sending it in one shot destroys the UX.",
+            "**Bursty but infrequent**: most AI apps have uneven traffic — quiet for hours, then a spike — which makes always-on dedicated servers wasteful."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Pick the wrong deployment target and you hit one of three failure modes: **killed by a timeout** (serverless function cuts off mid-stream), **frozen by a cold start** (a 10-second Lambda init before the first token), or **bankrupted by idle cost** (a beefy VM running at 2% CPU waiting for occasional requests)."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "AWS Lambda's hard limit is **900 seconds (15 minutes)** per invocation, but the default is much lower. More dangerously, API Gateway — the typical front door for Lambda — has a **29-second** integration timeout that cannot be raised. An agent loop that runs for 45 seconds will be silently killed at the gateway layer, not Lambda itself."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How Each Deployment Model Works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Each model has a distinct lifecycle for an incoming HTTP request. Understanding that lifecycle reveals where it will struggle with LLM workloads."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Request Lifecycle by Deployment Model",
+            "columns": [
+              {
+                "title": "Serverless Function",
+                "items": [
+                  "Request arrives",
+                  "Cold start: runtime boots (0-5 s)",
+                  "Handler runs (billed per ms)",
+                  "Response sent",
+                  "Instance freezes or terminates"
+                ]
+              },
+              {
+                "title": "Container (always-on)",
+                "items": [
+                  "Request arrives",
+                  "Process already warm",
+                  "Handler runs",
+                  "Response sent",
+                  "Process stays alive, awaiting next request"
+                ]
+              },
+              {
+                "title": "Edge Function",
+                "items": [
+                  "Request arrives at nearest PoP",
+                  "Isolate spins up (<1 ms)",
+                  "Handler runs (CPU budget: seconds)",
+                  "Response sent from edge node",
+                  "Isolate may be reused or recycled"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Serverless functions"
+        },
+        {
+          "type": "p",
+          "md": "Platforms like AWS Lambda, Google Cloud Functions, and Vercel Functions spin up a runtime only when a request arrives. The billing model is per-invocation and per-millisecond of execution. For AI apps, the critical knobs are the **maximum duration** and **streaming support**."
+        },
+        {
+          "type": "p",
+          "md": "**Vercel Functions** are a common choice for Next.js AI apps. On the Hobby plan, functions time out at 60 seconds — enough for many single-turn LLM calls but risky for agentic loops. The Pro plan's Fluid Compute model extends this to 800 seconds and is what Vercel recommends for AI streaming. Vercel Edge Functions (the V8-isolate tier) must begin sending a response within 25 seconds but can then stream for up to 300 seconds — a good fit for streaming chat if you open the stream quickly."
+        },
+        {
+          "type": "p",
+          "md": "**AWS Lambda** has a 15-minute (900s) hard cap, but the bigger trap is **API Gateway's 29-second integration timeout**, which sits in front of Lambda and cannot be increased. The workaround is Lambda response streaming — Lambda can push chunks directly to the client, bypassing the API Gateway timeout — but it requires the `InvokeWithResponseStreaming` API and specific SDK wiring. AWS has a dedicated blog post on this pattern (see Further Reading)."
+        },
+        {
+          "type": "h3",
+          "text": "Containers (always-on or scale-to-zero)"
+        },
+        {
+          "type": "p",
+          "md": "Platforms like **Fly.io**, **Railway**, **Render**, and **Google Cloud Run** run your Docker image as a long-lived process. There is no platform-imposed request timeout — your server can hold a streaming connection open for as long as the underlying TCP connection survives. This makes containers the most natural fit for LLM streaming."
+        },
+        {
+          "type": "p",
+          "md": "Google Cloud Run is a hybrid: it feels serverless (scale-to-zero, pay-per-request) but runs real containers. Request timeout is configurable up to 60 minutes for services. Cloud Run also supports NVIDIA L4 GPUs (generally available), giving you a path to self-hosted inference if you outgrow external API calls. Cold starts with an L4 GPU and a loaded model framework like Ollama range from roughly 11 to 35 seconds — acceptable for background tasks, painful for interactive chat unless you keep minimum instances > 0."
+        },
+        {
+          "type": "h3",
+          "text": "Edge functions"
+        },
+        {
+          "type": "p",
+          "md": "Edge functions (Cloudflare Workers, Vercel Edge Functions, Deno Deploy) run V8 JavaScript isolates distributed across hundreds of Points of Presence worldwide. Latency to the user is extremely low because the code runs in their region. But the trade-off is severe CPU constraints: a standard Cloudflare Workers plan gives you about 10 ms of CPU time per request, and even the paid plan's default of 30 seconds can be exhausted quickly by anything compute-heavy."
+        },
+        {
+          "type": "p",
+          "md": "For AI apps, edge functions are best used as a **thin proxy** — route the request, attach auth headers, forward to your LLM provider, and stream the response straight to the client. They cannot run PyTorch or any model weights locally. Cloudflare offers a separate product — **Workers AI** — that routes your inference request to GPU nodes while still dispatching from the edge, but that is distinct from a plain Worker."
+        }
+      ]
+    },
+    {
+      "id": "platform-comparison",
+      "title": "Platform-by-Platform Comparison",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The table below summarises the key constraints for popular platforms in mid-2026. Numbers change — always check official docs before committing."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Platform",
+            "Type",
+            "Max request duration",
+            "Streaming support",
+            "Cold start (typical)",
+            "Best for"
+          ],
+          "rows": [
+            [
+              "AWS Lambda + API GW",
+              "Serverless",
+              "29 s (API GW cap)",
+              "Via response streaming API only",
+              "< 1 s (warm)",
+              "Short tasks; streaming needs extra setup"
+            ],
+            [
+              "AWS Lambda (direct invoke)",
+              "Serverless",
+              "900 s",
+              "Via InvokeWithResponseStreaming",
+              "< 1 s (warm)",
+              "Agentic loops bypassing API GW"
+            ],
+            [
+              "Vercel Functions (Hobby)",
+              "Serverless",
+              "60 s",
+              "Yes, via AI SDK streaming",
+              "~200 ms",
+              "Simple chat UI on Hobby plan"
+            ],
+            [
+              "Vercel Fluid Compute (Pro)",
+              "Serverless",
+              "800 s",
+              "Yes",
+              "~200 ms",
+              "Production Next.js AI apps"
+            ],
+            [
+              "Vercel Edge Functions",
+              "Edge",
+              "Stream up to 300 s",
+              "Yes (stream must start < 25 s)",
+              "< 50 ms",
+              "Streaming proxy; no heavy compute"
+            ],
+            [
+              "Google Cloud Run",
+              "Container (scale-to-zero)",
+              "60 min",
+              "Yes (chunked encoding)",
+              "5-35 s (GPU), < 2 s (CPU)",
+              "FastAPI/Flask AI APIs; GPU inference"
+            ],
+            [
+              "Fly.io",
+              "Container",
+              "No platform limit",
+              "Yes (WebSocket + HTTP/2)",
+              "< 1 s (warm machines)",
+              "Full-stack AI app, persistent state"
+            ],
+            [
+              "Railway",
+              "Container",
+              "No platform limit",
+              "Yes",
+              "~5-15 s (cold deploy)",
+              "Rapid iteration, simple ops"
+            ],
+            [
+              "Render",
+              "Container",
+              "No platform limit",
+              "Yes",
+              "< 2 s (warm)",
+              "Django/FastAPI workers + background jobs"
+            ],
+            [
+              "Cloudflare Workers",
+              "Edge",
+              "30 s CPU (paid)",
+              "Yes (but proxy only)",
+              "< 1 ms",
+              "Auth gateway, prompt router, thin proxy"
+            ],
+            [
+              "Modal / RunPod Serverless",
+              "Serverless GPU",
+              "No hard limit",
+              "Yes",
+              "2-10 s (model load)",
+              "Self-hosted model inference, GPU bursts"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "For a Next.js app calling an external LLM provider (OpenAI, Anthropic, etc.), **Vercel Pro with Fluid Compute** or **Fly.io** are the fastest paths to production. Both handle long-lived streaming connections without extra plumbing."
+        }
+      ]
+    },
+    {
+      "id": "cost-and-scale",
+      "title": "Cost Patterns and Scaling",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Deployment cost for AI apps is dominated by two very different line items: **compute** (where your code runs) and **inference** (what you pay the LLM provider per token). Optimising the wrong one is a common mistake."
+        },
+        {
+          "type": "h3",
+          "text": "Serverless: pay-per-millisecond scales to zero but rewards fast code"
+        },
+        {
+          "type": "p",
+          "md": "If your app has uneven traffic — quiet nights, busy afternoons — serverless billing aligns naturally with usage. A function that sits idle costs nothing. But a function that streams a 45-second response to 100 concurrent users is paying for 4,500 function-seconds per batch, which adds up quickly at scale. The per-GB-second pricing of AWS Lambda means memory allocation directly drives cost, so right-sizing memory matters."
+        },
+        {
+          "type": "h3",
+          "text": "Containers: fixed floor, linear scale"
+        },
+        {
+          "type": "p",
+          "md": "A Fly.io machine or Railway service has a monthly floor cost even at zero traffic. For low-traffic apps this is wasteful; for consistently busy apps it becomes cheaper than serverless. Fly.io's `auto_stop_machines = true` option brings back scale-to-zero behaviour while keeping long-request support — a middle ground worth considering."
+        },
+        {
+          "type": "h3",
+          "text": "Serverless GPU: the inference hosting tier"
+        },
+        {
+          "type": "p",
+          "md": "If you are hosting your own model weights (open-source LLM, custom fine-tune), serverless GPU platforms like Modal and RunPod bridge the gap between serverless convenience and GPU power. Modal's H100 runs around $4.50/hr versus RunPod's ~$2.50/hr for equivalent hardware — Modal charges a premium for its developer-friendly `@app.function` decorator workflow where RunPod requires Docker image management. For bursty inference workloads under 30% GPU utilisation, serverless GPU is almost always cheaper than a reserved GPU instance."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "AWS changed its Lambda billing model in August 2025 to charge for the **initialization phase** (cold start time), not just handler execution. This increases the effective cost of cold-start-heavy workloads and makes provisioned concurrency more attractive for latency-sensitive AI apps."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "# Modal example: GPU function with scale-to-zero\nimport modal\n\napp = modal.App(\"llm-inference\")\n\n@app.function(\n    gpu=\"A10G\",\n    container_idle_timeout=60,  # scale to zero after 60s idle\n    timeout=300,                # 5-minute hard limit per call\n)\ndef run_inference(prompt: str) -> str:\n    # model is loaded once per container instance\n    return model.generate(prompt)"
+        }
+      ]
+    },
+    {
+      "id": "choosing-your-target",
+      "title": "How to Choose",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The right answer depends on three questions: how long your requests run, how variable your traffic is, and how much infrastructure you want to operate."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Picking a Deployment Target",
+            "steps": [
+              {
+                "label": "Request < 30 s?",
+                "sub": "single LLM call, no agentic loop"
+              },
+              {
+                "label": "Serverless OK",
+                "sub": "Vercel Functions, Lambda — simple setup"
+              },
+              {
+                "label": "Request 30 s - 15 min?",
+                "sub": "streaming chat, short agent"
+              },
+              {
+                "label": "Container or Vercel Fluid",
+                "sub": "Fly.io, Cloud Run, Railway, Vercel Pro"
+              },
+              {
+                "label": "Hosting own model weights?",
+                "sub": "open-source LLM, fine-tune"
+              },
+              {
+                "label": "Serverless GPU",
+                "sub": "Modal, RunPod, Cloud Run + GPU"
+              },
+              {
+                "label": "Global low-latency proxy only?",
+                "sub": "auth, routing, prompt injection"
+              },
+              {
+                "label": "Edge function",
+                "sub": "Cloudflare Workers, Vercel Edge"
+              }
+            ]
+          }
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Traffic is spiky and unpredictable** → serverless or Cloud Run (scale-to-zero). Pay only when busy.",
+            "**Requests stream for > 30 seconds regularly** → containers (Fly.io, Railway, Render) or Vercel Fluid Compute. No platform timeout to work around.",
+            "**You need global low latency but do no heavy compute** → edge function as a thin proxy, with the real work offloaded to a container or LLM API.",
+            "**You host your own model** → serverless GPU (Modal, RunPod) for burst, a reserved GPU pod for baseline.",
+            "**Team wants minimal ops overhead** → Railway or Render; push a Dockerfile and it runs."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "A common production pattern: **edge function as the entry point** (handles auth, rate-limiting, geo-routing) that proxies to a **container** (holds the LLM call open and streams back). The edge layer adds < 1 ms; the container has no timeout constraints."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going Deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you've chosen a deployment target, several advanced patterns become important at production scale."
+        },
+        {
+          "type": "h3",
+          "text": "Streaming architectures beyond HTTP"
+        },
+        {
+          "type": "p",
+          "md": "Server-Sent Events (SSE) is the standard protocol for token streaming over HTTP. For agentic apps that need **bidirectional** communication — where the client can cancel a run, inject new messages, or subscribe to tool-call updates — WebSockets or HTTP/2 server push are more appropriate. Fly.io and Railway both support WebSockets natively; Lambda requires the API Gateway WebSocket API, which is a separate configuration."
+        },
+        {
+          "type": "h3",
+          "text": "Keeping containers warm without paying for idle"
+        },
+        {
+          "type": "p",
+          "md": "Cold starts are the enemy of interactive AI apps. Google Cloud Run lets you configure `min-instances` to keep at least one container warm at all times — you pay for that instance continuously but eliminate cold starts for the first user after a quiet period. Modal offers a `keep_warm` parameter for the same purpose. For cost-optimised architectures, a single warm instance plus scale-to-zero overflow can cover most traffic shapes."
+        },
+        {
+          "type": "h3",
+          "text": "Background queues for long agentic tasks"
+        },
+        {
+          "type": "p",
+          "md": "If your agent loop genuinely takes 5-15 minutes, consider decoupling the trigger from the execution entirely. The user's HTTP request creates a **job** and returns a job ID immediately. A background worker (a long-running container or a serverless GPU function) processes the job asynchronously. The client polls or subscribes to a push channel for results. This pattern sidesteps every timeout constraint because the originating HTTP request completes in under a second."
+        },
+        {
+          "type": "h3",
+          "text": "Observability across deployment tiers"
+        },
+        {
+          "type": "p",
+          "md": "Distributed deployments — edge proxy feeding a container feeding an LLM API — require trace IDs to propagate across every hop. Pass a `X-Request-ID` header from the edge function through to your container logs. Most LLM provider SDKs let you attach custom metadata to requests; tie that to your trace ID so you can correlate LLM latency with the overall request timeline. Tools like Langfuse and Helicone provide LLM-aware observability that integrates with standard OpenTelemetry traces."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "For new projects, start with **containers** (Fly.io or Railway) and a simple FastAPI or Express server. You can always add an edge proxy later for geo-routing or CDN caching. Starting with serverless and retrofitting streaming support is harder than starting with containers and adding a CDN layer."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Can I use Vercel serverless functions for a streaming ChatGPT-style app?",
+      "a": "Yes, with caveats. On the Hobby plan the 60-second function timeout is fine for most single-turn chats but will cut off long responses. For production, Vercel's Pro plan with Fluid Compute raises the limit to 800 seconds and is explicitly designed for AI streaming use cases. Make sure you're using the Vercel AI SDK's `streamText` helper, which handles the SSE protocol correctly."
+    },
+    {
+      "q": "Why does my Lambda function time out at 29 seconds even though I set a 5-minute timeout?",
+      "a": "The 29-second limit is on **API Gateway**, not Lambda. API Gateway has a fixed maximum integration timeout of 29 seconds that cannot be increased. Solutions: switch to Lambda response streaming with `InvokeWithResponseStreaming` (bypasses API Gateway), use an Application Load Balancer instead (which supports idle timeout up to 4000 seconds), or move to a container platform."
+    },
+    {
+      "q": "Are edge functions suitable for AI apps?",
+      "a": "Only for the thin proxy layer — authentication, rate limiting, routing, and forwarding the streaming response to the client. Edge functions cannot run model weights or any significant CPU computation. Cloudflare's Workers AI is a separate product that routes inference to GPU nodes; a standard Worker just relays the request."
+    },
+    {
+      "q": "What is the cheapest way to deploy a low-traffic AI app?",
+      "a": "For apps with < 1,000 requests per day, a scale-to-zero container (Google Cloud Run free tier, Render free tier, or Railway's Hobby plan) usually beats serverless for cost because LLM inference is the dominant cost, not compute. Keep a single warm instance if cold starts hurt UX; the monthly cost of one 256 MB container is typically a few dollars."
+    },
+    {
+      "q": "How do I prevent cold starts from ruining the first-user experience?",
+      "a": "Set a minimum instance count of 1 on your platform (Cloud Run `min-instances`, Fly.io `min_machines_running`, Modal `keep_warm`). This keeps one instance alive continuously at idle cost. For serverless GPU, Modal's `keep_warm=1` ensures the GPU container never fully de-allocates. As a fallback, a lightweight health-check ping every 5 minutes can keep most serverless platforms from recycling your instance."
+    },
+    {
+      "q": "When should I use a background queue instead of a long HTTP connection?",
+      "a": "When a single task reliably takes more than 2-3 minutes, or when you need retry logic, progress updates, or fan-out parallelism. Return a job ID immediately on the HTTP request, process the work in a background worker (a container, a serverless GPU function, or a task queue like Celery or BullMQ), and push results via WebSocket or polling. This approach works on any deployment platform because no single HTTP connection ever needs to stay open for long."
+    }
+  ],
+  "related": [
+    "modern-ai-app-stack",
+    "add-ai-existing-app",
+    "python-vs-typescript-ai",
+    "beginner-ai-project-ideas"
+  ],
+  "furtherReading": [
+    {
+      "title": "Serverless Strategies for Streaming LLM Responses — AWS Compute Blog",
+      "url": "https://aws.amazon.com/blogs/compute/serverless-strategies-for-streaming-llm-responses/"
+    },
+    {
+      "title": "A Guide to AI Cold Starts on Cloud Run — Google Cloud Blog",
+      "url": "https://cloud.google.com/blog/topics/developers-practitioners/a-guide-to-ai-cold-starts-on-cloud-run"
+    },
+    {
+      "title": "Configuring Maximum Duration for Vercel Functions — Vercel Docs",
+      "url": "https://vercel.com/docs/functions/configuring-functions/duration"
+    }
+  ]
+}

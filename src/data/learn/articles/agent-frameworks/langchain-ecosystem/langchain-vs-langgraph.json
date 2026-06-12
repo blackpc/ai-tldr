@@ -1,0 +1,353 @@
+{
+  "slug": "langchain-vs-langgraph",
+  "title": "LangChain vs LangGraph: Which Should You Use?",
+  "seoTitle": "LangChain vs LangGraph: Which Should You Use?",
+  "metaDescription": "Same team, two tools. Understand how LangChain and LangGraph divide the work, when chains are enough, and when your app needs a graph.",
+  "keywords": [
+    "langchain vs langgraph",
+    "langchain or langgraph for agents",
+    "difference between langchain and langgraph",
+    "should i use langgraph instead of langchain",
+    "migrate langchain agent to langgraph"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Get a clear rule of thumb for when a simple chain is enough and when your workflow has earned a stateful graph — plus how the two work together.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**LangChain** and **LangGraph** come from the same company (LangChain Inc.) and share the same package ecosystem. But they solve different problems. LangChain is a collection of composable building blocks — model clients, prompt templates, document loaders, retrievers, and the pipe (`|`) operator that connects them. LangGraph is a lower-level orchestration engine that models your workflow as an explicit state machine: nodes, edges, and a shared state object that every node reads and updates."
+        },
+        {
+          "type": "p",
+          "md": "A good analogy: building with LangChain is like snapping Lego bricks together in a line. Each brick clicks onto the next, output flows forward, and you end up with a clean linear shape. LangGraph is more like wiring a circuit board — you still use the same components, but now current can loop back, fork into branches, and visit the same node twice before the circuit completes."
+        },
+        {
+          "type": "p",
+          "md": "As of October 2025, both frameworks reached v1.0 (general availability). One key change: **LangChain's high-level agent helpers now run on a LangGraph runtime internally**. The two tools are not alternatives — they are layers. LangChain gives you speed; LangGraph gives you control. Most non-trivial production agents use both."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The one-sentence rule: if your workflow always runs top-to-bottom with no loops, no branching on intermediate results, and no need to pause mid-execution, LangChain chains are enough. The moment any of those things is needed, reach for LangGraph."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The confusion between these two tools is one of the most common stumbling blocks for developers entering the LLM ecosystem. Many tutorials teach LangChain chains first, then silently switch to LangGraph for \"agents\" — without explaining why the switch happened or what problem it solved. That leads to two failure modes: developers who use LangGraph for everything (overkill for a simple RAG pipeline) and developers who try to squeeze complex agent loops into a chain (fragile, hard to debug)."
+        },
+        {
+          "type": "p",
+          "md": "Getting the boundary right saves you real time. A RAG pipeline built with plain LCEL chains is around 30 lines of code and trivially readable. The same pipeline rebuilt as a LangGraph StateGraph is perhaps 80 lines — perfectly maintainable, but the extra complexity buys you nothing if you never need loops or checkpoints. Conversely, a multi-step research agent that needs to retry a web search, escalate to a human reviewer, and resume after a server restart *requires* LangGraph — trying to simulate that in a linear chain produces spaghetti code."
+        },
+        {
+          "type": "h3",
+          "text": "The production case for LangGraph"
+        },
+        {
+          "type": "p",
+          "md": "Before LangGraph, production teams at companies like Uber, LinkedIn, and Klarna were building fragile stateful agents by layering custom retry logic on top of LangChain chains. LangGraph formalized what they were already doing: explicit state, conditional routing, and persistence. By the time it hit v1.0 it was already battle-tested at scale, which is why the LangChain team folded the agent runtime into LangGraph rather than the other way around."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How each tool works",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "LangChain: the pipe operator and Runnables"
+        },
+        {
+          "type": "p",
+          "md": "LangChain's modern core is the **LangChain Expression Language (LCEL)**. Every component — a prompt template, a model call, an output parser — implements a `Runnable` interface with a uniform `.invoke()` / `.stream()` / `.batch()` API. You compose Runnables with the `|` pipe operator, and data flows left to right. The chain is a directed acyclic graph (DAG): there are no cycles, no shared mutable state, and no branching based on intermediate outputs."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "A minimal LCEL RAG chain",
+          "code": "from langchain_anthropic import ChatAnthropic\nfrom langchain_core.prompts import ChatPromptTemplate\nfrom langchain_core.output_parsers import StrOutputParser\n\nprompt = ChatPromptTemplate.from_template(\n    \"Answer using this context:\\n{context}\\n\\nQuestion: {question}\"\n)\nmodel = ChatAnthropic(model=\"claude-opus-4-5\")\nparser = StrOutputParser()\n\n# The chain: prompt → model → parser (left to right, no loops)\nchain = prompt | model | parser\n\nresult = chain.invoke({\"context\": docs, \"question\": \"What is LCEL?\"})"
+        },
+        {
+          "type": "p",
+          "md": "Parallel execution, streaming, retries, and fallbacks are all built into the Runnable interface — you opt in per-component. But the *topology* is fixed at definition time. You cannot route to a different node based on what the model said."
+        },
+        {
+          "type": "h3",
+          "text": "LangGraph: state, nodes, and edges"
+        },
+        {
+          "type": "p",
+          "md": "LangGraph centers on three primitives. The **state** is a `TypedDict` that acts as a shared scratchpad every node can read and partially overwrite. **Nodes** are ordinary Python functions that receive the current state and return a dict of fields to update. **Edges** are either unconditional (`add_edge(\"a\", \"b\")`) or conditional (`add_conditional_edges`) — the conditional kind runs a routing function that inspects the state and picks the next node dynamically, which is what enables loops and branching."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Minimal LangGraph agent skeleton",
+          "code": "from typing import TypedDict, Literal\nfrom langgraph.graph import StateGraph, START, END\n\nclass AgentState(TypedDict):\n    messages: list\n    attempts: int\n\ndef call_llm(state: AgentState) -> dict:\n    reply = llm.invoke(state[\"messages\"])\n    return {\"messages\": state[\"messages\"] + [reply],\n            \"attempts\": state[\"attempts\"] + 1}\n\ndef route(state: AgentState) -> Literal[\"call_tool\", \"__end__\"]:\n    last = state[\"messages\"][-1]\n    return \"call_tool\" if last.tool_calls else END\n\ndef call_tool(state: AgentState) -> dict:\n    # execute tool calls, append results\n    ...\n\ngraph = StateGraph(AgentState)\ngraph.add_node(\"llm\", call_llm)\ngraph.add_node(\"call_tool\", call_tool)\ngraph.add_edge(START, \"llm\")\ngraph.add_conditional_edges(\"llm\", route)\ngraph.add_edge(\"call_tool\", \"llm\")  # loop back\n\napp = graph.compile()"
+        },
+        {
+          "type": "p",
+          "md": "Notice the last `add_edge` call routes `call_tool` back to `llm`. That is a cycle — impossible in a pure LCEL chain, but the fundamental pattern for any agent that uses a tool and then reasons about the result."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "LangChain vs LangGraph execution model",
+            "columns": [
+              {
+                "title": "LangChain (LCEL chain)",
+                "items": [
+                  "Directed acyclic graph (DAG)",
+                  "Pipe operator: A | B | C",
+                  "Output of each step feeds the next",
+                  "No shared mutable state",
+                  "Topology fixed at definition time",
+                  "Best for: RAG, prompt pipelines, simple chatbots"
+                ]
+              },
+              {
+                "title": "LangGraph (StateGraph)",
+                "accent": true,
+                "items": [
+                  "Cyclic state machine",
+                  "Nodes + conditional edges",
+                  "All nodes share typed State object",
+                  "Explicit state persisted by checkpointer",
+                  "Routing decided at runtime by router function",
+                  "Best for: agents with loops, retries, human review"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Checkpointers: how LangGraph persists state"
+        },
+        {
+          "type": "p",
+          "md": "One of LangGraph's most important features is its **checkpointer** system. After every node execution, LangGraph can serialize the full state and write it to a store (in-memory, SQLite, Postgres, or Redis). This means an agent can be interrupted — by a server restart, a rate limit, or a human review step — and resume exactly where it left off. No custom database logic required. LangChain chains have no equivalent built-in; state is ephemeral and lives only in the function call stack."
+        }
+      ]
+    },
+    {
+      "id": "decision-guide",
+      "title": "Choosing between them: a decision guide",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Here is the clearest way to decide which tool to reach for. Ask yourself these four questions about your workflow, in order:"
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Does it loop?** If the agent ever needs to call a tool, inspect the result, and decide whether to call again — that is a cycle. Use LangGraph.",
+            "**Does it branch on intermediate output?** If you route to different nodes depending on what the LLM said (e.g., search vs. calculate vs. answer), use LangGraph.",
+            "**Does it need to pause and resume?** Human-in-the-loop review, long-running background jobs, multi-day workflows — all require LangGraph checkpointers.",
+            "**Does it run across multiple specialized agents?** Multi-agent handoffs where a supervisor routes tasks to sub-agents are a LangGraph pattern built around the `split` topology."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "If you answered **no** to all four, a LangChain LCEL chain is the right choice. It is simpler to read, simpler to test, and simpler to debug. Reach for LangGraph only when the workflow has genuinely earned it."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Use case",
+            "Best tool",
+            "Why"
+          ],
+          "rows": [
+            [
+              "RAG pipeline (retrieve → prompt → answer)",
+              "LangChain (LCEL)",
+              "Linear DAG, no loops needed"
+            ],
+            [
+              "Simple chatbot with memory",
+              "LangChain (LCEL)",
+              "Memory can be injected as context; no graph required"
+            ],
+            [
+              "Document summarization pipeline",
+              "LangChain (LCEL)",
+              "Map-reduce pattern fits the pipe operator"
+            ],
+            [
+              "ReAct agent (reason → act → observe loop)",
+              "LangGraph",
+              "Requires a cycle back from observe to reason"
+            ],
+            [
+              "Agent with human review before taking action",
+              "LangGraph",
+              "Checkpointer + interrupt lets the graph pause"
+            ],
+            [
+              "Multi-agent system with specialist sub-agents",
+              "LangGraph",
+              "Supervisor → specialist routing is a graph pattern"
+            ],
+            [
+              "Long-running background research job",
+              "LangGraph",
+              "Needs durable state across server restarts"
+            ],
+            [
+              "Prototype / quick experiment",
+              "LangChain (LCEL)",
+              "Faster to write; drop to LangGraph later if needed"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Since LangChain v1.0 (October 2025), the high-level `create_agent` helper runs on a LangGraph runtime internally. You are not choosing between ecosystems — you are choosing an abstraction level. `create_agent` is LangGraph with the graph hidden; an explicit `StateGraph` is LangGraph with the graph visible."
+        }
+      ]
+    },
+    {
+      "id": "using-them-together",
+      "title": "Using LangChain and LangGraph together",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The most practical pattern is to use **LangChain components inside LangGraph nodes**. LangGraph provides the control-flow skeleton (state, routing, persistence) while LangChain provides the pre-built integrations (model clients, retrievers, output parsers, tool wrappers). You are not picking one or the other — you are using LangChain's breadth at the leaf level and LangGraph's structure at the orchestration level."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "LangChain components inside a LangGraph node",
+          "code": "from langchain_anthropic import ChatAnthropic\nfrom langchain_core.prompts import ChatPromptTemplate\nfrom langgraph.graph import StateGraph, MessagesState\nfrom langgraph.checkpoint.memory import MemorySaver\n\n# LangChain component: model + prompt\nmodel = ChatAnthropic(model=\"claude-opus-4-5\")\nprompt = ChatPromptTemplate.from_messages([\n    (\"system\", \"You are a helpful assistant.\"),\n    (\"placeholder\", \"{messages}\"),\n])\nchain = prompt | model  # LCEL chain used as a sub-component\n\n# LangGraph node that calls the LCEL chain\ndef agent_node(state: MessagesState) -> dict:\n    response = chain.invoke({\"messages\": state[\"messages\"]})\n    return {\"messages\": [response]}\n\n# LangGraph graph that gives the node durable state\ngraph = StateGraph(MessagesState)\ngraph.add_node(\"agent\", agent_node)\ngraph.set_entry_point(\"agent\")\ngraph.set_finish_point(\"agent\")\n\n# MemorySaver checkpoints state between turns\napp = graph.compile(checkpointer=MemorySaver())"
+        },
+        {
+          "type": "p",
+          "md": "This is the pattern the LangChain team recommends for production: LCEL chains handle prompt formatting and model calls inside each node, while LangGraph manages the routing, state, and persistence across the whole agent lifecycle."
+        },
+        {
+          "type": "h3",
+          "text": "Migrating an existing LangChain agent"
+        },
+        {
+          "type": "p",
+          "md": "If you have a legacy `AgentExecutor`-based agent from LangChain 0.x, the recommended migration path is to replace it with an explicit `StateGraph`. The migration is usually a single-commit change: your tools stay the same, your model stays the same — you just replace the `AgentExecutor` wrapper with a LangGraph graph definition. The payoff is deterministic routing, native persistence, and easy human-in-the-loop injection without patching the executor internals."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "The legacy `initialize_agent` and `AgentExecutor` APIs were deprecated in LangChain 0.2 and will only receive critical security fixes. New agents should use either the `create_agent` helper (backed by LangGraph) or an explicit `StateGraph`."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you are comfortable with the basics of LangGraph, there are several advanced capabilities worth exploring that have no LangChain-chain equivalent."
+        },
+        {
+          "type": "h3",
+          "text": "Subgraphs and multi-agent architectures"
+        },
+        {
+          "type": "p",
+          "md": "LangGraph supports **subgraphs** — a compiled `StateGraph` can itself be used as a node inside a larger graph. This is the foundation of multi-agent systems: a supervisor graph routes work to specialist sub-agents (each their own compiled graph), aggregates their outputs, and decides what to do next. The specialist sub-agents can share no code with the supervisor; they communicate only through the shared state schema."
+        },
+        {
+          "type": "h3",
+          "text": "Human-in-the-loop (HITL)"
+        },
+        {
+          "type": "p",
+          "md": "LangGraph's `interrupt` primitive lets you pause a graph at any node and hand control back to a human (or an approval system). The graph state is persisted by the checkpointer, so the agent can be resumed minutes or days later after the human has reviewed and optionally edited the state. This pattern is especially common in agentic systems that have side effects — sending emails, writing files, calling external APIs — where you want a human gate before irreversible actions."
+        },
+        {
+          "type": "h3",
+          "text": "Streaming and partial outputs"
+        },
+        {
+          "type": "p",
+          "md": "Both frameworks support streaming, but in different ways. LCEL chains stream token-by-token output from model calls transparently — call `.stream()` instead of `.invoke()`. LangGraph adds a second streaming mode: **streaming graph events** — you receive a notification as each node starts and finishes, including the full state snapshot at each step. This event-level stream is invaluable for building agent UIs that show \"thinking\" progress rather than a blank spinner."
+        },
+        {
+          "type": "h3",
+          "text": "LangSmith for observability"
+        },
+        {
+          "type": "p",
+          "md": "**LangSmith** is the observability and evaluation platform that completes the LangChain ecosystem. It traces every node execution in a LangGraph run — inputs, outputs, latency, token count, and the full state at each step. You can replay any run, add automated evaluators, and compare runs across experiments. For production LangGraph agents, LangSmith integration is essentially mandatory: the graph's explicit state makes traces far more readable than the opaque call stacks you get from a raw API client."
+        },
+        {
+          "type": "h3",
+          "text": "When to skip both"
+        },
+        {
+          "type": "p",
+          "md": "LangChain and LangGraph are not the only options. If you are working primarily with Anthropic models, the **Claude Agent SDK** (also known as the Anthropic Agents SDK) provides a first-party orchestration layer with built-in tool use and multi-agent support without the LangChain dependency. If you are building with Google's models, **Google ADK** takes a similar graph-based approach to LangGraph but is tightly integrated with Gemini. The right tool depends on which provider you are committed to and how much of the LangChain ecosystem (integrations, community templates, LangSmith) you intend to use."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Can I use LangGraph without LangChain?",
+      "a": "Yes. LangGraph is its own package (`langgraph`) and has no hard dependency on the high-level LangChain abstractions. You can write nodes that call the Anthropic or OpenAI SDK directly, without any LangChain model wrapper. Many teams use LangGraph as a standalone orchestration layer and pull in only the specific LangChain integrations they need (e.g., `langchain-anthropic` for the model client)."
+    },
+    {
+      "q": "Is LangGraph harder to learn than LangChain?",
+      "a": "LangGraph has a steeper initial learning curve because you have to think in terms of state machines — nodes, edges, state schema, and routing functions — rather than a simple pipe. Most developers find that after building one or two agents with LangGraph, the mental model clicks and the explicitness becomes an asset rather than overhead. The official LangGraph tutorials are well-structured and reach a working agent in under an hour."
+    },
+    {
+      "q": "Should I migrate my existing LangChain agent to LangGraph?",
+      "a": "If your agent uses `AgentExecutor` (the pre-v1.0 pattern), migrating to LangGraph is strongly recommended: `AgentExecutor` is deprecated and receives only security fixes. If your agent uses the newer `create_agent` helper from LangChain 1.0, it already runs on a LangGraph runtime — you only need to drop to explicit `StateGraph` if you need custom routing, checkpointing, or human-in-the-loop interrupts."
+    },
+    {
+      "q": "Does LangGraph work with models other than OpenAI?",
+      "a": "Yes — LangGraph is model-agnostic. It orchestrates whatever Python functions you put in its nodes. Nodes can call Anthropic, Google Gemini, Mistral, a local Ollama instance, or any other model. LangChain model wrappers (`langchain-anthropic`, `langchain-google-genai`, etc.) make it convenient to swap providers, but they are optional."
+    },
+    {
+      "q": "What is the difference between LangGraph checkpointers and LangChain memory?",
+      "a": "LangChain's `ConversationBufferMemory` and similar classes store conversation history in-process and inject it into prompts. They do not persist across server restarts and cannot checkpoint arbitrary agent state. LangGraph checkpointers serialize the entire `State` object — not just messages — to an external store (SQLite, Postgres, Redis) after every node execution. The agent can resume exactly where it left off after a failure, a restart, or a multi-day pause."
+    },
+    {
+      "q": "How do LangChain and LangGraph relate to LangSmith?",
+      "a": "LangSmith is a separate product (cloud SaaS, with a free tier) for tracing, evaluating, and monitoring LLM applications built with LangChain or LangGraph. It is not required to run either framework, but it integrates deeply: every LCEL chain and every LangGraph node execution is automatically traced when you set the `LANGCHAIN_TRACING_V2=true` environment variable. For production agents, LangSmith traces make debugging and evaluation dramatically easier."
+    }
+  ],
+  "related": [
+    "what-is-agent-framework",
+    "choose-agent-framework",
+    "what-is-claude-agent-sdk",
+    "no-code-agent-builders"
+  ],
+  "furtherReading": [
+    {
+      "title": "LangChain and LangGraph v1.0 announcement (official blog)",
+      "url": "https://blog.langchain.com/langchain-langgraph-1dot0/"
+    },
+    {
+      "title": "LangGraph concepts — official docs",
+      "url": "https://langchain-ai.github.io/langgraph/concepts/"
+    },
+    {
+      "title": "How to migrate from legacy LangChain agents to LangGraph",
+      "url": "https://js.langchain.com/v0.2/docs/how_to/migrate_agent/"
+    }
+  ]
+}

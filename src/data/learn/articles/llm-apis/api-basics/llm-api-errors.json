@@ -1,0 +1,423 @@
+{
+  "slug": "llm-api-errors",
+  "title": "Understanding LLM API Errors: Timeouts, Refusals, and Truncated Output",
+  "seoTitle": "LLM API Errors: Timeouts, Refusals, Truncated Output",
+  "metaDescription": "Decode every way an LLM call fails: HTTP status codes, stop reasons, content refusals, max-token cutoffs, and timeouts — plus how to handle each.",
+  "keywords": [
+    "llm api error codes explained",
+    "why is my llm response cut off",
+    "max tokens stop reason",
+    "llm api timeout handling",
+    "model refused to answer api"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Recognize every failure mode an LLM call can hit — status codes, stop reasons, refusals, cutoffs — and know the right fix for each.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every LLM API call can fail in a surprising number of ways — and most of them look identical at first glance: your code gets back something unexpected and the output is wrong, missing, or absent entirely. The good news is that there are really only two categories of failure: **the HTTP layer** (the request never completed, or completed with an error status code) and **the model layer** (the request completed fine, but the model stopped early or declined to answer)."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like a restaurant order. The first category is the waiter failing: the kitchen is on fire (`503 Service Unavailable`), your reservation expired (`401 Unauthorized`), or you ordered something that isn't on the menu (`400 Bad Request`). The second category is the chef stopping mid-dish: they ran out of the special ingredient (`max_tokens` cutoff), the recipe calls for a sauce they won't make (`content_filter` refusal), or the dish is simply finished (`stop` / `end_turn`)."
+        },
+        {
+          "type": "p",
+          "md": "Understanding which category you are in is the first diagnostic step, because the remedies are completely different. A `503` calls for a retry with exponential backoff. A `finish_reason: length` calls for raising your token budget or splitting the task. A content refusal calls for rephrasing the prompt. Retrying a refused or malformed request is wasted money."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Check **both** the HTTP status code **and** the `finish_reason` / `stop_reason` field in every response. A `200 OK` with `finish_reason: length` is a silent truncation — your call succeeded, but the output is incomplete."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Silent failures are the most dangerous bugs in LLM applications. If your summarizer truncates a legal document mid-sentence and returns `200 OK`, nothing throws an exception. The user sees a plausible but incomplete summary. The field `finish_reason` (OpenAI) or `stop_reason` (Anthropic) is the only signal that the output was cut off — and most beginner code ignores it entirely."
+        },
+        {
+          "type": "p",
+          "md": "Rate-limit errors (`429`) and server errors (`503`) come up constantly in production. LLM providers throttle requests aggressively to protect capacity. Without a retry strategy, a spike of parallel calls will cause cascading failures across your app. With the right backoff logic, the same spike barely registers as a blip."
+        },
+        {
+          "type": "p",
+          "md": "Content refusals are a third source of unexpected behaviour. A model will sometimes decline to answer a perfectly reasonable question — a false positive from safety classifiers, a topic that triggers a guardrail, or a prompt phrasing that looks adversarial. Knowing the exact signal for a refusal (versus a truncation or a network timeout) means you can route around it intelligently rather than silently returning an empty response to the user."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Production reliability** — unhandled `429` and `503` errors are the most common reason LLM-powered features go down under load.",
+            "**Data integrity** — `finish_reason: length` is a silent truncation; checking it prevents incomplete structured output from being parsed and acted on.",
+            "**User experience** — distinguishing a transient server error (retry-able) from a content refusal (needs rephrasing) lets you show the right message instead of a generic 'something went wrong.'",
+            "**Cost control** — retrying non-retryable errors (400, 401, 403) burns tokens and money with zero chance of success."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How the error layers work",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "An LLM API call passes through two distinct checkpoints before you see output. Understanding each checkpoint and its failure modes is the foundation of reliable error handling."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "LLM API call — what can fail where",
+            "steps": [
+              {
+                "label": "Your code sends HTTP request",
+                "sub": "API key, model, messages, parameters"
+              },
+              {
+                "label": "HTTP layer check",
+                "sub": "401 / 403 / 400 / 429 / 500 / 503 / 504"
+              },
+              {
+                "label": "Model generation starts",
+                "sub": "200 OK — request accepted"
+              },
+              {
+                "label": "Model layer check",
+                "sub": "stop_reason: length / content_filter / refusal"
+              },
+              {
+                "label": "Response returned",
+                "sub": "Check finish_reason before trusting output"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "HTTP status codes — the first checkpoint"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Status",
+            "Name",
+            "Cause",
+            "Action"
+          ],
+          "rows": [
+            [
+              "400",
+              "Bad Request",
+              "Malformed JSON, missing required field, invalid model name, message too long for context window",
+              "Fix the request. Do NOT retry — the same request will always fail."
+            ],
+            [
+              "401",
+              "Unauthorized",
+              "Missing or invalid API key",
+              "Check your key. Rotate it if compromised. Do NOT retry."
+            ],
+            [
+              "403",
+              "Forbidden",
+              "Key is valid but lacks permission for this model or feature",
+              "Check your account tier or organisation policy. Do NOT retry."
+            ],
+            [
+              "429",
+              "Too Many Requests",
+              "Rate limit hit: requests per minute, tokens per minute, or daily quota",
+              "Wait and retry with exponential backoff. Respect the Retry-After header."
+            ],
+            [
+              "500",
+              "Internal Server Error",
+              "Provider-side bug or unexpected model error",
+              "Retry with backoff (1–3 attempts). If persistent, check the provider status page."
+            ],
+            [
+              "503",
+              "Service Unavailable",
+              "Provider overloaded or in maintenance",
+              "Retry with backoff. Consider falling back to a different model or provider."
+            ],
+            [
+              "504",
+              "Gateway Timeout",
+              "Request took longer than the provider's gateway timeout",
+              "Retry. For large inputs, try chunking to reduce generation time."
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Never retry `400`, `401`, or `403` errors. They are permanent failures for that exact request. Only `429`, `500`, `502`, `503`, and `504` are worth retrying."
+        },
+        {
+          "type": "h3",
+          "text": "Stop reasons / finish reasons — the second checkpoint"
+        },
+        {
+          "type": "p",
+          "md": "When the HTTP call succeeds (`200 OK`), the response body includes a field that tells you *why* the model stopped generating. OpenAI's Chat Completions API calls this `finish_reason`; Anthropic's Messages API calls it `stop_reason`. Different names, same concept."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "OpenAI finish_reason",
+            "Anthropic stop_reason",
+            "Meaning",
+            "Action"
+          ],
+          "rows": [
+            [
+              "stop",
+              "end_turn",
+              "Model finished naturally — this is the happy path",
+              "None needed. Output is complete."
+            ],
+            [
+              "length",
+              "max_tokens",
+              "Hit the max token limit before finishing",
+              "Raise max_tokens, split the task, or use continuation prompting."
+            ],
+            [
+              "content_filter",
+              "refusal (Claude 4+)",
+              "Safety classifier blocked the output",
+              "Rephrase the prompt, remove context that looks adversarial, or reset conversation."
+            ],
+            [
+              "tool_calls",
+              "tool_use",
+              "Model wants to call a tool/function",
+              "Parse the tool call and invoke the function. Not an error — expected in agent loops."
+            ],
+            [
+              "stop_sequence",
+              "stop_sequence",
+              "Hit a custom stop sequence you defined",
+              "This is intentional if you set stop sequences. Otherwise remove the sequence from the request."
+            ]
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "Retryable vs non-retryable failures",
+            "root": {
+              "label": "LLM call fails or truncates"
+            },
+            "children": [
+              {
+                "label": "Retry with backoff",
+                "sub": "429, 500, 502, 503, 504, timeout"
+              },
+              {
+                "label": "Fix the request",
+                "sub": "400, 401, 403, finish_reason: length"
+              },
+              {
+                "label": "Rephrase the prompt",
+                "sub": "content_filter, refusal stop_reason"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "timeout-handling",
+      "title": "Timeouts: the silent killer",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Timeouts are different from HTTP error codes because they often never produce an HTTP response at all — your HTTP client simply gives up waiting. There are three distinct timeout types to configure in an LLM application, and getting any one of them wrong leads to hanging requests or premature failures."
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Connection timeout** — how long to wait for the initial TCP connection to the provider. Should be short: 5–10 seconds. A longer wait here usually means the provider is unreachable, not just slow.",
+            "**Read/response timeout** — how long to wait for the full response body to arrive. This is the one most developers forget to set. LLMs can take 30–120 seconds for large generations. Set this to at least 120 seconds, or use streaming to get tokens incrementally instead of waiting for the full batch.",
+            "**Request timeout (total)** — a hard ceiling on the entire request lifecycle. Set it high enough that large generations don't get killed prematurely, but not so high that a hung request blocks your thread forever."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "**Use streaming for long generations.** Instead of waiting 90 seconds for a single response blob, `stream=True` lets you receive and display tokens as they arrive. This also gives you a much earlier signal that something has gone wrong — a stream that stops mid-sentence is easier to detect than a timeout on a long blocking call."
+        },
+        {
+          "type": "p",
+          "md": "Handling a timeout correctly means treating it exactly like a `503`: wait, then retry with backoff. Do not immediately blast another request — if the provider is under heavy load, flooding it with retries makes the problem worse. A standard exponential backoff starts at 1 second, doubles on each failure (`1s → 2s → 4s → 8s`), and adds a small random jitter (±20%) to prevent every client from retrying at the same instant."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "import time\nimport random\nimport anthropic\n\nclient = anthropic.Anthropic(timeout=120.0)  # 120s read timeout\n\ndef call_with_backoff(messages, max_retries=4):\n    delay = 1.0\n    for attempt in range(max_retries):\n        try:\n            response = client.messages.create(\n                model=\"claude-opus-4-5\",\n                max_tokens=1024,\n                messages=messages,\n            )\n            # Always check stop_reason — 200 OK doesn't mean complete output\n            if response.stop_reason == \"max_tokens\":\n                raise ValueError(\"Response truncated — raise max_tokens or split the task\")\n            return response\n        except anthropic.RateLimitError:\n            if attempt == max_retries - 1:\n                raise\n            jitter = random.uniform(0.8, 1.2)\n            time.sleep(delay * jitter)\n            delay *= 2\n        except anthropic.APIStatusError as e:\n            # 400 / 401 / 403 are not retryable\n            if e.status_code in (400, 401, 403):\n                raise\n            if attempt == max_retries - 1:\n                raise\n            jitter = random.uniform(0.8, 1.2)\n            time.sleep(delay * jitter)\n            delay *= 2"
+        }
+      ]
+    },
+    {
+      "id": "content-refusals",
+      "title": "Content refusals and false positives",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A **content refusal** happens when the provider's safety layer intervenes before or during generation. This can happen at two points: the API returns a `400` with an error message like *'The response was filtered due to the prompt triggering content management policy'* (pre-generation block), or the model returns `200 OK` with `finish_reason: content_filter` (OpenAI) or `stop_reason: refusal` (Anthropic Claude 4+)."
+        },
+        {
+          "type": "p",
+          "md": "The Anthropic-specific `refusal` stop reason was introduced with Claude 4 models. When a streaming classifier detects a potential policy violation mid-generation, the API injects a stop with `stop_reason: \"refusal\"` and includes a `stop_details` object identifying which policy category triggered it. Importantly, Anthropic requires you to **reset the conversation context** before continuing — the turn that triggered the refusal must be removed or rephrased, because re-sending the same conversation history will trigger another refusal."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "On a `stop_reason: refusal`, do not simply retry the same messages array. The classifier will fire again. Remove the offending turn, rephrase the prompt, or clear the conversation history before the next call."
+        },
+        {
+          "type": "p",
+          "md": "False positives — legitimate requests that get blocked — are real and documented. Common triggers include: security-related code examples, medical topics phrased bluntly, legal questions about liability, and creative fiction with dark themes. Strategies to reduce false positives without weakening the model's safety posture:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Add context in the system prompt.** A system message that establishes the use-case ('You are an assistant for a licensed medical practice') can shift the classifier's interpretation of the same user message.",
+            "**Rephrase to be less ambiguous.** Classifiers are sensitive to phrasing. 'How does buffer overflow exploitation work at a conceptual level?' reads very differently from a more direct phrasing.",
+            "**Split the request.** If one large prompt covers both sensitive and innocuous content, separating them into smaller calls can prevent the sensitive part from contaminating the classification of the whole.",
+            "**Check provider-specific configuration.** Enterprise tiers on Azure OpenAI and some Anthropic plans allow adjusting content filter severity levels for specific categories."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "truncated-output",
+      "title": "Truncated output: the most common silent failure",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When a response ends because of a `max_tokens` limit, you get back a `200 OK` with partial text and `finish_reason: length` (OpenAI) or `stop_reason: max_tokens` (Anthropic). The output looks valid — it is grammatically plausible text — but it is incomplete. This is a genuine data integrity risk when the output is structured (JSON, code, a list) because incomplete structured output is often worse than no output at all."
+        },
+        {
+          "type": "p",
+          "md": "The `max_tokens` (OpenAI) / `max_tokens` (Anthropic) parameter is a **ceiling on output tokens**, not a target. If you set it to `256` and the model needs `800` tokens to finish the answer, you get the first 256 tokens and a truncated result. Most providers have a model-specific context window limit that combines input and output tokens — sending a very long conversation leaves little room for output even if your `max_tokens` is set high."
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Always check the stop reason** before parsing structured output. Treat `finish_reason: length` / `stop_reason: max_tokens` as an error that requires action.",
+            "**Raise max_tokens.** The most direct fix. For `gpt-4o`, the output limit is up to 16,384 tokens per response; for Claude models it can be up to 8,192 or higher depending on the model and tier.",
+            "**Split the task.** If the output is large by nature (a long document, a full code file), break the task into smaller pieces that each fit comfortably within the limit.",
+            "**Use continuation prompting.** If truncation is occasional rather than systematic, detect `finish_reason: length`, then send a follow-up message like *'Continue from where you left off'* and concatenate the outputs.",
+            "**Reserve output budget.** Calculate your input token count before sending. Leave at least the expected output size as headroom. If input + expected output approaches the context window, trim the input or summarise earlier messages."
+          ]
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "import openai\n\nclient = openai.OpenAI()\n\ndef safe_complete(messages, max_tokens=2048):\n    response = client.chat.completions.create(\n        model=\"gpt-4o\",\n        messages=messages,\n        max_tokens=max_tokens,\n    )\n    choice = response.choices[0]\n    if choice.finish_reason == \"length\":\n        # Do not silently return truncated output\n        raise ValueError(\n            f\"Response truncated at {max_tokens} tokens. \"\n            \"Raise max_tokens or split the task.\"\n        )\n    if choice.finish_reason == \"content_filter\":\n        raise ValueError(\"Response blocked by content filter. Rephrase the prompt.\")\n    return choice.message.content"
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you have basic retry logic and stop-reason checks in place, the next layer of reliability comes from **circuit breakers**, **fallback chains**, and **retry budgets**. A circuit breaker tracks recent failure rates and automatically stops sending requests to a provider that is clearly degraded — rather than hammering it with retries and burning quota. Once the failure rate drops below a threshold, the circuit 'closes' and normal traffic resumes."
+        },
+        {
+          "type": "p",
+          "md": "A **fallback chain** defines an ordered list of model alternatives. If your primary model (`claude-opus-4-5`) hits repeated `503` errors, the chain automatically falls back to `claude-sonnet-4-5`, then to `gpt-4o`, before giving up. This is especially important for latency-sensitive applications where a provider outage should degrade gracefully rather than take down the feature entirely."
+        },
+        {
+          "type": "p",
+          "md": "A **retry budget** prevents a degraded provider from pulling down your whole application. The rule of thumb: total retries should not exceed 10% of total requests at any given moment. If your retry rate climbs above that ceiling, stop retrying and fail fast — a system where 30% of threads are stalled on retry loops will degrade far worse than one that surfaces errors quickly and lets upstream callers handle them."
+        },
+        {
+          "type": "h3",
+          "text": "Streaming and partial-failure handling"
+        },
+        {
+          "type": "p",
+          "md": "Streaming introduces its own class of partial failures. A stream can be interrupted mid-token — the HTTP connection drops, or the provider sends an error event partway through generation. Your stream consumer should accumulate tokens and track whether the stream ended with a `stop` event or was interrupted. If the stream ends without a clean stop event, treat it as an error and either retry or surface it to the user as incomplete output."
+        },
+        {
+          "type": "h3",
+          "text": "Observability: log everything, alert on the right things"
+        },
+        {
+          "type": "p",
+          "md": "Every LLM call should log: the model name, the HTTP status code, the stop reason, input token count, output token count, and latency. Alert on: `finish_reason: length` rate above a threshold (indicates systematic token budget issues), `429` error rate trending up (indicates approaching quota), and p95 latency rising sharply (often a leading indicator of provider trouble before `503` errors start). These four metrics catch the vast majority of production LLM reliability issues before they become user-visible."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Provider status pages to bookmark: [status.anthropic.com](https://status.anthropic.com), [status.openai.com](https://status.openai.com), and [status.cloud.google.com](https://status.cloud.google.com) (for Vertex AI / Gemini). When you see a wave of `503` errors, check these before spending time debugging your code."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Why does my LLM response get cut off in the middle of a sentence?",
+      "a": "Your response was truncated because it hit the `max_tokens` limit. Check the `finish_reason` field in the API response — if it says `length` (OpenAI) or `max_tokens` (Anthropic), the model ran out of output budget. Raise the `max_tokens` parameter, split the task into smaller requests, or use a continuation prompt to pick up where the last response stopped."
+    },
+    {
+      "q": "What is the difference between a 429 error and a 503 error from an LLM provider?",
+      "a": "A `429 Too Many Requests` means you have exceeded your rate limit — too many requests per minute, too many tokens per minute, or your account quota is exhausted. A `503 Service Unavailable` means the provider's servers are overloaded or temporarily down, regardless of your usage. Both are retryable with exponential backoff, but a persistent `429` may require requesting a higher quota tier."
+    },
+    {
+      "q": "What does finish_reason: content_filter mean and how do I fix it?",
+      "a": "`finish_reason: content_filter` (OpenAI) or `stop_reason: refusal` (Anthropic Claude 4+) means the model's safety classifier blocked the response. Do not simply retry the same request — it will be blocked again. Try rephrasing the prompt to be less ambiguous, add clarifying context in the system prompt (explaining your use-case), or split the request to isolate the triggering content."
+    },
+    {
+      "q": "How long should I set the timeout for an LLM API call?",
+      "a": "Set your read/response timeout to at least 120 seconds for non-streaming calls, because large generations can legitimately take that long. For streaming calls you can use a shorter per-chunk timeout (10–30 seconds) since tokens arrive incrementally. Keep your connection timeout short (5–10 seconds) — a slow initial connection usually means the endpoint is unreachable, not slow."
+    },
+    {
+      "q": "Should I retry a 400 Bad Request error from an LLM API?",
+      "a": "No. A `400` means the request itself is malformed — invalid JSON, a missing required field, an unrecognised model name, or a message that exceeds the context window. The exact same request will fail every time. Fix the payload (check the error message body for specifics) before sending again. The same logic applies to `401` and `403` errors."
+    },
+    {
+      "q": "How do I tell if my LLM response is a refusal versus an error?",
+      "a": "A refusal typically returns `200 OK` with the model generating a polite decline in plain text, or (on Anthropic Claude 4+ streaming) a `stop_reason: refusal` with no assistant content. A hard error is an HTTP status code other than `2xx`, or a `400` with an error body describing a policy violation. The key distinction: refusals are model-layer decisions; errors are infrastructure or request-layer failures."
+    }
+  ],
+  "related": [
+    "what-is-llm-api",
+    "how-to-call-llm-api",
+    "what-is-function-calling",
+    "llm-streaming-explained",
+    "llm-api-pricing"
+  ],
+  "furtherReading": [
+    {
+      "title": "Stop reasons and fallback — Claude API Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons"
+    },
+    {
+      "title": "Retries, fallbacks, and circuit breakers in LLM apps — Portkey",
+      "url": "https://portkey.ai/blog/retries-fallbacks-and-circuit-breakers-in-llm-apps/"
+    },
+    {
+      "title": "Controlling the length of OpenAI model responses — OpenAI Help Center",
+      "url": "https://help.openai.com/en/articles/5072518-controlling-the-length-of-openai-model-responses"
+    }
+  ]
+}

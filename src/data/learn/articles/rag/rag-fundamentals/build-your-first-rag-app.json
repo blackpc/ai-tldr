@@ -1,0 +1,368 @@
+{
+  "slug": "build-your-first-rag-app",
+  "title": "How to Build Your First RAG App, Step by Step",
+  "seoTitle": "Build Your First RAG App: Step-by-Step Tutorial",
+  "metaDescription": "Build a working RAG app from scratch: load documents, chunk and embed them, store vectors, retrieve relevant context, and generate grounded answers.",
+  "keywords": [
+    "how to build a rag app step by step",
+    "rag tutorial for beginners",
+    "build rag chatbot with your own documents",
+    "simple rag app python tutorial"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You'll have built a minimal end-to-end RAG application and understand what every line of it is doing.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A RAG app is a short pipeline with two phases. In the **offline phase** you process your documents: split them into chunks, turn each chunk into a vector embedding, and store those vectors in a searchable index. In the **online phase** a user asks a question: you embed that question the same way, find the nearest chunks in the index, paste them into a prompt, and ask a language model to answer using only that text."
+        },
+        {
+          "type": "p",
+          "md": "A useful mental model: imagine you have a binder of company policies. Rather than memorising every page, you post-it-note the whole binder, then when someone asks a question you riffle through the tabs, pull out the three most relevant pages, and hand them to an expert who drafts the answer. RAG does the same thing — the post-its are embeddings, the binder is your vector store, and the expert is the LLM."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This tutorial builds a minimal but **complete** RAG pipeline using Python, `langchain`, `chromadb`, and the OpenAI API. Every step is explained so you know what is happening, not just which function to call."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why this matters for builders",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "RAG is the workhorse pattern behind most real-world AI products: customer-support bots grounded in a knowledge base, internal search tools over company wikis, document Q&A for legal and medical teams, and code assistants that know your private codebase. Learning to build even a simple RAG pipeline gives you the foundation to build all of these."
+        },
+        {
+          "type": "p",
+          "md": "The core skill is understanding what each stage does and what can go wrong — because retrieval quality, not model intelligence, is usually the limiting factor. A mediocre model with excellent retrieval beats a frontier model with irrelevant context almost every time."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Grounded answers**: the model is constrained to text you verified, which drastically reduces hallucination.",
+            "**No retraining needed**: update your knowledge base by adding files, not by fine-tuning.",
+            "**Auditable sources**: you can show users which document each answer came from.",
+            "**Cheap to iterate**: swapping the LLM, the embedding model, or the vector store is straightforward when stages are cleanly separated."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How the pipeline works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The pipeline has five named stages. Each stage is a distinct transformation — understanding the boundary between them is what lets you debug and improve the system later."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "End-to-end RAG pipeline",
+            "steps": [
+              {
+                "label": "Load",
+                "sub": "Read raw docs into memory"
+              },
+              {
+                "label": "Chunk",
+                "sub": "Split into overlapping text windows"
+              },
+              {
+                "label": "Embed",
+                "sub": "Convert each chunk to a vector"
+              },
+              {
+                "label": "Store",
+                "sub": "Index vectors in a vector database"
+              },
+              {
+                "label": "Retrieve",
+                "sub": "Embed query → find top-k chunks"
+              },
+              {
+                "label": "Generate",
+                "sub": "LLM answers using retrieved context"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Stage 1 — Load your documents"
+        },
+        {
+          "type": "p",
+          "md": "RAG works on any text: PDFs, Markdown files, web pages, database rows, or plain `.txt` files. For this tutorial we start with plain text. LangChain ships loaders for all common formats; the `PyPDFLoader` handles PDFs page-by-page, and `DirectoryLoader` can glob an entire folder."
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "code": "pip install langchain langchain-community langchain-openai chromadb openai tiktoken python-dotenv"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "from langchain_community.document_loaders import TextLoader\n\nloader = TextLoader(\"docs/company_faq.txt\", encoding=\"utf-8\")\ndocuments = loader.load()\n# documents is a list of LangChain Document objects\n# Each has .page_content (str) and .metadata (dict)\nprint(f\"Loaded {len(documents)} document(s)\")"
+        },
+        {
+          "type": "h3",
+          "text": "Stage 2 — Chunk the documents"
+        },
+        {
+          "type": "p",
+          "md": "Language models have a context-window limit, and similarity search is less precise over long passages. Chunking splits each document into smaller, overlapping windows. The overlap (typically 10–20% of chunk size) prevents key sentences from being cut right at a boundary."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "from langchain.text_splitter import RecursiveCharacterTextSplitter\n\nsplitter = RecursiveCharacterTextSplitter(\n    chunk_size=1000,      # characters per chunk\n    chunk_overlap=200,    # overlap between consecutive chunks\n    separators=[\"\\n\\n\", \"\\n\", \" \", \"\"],  # prefer paragraph breaks\n)\nchunks = splitter.split_documents(documents)\nprint(f\"Split into {len(chunks)} chunks\")\nprint(chunks[0].page_content[:200])  # preview the first chunk"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "`RecursiveCharacterTextSplitter` tries each separator in order. It only falls back to the next one if a split is still too large — so it respects natural paragraph boundaries rather than cutting mid-sentence when possible."
+        },
+        {
+          "type": "h3",
+          "text": "Stage 3 — Embed and store"
+        },
+        {
+          "type": "p",
+          "md": "Embedding converts each text chunk into a dense numeric vector (a list of floats). Chunks that are *semantically similar* end up close together in vector space, which is what makes similarity search work. We'll use OpenAI's `text-embedding-3-small` — at $0.02 per million tokens it is the recommended default for cost-sensitive RAG pipelines."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "import os\nfrom dotenv import load_dotenv\nfrom langchain_openai import OpenAIEmbeddings\nfrom langchain_community.vectorstores import Chroma\n\nload_dotenv()  # reads OPENAI_API_KEY from .env\n\nembeddings = OpenAIEmbeddings(model=\"text-embedding-3-small\")\n\n# Create the vector store and embed all chunks in one call\nvectorstore = Chroma.from_documents(\n    documents=chunks,\n    embedding=embeddings,\n    persist_directory=\"./chroma_db\",  # saves to disk\n)\nprint(\"Vector store created and persisted.\")"
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "ChromaDB stores embeddings on disk at `./chroma_db`. On the next run you can load it with `Chroma(persist_directory=\"./chroma_db\", embedding_function=embeddings)` instead of re-embedding everything."
+        },
+        {
+          "type": "h3",
+          "text": "Stage 4 — Retrieve relevant chunks"
+        },
+        {
+          "type": "p",
+          "md": "At query time the user's question is embedded using the *same model*, and the vector store returns the `k` chunks whose embeddings are closest (by cosine similarity) to the query vector. Those chunks are the context we'll pass to the LLM."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "retriever = vectorstore.as_retriever(search_kwargs={\"k\": 4})\n\nquery = \"What is your return policy for digital products?\"\nrelevant_chunks = retriever.invoke(query)\n\nfor i, doc in enumerate(relevant_chunks):\n    print(f\"--- Chunk {i+1} ---\")\n    print(doc.page_content[:300])"
+        },
+        {
+          "type": "h3",
+          "text": "Stage 5 — Generate a grounded answer"
+        },
+        {
+          "type": "p",
+          "md": "The retrieved chunks are formatted into a prompt that instructs the LLM to answer *only from the provided context*. This instruction is the main guard against hallucination — the model is told explicitly that if the answer is not in the context it should say so."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "from langchain_openai import ChatOpenAI\nfrom langchain.chains import RetrievalQA\nfrom langchain.prompts import PromptTemplate\n\nPROMPT_TEMPLATE = \"\"\"Use ONLY the context below to answer the question.\nIf the answer is not in the context, say \"I don't have that information.\"\n\nContext:\n{context}\n\nQuestion: {question}\n\nAnswer:\"\"\"\n\nllm = ChatOpenAI(model=\"gpt-4o-mini\", temperature=0)\n\nchain = RetrievalQA.from_chain_type(\n    llm=llm,\n    chain_type=\"stuff\",   # \"stuff\" = concatenate all chunks into one prompt\n    retriever=vectorstore.as_retriever(search_kwargs={\"k\": 4}),\n    chain_type_kwargs={\n        \"prompt\": PromptTemplate.from_template(PROMPT_TEMPLATE)\n    },\n    return_source_documents=True,\n)\n\nresult = chain.invoke({\"query\": \"What is your return policy for digital products?\"})\nprint(result[\"result\"])\n# result[\"source_documents\"] contains the chunks used"
+        }
+      ]
+    },
+    {
+      "id": "running-end-to-end",
+      "title": "Putting it all together",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Here is the complete script in one file. Drop a `.txt` file into a `docs/` folder, add your `OPENAI_API_KEY` to a `.env` file, and run it."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "# rag_app.py — minimal end-to-end RAG\nimport os\nfrom dotenv import load_dotenv\nfrom langchain_community.document_loaders import TextLoader\nfrom langchain.text_splitter import RecursiveCharacterTextSplitter\nfrom langchain_openai import OpenAIEmbeddings, ChatOpenAI\nfrom langchain_community.vectorstores import Chroma\nfrom langchain.chains import RetrievalQA\nfrom langchain.prompts import PromptTemplate\n\nload_dotenv()\n\n# 1. Load\nloader = TextLoader(\"docs/company_faq.txt\", encoding=\"utf-8\")\ndocuments = loader.load()\n\n# 2. Chunk\nsplitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)\nchunks = splitter.split_documents(documents)\n\n# 3. Embed + Store\nembeddings = OpenAIEmbeddings(model=\"text-embedding-3-small\")\nvectorstore = Chroma.from_documents(chunks, embeddings, persist_directory=\"./chroma_db\")\n\n# 4 & 5. Retrieve + Generate\nPROMPT = PromptTemplate.from_template(\n    \"\"\"Use ONLY the context below to answer. If the answer is not in the context, say \"I don't have that information.\"\n\nContext:\n{context}\n\nQuestion: {question}\n\nAnswer:\"\"\"\n)\n\nchain = RetrievalQA.from_chain_type(\n    llm=ChatOpenAI(model=\"gpt-4o-mini\", temperature=0),\n    chain_type=\"stuff\",\n    retriever=vectorstore.as_retriever(search_kwargs={\"k\": 4}),\n    chain_type_kwargs={\"prompt\": PROMPT},\n    return_source_documents=True,\n)\n\nwhile True:\n    question = input(\"\\nYour question (or 'quit'): \")\n    if question.lower() == \"quit\":\n        break\n    result = chain.invoke({\"query\": question})\n    print(\"\\nAnswer:\", result[\"result\"])\n    print(\"\\nSources used:\")\n    for doc in result[\"source_documents\"]:\n        print(\" -\", doc.metadata.get(\"source\", \"unknown\"), \"|\", doc.page_content[:80], \"...\")"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "To load a PDF instead of a text file, swap `TextLoader` for `PyPDFLoader` from `langchain_community.document_loaders`. Everything else in the pipeline stays the same."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Stage",
+            "Library used",
+            "Key parameter",
+            "What to tune"
+          ],
+          "rows": [
+            [
+              "Load",
+              "langchain-community loaders",
+              "file path / glob",
+              "Source format (PDF, HTML, CSV)"
+            ],
+            [
+              "Chunk",
+              "RecursiveCharacterTextSplitter",
+              "chunk_size=1000, chunk_overlap=200",
+              "Smaller chunks = more precise retrieval; larger = more context per chunk"
+            ],
+            [
+              "Embed",
+              "langchain-openai OpenAIEmbeddings",
+              "model=\"text-embedding-3-small\"",
+              "Switch to text-embedding-3-large for higher accuracy at higher cost"
+            ],
+            [
+              "Store",
+              "chromadb",
+              "persist_directory",
+              "Swap for FAISS (in-memory) or Qdrant/Weaviate (production)"
+            ],
+            [
+              "Retrieve",
+              "Chroma.as_retriever",
+              "k=4",
+              "Higher k = more context but may dilute relevance"
+            ],
+            [
+              "Generate",
+              "ChatOpenAI",
+              "model=\"gpt-4o-mini\", temperature=0",
+              "temperature=0 maximises factual consistency"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls and how to avoid them",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Most RAG problems show up not in the generation step but in the retrieval step. Before blaming the LLM, inspect what chunks it actually received."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Wrong chunks retrieved**: print `result[\"source_documents\"]` and read them. If the right text isn't there, the problem is in chunking or embedding — not in the LLM prompt.",
+            "**Chunks cut mid-sentence**: lower `chunk_size` or increase `chunk_overlap`. Boundary artifacts are the most common cause of incomplete answers.",
+            "**LLM ignores the context and answers from memory**: make the system prompt more explicit. Add a line like *\"Do not use any knowledge outside of the provided context.\"*",
+            "**Re-embedding on every run**: save the vector store to disk (`persist_directory`) and load it on subsequent runs instead of rebuilding from scratch each time.",
+            "**k is too small**: if the answer spans multiple sections, k=2 might miss half of it. Start with k=4 and go up if needed, watching for diminishing returns as irrelevant chunks creep in.",
+            "**Mixing embedding models**: if you embed documents with model A and later query with model B, similarity scores are meaningless. Always use the same model for ingestion and retrieval."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Never use OpenAI's legacy `text-embedding-ada-002` for new projects. The `text-embedding-3-small` model is cheaper, faster, and more accurate. The ada-002 model is still available but not recommended."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The pipeline above is deliberately minimal. Once it works end-to-end, there are four high-leverage upgrades worth learning in roughly this order."
+        },
+        {
+          "type": "h3",
+          "text": "1. Semantic chunking"
+        },
+        {
+          "type": "p",
+          "md": "Fixed-size character splitting sometimes cuts mid-thought. Semantic chunking compares consecutive sentence embeddings and only splits where the topic shifts. LangChain exposes this as `SemanticChunker` from `langchain_experimental.text_splitter`. It reduces boundary artifacts at the cost of a small extra embedding step during ingestion."
+        },
+        {
+          "type": "h3",
+          "text": "2. Hybrid search"
+        },
+        {
+          "type": "p",
+          "md": "Pure vector search can miss exact keyword matches — product names, error codes, or model numbers that have no semantic neighbours. **Hybrid search** combines a dense vector search (semantic) with a sparse BM25 keyword search, then fuses the scores. Weaviate and Elasticsearch both support this natively. For a quick local version, `langchain_community.retrievers.BM25Retriever` combined with an `EnsembleRetriever` achieves the same effect."
+        },
+        {
+          "type": "h3",
+          "text": "3. Reranking"
+        },
+        {
+          "type": "p",
+          "md": "After retrieving the top 20 chunks, a **cross-encoder reranker** re-scores each (query, chunk) pair jointly — much more accurate than the inner-product shortcut used by vector search. Cohere's Rerank API and `FlashrankRerank` from LangChain are both plug-and-play. You retrieve broadly (k=20), rerank, then pass only the top 4 to the LLM."
+        },
+        {
+          "type": "h3",
+          "text": "4. Evaluation"
+        },
+        {
+          "type": "p",
+          "md": "Never ship a RAG app without measuring it. Build a small golden dataset: 20–50 questions with known correct answers drawn from your documents. For each question, score **retrieval recall** (did the right chunk appear in top-k?), **faithfulness** (does the answer contain only claims from the context?), and **answer correctness**. RAGAS is a popular open-source framework that automates all three metrics."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "A retrieval recall below ~80% on your golden set almost always means chunking is wrong — the answer straddles a chunk boundary. Fix chunking before touching the LLM prompt or model."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Do I need an OpenAI API key to build a RAG app?",
+      "a": "No — OpenAI is the most common starting point but you can replace every paid component. Use `sentence-transformers/all-MiniLM-L6-v2` (free, local) for embeddings and a Hugging Face model like `TinyLlama` or an Ollama-served local model for generation. The pipeline structure stays identical; only the library calls change."
+    },
+    {
+      "q": "What chunk size should I use?",
+      "a": "A chunk size of 500–1000 characters with 10–20% overlap is a reliable default for most document types. Shorter chunks (256–512 characters) improve retrieval precision for dense technical text; longer chunks (1500–2000 characters) are better when context needs to span a full section. Always test on a golden dataset rather than guessing."
+    },
+    {
+      "q": "What is the difference between ChromaDB and FAISS?",
+      "a": "FAISS is a pure in-memory library — fast and zero setup, but your index disappears when the process ends unless you serialize it manually. ChromaDB adds a persistence layer, metadata filtering, and a client-server mode, making it easier to build a multi-session app. For a production service handling millions of documents, look at Qdrant, Weaviate, or Pinecone instead."
+    },
+    {
+      "q": "Why does my RAG app still hallucinate?",
+      "a": "Two root causes are common: first, the retriever is returning the wrong chunks, so the LLM invents an answer to fill the gap — print `source_documents` to check. Second, the prompt doesn't firmly restrict the model to the context; add an explicit instruction like *\"Answer only from the provided context. If the information is not there, say so.\"* and set `temperature=0`."
+    },
+    {
+      "q": "How do I add more documents without rebuilding the whole index?",
+      "a": "With ChromaDB you can call `vectorstore.add_documents(new_chunks)` on an already-persisted store. New embeddings are appended without touching existing ones. For FAISS you need to rebuild the index or use `FAISS.merge_from` to combine a new partial index with the existing one."
+    },
+    {
+      "q": "What is the 'stuff' chain type in LangChain, and when should I use something else?",
+      "a": "The `stuff` chain concatenates all retrieved chunks into a single prompt. It is the simplest and fastest option and works well when k is small (4–6 chunks). If your chunks are long and k is large, the combined context may exceed the model's context window — in that case switch to `map_reduce` (each chunk processed separately, then summaries combined) or `refine` (iteratively refines an answer over each chunk)."
+    }
+  ],
+  "related": [
+    "what-is-rag",
+    "how-rag-pipeline-works",
+    "what-is-chunking-in-rag",
+    "rag-vs-fine-tuning"
+  ],
+  "furtherReading": [
+    {
+      "title": "Build a RAG App — LangChain official tutorial",
+      "url": "https://python.langchain.com/docs/tutorials/rag/"
+    },
+    {
+      "title": "New embedding models and API updates — OpenAI",
+      "url": "https://openai.com/index/new-embedding-models-and-api-updates/"
+    },
+    {
+      "title": "Build a RAG System from Scratch in Python — Dataquest",
+      "url": "https://www.dataquest.io/blog/build-a-rag-system-from-scratch/"
+    }
+  ]
+}

@@ -1,0 +1,369 @@
+{
+  "slug": "continued-pretraining",
+  "title": "What Is Continued Pretraining? Teaching a Model Your Domain",
+  "seoTitle": "Continued Pretraining: Teach an LLM Your Domain",
+  "metaDescription": "Continued pretraining feeds raw domain text — legal, medical, code — into an existing model. How it differs from fine-tuning and when it's worth it.",
+  "keywords": [
+    "what is continued pretraining",
+    "domain adaptive pretraining",
+    "continued pretraining vs fine-tuning",
+    "train llm on domain corpus",
+    "adapt llm to a new domain"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Understand the heavyweight option for domain knowledge: pouring raw corpus text into a model's pretraining objective instead of Q&A pairs.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**Continued pretraining** (also called **domain-adaptive pretraining** or DAPT) is the process of taking a general-purpose language model that was trained on a broad internet corpus and running it through another round of the same pretraining objective — but now feeding it a large body of domain-specific text. The model sees millions or billions of raw tokens from your domain: clinical notes, financial filings, legal statutes, semiconductor manuals, or scientific papers. No question-and-answer pairs, no instructions — just raw text, the same way the model was trained in the first place."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like a seasoned generalist doctor who then spends three years as a resident in a specialist hospital. They already know how bodies work, how to read vitals, how to communicate with patients. The residency does not teach them medicine from scratch. Instead it immerses them in cardiology cases every single day until cardiac terminology, drug names, anatomy shortcuts, and case patterns become second nature. When they emerge, they still know general medicine — but they now *think* in cardiology. Continued pretraining does the same thing to a language model."
+        },
+        {
+          "type": "p",
+          "md": "The crucial detail is that continued pretraining changes what the model *knows*, not how it behaves. It is not about teaching it to follow instructions or answer questions in a particular format. It is about saturating its weights with domain vocabulary, concepts, and statistical relationships so that when you later fine-tune or prompt it, it already has deep familiarity with the subject matter. It is the foundation layer you lay *before* task-level training."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "You will see several names used interchangeably in the literature: **continued pretraining (CPT)**, **domain-adaptive pretraining (DAPT)**, **continual pretraining**, and **post-pretraining**. They all refer to the same core technique: resuming the standard language-model pretraining objective on a new corpus without discarding the original weights."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "General-purpose LLMs are trained on web text, books, and code. That mix is intentionally broad. The internet contains a lot of Reddit and Wikipedia but very little from behind-the-firewall enterprise document systems — confidential clinical trial data, proprietary chip design documentation, internal financial analysis memos, or jurisdiction-specific legal codes. When you deploy a general model on those domains, it does acceptably well on surface-level language but often stumbles on specialized terminology, domain-specific reasoning patterns, and abbreviations that mean something very different in context."
+        },
+        {
+          "type": "p",
+          "md": "Fine-tuning on labeled examples can partially compensate, but it has limits. If the model has never seen the phrase \"trailing-edge hold time violation\" in semiconductor design, a few hundred instruction examples will not deeply anchor that concept into its representations. The model is essentially memorizing patterns with a shaky foundation. Continued pretraining solves this by building that foundation first — giving the model millions of examples of how domain language is actually used, so that downstream fine-tuning or prompting can leverage genuine understanding rather than surface-level pattern matching."
+        },
+        {
+          "type": "h3",
+          "text": "Real-world evidence"
+        },
+        {
+          "type": "p",
+          "md": "**BloombergGPT** (2023) is one of the most cited examples. Bloomberg trained a 50-billion-parameter model using 363 billion tokens of financial data alongside 345 billion tokens of general text. On finance-specific benchmarks it outperformed larger general models while maintaining competitive general-language performance. **SaulLM-54B** and **SaulLM-141B** (2024) applied continued pretraining to large legal corpora and demonstrated substantial improvements over GPT-4 and the base Mixtral models on LegalBench-Instruct. **ChipNeMo** from NVIDIA showed that continued pretraining a Llama 2 model on proprietary chip-design data produced an LLM that outperformed much larger general models on EDA scripting and chip-design question answering tasks."
+        },
+        {
+          "type": "p",
+          "md": "The pattern is consistent: in domains with specialized vocabulary and reasoning structures, domain-adaptive pretraining reliably closes the gap between a large general model and a smaller but deeply domain-aware one — often at a fraction of the cost of scaling up model size."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Continued pretraining uses the exact same **next-token prediction** (causal language modeling) objective as the original pretraining run. The model receives a sequence of tokens and is trained to predict the next token at each position. The loss is standard cross-entropy. There is no task label, no input-output pair, no reward signal — just raw text, sliced into context windows and fed through the training loop."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Continued Pretraining Pipeline",
+            "steps": [
+              {
+                "label": "Domain corpus",
+                "sub": "Raw text: filings, papers, docs"
+              },
+              {
+                "label": "Data curation",
+                "sub": "Dedup, filter, quality score"
+              },
+              {
+                "label": "Tokenize + chunk",
+                "sub": "Fixed context-window sequences"
+              },
+              {
+                "label": "Resume training",
+                "sub": "Next-token prediction on existing weights"
+              },
+              {
+                "label": "Domain-adapted base model",
+                "sub": "Ready for instruction fine-tuning"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "The training objective in code"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Simplified CPT training loop (PyTorch / HuggingFace style)",
+          "code": "from transformers import AutoModelForCausalLM, AutoTokenizer\nfrom torch.optim import AdamW\n\n# Load the general base model\nmodel = AutoModelForCausalLM.from_pretrained(\"meta-llama/Meta-Llama-3-8B\")\ntokenizer = AutoTokenizer.from_pretrained(\"meta-llama/Meta-Llama-3-8B\")\n\noptimizer = AdamW(model.parameters(), lr=1e-5)  # lower LR than original\n\nfor batch in domain_dataloader:  # raw domain text, no labels\n    # Labels = input_ids shifted by 1 (standard CLM)\n    outputs = model(**batch, labels=batch[\"input_ids\"])\n    loss = outputs.loss          # cross-entropy over next-token prediction\n    loss.backward()\n    optimizer.step()\n    optimizer.zero_grad()"
+        },
+        {
+          "type": "p",
+          "md": "A few critical implementation details distinguish continued pretraining from a naive re-run of pretraining:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Lower learning rate.** Original pretraining uses learning rates around 1e-4 to 3e-4. Continued pretraining typically uses 1e-5 to 1e-4 — low enough to absorb new knowledge without destroying existing representations.",
+            "**Data mixing.** To prevent the model forgetting its general-language capabilities, a fraction (typically 10–30%) of the training data is drawn from a replay buffer of general-purpose text. For large distribution shifts such as adding a new language, that fraction may need to be 50%.",
+            "**Tokenizer handling.** If the domain uses terminology that the original tokenizer splits into many sub-tokens (e.g. medical compound words), teams sometimes extend the tokenizer vocabulary. This improves efficiency and can improve performance but requires re-initializing embedding weights for the new tokens.",
+            "**Warmup.** A short learning-rate warmup (a few hundred steps) prevents large gradient spikes when training resumes from a previously stable checkpoint."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "How much data do you need?"
+        },
+        {
+          "type": "p",
+          "md": "Practical token budgets range enormously by domain and model size. Research on financial-domain CPT suggests meaningful adaptation can begin with as few as **1–5 billion tokens** of high-quality domain text for a 7–13B parameter model. Production runs for frontier-size models often consume **50–100 billion tokens**. For comparison, the original Llama 3 pretraining used 15 trillion tokens. CPT is adding a targeted top-up, not replacing the original run."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Data *quality* matters more than raw volume. A well-curated 5B-token legal corpus (deduplicated, quality-filtered, OCR-corrected) will outperform 50B tokens of unprocessed web scrape that happens to mention legal terms. Invest in curation before scaling up compute."
+        }
+      ]
+    },
+    {
+      "id": "cpt-vs-fine-tuning",
+      "title": "Continued pretraining vs. fine-tuning",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The distinction matters because many teams reach for fine-tuning when they actually need continued pretraining — or vice versa. The two techniques sit at different points in the model-building stack and solve different problems."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "CPT vs. Fine-Tuning at a Glance",
+            "columns": [
+              {
+                "title": "Continued Pretraining",
+                "items": [
+                  "Unlabeled raw text",
+                  "Next-token prediction loss",
+                  "Billions of tokens",
+                  "Changes what the model knows",
+                  "Dozens to thousands of GPU-hours",
+                  "Output: a new base model"
+                ]
+              },
+              {
+                "title": "Instruction Fine-Tuning",
+                "items": [
+                  "Labeled prompt-response pairs",
+                  "Supervised task loss",
+                  "Thousands to millions of examples",
+                  "Changes how the model behaves",
+                  "Hours to tens of GPU-hours",
+                  "Output: a task-ready model"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "**Use continued pretraining when** the domain vocabulary and concepts are genuinely underrepresented in the base model's training data — meaning prompting and fine-tuning keep producing hallucinations or confusion about domain-specific terminology and reasoning. **Use fine-tuning when** the model already understands the domain but needs to follow a specific output format, adopt a particular style, or handle a specific task reliably."
+        },
+        {
+          "type": "p",
+          "md": "In practice, the two are often combined sequentially. The typical production pipeline is: **base model → continued pretraining on domain corpus → instruction fine-tuning on domain Q&A pairs → optional RLHF/DPO alignment**. Each step builds on the last. Skipping continued pretraining and jumping straight to fine-tuning works well enough when a capable base model already has decent domain coverage — but for niche domains or proprietary terminology, CPT meaningfully raises the ceiling."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Signal",
+            "Suggests CPT",
+            "Suggests Fine-Tuning"
+          ],
+          "rows": [
+            [
+              "Model hallucinates domain terminology",
+              "Yes",
+              "Unlikely to fix alone"
+            ],
+            [
+              "Model uses correct terms but wrong format",
+              "No",
+              "Yes"
+            ],
+            [
+              "Labeled Q&A pairs available",
+              "Not required",
+              "Required"
+            ],
+            [
+              "Budget: compute",
+              "High (GPU-days)",
+              "Low (GPU-hours)"
+            ],
+            [
+              "Budget: labeling",
+              "None needed",
+              "Significant"
+            ],
+            [
+              "Domain text corpus available",
+              "Required",
+              "Not needed"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pitfalls-and-risks",
+      "title": "Common pitfalls and how to avoid them",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "Catastrophic forgetting"
+        },
+        {
+          "type": "p",
+          "md": "The most widely cited risk is **catastrophic forgetting**: when the model trains intensively on narrow domain data, it can degrade on general-language tasks — losing the ability to do arithmetic, follow instructions, or write coherent prose that doesn't sound like legal boilerplate. The mechanism is the same as it was during original pretraining: gradient updates that strengthen domain-specific activations also weaken others."
+        },
+        {
+          "type": "p",
+          "md": "The fix is **data replay** — mixing a portion of general-purpose text back into every training batch. Empirically, mixing 10–30% general replay data substantially reduces forgetting while only slightly limiting peak domain performance. For very large distribution shifts, research suggests replay may need to reach 50% of the data mix. Even a tiny replay fraction (1–5%) can suppress forgetting of specific previously-learned capabilities."
+        },
+        {
+          "type": "h3",
+          "text": "Data quality and contamination"
+        },
+        {
+          "type": "p",
+          "md": "Low-quality domain corpora — boilerplate legal disclaimers repeated thousands of times, auto-generated financial summaries, or poorly OCR'd medical PDFs — can actively harm model quality. Deduplication is especially critical: if the same earnings call transcript appears 500 times in the corpus, the model will overfit to its exact phrasing. NVIDIA's NeMo Curator and similar tools handle deduplication, language filtering, and quality scoring at scale before training begins."
+        },
+        {
+          "type": "h3",
+          "text": "Evaluation is harder than it looks"
+        },
+        {
+          "type": "p",
+          "md": "After CPT, standard benchmarks like MMLU may show a small regression even when domain performance has improved significantly. Teams need domain-specific evaluation sets — ideally held-out examples from the same distribution as the training corpus — to measure whether the CPT run actually moved the needle on their target tasks. Without a dedicated eval suite, it is easy to ship a model that scores slightly worse on public benchmarks and declare the CPT run a failure, when in fact it improved exactly what mattered."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "**Watch out for benchmark contamination.** If your domain corpus includes content scraped from the web, it may contain answers to popular eval benchmarks (MMLU, HellaSwag, etc.). Remove known benchmark questions and their sources from your training data before CPT, or your eval numbers will be artificially inflated."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "Tooling landscape"
+        },
+        {
+          "type": "p",
+          "md": "Several platforms provide managed or semi-managed continued pretraining infrastructure. **Amazon Bedrock** offers a Continued Pre-Training API specifically for its Amazon Titan models, accepting unlabeled text from S3 and handling distributed training internally — a good on-ramp if you are already in the AWS ecosystem and want to customize a managed model without running your own GPU cluster. **NVIDIA NeMo** (the training framework, combined with NeMo Curator for data preprocessing) is the dominant open-source toolkit for large-scale domain-adaptive pretraining, used in projects like ChipNeMo; it handles tensor parallelism, flash attention, and distributed checkpointing. **Databricks** supports the full spectrum from pretraining through instruction tuning on its lakehouse platform, with NVIDIA H100 access and built-in MLflow tracking."
+        },
+        {
+          "type": "h3",
+          "text": "Efficient alternatives to full continued pretraining"
+        },
+        {
+          "type": "p",
+          "md": "Full continued pretraining updates all model parameters, which means full-precision gradients and optimizer states for every weight — expensive at scale. Several research directions aim to reduce this cost:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**LoRA-based CPT.** Applying low-rank adapters during continued pretraining reduces the number of trainable parameters by 10–100x. Performance is somewhat lower than full-parameter CPT, but the cost reduction is dramatic — feasible on a single A100 for mid-size models.",
+            "**LLaMA-Pro style expansion.** Add new transformer blocks to the model and train only those blocks on the domain corpus while freezing the original layers. The added blocks absorb domain knowledge; the original blocks preserve general ability. This avoids catastrophic forgetting almost entirely.",
+            "**Selective data curation.** Recent work shows that extremely careful data selection — 5–10% of a naive corpus, chosen by perplexity scores or domain classifiers — can match the performance of training on the full corpus at a fraction of the compute cost.",
+            "**Curriculum ordering.** Starting with general-adjacent domain text and gradually shifting to the most specialized content reduces the size of the distribution shift at any given point in training, which stabilizes loss curves and can reduce the replay fraction needed."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "When continued pretraining is NOT the right answer"
+        },
+        {
+          "type": "p",
+          "md": "CPT is a large, slow, expensive intervention. Several situations call for something lighter:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**You only have a few thousand labeled examples.** That is a fine-tuning problem, not a pretraining problem. CPT requires a large unlabeled corpus; if you have labels but not raw text, fine-tune.",
+            "**The task is about format, tone, or persona, not domain knowledge.** Teaching a model to always respond in JSON, to be concise, or to adopt a brand voice is an instruction fine-tuning or preference-tuning problem. CPT will not help.",
+            "**The domain is already well-covered.** General coding assistants based on Llama or Mistral already see enormous volumes of code during pretraining. Adding more code via CPT has diminishing returns; task-specific fine-tuning is more efficient.",
+            "**You need results this week.** A proper CPT run requires data curation, distributed training infrastructure, checkpoint evaluation, and regression testing. The minimum realistic timeline from raw corpus to deployable model is several weeks."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Continued pretraining sits at the expensive end of the model customization spectrum, but for the right problem — a genuinely underrepresented domain with a large unlabeled corpus and a team willing to invest in infrastructure — it is the only technique that fundamentally relocates the model's center of gravity toward your domain rather than just adjusting its surface behavior."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "How is continued pretraining different from fine-tuning?",
+      "a": "Continued pretraining uses the same **next-token prediction** objective as original pretraining and consumes billions of tokens of raw, unlabeled domain text. Fine-tuning uses supervised examples — usually input-output or prompt-response pairs — to teach the model a specific behavior or task. CPT changes *what the model knows*; fine-tuning changes *how it acts*. The two are often applied in sequence: CPT first to build domain knowledge, then fine-tuning to shape behavior."
+    },
+    {
+      "q": "How many tokens do I need for continued pretraining to be effective?",
+      "a": "There is no universal minimum, but research on financial and legal domains suggests that 1–5 billion high-quality domain tokens produces meaningful adaptation for a 7–13B parameter model. Production runs often use 50–100B tokens. Data quality matters more than raw volume — a well-curated 2B token corpus will typically outperform 20B tokens of noisy web scrape."
+    },
+    {
+      "q": "Will continued pretraining make my model forget what it already knows?",
+      "a": "It can, if you train entirely on domain data without any replay. The standard mitigation is to mix 10–30% general-purpose text (from the same distribution as the original pretraining corpus) into every training batch. This **replay** strategy substantially reduces catastrophic forgetting. For very large distribution shifts, you may need up to 50% replay data."
+    },
+    {
+      "q": "Can I do continued pretraining with LoRA instead of full parameter updates?",
+      "a": "Yes, and several teams do. LoRA-based CPT trains only low-rank adapter matrices added to the existing weights, reducing memory and compute by 10–100x. Performance is generally somewhat below full-parameter CPT, but for moderate domains and smaller models the gap is often acceptable, and the cost difference is large enough to make LoRA CPT the practical default when GPU budgets are limited."
+    },
+    {
+      "q": "What tools support continued pretraining in a managed way?",
+      "a": "**Amazon Bedrock** offers a Continued Pre-Training API for its Titan models that accepts raw text files from S3. **NVIDIA NeMo** (open source) is the leading framework for large-scale CPT, with built-in support for tensor parallelism, flash attention, and NeMo Curator for data preprocessing. **Databricks** supports CPT workflows with managed GPU clusters and MLflow tracking."
+    },
+    {
+      "q": "Is continued pretraining the same as training a model from scratch?",
+      "a": "No. Training from scratch initializes weights randomly and requires trillions of tokens and thousands of GPU-hours to produce a capable model. Continued pretraining starts from an already-trained checkpoint and adds a targeted top-up of domain data — typically 1–100B tokens at a learning rate well below the original run. It is orders of magnitude cheaper than training from scratch, while leveraging all the general-language capability already baked into the base model."
+    }
+  ],
+  "related": [
+    "what-is-fine-tuning",
+    "what-fine-tuning-changes",
+    "what-is-model-distillation",
+    "synthetic-data-for-fine-tuning",
+    "pretraining-vs-fine-tuning"
+  ],
+  "furtherReading": [
+    {
+      "title": "Efficient Continual Pre-Training for Building Domain Specific Large Language Models (ACL 2024)",
+      "url": "https://aclanthology.org/2024.findings-acl.606/"
+    },
+    {
+      "title": "Streamlining Data Processing for Domain Adaptive Pretraining with NVIDIA NeMo Curator",
+      "url": "https://developer.nvidia.com/blog/streamlining-data-processing-for-domain-adaptive-pretraining-with-nvidia-nemo-curator/"
+    },
+    {
+      "title": "Customize Models in Amazon Bedrock with Fine-Tuning and Continued Pre-Training (AWS Blog)",
+      "url": "https://aws.amazon.com/blogs/aws/customize-models-in-amazon-bedrock-with-your-own-data-using-fine-tuning-and-continued-pre-training/"
+    }
+  ]
+}

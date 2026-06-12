@@ -1,0 +1,397 @@
+{
+  "slug": "cut-llm-token-costs",
+  "title": "How to Cut Token Spend: Prompt Compression and Output Limits",
+  "seoTitle": "How to Cut LLM Token Costs Without Losing Quality",
+  "metaDescription": "Token bills creep up fast. How to cut spend with prompt compression, output limits, caching, and context trimming — without making answers worse.",
+  "keywords": [
+    "reduce llm token costs",
+    "prompt compression techniques",
+    "limit llm output tokens",
+    "cut llm api bill",
+    "llm cost optimization tips"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn practical ways to shrink your token bill — compression, output caps, context trimming — without degrading answers.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In Plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every API call to an LLM is billed by the token. Input tokens (your prompt) and output tokens (the model's reply) are metered separately, and output tokens typically cost 3–5x more per token than inputs. As usage scales, a bill that seemed trivial during prototyping can balloon into thousands of dollars a month."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like a phone call billed by the word. If you could trim your half of the conversation without losing meaning — shorter system prompts, tighter instructions, no repeated boilerplate — your bill drops immediately. If you could also stop the other party from rambling on after they've made their point, you'd save even more. That is exactly what **prompt compression** and **output limits** do."
+        },
+        {
+          "type": "p",
+          "md": "Prompt compression shrinks what you *send*. Output limits constrain what the model *returns*. Combine them with provider-level caching and aggressive context trimming and you can reduce a typical production workload by 60–80% without meaningfully changing answer quality."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Output tokens usually cost 2–5x more than input tokens. Cutting a verbose 400-token reply down to a precise 100-token reply therefore has a bigger dollar impact than trimming 300 tokens from your system prompt."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why It Matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Token costs are a silent scaling trap. A single call to Claude Sonnet costs $3 per million input tokens and $15 per million output tokens. That sounds cheap — until you have a multi-step agent that makes 12 calls per user session, each passing 8,000 tokens of history. At 10,000 daily sessions you are sending roughly 960 million input tokens and potentially tens of millions of output tokens every day. The bill goes from negligible to significant before you notice."
+        },
+        {
+          "type": "p",
+          "md": "Multi-agent systems are the worst offenders. Without deliberate optimization, agents can consume 4–15x more tokens than a single direct call because each sub-agent receives the full conversation history plus tool outputs plus instructions. Every orchestration hop multiplies your context."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Prototype vs. production gap** — token usage per session looks very different once real users write verbose queries and trigger long tool chains.",
+            "**Compounding in chat** — each turn appends to history, so costs grow super-linearly with conversation length unless you actively trim.",
+            "**Latency coupling** — more tokens also means slower responses; cutting tokens cuts both cost *and* p99 latency.",
+            "**Budget predictability** — highly variable token counts make cost forecasting hard; caps and compression smooth the distribution."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Log token counts per call from day one using the `usage` field in every API response. You cannot optimize what you cannot measure, and the breakdown between prompt, completion, and cached tokens tells you which lever to pull first."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How It Works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Token reduction falls into five mechanics that you can apply independently or stack together. The diagram below shows where each one acts in the request/response lifecycle."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Token Cost Reduction — Where Each Lever Acts",
+            "steps": [
+              {
+                "label": "Raw Prompt Assembled",
+                "sub": "System + history + retrieved docs + user query"
+              },
+              {
+                "label": "Prompt Compression",
+                "sub": "Trim redundant tokens; algorithmic or model-based"
+              },
+              {
+                "label": "Context Trimming",
+                "sub": "Drop old turns; summarise or slide the window"
+              },
+              {
+                "label": "Prefix Caching",
+                "sub": "Stable prefix read from cache at 0.1x input price"
+              },
+              {
+                "label": "LLM Inference",
+                "sub": "Billed on uncached input tokens"
+              },
+              {
+                "label": "Output Limits",
+                "sub": "max_tokens cap + concise-format instructions"
+              },
+              {
+                "label": "Semantic Response Cache",
+                "sub": "Similar future queries reuse stored reply"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "1. Prompt compression"
+        },
+        {
+          "type": "p",
+          "md": "Prompt compression removes low-information tokens from the prompt before it is sent to the expensive frontier model. The most capable open-source framework for this is **LLMLingua** (Microsoft Research). LLMLingua-2 frames compression as a token classification task: a small distilled model is trained (using GPT-4-generated labels) to predict which tokens are safe to drop. It achieves 2x–5x compression ratios while reducing end-to-end latency by up to 2.9x. **LongLLMLingua** extends this to retrieval-augmented generation (RAG) pipelines with a question-aware coarse-to-fine strategy that reorders and selects document passages, achieving up to a 21.4% *improvement* on multi-document QA benchmarks while using only one quarter of the original tokens."
+        },
+        {
+          "type": "p",
+          "md": "Before reaching for a library, start with manual prompt auditing. The rule: every sentence in your system prompt must actively change the model's behaviour. If you can delete it and the outputs are identical, delete it. Teams commonly find they can cut system prompts from 2,000 tokens to 800 tokens this way — a 60% reduction with zero quality loss."
+        },
+        {
+          "type": "h3",
+          "text": "2. Context trimming"
+        },
+        {
+          "type": "p",
+          "md": "In a multi-turn chat, history grows with every exchange. Without trimming, a 30-turn conversation inflates the prompt by tens of thousands of tokens. Three strategies manage this:"
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Sliding window** — keep only the last N turns verbatim; older turns are dropped. Simple and predictable, but loses long-term context.",
+            "**Summarisation** — periodically compress old turns into a compact summary (a few hundred tokens) using a cheap model like Haiku. The summary rides at the top of the context; full turns are discarded. Anthropic's Claude tooling introduced automatic compaction in late 2025 that does this transparently.",
+            "**Importance scoring** — assign a relevance score to each context chunk (using embeddings or a lightweight classifier) and greedily drop the lowest-scoring chunks until you hit your token budget. This preserves the most task-relevant history rather than just the most recent."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "3. Prefix caching"
+        },
+        {
+          "type": "p",
+          "md": "Both Anthropic and OpenAI offer prompt caching for the stable prefix of a request (your system prompt, reference documents, few-shot examples). Instead of reprocessing those tokens on every call, the provider reads them from a cached key-value state at a fraction of the normal input price."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Provider",
+            "Cache discount",
+            "Min cacheable prefix",
+            "Cache duration"
+          ],
+          "rows": [
+            [
+              "Anthropic (Claude)",
+              "90% off input (0.1x rate)",
+              "1,024 tokens",
+              "5 min (default) or 1 hour"
+            ],
+            [
+              "OpenAI (GPT-4o, o-series)",
+              "50% off input (0.5x rate)",
+              "1,024 tokens",
+              "~5 min (automatic)"
+            ],
+            [
+              "Google (Gemini)",
+              "75% off input",
+              "32,768 tokens",
+              "60 min (explicit)"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "The 90% saving only applies to cache *reads*, not cache *writes*. Anthropic charges 1.25x for a 5-minute write and 2x for a 1-hour write. Caching pays off only when the same prefix is reused many times within the TTL window. Track your cache hit rate before claiming the saving."
+        },
+        {
+          "type": "h3",
+          "text": "4. Output limits"
+        },
+        {
+          "type": "p",
+          "md": "Because output tokens cost more than input tokens, capping response length has an outsized effect on the bill. Every LLM API exposes a `max_tokens` parameter. Set it to the tightest value that still satisfies your use case. Pair it with an explicit length instruction inside the prompt: `Answer in three sentences or fewer.` or `Return a valid JSON object only, no prose.`"
+        },
+        {
+          "type": "p",
+          "md": "Structured output formats (JSON, CSV, YAML) are far more token-efficient than natural-language prose for data extraction tasks. Shorter JSON keys also matter: renaming `message_is_conversation_continuation` to `cont` saves ~19 tokens per call — trivial per call but significant at millions of calls per day."
+        },
+        {
+          "type": "h3",
+          "text": "5. Semantic response caching"
+        },
+        {
+          "type": "p",
+          "md": "Semantic caching goes beyond prefix caching: it stores the model's *complete response* alongside a vector embedding of the query. When a future query is semantically similar enough (cosine similarity above a threshold), the stored response is returned immediately — the LLM never runs. **GPTCache** (open-source, by Zilliz) provides a modular Python layer supporting Milvus, Faiss, Redis, and Qdrant as backends. Redis LangCache is a hosted alternative. GPTSemCache benchmarks report cache hit rates of 61–69% across diverse query sets, eliminating those API calls entirely."
+        }
+      ]
+    },
+    {
+      "id": "practical-playbook",
+      "title": "Practical Playbook: Where to Start",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Not every technique is worth implementing immediately. Here is a rough priority ordering based on effort vs. impact."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Step",
+            "Technique",
+            "Typical saving",
+            "Effort"
+          ],
+          "rows": [
+            [
+              "1",
+              "Audit and trim system prompt manually",
+              "40–60% of system prompt tokens",
+              "Low"
+            ],
+            [
+              "2",
+              "Enable prefix caching (Anthropic / OpenAI)",
+              "50–90% on cached prefix",
+              "Low — flip a flag"
+            ],
+            [
+              "3",
+              "Add max_tokens + length instructions",
+              "20–50% of output tokens",
+              "Low"
+            ],
+            [
+              "4",
+              "Implement context trimming / summarisation",
+              "40–70% of history tokens",
+              "Medium"
+            ],
+            [
+              "5",
+              "Add semantic response cache (GPTCache / Redis)",
+              "Eliminates 30–70% of repeat calls",
+              "Medium-High"
+            ],
+            [
+              "6",
+              "Integrate algorithmic compression (LLMLingua)",
+              "2–7x token reduction on long docs",
+              "High"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Steps 1–3 cost almost nothing and are the highest-ROI starting point. Even a modest system-prompt audit plus setting a `max_tokens` cap often cuts a production bill by 30–40% with an afternoon's work."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Stack discounts carefully. Anthropic's prompt caching (90% off cached input) plus the Batch API (50% off all tokens) compounds to roughly a 95% reduction on repeated, non-latency-sensitive work like nightly document classification."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "import anthropic\n\nclient = anthropic.Anthropic()\n\n# System prompt is large and stable — mark it for caching\nsystem_prompt = \"\"\"You are a concise code reviewer. Rules:\\n\"\"\"\n# ... (imagine 1500 tokens of guidelines here)\n\nresponse = client.messages.create(\n    model=\"claude-sonnet-4-6\",\n    max_tokens=256,           # hard output cap\n    system=[\n        {\n            \"type\": \"text\",\n            \"text\": system_prompt,\n            \"cache_control\": {\"type\": \"ephemeral\"}  # prefix cache\n        }\n    ],\n    messages=[\n        {\"role\": \"user\", \"content\": \"Review this function: def add(a, b): return a + b\"}\n    ]\n)\n\nusage = response.usage\nprint(f\"Input tokens: {usage.input_tokens}\")\nprint(f\"Cache read: {usage.cache_read_input_tokens}\")\nprint(f\"Output tokens: {usage.output_tokens}\")"
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common Pitfalls",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Aggressive token cutting introduces its own failure modes. Here are the ones teams hit most often."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Over-compressing the system prompt** — deleting nuance from instructions saves tokens but degrades output quality. Always A/B test compressed vs. original prompts on your eval set before deploying.",
+            "**Too-tight max_tokens cap** — if the model hits the ceiling mid-response, it truncates silently. A truncated JSON object breaks parsers downstream. Add a 20–30% buffer above your expected output length and monitor truncation rate.",
+            "**Semantic cache false positives** — a similarity threshold that is too permissive returns a cached answer to a subtly different question. For high-stakes domains (medical, legal, financial), raise the threshold or disable semantic caching entirely.",
+            "**Cache cold-start cost** — prefix cache writes cost more than a normal read. A new deployment or cache expiry means the first call after a restart is expensive. This is fine at scale but can look like a spike in dashboards.",
+            "**LLMLingua degradation on short prompts** — algorithmic compression assumes there is redundancy to remove. On a tight 200-token prompt, aggressive compression hurts quality. Apply it only to prompts above ~1,000 tokens.",
+            "**Ignoring output token price** — many teams obsess over cutting input tokens (which cost less) while leaving verbose, unstructured outputs untouched. Always measure cost by *token type*, not total token count."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "JSON is not always the most token-efficient structured format. Benchmarks show JSON can consume roughly twice as many tokens as TSV for the same tabular data. For bulk extraction pipelines, consider TSV or compact delimiters over nested JSON."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going Deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you have the basics in place, several advanced techniques can push savings further."
+        },
+        {
+          "type": "h3",
+          "text": "Model routing as a cost multiplier"
+        },
+        {
+          "type": "p",
+          "md": "Not every query needs a frontier model. A well-calibrated router classifies each incoming query by complexity and dispatches simple queries to a cheap small model (Haiku, GPT-4o mini) and only sends genuinely hard queries to a powerful model (Opus, GPT-4o). Done well, 60–80% of queries can be served by the cheap tier, cutting effective cost per query by 40–70%. This is sometimes called **model tiering** or **cascade routing**."
+        },
+        {
+          "type": "h3",
+          "text": "Batch API for async workloads"
+        },
+        {
+          "type": "p",
+          "md": "Both OpenAI and Anthropic offer a Batch API that processes requests asynchronously (24-hour turnaround) at a 50% discount. For document summarisation, classification pipelines, nightly report generation, and similar non-real-time workloads, shifting to batch mode halves the input *and* output cost with no code changes beyond the API call."
+        },
+        {
+          "type": "h3",
+          "text": "Adaptive RAG chunking"
+        },
+        {
+          "type": "p",
+          "md": "In RAG pipelines, naive top-k retrieval often returns redundant or off-topic chunks that bloat the context. Semantic chunking (splitting documents on embedding-similarity boundaries rather than fixed token counts) and **reranking** (using a cross-encoder to rescore retrieved chunks before injection) together cut the average retrieved context by 40–60% while improving answer relevance. The rule of thumb: 5–10 tightly-focused retrieved chunks outperforms 20 loosely-matched ones, both for quality and cost."
+        },
+        {
+          "type": "h3",
+          "text": "Measuring what you save"
+        },
+        {
+          "type": "p",
+          "md": "Track five metrics in your observability stack: (1) mean input tokens per call, (2) mean output tokens per call, (3) cache hit rate, (4) cost per session, and (5) quality score from your eval suite. Optimisations that reduce tokens but also reduce eval scores are not wins. The goal is to move down the cost axis while holding the quality axis flat — or better, improve both by removing noise from the context."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Use a **token budget** pattern in your orchestration layer: before assembling a prompt, calculate how many tokens each component (system, history, retrieved docs, instructions) is allowed, and trim greedily from the lowest-priority component first. This prevents any single component from crowding out the others when the context window fills up."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Does prompt compression actually hurt answer quality?",
+      "a": "Mild compression (2–3x ratio) typically has less than 5% accuracy impact on most tasks, and LongLLMLingua can even *improve* accuracy on long-document QA by removing distracting noise. Heavy compression (5–7x) shows more degradation. Always run your eval suite on compressed vs. original prompts before deploying."
+    },
+    {
+      "q": "How do I know if prefix caching is actually saving me money?",
+      "a": "The API response includes a `usage` object with a `cache_read_input_tokens` field (Anthropic) or `cached_tokens` field (OpenAI). Check that field in production logs. If it is consistently zero, your prefix is changing between calls — perhaps because you are injecting a timestamp or dynamic value near the top. Move all dynamic content to the end of the prompt so the stable prefix is as long as possible."
+    },
+    {
+      "q": "What is the safest max_tokens value to set?",
+      "a": "Measure the 95th-percentile output length in production, then add a 30% buffer. Monitor your truncation rate (calls where `stop_reason` is `max_tokens` rather than `end_turn` or `stop`). If truncation rate exceeds 1%, raise the cap. For structured outputs, set it to 2–3x the size of a well-formed example response."
+    },
+    {
+      "q": "When should I avoid semantic caching?",
+      "a": "Avoid semantic caching for highly dynamic or personalised content (shopping recommendations, real-time data), for high-stakes domains where a slightly wrong cached answer is dangerous (medical triage, legal advice), and when your query distribution is too diverse to generate enough cache hits to justify the latency added by the embedding lookup."
+    },
+    {
+      "q": "Is LLMLingua safe to use in production?",
+      "a": "LLMLingua and LLMLingua-2 are actively maintained by Microsoft Research and are used in production by multiple teams. The main operational cost is the compression step itself (running a small model on your hardware or via API). For RAG pipelines with 10k-token contexts it is well worth the overhead; for short prompts the compression latency may exceed the savings."
+    },
+    {
+      "q": "Can I combine prompt caching and the Batch API?",
+      "a": "Yes. On Anthropic, stacking prompt caching (90% off cached input tokens) with the Batch API (50% off all tokens) compounds to roughly a 95% reduction on the cached portion for async workloads like nightly classification or batch summarisation. This is the most cost-effective configuration available today."
+    }
+  ],
+  "related": [
+    "what-is-llmops",
+    "llm-prototype-to-production",
+    "semantic-caching-llm",
+    "kv-cache-explained"
+  ],
+  "furtherReading": [
+    {
+      "title": "LLMLingua: Prompt Compression for Efficient LLM Inference",
+      "url": "https://llmlingua.com/"
+    },
+    {
+      "title": "Prompt Caching — Anthropic Developer Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching"
+    },
+    {
+      "title": "Prompt Caching — OpenAI API Docs",
+      "url": "https://developers.openai.com/api/docs/guides/prompt-caching"
+    }
+  ]
+}

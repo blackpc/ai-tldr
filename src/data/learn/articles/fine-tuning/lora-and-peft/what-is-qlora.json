@@ -1,0 +1,407 @@
+{
+  "slug": "what-is-qlora",
+  "title": "What Is QLoRA? Fine-Tuning Big Models on One GPU",
+  "seoTitle": "What Is QLoRA? Fine-Tune Big Models on One GPU",
+  "metaDescription": "QLoRA combines 4-bit quantization with LoRA so you can fine-tune a 70B model on a single consumer GPU. Here's how it works and what you trade off.",
+  "keywords": [
+    "what is qlora",
+    "qlora vs lora difference",
+    "fine-tune llm on one gpu",
+    "4-bit quantized fine-tuning",
+    "qlora explained simply"
+  ],
+  "difficulty": "beginner",
+  "oneLiner": "See how stacking 4-bit quantization under LoRA shrinks fine-tuning memory enough to train large models on a single consumer card.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**QLoRA** stands for **Quantized Low-Rank Adaptation**. It is a fine-tuning method that stacks two ideas together. The first idea is **LoRA**: freeze the original model weights and train only a tiny pair of adapter matrices that bolt on to the side. The second idea is **4-bit quantization**: compress those frozen weights into a much smaller format so they barely use memory. Stack both ideas and you can fine-tune a model that would normally demand a rack of GPUs on a single consumer card."
+        },
+        {
+          "type": "p",
+          "md": "An analogy: imagine a hardcover city atlas that weighs five kilograms. LoRA says \"stop annotating in the margins of the whole book — just clip a thin Post-it layer on the pages that matter.\" QLoRA adds \"and let's shrink the atlas to a pocket-sized low-resolution version while we work. The Post-it notes stay full-size and sharp. If we need the full atlas later, we can zoom back in, page by page, for just a moment.\" The original atlas is replaced in your bag by something 75 % lighter, and your sticky notes are still perfectly readable."
+        },
+        {
+          "type": "p",
+          "md": "The original QLoRA paper was published in 2023 by Tim Dettmers, Artidoro Pagnoni, Ari Holtzman, and Luke Zettlemoyer. It showed that a 65-billion-parameter model fine-tuned with QLoRA could match the quality of a 13B model fine-tuned fully — and do so on a single 48 GB GPU. Before that paper, fine-tuning at that scale required a multi-GPU server costing tens of thousands of dollars."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "QLoRA builds on top of LoRA. If you haven't read about LoRA yet, the short version is: LoRA freezes the base model and trains two small matrices (A and B) whose product approximates the weight change you need. Only A and B have gradients — that's where QLoRA's adapter lives too."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Even with plain LoRA, large models demand serious hardware. A 7-billion-parameter model stored in 16-bit floats weighs roughly 14 GB before you add the optimizer, activations, and gradient buffers that training needs. Add those up and a single 7B fine-tune can push 40–50 GB of VRAM — more than any consumer GPU has. A 65B model in 16-bit weights alone is around 130 GB."
+        },
+        {
+          "type": "p",
+          "md": "QLoRA's 4-bit compression cuts the weight memory by about **75 %**. A 65B model's weights shrink from 130 GB to roughly 33 GB. The LoRA adapter that trains on top stays in 16-bit precision, but it is a tiny fraction of the total parameter count — small enough that its memory cost barely registers. The combined footprint suddenly fits on one 48 GB data-center GPU, or, for smaller models, on a consumer gaming card."
+        },
+        {
+          "type": "h3",
+          "text": "What this unlocks for builders"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Fine-tune a 7B model on a 12 GB gaming GPU.** An RTX 3060 or RTX 4070 that could never run a full fine-tune handles 7B QLoRA comfortably.",
+            "**Fine-tune a 13B model on a 24 GB card.** An RTX 3090 or RTX 4090 — a card many developers already own — is enough.",
+            "**Fine-tune a 65–70B model on one 48 GB GPU.** What once required an 8-GPU server now runs on a single A100 or A6000.",
+            "**Dramatically cheaper cloud runs.** A single A100 instance costs a fraction of a multi-GPU cluster. You can iterate on ideas in hours instead of days.",
+            "**Democratized research.** Academics and indie builders can now publish competitive fine-tunes of the world's largest open models without institutional compute."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The trade-off is a small quality gap. QLoRA fine-tunes typically land at **90–97 % of full fine-tuning quality** on instruction-following and style-adaptation tasks. For most production use cases that gap is invisible to end users. Tasks with tight numerical precision requirements — specialized code generation, math proofs, low-resource languages — can see a larger drop, sometimes 10–20 %."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "QLoRA introduces three interlocking innovations. Together they explain both why memory drops so dramatically and why quality holds despite the compression."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "stack",
+            "title": "What lives in GPU memory during QLoRA training",
+            "layers": [
+              {
+                "label": "LoRA adapter matrices A and B",
+                "sub": "Full 16-bit (BF16) — the only parameters that train",
+                "accent": true
+              },
+              {
+                "label": "Dequantization buffer",
+                "sub": "One layer at a time, briefly restored to BF16 for the forward pass"
+              },
+              {
+                "label": "Frozen base model weights",
+                "sub": "4-bit NF4 — ~75% smaller than BF16, never updated during training"
+              },
+              {
+                "label": "Paged optimizer state",
+                "sub": "Spills to CPU RAM on memory spikes, pages back in automatically"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Innovation 1: 4-bit NormalFloat (NF4)"
+        },
+        {
+          "type": "p",
+          "md": "Standard 4-bit integers represent 16 evenly-spaced values. That works fine for data with a flat distribution, but neural-network weights follow a **bell curve** — most values cluster near zero and only a few are large. Squeezing a bell curve into equally-spaced buckets wastes most of your precision budget on the sparse extremes."
+        },
+        {
+          "type": "p",
+          "md": "NF4 (4-bit NormalFloat) solves this by placing its 16 quantization levels at **equal-probability intervals** under a standard normal distribution. The levels are denser near zero — where most weights live — and more spread out in the tails. The result is information-theoretically optimal: you lose the minimum possible signal given a 4-bit budget when the data is normally distributed. Because neural-network weights are normally distributed, NF4 fits them better than any fixed integer format."
+        },
+        {
+          "type": "h3",
+          "text": "Innovation 2: Double Quantization"
+        },
+        {
+          "type": "p",
+          "md": "Every block of quantized weights needs a **scaling constant** — a small number that records the original magnitude so the weights can be approximately restored during computation. With large models, thousands of these constants accumulate. QLoRA's double quantization step compresses those constants a second time, from 32-bit floats down to 8-bit. This saves roughly **0.37 extra bits per parameter**. On a 65-billion-parameter model that is several gigabytes shaved off for what amounts to free."
+        },
+        {
+          "type": "h3",
+          "text": "Innovation 3: Paged Optimizers"
+        },
+        {
+          "type": "p",
+          "md": "Even with 4-bit base weights, long training sequences can cause sudden GPU memory spikes — the GPU temporarily runs out of room for the activations it needs to store for backpropagation. QLoRA exploits NVIDIA's **unified memory** feature: when a spike hits, optimizer state pages automatically from GPU VRAM into CPU RAM, and pages back in once the spike passes. This prevents out-of-memory crashes without forcing you to reduce batch size or sequence length."
+        },
+        {
+          "type": "h3",
+          "text": "The training loop step by step"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "One QLoRA forward + backward pass",
+            "steps": [
+              {
+                "label": "Input tokens",
+                "sub": "normal 16-bit tensor"
+              },
+              {
+                "label": "Dequantize layer weights",
+                "sub": "NF4 → BF16 on-the-fly, one layer at a time"
+              },
+              {
+                "label": "Forward pass",
+                "sub": "Frozen base (BF16) + LoRA adapter path, results added"
+              },
+              {
+                "label": "Compute loss",
+                "sub": "Cross-entropy or task loss in BF16"
+              },
+              {
+                "label": "Backprop into adapter only",
+                "sub": "Gradients flow through A and B — base weights untouched",
+                "accent": true
+              },
+              {
+                "label": "Update A and B",
+                "sub": "Optimizer state in 16-bit; pages to CPU RAM if VRAM spikes"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The crucial detail is \"dequantize on-the-fly\". The base weights are **stored** in compact 4-bit NF4, but the matrix multiplications during the forward pass temporarily restore each layer to BF16. Only one layer's worth of BF16 weights exists in memory at any moment — the buffer is discarded after that layer's compute. The permanent storage stays compact throughout training."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The LoRA adapter matrices A and B are **never quantized**. They remain in full BF16 precision throughout the entire training run. This is the key reason QLoRA retains high quality: the learning signal is always clean, even though it sits on top of a compressed base."
+        }
+      ]
+    },
+    {
+      "id": "qlora-vs-lora",
+      "title": "QLoRA vs. plain LoRA: which should you use?",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "QLoRA and plain LoRA share the same adapter math — the difference is purely in what happens to the frozen base weights. That one difference has cascading consequences for memory, speed, and quality."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Factor",
+            "Plain LoRA (BF16 base)",
+            "QLoRA (NF4 base)"
+          ],
+          "rows": [
+            [
+              "Base weight storage",
+              "16-bit (full precision)",
+              "4-bit NF4 (~75% smaller)"
+            ],
+            [
+              "VRAM for a 7B model",
+              "~18–22 GB total",
+              "~6–10 GB total"
+            ],
+            [
+              "VRAM for a 13B model",
+              "~28–35 GB total",
+              "~10–14 GB total"
+            ],
+            [
+              "VRAM for a 65B model",
+              "~130+ GB (multi-GPU)",
+              "~35–48 GB (single GPU)"
+            ],
+            [
+              "Training speed",
+              "Faster (no dequantize overhead)",
+              "~10–20% slower per step"
+            ],
+            [
+              "Output quality ceiling",
+              "Higher",
+              "Slightly lower (quantization noise)"
+            ],
+            [
+              "Best hardware fit",
+              "40–80 GB data-center GPU",
+              "Consumer GPU (12–24 GB) or 48 GB card for large models"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The decision rule is simple: **if your GPU has enough VRAM for plain LoRA, use plain LoRA** — you get slightly higher quality and faster training. **If you're memory-constrained**, QLoRA is the right default. That means most developers working on a single consumer card, or anyone trying to fine-tune a model too large for plain LoRA, should reach for QLoRA."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The 10–20% per-step slowdown from dequantization often disappears in practice. Because QLoRA uses so much less VRAM, you can afford a **larger batch size** on the same hardware, which can more than compensate for the per-step overhead and reduce total wall-clock training time."
+        }
+      ]
+    },
+    {
+      "id": "qlora-in-practice",
+      "title": "QLoRA in practice",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The standard QLoRA toolchain uses three libraries from the Hugging Face ecosystem: **bitsandbytes** (handles the NF4 quantization), **PEFT** (wraps the model with LoRA adapters), and **Transformers** (loads the model). Here is the minimal working pattern:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "qlora_minimal.py",
+          "code": "import torch\nfrom transformers import AutoModelForCausalLM, BitsAndBytesConfig\nfrom peft import LoraConfig, get_peft_model\n\n# Step 1: configure 4-bit NF4 loading\nbnb_config = BitsAndBytesConfig(\n    load_in_4bit=True,\n    bnb_4bit_quant_type=\"nf4\",            # NormalFloat4, not plain int4\n    bnb_4bit_compute_dtype=torch.bfloat16, # dequantize to BF16 for matmuls\n    bnb_4bit_use_double_quant=True,        # compress scaling constants too\n)\n\n# Step 2: load model — weights land in NF4 immediately\nmodel = AutoModelForCausalLM.from_pretrained(\n    \"meta-llama/Llama-3-8B\",\n    quantization_config=bnb_config,\n    device_map=\"auto\",\n)\n\n# Step 3: attach LoRA adapters in full BF16 precision\nlora_config = LoraConfig(\n    r=16,                # rank — try 16-32 for QLoRA (a bit higher than plain LoRA)\n    lora_alpha=32,\n    lora_dropout=0.05,\n    target_modules=[\"q_proj\", \"k_proj\", \"v_proj\", \"o_proj\"],\n    task_type=\"CAUSAL_LM\",\n)\nmodel = get_peft_model(model, lora_config)\nmodel.print_trainable_parameters()\n# trainable: ~6.5M  ||  all: ~8.0B  ||  trainable%: 0.08\n\n# Step 4: train with your dataset, then save just the adapter\nmodel.save_pretrained(\"./my-qlora-adapter\")"
+        },
+        {
+          "type": "p",
+          "md": "The three lines inside `BitsAndBytesConfig` are what turn plain LoRA into QLoRA. Remove them and you have standard LoRA. Add them back and the 8B base model's weights are compressed from ~16 GB to ~4 GB on disk, letting the whole training run fit on a 10–12 GB GPU."
+        },
+        {
+          "type": "h3",
+          "text": "Practical rank guidance for QLoRA"
+        },
+        {
+          "type": "p",
+          "md": "Because the frozen base is already compressed, the LoRA adapter carries slightly more representational load than it does with a full-precision base. In practice this means **QLoRA often needs a rank of 16–32** where plain LoRA would be fine at 8. If quality is short, try raising the rank before anything else. You can also expand `target_modules` to include the feed-forward layers (`gate_proj`, `up_proj`, `down_proj`) for additional capacity."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Enable **gradient checkpointing** (`model.gradient_checkpointing_enable()` before training) alongside QLoRA. It trades roughly 30% more compute for a large reduction in activation memory — especially valuable at longer sequence lengths or larger batch sizes."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics are solid, a few more details are worth understanding — both to extract more quality and to avoid common mistakes in production."
+        },
+        {
+          "type": "h3",
+          "text": "Merging the adapter after training"
+        },
+        {
+          "type": "p",
+          "md": "After QLoRA training you have a small adapter file (a few hundred MB at most) and a separately downloaded 4-bit base model. To merge them into one deployable model, you must **first dequantize the base back to BF16** before folding in the adapter via `W_merged = W_base + B·A`. The merged result is a full BF16 model — no longer quantized — which uses more memory at inference time. Many teams then re-apply a deployment-time quantization format (GGUF for local use, AWQ or GPTQ for serving) to the merged model to get efficient inference without sacrificing adapter quality."
+        },
+        {
+          "type": "h3",
+          "text": "Where quality loss shows up"
+        },
+        {
+          "type": "p",
+          "md": "The NF4 quantization introduces a small noise floor in the base weights. For instruction-following, summarization, and style-transfer tasks, studies consistently show QLoRA reaching 90–97 % of full fine-tuning quality. The gap widens on tasks that require precise numerical reasoning, strict code correctness, or fluency in languages underrepresented in training data. A useful heuristic: if you need the last few percent of quality and your hardware can afford plain LoRA, use it. Otherwise, QLoRA's memory savings are almost always worth the small quality trade-off."
+        },
+        {
+          "type": "h3",
+          "text": "Faster QLoRA with Unsloth"
+        },
+        {
+          "type": "p",
+          "md": "**Unsloth** is an open-source library (actively maintained through 2025–2026) that reimplements the QLoRA forward and backward passes with hand-written CUDA kernels. It delivers roughly **2–5x faster training** and 30–60% less memory than the standard bitsandbytes + PEFT stack, with identical output. It supports Llama 3, Mistral, Gemma, Phi, Qwen, and most major open-model families. For any solo researcher or small team running on a single consumer GPU, Unsloth + QLoRA is the recommended starting point in 2026."
+        },
+        {
+          "type": "h3",
+          "text": "What comes after QLoRA"
+        },
+        {
+          "type": "p",
+          "md": "The field continues to refine the combination of quantization and efficient adapters. **DoRA** (weight decomposition into magnitude and direction) often closes the remaining quality gap over vanilla LoRA and can be layered on top of NF4 quantization. **LoftQ** initializes LoRA weights specifically to compensate for the error introduced by quantization, which can speed up convergence when training a QLoRA run. **GaLore** takes a different angle entirely — it trains the full model using low-rank gradient projections rather than adapter matrices, claiming better quality at comparable memory cost. None of these displace QLoRA as the default single-GPU fine-tuning method today, but they signal that this is an active research area where the memory-vs-quality curve is still improving."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Fine-tuning method landscape by memory cost",
+            "columns": [
+              {
+                "title": "Full fine-tuning",
+                "items": [
+                  "Updates every weight",
+                  "Needs 40–80 GB+ per 7B model",
+                  "Highest quality ceiling",
+                  "Cluster or multi-GPU required"
+                ]
+              },
+              {
+                "title": "Plain LoRA",
+                "items": [
+                  "Freezes base in 16-bit",
+                  "~18–22 GB for a 7B model",
+                  "High quality, fast training",
+                  "Single 24–40 GB GPU"
+                ]
+              },
+              {
+                "title": "QLoRA",
+                "accent": true,
+                "items": [
+                  "Freezes base in 4-bit NF4",
+                  "~6–10 GB for a 7B model",
+                  "90–97% of full fine-tune quality",
+                  "Single consumer GPU (12–24 GB)"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What does QLoRA stand for?",
+      "a": "QLoRA stands for **Quantized Low-Rank Adaptation**. It combines 4-bit quantization of the frozen base model with LoRA adapter training, so the adapter trains on top of a heavily compressed base rather than a full-precision one."
+    },
+    {
+      "q": "What is the difference between QLoRA and LoRA?",
+      "a": "Both methods freeze the original model weights and train only small adapter matrices (A and B). The difference is that QLoRA also compresses the frozen base weights to 4-bit NF4 format, reducing base weight memory by about 75%. The adapter itself stays in 16-bit precision in both cases. QLoRA trades a small quality reduction for a large drop in VRAM requirements."
+    },
+    {
+      "q": "Can you fine-tune a 70B model on a single consumer GPU with QLoRA?",
+      "a": "A 70B model typically requires around 35–48 GB of VRAM with QLoRA. That fits on a single 48 GB data-center GPU (like an A100 48GB or A6000). Consumer cards top out at 24 GB (RTX 4090), which is usually not enough for 70B even with QLoRA — those cards are better suited for 7B–13B models. Cloud instances with A100 80 GB are the practical home for 70B QLoRA runs."
+    },
+    {
+      "q": "What is NF4 and why is it better than INT4 for neural networks?",
+      "a": "NF4 (4-bit NormalFloat) places its 16 quantization levels at equal-probability intervals under a standard normal distribution, matching how neural-network weights are actually distributed. Standard INT4 spaces values evenly, wasting precision on the sparse extremes of the distribution. NF4 loses less signal per bit for normally-distributed data, which is why the QLoRA paper chose it over plain INT4."
+    },
+    {
+      "q": "Does QLoRA produce a quantized model as its output?",
+      "a": "No. The output of a QLoRA training run is just a small LoRA adapter file in 16-bit precision. The 4-bit quantization is only a training-time memory trick applied to the base weights. To deploy, you merge the adapter into a dequantized base and then optionally re-apply a deployment quantization (GGUF, AWQ, GPTQ) for efficient inference."
+    },
+    {
+      "q": "How much slower is QLoRA than plain LoRA?",
+      "a": "Each forward pass adds a dequantize step (NF4 to BF16) per layer, which creates roughly 10–20% per-step overhead versus plain LoRA with a full-precision base. However, QLoRA typically allows larger batch sizes because the base uses far less VRAM, which can offset the per-step cost. With an optimized library like Unsloth, the overhead nearly disappears."
+    }
+  ],
+  "related": [
+    "what-is-fine-tuning",
+    "what-fine-tuning-changes",
+    "what-is-lora",
+    "qlora-explained",
+    "pretraining-vs-fine-tuning"
+  ],
+  "furtherReading": [
+    {
+      "title": "QLoRA: Efficient Finetuning of Quantized LLMs (original paper, NeurIPS 2023)",
+      "url": "https://arxiv.org/abs/2305.14314"
+    },
+    {
+      "title": "Making LLMs even more accessible with bitsandbytes, 4-bit quantization and QLoRA — Hugging Face blog",
+      "url": "https://huggingface.co/blog/4bit-transformers-bitsandbytes"
+    },
+    {
+      "title": "Hugging Face PEFT quantization guide",
+      "url": "https://huggingface.co/docs/peft/developer_guides/quantization"
+    }
+  ]
+}

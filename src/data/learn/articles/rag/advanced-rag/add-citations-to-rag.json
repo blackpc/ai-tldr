@@ -1,0 +1,311 @@
+{
+  "slug": "add-citations-to-rag",
+  "title": "How to Add Citations to RAG Answers (Grounded Generation)",
+  "seoTitle": "How to Add Citations to RAG Answers",
+  "metaDescription": "Citations turn a RAG answer from 'trust me' into 'see source 3'. Learn techniques for grounded generation: span attribution, source IDs, and verification.",
+  "keywords": [
+    "how to add citations to rag",
+    "grounded generation with sources",
+    "llm cite sources from documents",
+    "rag answer attribution"
+  ],
+  "difficulty": "advanced",
+  "oneLiner": "You'll know the practical techniques for making RAG answers cite their sources, from inline markers to post-hoc verification.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Imagine two research assistants. You give both the same stack of documents and the same question. The first types up a confident, well-written answer. The second does the same — but every sentence ends with a bracketed number pointing to the exact paragraph it came from. The first answer might be right. The second answer is **verifiable**. Grounded generation is the engineering practice of making your RAG system behave like the second assistant."
+        },
+        {
+          "type": "p",
+          "md": "In a standard RAG pipeline, the retriever fetches the top-k chunks and the LLM synthesizes an answer from them. The answer sounds authoritative, but there is no traceable link between the text on screen and the source that justified it. **Citations** restore that link. The model identifies which chunk (or which span within a chunk) supports each claim it makes, and the UI surfaces that pointer as a numbered footnote, a highlighted passage, or a clickable source card. The user goes from \"I guess I trust this\" to \"I can check this right now.\""
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The terms **attribution**, **grounding**, and **citation** are often used interchangeably, but have slight shading: attribution is the broad idea of linking a claim to a source; grounding emphasises that the output is *constrained* to the source material; citation is the user-visible signal (a number, a link, a quote) that makes the attribution legible."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "RAG reduces hallucination, but it does not eliminate it. A 2025 Stanford study of RAG-powered legal assistants found hallucination rates of 17–34% even in purpose-built systems. Citations do two things that help: they let users catch hallucinations themselves, and they force the pipeline to surface evidence so that automated verifiers can catch them on your behalf."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Trust in enterprise deployments.** When a compliance officer reads a policy summary, they need to know which clause it came from — not because they distrust AI, but because they are personally accountable for the answer. Citations turn RAG from a useful toy into a professional tool.",
+            "**Automated quality gates.** A citation is a testable claim. You can build a verifier that re-reads the cited chunk and scores whether it actually supports the sentence. Without citations, you can only score the answer holistically, which is far weaker.",
+            "**Debugging.** When the answer is wrong, citations tell you whether the problem is in retrieval (wrong chunk was fetched) or in generation (right chunk, wrong summary). That distinction drives completely different fixes.",
+            "**Regulatory and legal exposure.** In medical, legal, and financial applications, an uncited assertion made by an AI is a liability. A cited one at least points to the underlying source where accountability lives.",
+            "**User experience.** Showing sources builds user confidence even before they click through, and gives power users a fast path to the original for context the summary omits."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "**Citation-shaped hallucinations are a real threat.** A model can output `[Source 2]` next to a claim that Source 2 does not actually support. The citation *looks* trustworthy but the grounding is broken. This is why generating citations is only half the job — verifying them is the other half."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "There are three broad moments in the RAG pipeline where citation work happens: at **index time** (tag every chunk with a stable identifier and rich metadata), at **generation time** (prompt the model to emit citation markers inline with its answer), and at **verification time** (check that each citation actually supports the claim beside it). Most production systems combine all three."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "RAG citation pipeline",
+            "steps": [
+              {
+                "label": "Index with metadata",
+                "sub": "chunk ID, source URL, page, section"
+              },
+              {
+                "label": "Retrieve top-k chunks",
+                "sub": "pass IDs through to the prompt"
+              },
+              {
+                "label": "Prompt with source markers",
+                "sub": "instruct model to cite [1], [2]..."
+              },
+              {
+                "label": "Generate cited answer",
+                "sub": "model embeds markers inline"
+              },
+              {
+                "label": "Verify citations",
+                "sub": "NLI or LLM-as-judge check each claim"
+              },
+              {
+                "label": "Render to user",
+                "sub": "resolve IDs to links / highlights"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Step 1 — Index time: give every chunk a stable ID and rich metadata"
+        },
+        {
+          "type": "p",
+          "md": "Nothing downstream works unless each chunk carries a durable pointer back to its origin. At minimum that means a stable `chunk_id` (a UUID or a deterministic hash of the content), the source document name or URL, and a page or section number. Vector databases including Pinecone, Qdrant, and Weaviate store arbitrary key-value metadata alongside each vector — exploit this. If you are chunking a PDF, capture the bounding box so you can highlight the exact paragraph in a document viewer later."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "import hashlib\n\ndef chunk_with_metadata(text: str, source_url: str, page: int) -> dict:\n    chunk_id = hashlib.sha256(text.encode()).hexdigest()[:12]\n    return {\n        \"chunk_id\": chunk_id,\n        \"text\": text,\n        \"metadata\": {\n            \"source_url\": source_url,\n            \"page\": page,\n        },\n    }\n\n# Later, when you upsert into a vector DB:\n# vector_db.upsert(id=chunk[\"chunk_id\"], vector=embed(chunk[\"text\"]), metadata=chunk[\"metadata\"])"
+        },
+        {
+          "type": "h3",
+          "text": "Step 2 — Generation time: prompt the model to cite as it writes"
+        },
+        {
+          "type": "p",
+          "md": "Before calling the LLM, number the retrieved chunks and inject them into the system prompt with their IDs visible. Then tell the model explicitly that *every factual claim must be followed by the bracketed source number*. Most frontier models follow this instruction reliably. The prompt pattern looks like this:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "def build_cited_prompt(question: str, chunks: list[dict]) -> str:\n    context_lines = []\n    for i, chunk in enumerate(chunks, start=1):\n        context_lines.append(f\"[{i}] (id={chunk['chunk_id']})\\n{chunk['text']}\")\n    context = \"\\n\\n\".join(context_lines)\n\n    system = (\n        \"You are a helpful assistant. Answer using ONLY the sources below. \"\n        \"After every factual claim, add the source number in brackets, e.g. [1] or [2,3]. \"\n        \"Do NOT add claims you cannot support with a source number.\"\n    )\n    user = f\"Sources:\\n{context}\\n\\nQuestion: {question}\"\n    return system, user"
+        },
+        {
+          "type": "p",
+          "md": "The key instruction is \"Do NOT add claims you cannot support\" — this nudges the model toward acknowledged uncertainty rather than fabricated citations. When you get the model's response back, parse out the `[N]` markers with a regex and resolve each number to the corresponding `chunk_id` from your numbered list."
+        },
+        {
+          "type": "h3",
+          "text": "Step 3 — Verification time: check every citation is real"
+        },
+        {
+          "type": "p",
+          "md": "Once the model has produced a cited answer, you can run an automated verification pass. The two dominant approaches are **NLI-based** and **LLM-as-judge**. NLI (natural language inference) classifiers — such as fine-tuned versions of DeBERTa or AlignScore — take a (claim, evidence) pair and return `entailment`, `neutral`, or `contradiction`. LLM-as-judge passes the same pair to a capable model with a structured scoring prompt. Both approaches output a per-citation confidence score. Claims with low confidence can be flagged in the UI, suppressed, or sent back for retrieval retry."
+        }
+      ]
+    },
+    {
+      "id": "citation-strategies-compared",
+      "title": "Citation strategies compared",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "There is no single right way to produce citations. The four mainstream strategies sit on a spectrum from simple prompt engineering to multi-step pipelines, each with different accuracy and latency tradeoffs."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Strategy",
+            "How it works",
+            "Accuracy",
+            "Latency",
+            "Complexity"
+          ],
+          "rows": [
+            [
+              "Inline source IDs",
+              "Number chunks, prompt model to emit [N] markers",
+              "Good with strong models",
+              "No extra calls",
+              "Low"
+            ],
+            [
+              "Quote-then-cite",
+              "Model first quotes exact passages, then builds answer from quotes",
+              "High — grounding enforced at generation",
+              "Slightly higher",
+              "Medium"
+            ],
+            [
+              "Post-hoc attribution",
+              "Generate answer first, then run a second pass to assign sources",
+              "Moderate — relies on semantic match",
+              "One extra call",
+              "Medium"
+            ],
+            [
+              "NLI verification layer",
+              "Run NLI classifier on every (claim, cited chunk) pair after generation",
+              "Highest audit quality",
+              "High — per-claim calls",
+              "High"
+            ]
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Quote-then-cite: breaking the task into steps"
+        },
+        {
+          "type": "p",
+          "md": "One of the most reliable patterns is to split the cognitive load: in a first LLM call, ask the model to extract *verbatim quotes* from the retrieved chunks that are relevant to the question. In a second call, ask the model to write an answer using only those quotes as building blocks, citing the source of each quote. Because the second step is constrained to exact text the model copied from sources, the grounding is much tighter than asking the model to simultaneously reason and cite. This is the logic behind LlamaIndex's `CitationQueryEngine`, which creates intermediate \"citation nodes\" wrapping the exact excerpt."
+        },
+        {
+          "type": "h3",
+          "text": "Post-hoc attribution: adding citations after the fact"
+        },
+        {
+          "type": "p",
+          "md": "Sometimes you have a generated answer already — from a legacy pipeline, a different model, or a streaming output you could not interrupt — and you need to add citations retrospectively. Post-hoc attribution splits the answer into sentences, embeds each sentence, and retrieves the best-matching chunk from the vector store for that sentence. The sentence-to-chunk similarity score becomes the citation confidence. This works reasonably well but has a known failure mode: a sentence may *semantically resemble* a chunk without being *derived from* it. Pair it with an NLI check to catch false positives."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "**Separate analysis from citation.** Research consistently shows that asking a model to reason deeply about a question *and* emit citation markers simultaneously hurts both tasks. Do your reasoning in a first call, then ask the model to decorate the answer with sources in a second call. The total cost is small and accuracy improves substantially."
+        }
+      ]
+    },
+    {
+      "id": "pitfalls-and-common-mistakes",
+      "title": "Pitfalls and common mistakes",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Citation systems fail in a small number of predictable ways. Knowing them up front saves a lot of debugging."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Metadata stripped at chunk time.** If you split documents with a library that discards the source URL or page number, you have nothing to cite. Make metadata inheritance the first thing you test in your chunker.",
+            "**ID drift between index and retrieval.** If you rebuild your index and chunk IDs change, previously cached citation pointers become stale. Use content-based hashes or stable document-level IDs rather than auto-increment integers.",
+            "**Citation hallucination without verification.** A model that is told to cite *will* cite — sometimes to sources that do not support the claim. Always run at least a spot-check pass; in production, run an automated NLI or LLM-judge verifier.",
+            "**Over-citing.** Adding `[1][2][3]` after every clause makes the answer unreadable and often reflects the model hedging rather than genuine multi-source support. Instruct the model to cite only when genuinely required, and prefer the single best source.",
+            "**UI that drops citations.** It is common to implement the citation logic in the backend and then have the frontend strip out the `[N]` markers as \"ugly\". Citations without a rendered UI are invisible. Treat citation rendering as a first-class frontend feature from day one.",
+            "**Confusing faithfulness with correctness.** A citation can be *faithful* (the chunk really does say what the model claimed) but *incorrect* if the chunk itself contains wrong information. Citations ground the answer in the retrieved documents — they do not guarantee the documents are true."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**Span-level attribution is the research frontier.** Most production systems cite at the chunk level — \"this paragraph came from Document 3\". Span-level attribution goes finer: it highlights the *exact sentence or phrase* within the chunk that supports the claim. Achieving this requires either a fine-tuned model that produces character-offset pointers alongside its answer, or a post-hoc alignment step that uses fuzzy string matching to locate the model's paraphrase inside the original text. The TREC 2025 RAG Track, a shared evaluation benchmark, requires sentence-level citation links in submitted systems, signalling that span attribution is becoming the expected standard in research."
+        },
+        {
+          "type": "p",
+          "md": "**NLI classifiers vs LLM-as-judge.** NLI models trained on datasets like MultiNLI are fast and cheap — a DeBERTa-based classifier runs in milliseconds per pair — but they are known to miss paraphrase-heavy entailment and struggle with domain-specific terminology. LLM-as-judge is slower and more expensive but handles nuance far better, can explain its verdict, and generalises across domains without fine-tuning. The pragmatic choice for most teams: use NLI as a first-pass filter for obvious non-entailments, then escalate low-confidence cases to an LLM judge. This keeps cost manageable while catching the failure modes that NLI misses."
+        },
+        {
+          "type": "p",
+          "md": "**Correctness vs faithfulness is a subtle trap.** A citation can be perfectly faithful — the model is accurately summarising the chunk — while being incorrect if the chunk itself is wrong or out of date. Conversely, a citation can be technically unfaithful (the model used slightly different phrasing) while pointing to perfectly relevant source material. Evaluation frameworks like CiteEval (2024) try to disentangle these axes by scoring redundancy, credibility, and evidence completeness separately, rather than collapsing everything into a single binary score."
+        },
+        {
+          "type": "p",
+          "md": "**Model training for citation.** Beyond prompt engineering, some teams fine-tune or preference-tune their generation model to natively produce citations. The 2025 paper *Cite Pretrain* explored pre-training on corpora where inline citation anchors are already present (such as Wikipedia, which has inline `[N]` footnotes throughout), teaching the model to *expect* the citation idiom during generation rather than learning it only at inference time via a system prompt. Fine-tuned citation models make fewer citation-shaped hallucinations and require simpler prompts. For most teams the prompt-engineering approach is good enough; fine-tuning makes sense when you have a domain-specific corpus and citation quality is a hard requirement."
+        },
+        {
+          "type": "p",
+          "md": "**TREC RAG Track as a benchmark.** If you want to measure your system against a public standard, the TREC 2025 RAG Track is the best current reference. It requires structured JSON output where each answer sentence carries explicit document citations, and it evaluates both nugget-based answer quality and citation faithfulness separately. Reviewing the task guidelines and top-system papers is one of the fastest ways to understand the state of the art in production citation systems."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "**Start simple, add layers only when you measure a gap.** Inline source IDs + a single-pass NLI check handles the majority of real-world citation quality needs. Add quote-then-cite or fine-tuned verifiers only if your evaluation shows that simpler approaches are producing unacceptable hallucination rates in specific query categories."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Do I need to fine-tune my LLM to get good citations?",
+      "a": "Not usually. Modern frontier models (GPT-4o, Claude 3.x/4.x, Gemini 1.5+) follow citation instructions reliably when prompted correctly. Fine-tuning pays off mainly when you need span-level attribution, work in a narrow domain with specialised terminology, or have very high citation-accuracy requirements. For most production RAG systems, prompt engineering plus a post-hoc verification step is enough."
+    },
+    {
+      "q": "What is the difference between citation and attribution in RAG?",
+      "a": "Attribution is the broad concept of linking generated content back to a source — it can be implicit (the model was grounded but shows nothing to the user) or explicit. Citation is the user-visible signal that makes attribution legible: a bracketed number, a link, a highlighted excerpt. In practice the terms are used interchangeably, but if you see them contrasted, attribution is the internal mechanism and citation is the external presentation."
+    },
+    {
+      "q": "How do I prevent the model from citing sources it did not actually use?",
+      "a": "Three approaches together work best: first, instruct the model to only cite when it can, and to say \"I don't know\" rather than fabricate a source. Second, run an NLI or LLM-judge verification pass that checks whether each cited chunk actually entails the claim beside it. Third, implement the quote-then-cite pattern so the model is constrained to passages it copied verbatim before building the answer — this makes up citations structurally harder."
+    },
+    {
+      "q": "Can I add citations to a RAG system that already generates un-cited answers?",
+      "a": "Yes — this is called post-hoc attribution. You split the existing answer into sentences, embed each sentence, and retrieve the best-matching chunk for each one. The retrieved chunk becomes the citation. It works reasonably well but is less reliable than generating citations during the initial response, because the model may have synthesised claims from multiple chunks in ways that are hard to disentangle after the fact."
+    },
+    {
+      "q": "What metadata should I store with each chunk to support citations?",
+      "a": "At minimum: a stable chunk ID, the source document name or URL, and a page or section number. For PDFs, storing the bounding box of the text block enables pixel-accurate highlighting in a document viewer. For web pages, storing the URL fragment or heading anchor lets you deep-link directly to the passage. Rich metadata costs almost nothing at index time and is extremely hard to reconstruct after the fact."
+    },
+    {
+      "q": "How do I evaluate whether my citations are good?",
+      "a": "Score two things separately: **faithfulness** (does the cited chunk actually support the claim — measured with NLI or LLM-as-judge) and **completeness** (are all the important claims in the answer cited at all — measured by scanning the answer for uncited factual sentences). Frameworks like RAGAS, TruLens, and CiteEval provide automated metrics for both. Run on a held-out eval set before and after any citation-related change."
+    }
+  ],
+  "related": [
+    "what-is-rag",
+    "how-rag-pipeline-works",
+    "build-your-first-rag-app",
+    "rag-vs-fine-tuning"
+  ],
+  "furtherReading": [
+    {
+      "title": "Citation-Aware RAG: Fine-Grained Citations in Retrieval and Response Synthesis (Tensorlake)",
+      "url": "https://www.tensorlake.ai/blog/rag-citations"
+    },
+    {
+      "title": "VeriCite: Towards Reliable Citations in RAG via Rigorous Verification (arXiv 2025)",
+      "url": "https://arxiv.org/abs/2510.11394"
+    },
+    {
+      "title": "Overview of the TREC 2025 Retrieval Augmented Generation Track (arXiv)",
+      "url": "https://arxiv.org/abs/2603.09891"
+    }
+  ]
+}

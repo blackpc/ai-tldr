@@ -1,0 +1,365 @@
+{
+  "slug": "faithfulness-vs-relevance",
+  "title": "Faithfulness vs Relevance: Scoring Answers and Retrieval Separately",
+  "seoTitle": "Faithfulness vs Relevance in RAG Evaluation",
+  "metaDescription": "An answer can be relevant but made up — or faithful but off-topic. Learn how faithfulness and relevance metrics score generation and retrieval separately.",
+  "keywords": [
+    "faithfulness vs relevance rag",
+    "what is faithfulness metric llm",
+    "answer relevance metric explained",
+    "groundedness evaluation rag"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You'll understand why answer quality needs two separate scores and how faithfulness and relevance are each measured.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Imagine asking a friend for restaurant recommendations and they confidently describe a five-star place they read about in *exactly* the review you gave them — except the review was for a hotel, not a restaurant. Their answer is **faithful** (every detail comes from the source) but **not relevant** (it doesn't answer your question). Now flip it: a different friend names a perfect restaurant that sounds spot-on, but they made it up entirely. That answer is **relevant** but **not faithful**. These are two orthogonal failure modes, and a single quality score cannot distinguish them."
+        },
+        {
+          "type": "p",
+          "md": "In RAG evaluation, **faithfulness** asks: *Are the claims in the generated answer actually supported by the retrieved context?* It catches hallucinations — moments when the LLM interpolates or invents details beyond what the documents say. **Answer relevance** asks: *Does the generated answer actually address what the user asked?* It catches off-topic drift — moments when the model produces a well-grounded wall of text that misses the point."
+        },
+        {
+          "type": "p",
+          "md": "Both metrics score a single generated answer, but they measure it against *different references*: faithfulness compares the answer to the **retrieved documents**, while answer relevance compares it to the **original question**. That is the core asymmetry. You need both numbers to know whether an answer is both grounded and useful."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "These two metrics live in the *generation* half of RAG evaluation. Retrieval quality is covered by **context precision** and **context recall** — see the companion article on RAG Evaluation Metrics for the full four-metric picture."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why two separate scores matter",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A composite \"answer quality\" score hides which part of your pipeline is broken. Consider two failing systems: one that consistently retrieves the right documents but lets the LLM invent extras, and one that retrieves irrelevant documents and the LLM faithfully summarises them (producing an accurate-sounding but useless answer). Both systems would score similarly on a single end-to-end quality rating. Splitting the score into faithfulness and relevance immediately tells you which lever to pull."
+        },
+        {
+          "type": "h3",
+          "text": "The four failure quadrants"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Faithfulness",
+            "Answer Relevance",
+            "What went wrong",
+            "Where to look"
+          ],
+          "rows": [
+            [
+              "High",
+              "High",
+              "Nothing — this is the target state",
+              "Ship it"
+            ],
+            [
+              "High",
+              "Low",
+              "Model accurately reflects the context but the retriever pulled the wrong docs, or the prompt drifted off-topic",
+              "Fix retrieval or tighten the prompt"
+            ],
+            [
+              "Low",
+              "High",
+              "Answer looks on-topic but the model fabricated details not in the context — the most dangerous failure",
+              "Fix the generation prompt or use a less hallucination-prone model"
+            ],
+            [
+              "Low",
+              "Low",
+              "Both retrieval and generation are broken",
+              "Start with retrieval; generation often improves once context is good"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "High faithfulness with low relevance is frustrating but safe — users get an unhelpful answer, not a wrong one. **Low faithfulness with high relevance is the dangerous quadrant**: the answer reads like exactly what the user wanted, but the facts are fabricated. A user who trusts a confident, on-topic, made-up answer is worse off than a user who gets a clearly off-topic response they know to ignore."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "LLMs optimised for helpfulness tend to drift toward low-faithfulness responses. When the retrieved context is thin or ambiguous, the model \"fills in\" plausible-sounding detail from its training data. This is why faithfulness monitoring is especially important in production, not just during offline evaluation."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How each metric is computed",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Both metrics use **LLM-as-a-judge** internally, but their pipelines are structurally different because they compare against different inputs."
+        },
+        {
+          "type": "h3",
+          "text": "Faithfulness: claim decomposition and verification"
+        },
+        {
+          "type": "p",
+          "md": "Faithfulness is computed in two LLM passes. The first pass **decomposes** the generated answer into atomic factual claims — short, self-contained statements that can each be independently verified. The second pass **checks each claim** against the retrieved context, labelling it as supported (1) or unsupported (0). The final score is the ratio of supported claims to total claims."
+        },
+        {
+          "type": "p",
+          "md": "**Faithfulness = (number of supported claims) / (total claims in answer)**"
+        },
+        {
+          "type": "p",
+          "md": "A score of 0.85 means 85 % of the statements in the answer have backing in the retrieved documents. Frameworks like RAGAS and DeepEval implement this pipeline with `gpt-4.1` or `claude-sonnet` as the judge. Haystack's `FaithfulnessEvaluator` does the same decompose-then-verify loop and returns per-statement scores alongside the aggregate. Vectara's open-source **Hughes Hallucination Evaluation Model (HHEM)** offers a lighter, NLI-based alternative that skips the LLM judge and classifies each claim as *entailed*, *neutral*, or *contradicted* using a DeBERTa-based model."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Faithfulness scoring pipeline",
+            "steps": [
+              {
+                "label": "Generated answer",
+                "sub": "the LLM's response"
+              },
+              {
+                "label": "Claim extraction",
+                "sub": "LLM splits answer into atomic statements"
+              },
+              {
+                "label": "Context check",
+                "sub": "each claim verified against retrieved docs"
+              },
+              {
+                "label": "Supported / Unsupported",
+                "sub": "binary label per claim"
+              },
+              {
+                "label": "Faithfulness score",
+                "sub": "supported ÷ total claims (0–1)"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Answer relevance: reverse question generation"
+        },
+        {
+          "type": "p",
+          "md": "Answer relevance does **not** compare the answer to the retrieved documents at all. Instead it asks: *If someone had written this answer, what question were they probably answering?* The metric generates `n` hypothetical questions that the answer would plausibly satisfy, then measures how closely those questions match the user's actual question using **cosine similarity of embeddings**."
+        },
+        {
+          "type": "p",
+          "md": "**Answer Relevance = mean cosine similarity(embeddings of generated questions, embedding of original question)**"
+        },
+        {
+          "type": "p",
+          "md": "RAGAS generates three reverse questions by default (`n=3`). An answer about \"how to deploy Docker containers\" that was asked in response to \"how do I containerise a Node app?\" should produce reverse questions closely matching the original. An answer that drifts into general infrastructure topics will produce reverse questions that are semantically distant, lowering the score. Because embeddings capture meaning rather than wording, a paraphrase still scores high."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Faithfulness vs Answer Relevance at a glance",
+            "columns": [
+              {
+                "title": "Faithfulness",
+                "items": [
+                  "Compares answer to: retrieved context",
+                  "Failure mode caught: hallucination",
+                  "Technique: claim decomposition + NLI/LLM verify",
+                  "Needs retrieval context: yes",
+                  "Needs ground-truth answer: no",
+                  "Score formula: supported claims / total claims"
+                ]
+              },
+              {
+                "title": "Answer Relevance",
+                "items": [
+                  "Compares answer to: original question",
+                  "Failure mode caught: off-topic drift",
+                  "Technique: reverse question generation + cosine similarity",
+                  "Needs retrieval context: no",
+                  "Needs ground-truth answer: no",
+                  "Score formula: mean cosine sim of re-generated Qs"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "tools-and-code",
+      "title": "Measuring both metrics in code",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "RAGAS, DeepEval, and TruLens all expose faithfulness and answer relevance as first-class metrics. The following examples show the minimal setup for each."
+        },
+        {
+          "type": "h3",
+          "text": "RAGAS"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "from ragas import evaluate\nfrom ragas.metrics import faithfulness, answer_relevancy\nfrom datasets import Dataset\n\ndata = {\n    \"question\": [\"What is the return policy?\"],\n    \"answer\": [\"We offer a 30-day full refund at no extra cost.\"],\n    \"contexts\": [[\"All customers are eligible for a 30-day full refund.\"]],\n    # answer_relevancy does not need 'ground_truth'\n}\n\ndataset = Dataset.from_dict(data)\nresult = evaluate(dataset, metrics=[faithfulness, answer_relevancy])\nprint(result)  # {'faithfulness': 1.0, 'answer_relevancy': 0.94}"
+        },
+        {
+          "type": "h3",
+          "text": "DeepEval"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "from deepeval import evaluate\nfrom deepeval.test_case import LLMTestCase\nfrom deepeval.metrics import FaithfulnessMetric, AnswerRelevancyMetric\n\ntest_case = LLMTestCase(\n    input=\"What is the return policy?\",\n    actual_output=\"We offer a 30-day full refund at no extra cost.\",\n    retrieval_context=[\"All customers are eligible for a 30-day full refund.\"]\n)\n\nfaithfulness_metric = FaithfulnessMetric(threshold=0.7, model=\"gpt-4.1\")\nrelevancy_metric = AnswerRelevancyMetric(threshold=0.7, model=\"gpt-4.1\")\n\nevaluate(test_cases=[test_case], metrics=[faithfulness_metric, relevancy_metric])"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Both RAGAS and DeepEval are reference-free for these two metrics — you do not need a human-written gold answer. This makes them practical for production monitoring where ground truth is unavailable. Set up a nightly batch job that samples 5 % of production queries and scores them automatically."
+        }
+      ]
+    },
+    {
+      "id": "pitfalls-and-edge-cases",
+      "title": "Common pitfalls and edge cases",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "Faithfulness can be gamed by a vague answer"
+        },
+        {
+          "type": "p",
+          "md": "If the generated answer is so hedged or brief that it makes no falsifiable claims, faithfulness will score 1.0 — every (zero) claim is supported. A response like \"There may be some relevant information in the documents\" is technically faithful but completely useless. Pair faithfulness with a completeness or coverage metric to catch this pathological edge case."
+        },
+        {
+          "type": "h3",
+          "text": "Answer relevance does not detect hallucinations"
+        },
+        {
+          "type": "p",
+          "md": "The reverse-question trick only checks whether the answer addresses the question — it does not look at the retrieved documents at all. A beautifully relevant, completely fabricated answer will score 1.0 on answer relevance. This is why you must run both metrics together: relevance alone gives a false sense of security."
+        },
+        {
+          "type": "h3",
+          "text": "Long contexts stress faithfulness scoring"
+        },
+        {
+          "type": "p",
+          "md": "When the retrieved context is very long, two problems emerge. First, the LLM judge may miss a supporting passage buried deep in the context — a supported claim gets marked unsupported, dragging the score down unfairly. Second, the generator itself is more likely to stray from a dense, noisy context. Chunking aggressively and applying a reranker to trim the context before generation reduces both problems simultaneously."
+        },
+        {
+          "type": "h3",
+          "text": "Incomplete answers hurt relevance scores disproportionately"
+        },
+        {
+          "type": "p",
+          "md": "RAGAS's answer relevance metric penalises incomplete answers — a response that answers only half the question will produce reverse questions that match only part of the original, dragging the cosine similarity down. This is intentional behaviour: an incomplete answer is treated as partially irrelevant. If you see relevance scores declining after shortening your system prompt, check whether the shorter prompt is causing truncated answers."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Neither metric catches *factually incorrect* but context-consistent answers. If the retrieved document itself is wrong (outdated pricing, stale policy), faithfulness will be high — the answer faithfully repeats the error. Accuracy against a ground-truth requires a separate metric like **answer correctness** or **exact match**."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "NLI-based faithfulness without an LLM judge"
+        },
+        {
+          "type": "p",
+          "md": "The LLM-as-a-judge approach to faithfulness is accurate but expensive — two LLM calls per evaluated answer. For high-volume production monitoring, **Natural Language Inference (NLI) pipelines** offer a cheaper alternative. A model like DeBERTa-v3 is fine-tuned to classify whether a *hypothesis* (a claim from the answer) is **entailed**, **neutral**, or **contradicted** by a *premise* (a context chunk). Vectara's open-source HHEM model uses this approach and can score thousands of answers per second on a single GPU without any LLM API calls."
+        },
+        {
+          "type": "h3",
+          "text": "Context relevance: the retrieval-side complement"
+        },
+        {
+          "type": "p",
+          "md": "Faithfulness and answer relevance both evaluate *generation*. On the *retrieval* side, **context precision** measures what fraction of your retrieved chunks actually contain useful information, and **context recall** measures whether the chunks that *do* contain the answer were retrieved at all. The full four-metric RAGAS suite covers both sides of the pipeline. A RAG system with high faithfulness and relevance but low context recall might appear to work well on easy questions while silently failing on anything requiring obscure information."
+        },
+        {
+          "type": "h3",
+          "text": "LLM-as-a-judge calibration"
+        },
+        {
+          "type": "p",
+          "md": "Research from 2025 (Benchmarking LLM Faithfulness in RAG with Evolving Leaderboards, arxiv 2505.04847) shows that judge choice matters: different LLMs rate faithfulness quite differently on the same examples. `o3-mini` with high reasoning effort achieves 84 % balanced accuracy on FaithBench, substantially better than smaller judges. For production pipelines where faithfulness errors are costly, calibrate your judge against a human-annotated test set before trusting its scores at scale."
+        },
+        {
+          "type": "h3",
+          "text": "Using scores as CI/CD gates"
+        },
+        {
+          "type": "p",
+          "md": "DeepEval integrates with pytest, making it straightforward to block a deployment when faithfulness drops below a threshold. A common pattern is to maintain a **golden test set** of 50–200 queries with known good answers, score the full set on every pull request, and fail the build if faithfulness drops below 0.80 or answer relevance drops below 0.75. This catches regressions introduced by prompt changes, model version upgrades, or index rebuilds before they reach users."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "# deepeval pytest integration — fails CI if thresholds are not met\nimport pytest\nfrom deepeval import assert_test\nfrom deepeval.test_case import LLMTestCase\nfrom deepeval.metrics import FaithfulnessMetric, AnswerRelevancyMetric\n\n@pytest.mark.parametrize(\"test_case\", golden_test_set)\ndef test_rag_quality(test_case):\n    assert_test(test_case, metrics=[\n        FaithfulnessMetric(threshold=0.80),\n        AnswerRelevancyMetric(threshold=0.75),\n    ])"
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Can a RAG answer score 1.0 on faithfulness and still be wrong?",
+      "a": "Yes. Faithfulness only checks whether the answer is consistent with the retrieved context — it does not check whether the context itself is correct. If the retrieved document contains outdated or incorrect information, a perfectly faithful answer will repeat that error. Faithfulness guarantees **grounding**, not **accuracy**. Use answer correctness (which requires a ground-truth reference) to catch factually wrong answers."
+    },
+    {
+      "q": "What is the difference between faithfulness and groundedness?",
+      "a": "The terms are used interchangeably in most frameworks. **Groundedness** is the general concept — every claim in the answer is traceable to the source documents. **Faithfulness** is the specific metric operationalisation of that concept, typically computed as the ratio of supported claims to total claims. Some tools (Azure AI Foundry, Haystack) prefer \"groundedness\"; RAGAS and DeepEval use \"faithfulness\"."
+    },
+    {
+      "q": "Does answer relevance require a ground-truth answer?",
+      "a": "No. RAGAS's answer relevance metric is **reference-free**: it generates hypothetical questions from the answer and compares them to the original question using embedding cosine similarity. No human-written ideal answer is needed. This is what makes it practical for production monitoring — you only have the user's question and the system's response, not a gold standard."
+    },
+    {
+      "q": "Why would answer relevance drop after I improved my retrieval?",
+      "a": "Better retrieval often means more context is passed to the generator. If the additional context is noisy or pushes the model toward a tangential topic, the answer may drift from the original question even though it is more faithful. This is sometimes called **context distraction**. Reranking retrieved chunks to keep only the most relevant ones before generation typically fixes both the relevance drop and reduces context token usage."
+    },
+    {
+      "q": "How many test samples do I need for reliable faithfulness and relevance scores?",
+      "a": "Scores stabilise around **50–100 samples** for most RAG systems, assuming the test set covers diverse query types. Fewer samples produce noisy estimates that can vary by 0.05–0.10 between runs just from LLM judge variance. For CI/CD gates, a golden set of 100–200 representative queries is a practical minimum."
+    },
+    {
+      "q": "Can I run faithfulness scoring without paying for LLM API calls?",
+      "a": "Yes. Vectara's open-source HHEM model (available on Hugging Face as `vectara/hallucination_evaluation_model`) uses NLI to classify claims as entailed or not entailed by the context, with no LLM API calls. It is faster and cheaper than LLM-as-a-judge but slightly less accurate on subtle or complex claims. For high-volume production monitoring it is a practical alternative to GPT-4-class judges."
+    }
+  ],
+  "related": [
+    "what-is-rag",
+    "how-rag-pipeline-works",
+    "rag-vs-fine-tuning",
+    "build-your-first-rag-app"
+  ],
+  "furtherReading": [
+    {
+      "title": "RAGAS Answer Relevancy metric documentation",
+      "url": "https://docs.ragas.io/en/v0.1.21/concepts/metrics/answer_relevance.html"
+    },
+    {
+      "title": "DeepEval Faithfulness metric documentation",
+      "url": "https://deepeval.com/docs/metrics-faithfulness"
+    },
+    {
+      "title": "Benchmarking LLM Faithfulness in RAG with Evolving Leaderboards (arXiv 2025)",
+      "url": "https://arxiv.org/abs/2505.04847"
+    }
+  ]
+}

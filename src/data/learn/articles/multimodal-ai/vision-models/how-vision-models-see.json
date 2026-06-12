@@ -1,0 +1,342 @@
+{
+  "slug": "how-vision-models-see",
+  "title": "How Do Vision Models See? Image Tokens Explained",
+  "seoTitle": "How Do Vision Models See? Image Tokens Explained",
+  "metaDescription": "How does an LLM actually see a picture? Learn how images become tokens through vision encoders and patches — explained for beginners.",
+  "keywords": [
+    "how do vision models work",
+    "how does an llm see an image",
+    "image tokens explained",
+    "vision transformer patches explained",
+    "how are images tokenized"
+  ],
+  "difficulty": "beginner",
+  "oneLiner": "Learn the path from pixels to tokens — patches, vision encoders, and projection layers — so vision model behavior stops feeling like magic.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A text-only LLM thinks in **tokens** — small chunks of text like words or word-pieces. Every sentence you write gets chopped into tokens, and the model reads and writes them one at a time. But a photo isn't text. You can't split \"a picture of a cat\" into word-pieces. So how does a vision model actually look at an image?"
+        },
+        {
+          "type": "p",
+          "md": "The answer is that the model never works with raw pixels at all. Instead, the image is converted into a sequence of **image tokens** — numerical vectors shaped exactly like text tokens. To the language model, an image is just more items in a list. It doesn't know those items came from pixels rather than words; it just runs its attention mechanism over everything together."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like a jigsaw puzzle. You take a complete photograph and slice it into a grid of small square tiles. Each tile gets compressed into a single numbered piece that summarizes what's in that square: an edge, a face, the letter \"R\", a patch of blue sky. Line all those pieces up in a row and hand them to the transformer alongside your text. That row of compressed tiles is, mechanically speaking, what the model \"sees.\""
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This article focuses on the *input pipeline* — how a still image becomes tokens. If you want the bigger picture of what a vision language model (VLM) can do with those tokens, start with the companion piece on what a VLM is."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters for builders",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Understanding how images become tokens is not just trivia. It explains several practical behaviors you will hit the moment you start passing images to a vision API."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Token cost scales with resolution.** A 1024x1024 image costs far more tokens than a 256x256 thumbnail. If you resize before sending, you directly control your API bill and your latency.",
+            "**Small text disappears below a certain resolution.** The model splits the image into patches before it can read anything. If a patch covers 28 pixels and the letters you need to read are 8 pixels tall, detail gets smeared together inside that patch.",
+            "**More patches means a bigger context window bite.** A 1568-token image eats roughly the same context as a thousand words of prose. Feed ten screenshots and you might fill half a 16K context window before you even ask a question.",
+            "**Tiling improves accuracy on dense documents.** Modern models tile big images into overlapping sub-images and encode each separately, then combine the patches. Knowing this helps you understand why the same screenshot at 512px versus full resolution gives dramatically different extraction quality.",
+            "**Low-detail mode trades accuracy for speed.** APIs like GPT-4o offer a `detail: low` mode that locks the image to a fixed small size and a flat token cost, trading fine detail for predictable, cheap calls."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "In short: the patch-and-token pipeline is the reason vision models have a *resolution sweet spot*, why they struggle with tiny printed numbers, and why image-heavy prompts can get expensive fast. Once you see the mechanics, you can tune the knobs instead of guessing."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works: the three-stage pipeline",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Turning a photograph into something a language model can reason over takes three distinct stages: **patch extraction**, **vision encoding**, and **projection**. Each stage has a specific job, and together they translate pixels into a token sequence the LLM has never needed to be retrained to accept."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "From pixels to image tokens",
+            "steps": [
+              {
+                "label": "Raw image",
+                "sub": "pixels (e.g. 336x336)"
+              },
+              {
+                "label": "Patch extraction",
+                "sub": "split into NxN tiles (e.g. 16x16 px)"
+              },
+              {
+                "label": "Vision encoder (ViT)",
+                "sub": "each patch → dense feature vector",
+                "accent": true
+              },
+              {
+                "label": "Projection layer (MLP)",
+                "sub": "feature vectors → image token embeddings"
+              },
+              {
+                "label": "Language model input",
+                "sub": "image tokens + text tokens concatenated"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Stage 1: patch extraction"
+        },
+        {
+          "type": "p",
+          "md": "The image is first resized to a fixed square — commonly 224x224 or 336x336 pixels — and then divided into a regular grid of non-overlapping square patches. The patch size depends on the model: 16x16 pixels per patch is a common default from the original Vision Transformer (ViT) paper. A 336x336 image with 14x14 pixel patches produces exactly **576 patches** (24 patches per side, 24 x 24 = 576). Each patch is flattened into a vector by concatenating the RGB pixel values of every pixel in that square."
+        },
+        {
+          "type": "p",
+          "md": "A **positional embedding** is added to each patch vector before it goes any further, so the model knows *where* in the image each patch came from. Without this, the model would have 576 feature vectors with no spatial order — like a bag of jigsaw pieces with no picture on the box."
+        },
+        {
+          "type": "h3",
+          "text": "Stage 2: the vision encoder"
+        },
+        {
+          "type": "p",
+          "md": "The sequence of patch vectors is fed into a **vision encoder** — almost always a Vision Transformer (ViT). The encoder runs self-attention across all patches so each patch can gather context from the others: a patch showing the letter \"P\" looks at surrounding patches showing \"DF\" to understand \"PDF\". After several transformer layers, each patch position now holds a rich contextual feature vector rather than a raw pixel dump. These are commonly called **visual features** or **visual embeddings**."
+        },
+        {
+          "type": "p",
+          "md": "The vision encoder that most production VLMs were built on is **CLIP** (Contrastive Language-Image Pre-Training), released by OpenAI in 2021. CLIP was trained on hundreds of millions of image-caption pairs by pulling matching pairs together in a shared vector space and pushing non-matching pairs apart. Because CLIP encodes images and text into the *same* space, its visual features already carry semantic meaning that is compatible with language. LLaVA, LLaMA-Vision, Qwen-VL, and many other open models all start from a frozen CLIP ViT before fine-tuning."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "A standard CLIP ViT-L/14 at 336x336 input produces **577 output vectors** — 576 patch tokens plus one global **[CLS] token** that summarizes the whole image. Some models pass the CLS token to the LLM; others discard it."
+        },
+        {
+          "type": "h3",
+          "text": "Stage 3: the projection layer"
+        },
+        {
+          "type": "p",
+          "md": "The vision encoder outputs features in its own vector space — a 1024-dimensional or 1280-dimensional space depending on the ViT size. That is not the same space the language model uses for its word-token embeddings. A small **projection layer** (usually a two-layer MLP, also called an adapter or connector) maps each visual feature vector into the LLM's embedding dimension. The result is a sequence of **image tokens** that live in exactly the same numerical space as the model's text tokens."
+        },
+        {
+          "type": "p",
+          "md": "This projection layer is the secret to why it is relatively cheap to add vision to a pre-trained LLM. You don't retrain the language model at all during the first phase — you freeze both the vision encoder and the LLM, and only train the small MLP to bridge them. The MLP learns to translate visual features into vectors the LLM already understands, like hiring an interpreter rather than teaching two people each other's native language."
+        },
+        {
+          "type": "p",
+          "md": "Once the projection is done, the image tokens are **concatenated** with the text tokens from your prompt and fed into the LLM as a single flat sequence. From here, the transformer's attention mechanism runs exactly as it does for text — every token (image and text alike) attends to every other token. A text token representing \"red\" can attend to the patch token covering the car in the photo and confirm it. The model \"sees\" by paying attention."
+        }
+      ]
+    },
+    {
+      "id": "token-counts-real-models",
+      "title": "Real token counts across models",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The abstract pipeline is the same across providers, but the exact numbers differ — and those numbers directly affect cost and context usage. Here is how three of the most widely used APIs handle image tokenization."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Model family",
+            "Patch / tile size",
+            "Low-res token cost",
+            "High-res token cost (example)"
+          ],
+          "rows": [
+            [
+              "GPT-4o (OpenAI)",
+              "512x512 tiles",
+              "85 tokens flat (`detail: low`)",
+              "85 base + 170 per tile; 1024x1024 ≈ 765 tokens"
+            ],
+            [
+              "Claude (Anthropic)",
+              "28x28 pixel patches",
+              "~1568 tokens max (older models)",
+              "~4784 tokens max (Opus 4.7+, long edge ≤ 2576 px)"
+            ],
+            [
+              "Gemini (Google)",
+              "varies by model",
+              "Flexible; approx 258 tokens per image at standard",
+              "Up to ~1290 tokens for large images (Pro/Ultra)"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "For Claude specifically: image cost = ceil(width / 28) x ceil(height / 28) visual tokens, because each 28x28 pixel block is one token. Resize to 560x420 before sending and you spend 20 x 15 = 300 tokens instead of 2000+ for a full-resolution screenshot."
+        },
+        {
+          "type": "p",
+          "md": "GPT-4o's `detail: low` mode is worth calling out as a design choice: it always resizes the image to a thumbnail internally and charges a flat 85 tokens. You get fast, cheap calls but lose fine text and precise layout detail. `detail: high` uses the full tiling approach and can reach 1000+ tokens on a large image. Choosing between them is a conscious accuracy-versus-cost trade-off."
+        }
+      ]
+    },
+    {
+      "id": "high-res-tiling",
+      "title": "High-resolution tiling: seeing the fine print",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Encoding a big image into a fixed 336x336 patch grid throws away most of its resolution. A model trying to read a receipts line-item with six-point font from a 4K photograph that has been squashed to 336 pixels wide has essentially been given a blurry photocopy. The solution modern VLMs use is called **tiling** (or \"AnyRes\" in LLaVA's naming, \"dynamic high resolution\" in Qwen-VL's)."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "Tiling a high-resolution image",
+            "root": {
+              "label": "Original image",
+              "sub": "e.g. 1344x336 px"
+            },
+            "children": [
+              {
+                "label": "Tile 1",
+                "sub": "336x336 px → 576 tokens"
+              },
+              {
+                "label": "Tile 2",
+                "sub": "336x336 px → 576 tokens"
+              },
+              {
+                "label": "Tile 3",
+                "sub": "336x336 px → 576 tokens"
+              },
+              {
+                "label": "Thumbnail",
+                "sub": "downscaled overview → 576 tokens"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The idea is straightforward: divide the image into a grid of tiles, each sized to the encoder's native resolution (e.g. 336x336). Encode every tile independently to get full-resolution patches for each region. Also encode a downscaled thumbnail of the entire image so the model keeps the global context. Concatenate all the resulting token sequences and feed them in together. The model now has both *global layout* (from the thumbnail) and *local detail* (from the tiles), at the cost of proportionally more tokens."
+        },
+        {
+          "type": "p",
+          "md": "For document reading — invoices, PDFs, dense tables, handwritten notes — tiling is what closes the gap between a VLM and a dedicated OCR tool. Without it, small text simply falls below the patch resolution threshold and is unreadable. With tiling enabled, those same characters each appear across several pixels in their own tile, giving the encoder enough information to identify them."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Tiling multiplies your token count. A 1344x336 image split into three 336x336 tiles plus a thumbnail uses roughly 4x the tokens of a single-pass encode. At scale, this matters for both cost and latency."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you have the basic pipeline in mind, a few advanced directions become much easier to reason about."
+        },
+        {
+          "type": "h3",
+          "text": "Token reduction and efficiency"
+        },
+        {
+          "type": "p",
+          "md": "The biggest open engineering problem in vision transformers is that image sequences are long. 576 tokens per image sounds manageable, but multiply that by tiling and you quickly hit thousands. Researchers have explored **adaptive patch sizing** (using larger patches in uniform background regions and smaller patches in detail-rich areas), **token merging** (fusing similar adjacent patch tokens into one), and **cross-attention adapters** that avoid putting all image tokens directly into the LLM's context. LLaVA-Mini pushed this to an extreme: it reduces a whole image to as few as **one vision token** by using cross-attention, achieving near-parity on many benchmarks while cutting context usage dramatically. The trade-off is that the compression is lossy — fine-grained spatial tasks suffer."
+        },
+        {
+          "type": "h3",
+          "text": "Interleaved and multi-image prompts"
+        },
+        {
+          "type": "p",
+          "md": "Nothing in the pipeline limits you to one image per prompt. You can interleave multiple image token sequences with text: `[image tokens A] compare these two charts [image tokens B]`. The LLM attends across all tokens in one pass, so it can reason about relationships between images just as it reasons about relationships between paragraphs. This is how screenshot-driven agents work: they receive a new image every loop iteration, and the prior image tokens remain in context as recent history."
+        },
+        {
+          "type": "h3",
+          "text": "Training the projection layer"
+        },
+        {
+          "type": "p",
+          "md": "The two-stage training recipe pioneered by LLaVA in 2023 is still the template most open VLMs follow. **Stage 1 (alignment pretraining):** freeze the ViT and the LLM, train only the MLP projection on ~600K image-caption pairs so the projector learns to translate visual features into plausible word-space vectors. **Stage 2 (visual instruction tuning):** unfreeze the LLM (keeping the ViT frozen) and fine-tune on ~150K instruction-following examples — images paired with questions, answers, and multi-turn conversations. After stage 2, the model can follow instructions about images, not just describe them. The cheap version of stage 1 makes it feasible for small labs and individual researchers to build capable VLMs without training the full stack from scratch."
+        },
+        {
+          "type": "h3",
+          "text": "Video as image tokens over time"
+        },
+        {
+          "type": "p",
+          "md": "Video is a sequence of image frames. The simplest approach is to sample frames at a fixed rate (e.g. one frame per second), encode each through the same patch-and-projection pipeline, and concatenate all the resulting token sequences in temporal order. A 30-second video at 1 fps with 576 tokens per frame is 17,280 tokens — a meaningful chunk of context. More efficient approaches use temporal compression (merging tokens from adjacent similar frames), sparse sampling, or dedicated video-specific encoders. The token economics are the binding constraint: richer sampling means better temporal understanding but higher cost and longer context windows, a trade-off the field has not fully resolved."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "If you're building a document extraction pipeline and cost is a concern: resize images to the minimum resolution where your target text is still legible before sending them to the API. For most printed documents at 12pt font, a 1000px wide image is plenty. You don't need to send a 4K scan."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "How many tokens does an image use in GPT-4o?",
+      "a": "In low-detail mode, GPT-4o charges a flat 85 tokens per image regardless of size. In high-detail mode the formula is 85 base tokens plus 170 tokens for each 512x512 tile needed to cover the image after scaling — so a 1024x1024 image costs around 765 tokens. You control the mode by passing `detail: low` or `detail: high` in the API request."
+    },
+    {
+      "q": "What is a vision encoder and why do models need one?",
+      "a": "A vision encoder is a neural network — almost always a Vision Transformer (ViT) — that converts image patches into dense numerical vectors. Language models work entirely in token embeddings (vectors representing meaning) and have no built-in way to process pixel grids. The vision encoder bridges that gap by turning image regions into vectors the LLM can treat as ordinary token inputs."
+    },
+    {
+      "q": "What is an image patch in a vision transformer?",
+      "a": "A patch is a small square region of pixels — typically 14x14 or 16x16 pixels per patch — that the ViT treats as a single unit. The image is divided into a grid of non-overlapping patches, each flattened into a vector and fed into the transformer as one token in the sequence. A 336x336 image with 14x14 patches yields 576 patch tokens."
+    },
+    {
+      "q": "Why do vision models struggle to read tiny text in images?",
+      "a": "Because text smaller than one patch effectively falls below the resolution threshold. If each patch covers 28x28 pixels and the letters you need to read are only 8 pixels tall, multiple characters get compressed into the same patch vector, and the model has to guess at the content. High-resolution tiling helps by giving fine regions their own tiles, but there is always a physical floor below which detail is lost."
+    },
+    {
+      "q": "What is a projection layer in a vision language model?",
+      "a": "The projection layer (usually a small two-layer MLP) converts the vision encoder's output vectors into the embedding dimension the language model uses internally. The two models operate in different vector spaces, and the projection layer is the translator. It is typically the only component trained from scratch in a VLM — the vision encoder and LLM start from pre-trained weights."
+    },
+    {
+      "q": "How does image tiling improve a vision model's ability to read documents?",
+      "a": "Tiling splits a high-resolution image into a grid of smaller tiles, each at the encoder's native resolution (e.g. 336x336 px), encodes each tile independently to preserve local detail, then feeds all the resulting token sequences to the LLM alongside a downscaled thumbnail for global context. The tile regions give the model enough pixel density to identify small text characters that would otherwise be smeared across a single patch."
+    }
+  ],
+  "related": [
+    "what-is-vision-language-model",
+    "send-images-to-llm-api",
+    "what-is-multimodal-ai"
+  ],
+  "furtherReading": [
+    {
+      "title": "Vision — Anthropic Claude Docs",
+      "url": "https://docs.anthropic.com/en/docs/build-with-claude/vision"
+    },
+    {
+      "title": "Visual Instruction Tuning (LLaVA paper, arXiv)",
+      "url": "https://arxiv.org/abs/2304.08485"
+    },
+    {
+      "title": "An Image is Worth 16x16 Words: ViT paper (arXiv)",
+      "url": "https://arxiv.org/abs/2010.11929"
+    }
+  ]
+}

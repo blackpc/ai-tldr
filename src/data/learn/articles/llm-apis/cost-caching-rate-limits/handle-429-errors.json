@@ -1,0 +1,375 @@
+{
+  "slug": "handle-429-errors",
+  "title": "How to Handle 429 Errors: Retries, Backoff, and Request Queues",
+  "seoTitle": "How to Handle 429 Errors: Retries and Backoff",
+  "metaDescription": "429 means you're sending too much, too fast. Learn exponential backoff with jitter, retry-after headers, and client-side queues that stop the bleeding.",
+  "keywords": [
+    "how to handle 429 too many requests",
+    "exponential backoff with jitter llm",
+    "retry-after header api",
+    "llm request queue pattern",
+    "rate limit error retry strategy"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Build retry logic that actually works under load — exponential backoff with jitter, retry-after headers, and a client-side queue.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "HTTP status `429 Too Many Requests` is the server telling you: **slow down, you're sending faster than I'm willing to serve you.** Every LLM provider — Anthropic, OpenAI, Google — enforces rate limits measured in requests per minute (RPM) and tokens per minute (TPM). When your code crosses those limits, the response comes back with a 429 instead of a completion."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like a busy coffee shop with a single cashier. You can't place three orders simultaneously — you have to queue. The cashier (the API) can only take so many orders per minute. If you rush the counter too aggressively, you don't get your coffee, you get turned away. The smart approach isn't to shout louder, it's to wait your turn and try again politely."
+        },
+        {
+          "type": "p",
+          "md": "The good news: a 429 is not an error in the sense of \"something is broken.\" It's a **signal** — the server is healthy, your request was valid, you just need to back off and retry. Almost every production LLM app needs a retry strategy, because even well-budgeted applications hit brief rate-limit windows during traffic spikes."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "429 errors come in two flavours from LLM providers: **RPM exceeded** (too many requests in the last minute) and **TPM exceeded** (too many tokens in the last minute, which is a separate limit). The `Retry-After` header — or for Anthropic, the `retry-after` header — tells you how long to wait for each case."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Naive retry logic — sleep one second, try again — fails in production for two reasons. First, if ten workers all sleep the same second and wake up together, they produce a **thundering herd**: a synchronized burst that trips the rate limit again immediately, creating a loop that never converges. Second, a fixed wait doesn't respect the server's own guidance on when it will be ready — so you may wait too long (wasting latency) or not long enough (getting another 429)."
+        },
+        {
+          "type": "p",
+          "md": "Getting this right matters because:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**User-facing latency** — a badly implemented retry loop can add 10–30s of delay to a request, turning a 2-second interaction into a timeout.",
+            "**Cost amplification** — if a bug causes infinite retries, you can rack up a large bill before anyone notices. Retries should be capped.",
+            "**Correctness** — LLM calls are not free side-effect operations. Retrying a non-idempotent action (e.g., \"send this email\") without a guard can duplicate real-world effects.",
+            "**Quota fairness** — in multi-tenant apps, one user's burst shouldn't exhaust the shared API budget for everyone. Client-side queuing is the fix.",
+            "**Reliability** — apps that crash on first 429 feel brittle. Apps with clean retry handling degrade gracefully and self-heal automatically."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The standard solution is **exponential backoff with full jitter**. On each failed attempt, you wait for a random time drawn from an exponentially growing window. The algorithm has three components:"
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Check for Retry-After.** Read the `retry-after` (or `retry-after-ms`) response header. If present, it is the server's own advice on when to retry — honor it exactly. Never retry sooner than this value.",
+            "**Compute the backoff window.** If no Retry-After is present, use `min(cap, base * 2^attempt)`. A common default: `base = 1s`, `cap = 60s`. After attempt 1 the window is 0–2s, after attempt 4 it is 0–16s, after attempt 6 it is capped at 0–60s.",
+            "**Apply full jitter.** Pick a random value uniformly from `[0, window]`. This spreads retries across time, collapsing the thundering herd into a smooth distribution.",
+            "**Cap total attempts.** Stop after 5–8 retries and surface the error. Unbounded retries can stall the event loop and obscure real bugs."
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Exponential backoff with jitter — one request lifecycle",
+            "steps": [
+              {
+                "label": "Send API request",
+                "sub": "attempt N"
+              },
+              {
+                "label": "429 received?",
+                "sub": "check status code"
+              },
+              {
+                "label": "Read Retry-After header",
+                "sub": "if present, use it; else compute window",
+                "accent": true
+              },
+              {
+                "label": "Sleep random(0, min(cap, base × 2^N))",
+                "sub": "full jitter — no thundering herd",
+                "accent": true
+              },
+              {
+                "label": "Retry or give up",
+                "sub": "if N < max_attempts, go back to step 1"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "What the provider headers tell you"
+        },
+        {
+          "type": "p",
+          "md": "Both Anthropic and OpenAI return rate-limit headers with every response — not just on 429s. These let you implement **proactive throttling** before you ever hit a limit."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Provider",
+            "Header",
+            "Meaning"
+          ],
+          "rows": [
+            [
+              "Anthropic",
+              "`anthropic-ratelimit-requests-remaining`",
+              "Requests left in the current window"
+            ],
+            [
+              "Anthropic",
+              "`anthropic-ratelimit-requests-reset`",
+              "ISO timestamp when the window resets"
+            ],
+            [
+              "Anthropic",
+              "`anthropic-ratelimit-tokens-remaining`",
+              "Tokens left this minute (most restrictive limit)"
+            ],
+            [
+              "Anthropic",
+              "`retry-after`",
+              "Seconds to wait (only on 429)"
+            ],
+            [
+              "OpenAI",
+              "`x-ratelimit-remaining-requests`",
+              "Requests left in the current window"
+            ],
+            [
+              "OpenAI",
+              "`x-ratelimit-reset-requests`",
+              "Time until the window resets"
+            ],
+            [
+              "OpenAI",
+              "`x-ratelimit-remaining-tokens`",
+              "Tokens left this minute"
+            ],
+            [
+              "OpenAI",
+              "`retry-after-ms`",
+              "Milliseconds to wait (only on 429)"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Monitor `x-ratelimit-remaining-tokens` (OpenAI) or `anthropic-ratelimit-tokens-remaining` (Anthropic) on every response. When remaining drops below ~20% of the limit, start artificially spacing requests. This is proactive throttling — you never touch the 429 wall."
+        }
+      ]
+    },
+    {
+      "id": "retry-in-code",
+      "title": "Retry in code",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The cleanest Python approach is the `tenacity` library, which wraps the full jitter algorithm behind a decorator. You don't need to hand-roll the backoff math."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Exponential backoff with full jitter using tenacity",
+          "code": "import anthropic\nfrom tenacity import (\n    retry,\n    stop_after_attempt,\n    wait_random_exponential,\n    retry_if_exception_type,\n)\n\nclient = anthropic.Anthropic()\n\n@retry(\n    retry=retry_if_exception_type(anthropic.RateLimitError),\n    wait=wait_random_exponential(min=1, max=60),  # full jitter, capped at 60s\n    stop=stop_after_attempt(6),\n)\ndef call_with_retry(prompt: str) -> str:\n    message = client.messages.create(\n        model=\"claude-opus-4-5\",\n        max_tokens=1024,\n        messages=[{\"role\": \"user\", \"content\": prompt}],\n    )\n    return message.content[0].text\n\n# Usage — transparent to the caller\nresult = call_with_retry(\"Summarise this document: ...\")"
+        },
+        {
+          "type": "p",
+          "md": "For OpenAI the pattern is identical — swap `anthropic.RateLimitError` for `openai.RateLimitError`. The `wait_random_exponential` function implements the full-jitter algorithm from the AWS architecture blog: it picks a uniform random value from `[0, min(cap, base × 2^attempt)]`, which has the best convergence properties under high contention."
+        },
+        {
+          "type": "p",
+          "md": "When you need to **respect the Retry-After header** explicitly — rather than trusting tenacity's default math — you can read the header from the exception and use it as a floor:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Manual retry loop that reads Retry-After",
+          "code": "import time\nimport random\nimport anthropic\n\nclient = anthropic.Anthropic()\n\ndef call_respecting_retry_after(\n    prompt: str,\n    max_attempts: int = 6,\n) -> str:\n    base_delay = 1.0\n    cap = 60.0\n\n    for attempt in range(max_attempts):\n        try:\n            msg = client.messages.create(\n                model=\"claude-opus-4-5\",\n                max_tokens=1024,\n                messages=[{\"role\": \"user\", \"content\": prompt}],\n            )\n            return msg.content[0].text\n\n        except anthropic.RateLimitError as exc:\n            if attempt == max_attempts - 1:\n                raise  # exhausted, bubble up\n\n            # Respect Retry-After if the server provided it\n            retry_after = getattr(exc, \"retry_after\", None)\n            if retry_after is not None:\n                wait = float(retry_after)\n            else:\n                window = min(cap, base_delay * (2 ** attempt))\n                wait = random.uniform(0, window)  # full jitter\n\n            print(f\"429 on attempt {attempt + 1}; sleeping {wait:.1f}s\")\n            time.sleep(wait)\n\n    raise RuntimeError(\"Unreachable\")"
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Never set `max_retries` to a very large number or leave it unbounded. An infinite retry loop on a sustained rate-limit event will hold coroutines or threads blocked, can spike your bill on partial successes, and makes bugs very hard to surface. Six retries with full jitter is a safe default for most production workloads."
+        }
+      ]
+    },
+    {
+      "id": "request-queue-pattern",
+      "title": "The client-side request queue",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Retry logic handles the *aftermath* of hitting a 429. A **client-side request queue** prevents you from hitting it in the first place. The idea is simple: instead of firing every API call immediately, route them through a queue that enforces the provider's own rate limits on your side."
+        },
+        {
+          "type": "p",
+          "md": "For LLM APIs you need two parallel buckets — one for RPM and one for TPM — because providers enforce both independently. A request that fits the RPM budget may still be blocked if it exceeds the TPM budget:"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Client-side dual-bucket queue",
+            "steps": [
+              {
+                "label": "Incoming requests",
+                "sub": "N concurrent callers"
+              },
+              {
+                "label": "FIFO queue",
+                "sub": "buffer until slots are available"
+              },
+              {
+                "label": "RPM bucket check",
+                "sub": "≤ limit requests/min?",
+                "accent": true
+              },
+              {
+                "label": "TPM bucket check",
+                "sub": "≤ limit tokens/min?",
+                "accent": true
+              },
+              {
+                "label": "Send to API",
+                "sub": "both buckets had capacity"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The TypeScript example below uses a simple sliding-window approach that works in a Node.js app or serverless function. For Python async code you can adapt the same pattern with `asyncio.Queue`."
+        },
+        {
+          "type": "code",
+          "lang": "typescript",
+          "title": "Simple RPM-limited request queue (TypeScript)",
+          "code": "interface QueuedRequest<T> {\n  fn: () => Promise<T>;\n  resolve: (value: T) => void;\n  reject: (error: unknown) => void;\n}\n\nexport class RateLimitedQueue {\n  private queue: QueuedRequest<unknown>[] = [];\n  private timestamps: number[] = []; // rolling window of request times\n  private readonly rpm: number;\n  private readonly windowMs = 60_000;\n  private running = false;\n\n  constructor(rpm: number) {\n    this.rpm = rpm;\n  }\n\n  enqueue<T>(fn: () => Promise<T>): Promise<T> {\n    return new Promise((resolve, reject) => {\n      this.queue.push({ fn, resolve, reject } as QueuedRequest<unknown>);\n      if (!this.running) this.drain();\n    });\n  }\n\n  private async drain() {\n    this.running = true;\n    while (this.queue.length > 0) {\n      const now = Date.now();\n      // Purge timestamps older than 60s\n      this.timestamps = this.timestamps.filter(t => now - t < this.windowMs);\n\n      if (this.timestamps.length >= this.rpm) {\n        // Sleep until the oldest timestamp falls out of the window\n        const wait = this.windowMs - (now - this.timestamps[0]);\n        await new Promise(r => setTimeout(r, wait + 50)); // +50ms margin\n        continue;\n      }\n\n      const item = this.queue.shift()!;\n      this.timestamps.push(Date.now());\n      item.fn().then(item.resolve).catch(item.reject);\n    }\n    this.running = false;\n  }\n}\n\n// Usage\nconst queue = new RateLimitedQueue(50); // 50 RPM (Tier 1 Anthropic)\n\nasync function ask(prompt: string) {\n  return queue.enqueue(() =>\n    anthropicClient.messages.create({ ... })\n  );\n}"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "To add TPM control, estimate the prompt's token count before enqueuing (use `tiktoken` for OpenAI or the Anthropic SDK's `client.messages.count_tokens()` for Claude). Keep a second sliding-window counter for tokens and block the queue when either RPM or TPM would be exceeded."
+        },
+        {
+          "type": "p",
+          "md": "For large-scale multi-service architectures, a **centralized rate-limit proxy** is the natural next step: a single internal service that all your microservices funnel through. It holds the global RPM and TPM counters, queues or rejects excess requests, and distributes the API budget fairly across consumers. Open-source options like LiteLLM Proxy provide this out of the box."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "Proactive throttling from response headers"
+        },
+        {
+          "type": "p",
+          "md": "The cleanest production systems never hit a 429 wall at all. They read the `x-ratelimit-remaining-*` (OpenAI) or `anthropic-ratelimit-*-remaining` (Anthropic) headers on every successful response and **slow down proactively** when remaining budget falls below a threshold — typically 20% of the per-minute limit. This eliminates retry jitter latency entirely for well-behaved traffic."
+        },
+        {
+          "type": "h3",
+          "text": "Idempotency and side effects"
+        },
+        {
+          "type": "p",
+          "md": "Pure completions (\"summarise this text\") are safe to retry — the same input always produces an equivalent output. But if your LLM call is part of a larger action — writing to a database, sending an email, posting a webhook — you must guard against **double execution**. Use an idempotency key or a distributed lock that marks the action as started before the API call. If the process crashes mid-retry, the lock prevents a second execution on restart."
+        },
+        {
+          "type": "h3",
+          "text": "Circuit breaker pattern"
+        },
+        {
+          "type": "p",
+          "md": "Exponential backoff handles *short* rate-limit events. For a sustained outage — where the provider's limits are hit continuously for minutes — a **circuit breaker** is more appropriate. The circuit trips open after N consecutive 429s, returns a cached or degraded response immediately for the next T seconds, then allows a single probe request through. If the probe succeeds, the circuit closes. If it fails, the timeout resets. Libraries like `pybreaker` (Python) or `opossum` (Node.js) implement this."
+        },
+        {
+          "type": "h3",
+          "text": "Tier upgrades vs. architectural fixes"
+        },
+        {
+          "type": "p",
+          "md": "If you are consistently hitting rate limits despite correct retry logic, you have two levers: upgrade your tier (Anthropic and OpenAI both have spend-based tier progression that unlocks higher RPM/TPM), or reduce your per-request token footprint through prompt compression, caching, or routing simpler tasks to a cheaper and higher-throughput model. Tier upgrades cost money; architectural fixes often cost less long-term."
+        },
+        {
+          "type": "h3",
+          "text": "Full jitter vs. equal jitter vs. decorrelated jitter"
+        },
+        {
+          "type": "p",
+          "md": "The AWS Architecture Blog's canonical comparison (\"Exponential Backoff And Jitter\") found that **full jitter** — `sleep = random(0, cap)` — produces the best throughput under high contention because it spreads load most evenly. Equal jitter — `sleep = cap/2 + random(0, cap/2)` — guarantees a minimum wait, useful if you want to avoid zero-second retries. Decorrelated jitter — `sleep = random(base, sleep * 3)` — can produce higher average waits and is generally not preferred for LLM retries. For most applications, full jitter with `wait_random_exponential` from tenacity is the correct choice."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The OpenAI Python SDK has a built-in `max_retries` parameter on the client constructor that implements exponential backoff automatically. Set `openai.OpenAI(max_retries=5)` for simple cases. The Anthropic Python SDK exposes the same via `anthropic.Anthropic(max_retries=5)`. For production code with custom Retry-After handling or queue integration, wrap the SDK call yourself as shown above."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is the difference between 429 Too Many Requests and 503 Service Unavailable?",
+      "a": "A 429 means the server is healthy but your client is sending too fast — a rate limit you can back off from. A 503 means the server is temporarily unable to handle requests at all (overloaded or down). Both warrant retries, but 503 usually needs a longer wait and may indicate a provider incident worth checking a status page for."
+    },
+    {
+      "q": "Should I retry 429s on all LLM providers the same way?",
+      "a": "The algorithm is identical, but the headers differ. Always check for a `retry-after` or `retry-after-ms` header first and honor it. OpenAI uses `retry-after-ms` (milliseconds) on 429 responses; Anthropic uses `retry-after` (seconds). If neither is present, fall back to exponential backoff with full jitter."
+    },
+    {
+      "q": "How do I avoid 429 errors in a batch job that processes thousands of documents?",
+      "a": "Use a client-side rate-limited queue that enforces the provider's RPM and TPM limits before sending each request. Pre-estimate token counts with tiktoken (OpenAI) or `client.messages.count_tokens()` (Anthropic) to stay within the TPM limit. For very large batch jobs, use the provider's batch API (OpenAI Batch, Anthropic's Message Batches API) which has higher throughput and lower cost at the expense of async delivery."
+    },
+    {
+      "q": "Is full jitter better than exponential backoff without jitter?",
+      "a": "Yes, significantly so when multiple clients share the same API key or when you have concurrent workers. Without jitter, all workers sleep the same duration and wake up simultaneously, creating a synchronized burst (thundering herd) that immediately trips the rate limit again. Full jitter scatters wake-up times across the window so the combined load is spread evenly."
+    },
+    {
+      "q": "Can I use the OpenAI or Anthropic SDK's built-in retry instead of writing my own?",
+      "a": "For simple cases, yes. Both SDKs accept a `max_retries` constructor argument and implement backoff internally. However, the SDK does not expose the queue-based proactive throttling you need for high-concurrency apps, and it does not give you control over what happens when retries are exhausted. For anything beyond a prototype, wrap the SDK call in your own retry + queue logic."
+    },
+    {
+      "q": "What is the thundering herd problem and why does it matter for retries?",
+      "a": "The thundering herd is what happens when many clients hit a rate limit at the same moment, all sleep the same fixed interval, and then all retry at exactly the same moment — creating another synchronized burst that triggers another 429. Adding random jitter to the sleep duration breaks the synchronization so retries arrive as a smooth stream rather than a spike."
+    }
+  ],
+  "related": [
+    "what-is-llm-api",
+    "api-keys-explained",
+    "sdk-vs-raw-http",
+    "how-to-choose-llm-model"
+  ],
+  "furtherReading": [
+    {
+      "title": "Rate limits — Anthropic API Docs",
+      "url": "https://platform.claude.com/docs/en/api/rate-limits"
+    },
+    {
+      "title": "How to handle rate limits — OpenAI Cookbook",
+      "url": "https://developers.openai.com/cookbook/examples/how_to_handle_rate_limits"
+    },
+    {
+      "title": "Exponential Backoff And Jitter — AWS Architecture Blog",
+      "url": "https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/"
+    }
+  ]
+}

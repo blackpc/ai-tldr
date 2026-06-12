@@ -1,0 +1,426 @@
+{
+  "slug": "llm-model-upgrade-rollout",
+  "title": "How to Roll Out a Model Upgrade Safely: Canaries, Flags, and Rollbacks",
+  "seoTitle": "Safe Model Upgrades: Canaries, Flags, Rollbacks",
+  "metaDescription": "A new model version can quietly break your prompts. How to roll out upgrades with canary releases, feature flags, and instant rollback paths.",
+  "keywords": [
+    "safe model upgrade rollout",
+    "canary release llm model",
+    "feature flags for llm apps",
+    "rollback model version",
+    "llm model migration strategy"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn to ship model upgrades with canaries, feature flags, and rollback paths so a bad version never reaches everyone.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Imagine a restaurant swapping its head chef mid-service. Same recipes on paper, but the new chef seasons differently, plates differently, and occasionally forgets an ingredient. Most tables are fine. Table 12 gets the wrong dish. You only find out when they complain."
+        },
+        {
+          "type": "p",
+          "md": "Switching an LLM model version in production is the same situation. The new model might score higher on benchmarks, cost less per token, and handle most of your prompts beautifully. But somewhere in the long tail of real user inputs it will behave differently — missing a format your downstream parser expects, declining a request the previous model handled, or producing subtly different reasoning that breaks a tool-calling chain."
+        },
+        {
+          "type": "p",
+          "md": "**Rolling out a model upgrade safely** means you introduce the new model to a controlled slice of real traffic first, watch what happens, and keep an instant escape hatch open. Three mechanisms do the heavy lifting: **canary releases** (route a small fraction of traffic to the new model), **feature flags** (flip models on or off in code without redeploying), and **rollback paths** (promote the old version back to production in seconds, not hours)."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Model providers routinely update hosted models without bumping the model ID you call. OpenAI has shipped weight updates to `gpt-4o` that changed tool-selection accuracy by double digits before the documentation mentioned it. If you are calling a non-pinned alias, you are already doing live canary tests — you just have no control over them."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Most software teams have learned to ship code gradually — blue-green deploys, ring-based rollouts, feature flags. LLM apps need the same discipline, but the failure modes are harder to detect and slower to surface."
+        },
+        {
+          "type": "h3",
+          "text": "Silent regressions are the core danger"
+        },
+        {
+          "type": "p",
+          "md": "A broken API endpoint throws a 500 immediately. A degraded LLM response looks fine. It arrives fluent, confident, and on time. Nobody sees a stack trace. The regression lives in *quality* — wrong tone, broken JSON structure, a tool called with the wrong argument — and it only surfaces when users or downstream systems start behaving oddly. One documented case: a model provider updated weights mid-week, causing an app's tool-selection accuracy to drop from 91% to 71%. The team discovered it on Friday when support tickets spiked. Two days of bad outputs had already reached real users."
+        },
+        {
+          "type": "h3",
+          "text": "Model upgrades are not optional"
+        },
+        {
+          "type": "p",
+          "md": "Providers deprecate model versions on fixed schedules. OpenAI, Anthropic, and Google all publish end-of-life dates for pinned model versions, typically 6-12 months after a successor ships. You will migrate eventually — the only choice is whether you do it on your schedule with a safety net, or under a deprecation deadline without one."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Prompt sensitivity**: prompts tuned for one model often rely on subtle formatting cues, instruction-following quirks, or implicit defaults that shift between versions.",
+            "**Tool-calling changes**: newer models may parse function schemas differently or call tools more or less aggressively than their predecessors.",
+            "**Output format drift**: even if the semantic content is right, a new model may change capitalization, punctuation, or JSON field ordering in ways that break downstream parsing.",
+            "**Cost and latency shifts**: a newer model at the same price tier may have different token throughput, affecting your p95 latency budget and cost per conversation."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "**Do not test model upgrades only in staging.** Staging environments almost never capture the full diversity of real user inputs. Edge cases that cause regressions are definitionally rare — you need real production traffic to flush them out. Canary releases are how you get real traffic with bounded blast radius."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A safe model upgrade is a four-phase process: prepare offline, expose a canary slice, widen gradually, then cut over or roll back based on what you observe."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Safe Model Upgrade Pipeline",
+            "steps": [
+              {
+                "label": "Offline eval",
+                "sub": "Run regression suite against new model on golden dataset before touching production"
+              },
+              {
+                "label": "Canary slice",
+                "sub": "Route 1-5% of live traffic to the new model via gateway weight or feature flag"
+              },
+              {
+                "label": "Observe",
+                "sub": "Compare quality scores, latency, error rates, and cost side-by-side for 24-72 hours"
+              },
+              {
+                "label": "Progressive ramp",
+                "sub": "Increase to 10%, 25%, 50% with a pause and review at each step"
+              },
+              {
+                "label": "Cut over or roll back",
+                "sub": "Promote new model to 100% if metrics are green; instantly revert if not"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Phase 1: offline evaluation before touching production"
+        },
+        {
+          "type": "p",
+          "md": "Before routing any live traffic to the new model, run your existing eval suite against it. A golden dataset — a curated set of inputs with expected outputs or scoring rubrics — tells you immediately whether the new model breaks anything you already know to care about. Tools like LangSmith, MLflow, and Braintrust can run the same evaluation harness against multiple model versions and produce a side-by-side report."
+        },
+        {
+          "type": "p",
+          "md": "Offline evals catch obvious regressions but miss the long tail of real user inputs. Think of the offline eval as a necessary gate that blocks clearly bad upgrades, not a sufficient gate that certifies good ones."
+        },
+        {
+          "type": "h3",
+          "text": "Phase 2: canary routing"
+        },
+        {
+          "type": "p",
+          "md": "A **canary release** routes a small percentage of real traffic — typically 1-5% to start — to the new model version while the rest continues on the stable version. The term comes from the mining practice of carrying a canary into a coal mine: if the canary died, miners knew there was gas before it reached them."
+        },
+        {
+          "type": "p",
+          "md": "In practice, canary routing is implemented at the LLM gateway layer. Gateways like Portkey, LiteLLM, and the MLflow AI Gateway accept weighted routing configurations that split traffic between model endpoints without any application code changes."
+        },
+        {
+          "type": "code",
+          "lang": "yaml",
+          "code": "# LiteLLM router config — 5% canary to gpt-4o-2025-01, 95% stable\nrouter_settings:\n  model_list:\n    - model_name: production-model\n      litellm_params:\n        model: openai/gpt-4o-2024-08-06\n      weight: 95\n    - model_name: production-model\n      litellm_params:\n        model: openai/gpt-4o-2025-01-21\n      weight: 5"
+        },
+        {
+          "type": "h3",
+          "text": "Phase 3: feature flags for application-layer control"
+        },
+        {
+          "type": "p",
+          "md": "Feature flags give you finer-grained control than gateway weights. Instead of routing a random 5% of *all* requests, you can target specific user segments (internal employees, beta users, paying subscribers), specific prompt types (classification tasks only, not generation), or specific geographies. Platforms like LaunchDarkly, Unleash, FeatBit, and Cloudflare Flags all support percentage rollouts with user-level targeting."
+        },
+        {
+          "type": "p",
+          "md": "The key insight is that feature flags **decouple deployment from activation**. You deploy the new model configuration to production but keep the flag off. Zero users see it until you flip the flag — and you can flip it back in under a second if something goes wrong, with no redeployment required."
+        },
+        {
+          "type": "code",
+          "lang": "typescript",
+          "code": "import { evaluate } from '@unleash/nextjs';\n\nasync function getModelId(userId: string): Promise<string> {\n  // Flag targets 5% of users by userId hash\n  const useNewModel = await evaluate('use-gpt4o-jan-2025', { userId });\n  return useNewModel\n    ? 'gpt-4o-2025-01-21'   // canary\n    : 'gpt-4o-2024-08-06';  // stable\n}"
+        },
+        {
+          "type": "h3",
+          "text": "Phase 4: observing the canary"
+        },
+        {
+          "type": "p",
+          "md": "Routing 5% of traffic to the new model gives you signal, but only if you're looking at the right metrics. Standard uptime monitors won't catch quality regressions — you need LLM-specific observability."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Metric category",
+            "What to track",
+            "Regression signal"
+          ],
+          "rows": [
+            [
+              "Output quality",
+              "LLM-as-judge scores, eval pass rate on golden set",
+              "Score drops more than 2-3 percentage points vs baseline"
+            ],
+            [
+              "Format compliance",
+              "JSON parse error rate, schema validation failures",
+              "Any increase in parse failures"
+            ],
+            [
+              "Tool use accuracy",
+              "Correct tool called, correct arguments extracted",
+              "Drop in tool-call precision"
+            ],
+            [
+              "Latency",
+              "p50 / p95 / p99 response time per model",
+              "p95 exceeds SLA threshold"
+            ],
+            [
+              "Cost",
+              "Token usage per conversation, cost per request",
+              "Cost per request rises more than acceptable budget"
+            ],
+            [
+              "Error rate",
+              "4xx / 5xx from provider, retry rate",
+              "Spike in provider errors or timeout rate"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Set explicit success criteria before you start the canary — not after. \"Quality score must stay within 2% of baseline and p95 latency must stay under 3 seconds\" is a decision rule you can automate. \"It seems fine\" is not."
+        }
+      ]
+    },
+    {
+      "id": "rollback-paths",
+      "title": "Rollback paths",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A rollback path is only useful if it is genuinely instant. If rolling back requires a code change, a PR review, a CI build, and a deployment — that's 30-90 minutes of bad outputs reaching users. The whole point of a rollback path is that it is faster than any of that."
+        },
+        {
+          "type": "h3",
+          "text": "Gateway weight rollback"
+        },
+        {
+          "type": "p",
+          "md": "If your canary is implemented at the gateway level via weighted routing, rolling back means changing the weights to send 0% traffic to the new model. This takes seconds and requires no application code changes. Most gateway platforms expose this via a UI and an API, so you can automate it — if your monitoring detects that the canary's quality score drops below threshold, a webhook can flip the weights back automatically."
+        },
+        {
+          "type": "h3",
+          "text": "Feature flag rollback"
+        },
+        {
+          "type": "p",
+          "md": "If your canary is behind a feature flag, rolling back is a single flag toggle in your feature management platform dashboard. Every major platform (LaunchDarkly, Unleash, Cloudflare Flags, FeatBit) propagates flag changes to your running application within milliseconds via server-sent events or polling, with no deployment step."
+        },
+        {
+          "type": "h3",
+          "text": "Model registry rollback"
+        },
+        {
+          "type": "p",
+          "md": "For teams using a model registry like MLflow, rollback means reassigning the `production` alias from the new model version to the previous one. MLflow's model registry stores every version with its evaluation metrics, prompt configuration, and deployment metadata. Repointing the alias makes every inference call transparently pick up the previous model — no code change, no restart."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "**Always keep at least one previous stable version in your registry.** The moment you cut over to 100% of the new model, mark the old version as `archived` rather than deleting it. If an issue surfaces days later — after the canary window — you still need a clean rollback target."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Rollback mechanism comparison",
+            "columns": [
+              {
+                "title": "Gateway weight change",
+                "items": [
+                  "Speed: seconds via API or UI",
+                  "Granularity: percentage of all requests",
+                  "Requires: LLM gateway in your stack",
+                  "Best for: traffic-level canaries"
+                ]
+              },
+              {
+                "title": "Feature flag toggle",
+                "items": [
+                  "Speed: milliseconds via flag platform",
+                  "Granularity: per user, segment, or attribute",
+                  "Requires: flag SDK in your app",
+                  "Best for: targeted rollouts and instant kill-switch"
+                ]
+              },
+              {
+                "title": "Model registry alias",
+                "items": [
+                  "Speed: seconds to reassign alias",
+                  "Granularity: entire model version",
+                  "Requires: MLflow or equivalent registry",
+                  "Best for: teams managing fine-tuned or hosted models"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "Upgrading prompts and the model at the same time"
+        },
+        {
+          "type": "p",
+          "md": "When a new model ships, it often prompts teams to also update their system prompt — add new instructions, try different formatting, tighten constraints. Changing both at once means you can't tell whether a regression was caused by the new model or the new prompt. **Change one variable at a time.** Upgrade the model first, verify it, then iterate on the prompt separately."
+        },
+        {
+          "type": "h3",
+          "text": "Using non-pinned model aliases"
+        },
+        {
+          "type": "p",
+          "md": "Calling `gpt-4o` or `claude-3-5-sonnet-latest` is convenient but means the provider can update the underlying weights without notice. If your system relies on precise behavior, always pin to a specific dated version ID (e.g., `gpt-4o-2024-08-06`, `claude-3-5-sonnet-20241022`). You'll need to migrate manually on your own schedule, but you control when and how."
+        },
+        {
+          "type": "h3",
+          "text": "Canary window too short"
+        },
+        {
+          "type": "p",
+          "md": "Running a canary for two hours is not enough. Some regressions are input-distribution dependent — they only show up with rare query types that might take 24-48 hours to appear in your traffic. Run your canary for at least 24 hours, and preferably through a full weekly traffic cycle if your product has day-of-week usage patterns."
+        },
+        {
+          "type": "h3",
+          "text": "No pre-defined rollback criteria"
+        },
+        {
+          "type": "p",
+          "md": "Teams that start a canary without defining what failure looks like tend to keep the canary running too long when things go wrong, rationalizing marginal metrics rather than cutting over or rolling back decisively. Write your success and failure criteria down before you flip the switch, and commit to following them."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "**Token cost is a silent budget killer.** A new model may be architecturally better but produce longer responses, causing your monthly token bill to jump 20-30% without any quality improvement. Always include cost-per-request in your canary metrics, not just quality and latency."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "Shadow mode testing"
+        },
+        {
+          "type": "p",
+          "md": "Shadow mode (also called dark launch) takes canary testing further: you route every request to *both* the old and new model simultaneously, but only serve the old model's response to the user. The new model's output is logged and evaluated offline. Users never see the experimental output, so there is zero risk of a regression affecting them — but you still accumulate signal on real production queries. Shadow mode is expensive (you pay for double the inference) but useful for high-stakes applications like medical information or financial advice where even a small canary slice of degraded output is unacceptable."
+        },
+        {
+          "type": "h3",
+          "text": "Automated promotion and rollback"
+        },
+        {
+          "type": "p",
+          "md": "The most mature teams automate the entire promotion decision. An eval harness runs continuously against the canary slice, emitting a quality score every 15 minutes. A simple rule — \"if quality score stays above 90% and p95 latency stays under 2s for 4 consecutive windows, increment traffic by 10%\" — replaces the manual check-in. Similarly, \"if quality score drops below 85% in any single window, set canary weight to 0%\" creates an automated rollback trigger. Tools like Argo Rollouts, Flagger, and custom scripts on top of gateway APIs all support this pattern."
+        },
+        {
+          "type": "h3",
+          "text": "Prompt versioning as part of the upgrade"
+        },
+        {
+          "type": "p",
+          "md": "Every model version should be paired with a pinned prompt version in your prompt registry. MLflow's Prompt Registry, LangSmith's prompt hub, and Maxim all track prompt versions alongside model versions so you can reproduce any historical configuration. This linkage is critical for rollback: rolling back the model without also rolling back to the prompt that was tuned for it can compound the regression rather than cure it."
+        },
+        {
+          "type": "h3",
+          "text": "Multi-tenant canary strategies"
+        },
+        {
+          "type": "p",
+          "md": "If your product serves multiple enterprise tenants, consider tiering your canary by tenant risk profile rather than random percentage. Internal users and beta tenants get the new model first. High-value enterprise accounts with strict SLAs are the last to receive it, after the model has been validated on lower-stakes traffic. This keeps your highest-value relationships insulated from early-stage risk while still gathering real-world signal at meaningful scale."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "When migrating between major model families (e.g., GPT-4 to Claude 3, or any jump across provider), treat it as a full prompt rewrite project, not a model swap. System prompt conventions, function-calling syntax, and output formatting norms differ enough across providers that a direct swap without prompt adaptation almost always causes regressions. Build a dedicated eval suite for the migration before you start canary traffic."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What percentage of traffic should I use for the initial canary?",
+      "a": "Start at 1-5% — enough to accumulate statistically meaningful signal within 24-48 hours without exposing the majority of users to potential regressions. Increase to 10%, 25%, and 50% in steps, pausing at each level to review metrics before continuing. The right starting percentage also depends on your traffic volume: a high-traffic app can validate a 1% canary quickly, while a low-traffic app may need to start at 10-20% to see enough volume."
+    },
+    {
+      "q": "How long should I run a canary before declaring it safe?",
+      "a": "At minimum 24 hours, preferably 48-72 hours or a full weekly traffic cycle if your product has day-of-week usage patterns. Some regressions are input-distribution dependent and only appear with rare query types that may take days to surface at low canary percentages. Cutting a canary window short to ship faster is one of the most common causes of production incidents."
+    },
+    {
+      "q": "Can I use feature flags instead of a gateway for canary routing?",
+      "a": "Yes, and many teams do — especially for targeted rollouts by user segment. Feature flags give you finer-grained targeting (internal users only, specific plan tier, specific geography) that random traffic splitting at the gateway level cannot match. The tradeoff is that the flag logic lives in application code, so it needs to handle every place in your codebase where a model is called, whereas a gateway-level weight change is a single configuration entry."
+    },
+    {
+      "q": "What metrics should trigger an automatic rollback?",
+      "a": "Define thresholds before starting the canary. Common automatic rollback triggers include: quality score (from LLM-as-judge or eval suite) dropping more than 3-5 percentage points vs baseline; JSON or schema parse error rate increasing by more than 1%; p95 latency exceeding your SLA threshold; or provider error rate (timeouts, 429s, 5xxs) spiking above normal. The exact numbers depend on your application — set them conservatively for customer-facing features."
+    },
+    {
+      "q": "How do I handle a model upgrade when my prompts are tightly tuned to the old version?",
+      "a": "Run an offline eval against the new model first using your existing prompts and golden dataset. Identify the specific failure categories. Then adapt your prompts for the new model in a branch, run offline evals again, and only then start a canary with the new model + new prompts as a paired unit. Avoid mixing old prompts with the new model and new prompts with the old model — each pairing is a separate experiment that muddies your signal."
+    },
+    {
+      "q": "What is the difference between a canary release and A/B testing for model versions?",
+      "a": "A canary release is primarily a *safety gate* — you expose a small slice of traffic to the new version to check for regressions before widening, with rollback as the default exit if anything looks wrong. An A/B test is primarily a *measurement experiment* — you split traffic between two versions to decide which one performs better on a business metric, with statistical significance as the exit criterion. In practice they use the same infrastructure (traffic splitting, side-by-side metrics) but have different goals: canaries are risk mitigation, A/B tests are optimization."
+    }
+  ],
+  "related": [
+    "what-is-llmops",
+    "llm-prototype-to-production",
+    "production-llm-stack",
+    "llm-model-routing",
+    "llm-provider-failover"
+  ],
+  "furtherReading": [
+    {
+      "title": "Canary Testing for LLM Apps",
+      "url": "https://portkey.ai/blog/canary-testing-for-llm-apps/"
+    },
+    {
+      "title": "MLflow Model Registry Workflows",
+      "url": "https://mlflow.org/docs/latest/ml/model-registry/workflow/"
+    },
+    {
+      "title": "Silent Degradation in LLM Systems: Detecting When Your AI Quietly Gets Worse",
+      "url": "https://dev.to/delafosse_olivier_f47ff53/silent-degradation-in-llm-systems-detecting-when-your-ai-quietly-gets-worse-4gdm"
+    }
+  ]
+}

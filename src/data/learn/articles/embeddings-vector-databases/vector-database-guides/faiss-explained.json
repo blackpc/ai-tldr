@@ -1,0 +1,443 @@
+{
+  "slug": "faiss-explained",
+  "title": "What Is FAISS? Vector Search as a Library, Not a Server",
+  "seoTitle": "What Is FAISS? Vector Search Library Explained",
+  "metaDescription": "FAISS is Meta's library for similarity search — no server, no API, just fast indexes in memory. Learn its index types and when it beats a database.",
+  "keywords": [
+    "what is faiss",
+    "faiss tutorial python beginners",
+    "faiss vs vector database",
+    "faiss index types explained",
+    "faiss gpu similarity search"
+  ],
+  "difficulty": "advanced",
+  "oneLiner": "Learn when an in-process index beats a database, and how FAISS's index zoo — Flat, IVF, HNSW, PQ — fits together.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**FAISS** (Facebook AI Similarity Search) is an open-source library from Meta's Fundamental AI Research group. It does one thing: given a large collection of vectors, find the ones closest to a query vector — fast. It is not a database, not a server, and has no REST API. It is a C++ library with Python bindings that lives inside your process, reads your vectors from memory, and hands back results as arrays of indices and distances."
+        },
+        {
+          "type": "p",
+          "md": "A useful analogy: imagine a phone book printed on paper. A database is the whole phone book plus a librarian who files new entries, handles deletions, enforces permissions, and can answer questions like \"show me everyone whose last name starts with S.\" FAISS is only the *page of the phone book* — the part that organizes names so you can find one fast. It gives you raw lookup speed at a fraction of the overhead, but you are responsible for everything the librarian normally handles: keeping the book on a shelf, adding new pages, handling concurrent readers, and knowing which page maps to which entry."
+        },
+        {
+          "type": "p",
+          "md": "This design is a feature, not a bug. Many production systems — recommendation engines at Netflix scale, image deduplication pipelines, research prototypes, and real-time RAG services — need maximum search throughput with minimum overhead, and running a full database server in the same process as the model is more machinery than the problem needs. FAISS gives you control."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "FAISS was originally open-sourced by Meta in 2017 and is still actively developed. The 2024 arXiv paper *The Faiss Library* covers its architecture and the full index family in detail."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The core problem FAISS solves is **nearest-neighbor search at scale**. If you have a thousand vectors, comparing your query to all of them is trivial — a loop in pure Python completes in milliseconds. Stretch that to ten million vectors of 768 dimensions each and brute-force search takes several seconds per query, far too slow for real-time use. FAISS is built around specialized indexes and C++/BLAS kernels that reduce this to milliseconds even at billion-vector scale."
+        },
+        {
+          "type": "p",
+          "md": "Three specific scenarios where FAISS wins over a full vector database:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**You already manage infrastructure yourself.** FAISS is a library dependency — `pip install faiss-cpu` — not a service to run and monitor. If your system already manages its own state (a compiled model server, a Lambda function, an offline batch job), adding a managed database is unnecessary complexity.",
+            "**You need raw throughput.** FAISS indexes live in process memory; a managed database adds a network round-trip, serialization, and connection overhead. For high-QPS search services where latency budgets are tight, in-process search can be ten times faster.",
+            "**You need GPU acceleration.** FAISS ships GPU-native implementations of its key indexes. You can offload an entire billion-vector flat search to a GPU in one call, something almost no database product exposes directly.",
+            "**You are building a vector database.** Weaviate, Milvus, and Vespa all use FAISS or its algorithms internally. Understanding FAISS means understanding what is happening underneath the managed layer."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The tradeoff is real: you get speed and flexibility, but you give up metadata filtering, persistence, horizontal sharding, real-time updates, and authentication. FAISS does not know what a \"document\" is. It stores vectors and their integer IDs, nothing else. Any time you need to filter by date, author, or document type, you maintain a separate lookup table yourself and post-filter the FAISS results."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every FAISS workflow follows the same three steps: **choose an index**, **train it on your data** (some indexes require this), and **add vectors**. Then at query time you call `index.search(query_vectors, k)` and receive two arrays: distances and integer IDs. That's the whole API."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "FAISS workflow",
+            "steps": [
+              {
+                "label": "Choose index type",
+                "sub": "Flat, IVF, HNSW, PQ, or composite"
+              },
+              {
+                "label": "Train (if needed)",
+                "sub": "k-means clustering for IVF/PQ"
+              },
+              {
+                "label": "Add vectors",
+                "sub": "index.add(numpy_array)"
+              },
+              {
+                "label": "Search",
+                "sub": "index.search(query, k) → distances + ids",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "The index zoo"
+        },
+        {
+          "type": "p",
+          "md": "FAISS ships a large family of index types. They all expose the same `search` interface but differ in how they trade off **speed**, **memory**, and **recall** (the fraction of true nearest neighbors actually returned). Understanding four of them covers 95% of real use cases."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Index",
+            "Strategy",
+            "Memory",
+            "Speed",
+            "Recall",
+            "Best for"
+          ],
+          "rows": [
+            [
+              "IndexFlatL2 / IndexFlatIP",
+              "Brute-force exact",
+              "High (full float32)",
+              "Slow at scale",
+              "100%",
+              "< 1M vectors; ground-truth baseline"
+            ],
+            [
+              "IndexIVFFlat",
+              "Cluster + search top nprobe clusters",
+              "Medium",
+              "Fast",
+              "~95-99%",
+              "1M – 100M vectors, tunable accuracy"
+            ],
+            [
+              "IndexHNSWFlat",
+              "Navigable graph traversal",
+              "High (graph + vectors)",
+              "Very fast",
+              "~98-99%",
+              "Latency-sensitive; no training needed"
+            ],
+            [
+              "IndexIVFPQ",
+              "IVF clustering + product quantization",
+              "Low (compressed)",
+              "Fast",
+              "~85-95%",
+              "Billion-scale; memory-constrained"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "**IndexFlatL2** compares the query to every stored vector using exact L2 (Euclidean) distance. It always returns the true nearest neighbors. Use it to verify correctness of a faster index, or when your collection is small enough that brute force is acceptable. `IndexFlatIP` is the inner-product variant — use it when your embedding model was trained with dot-product similarity."
+        },
+        {
+          "type": "p",
+          "md": "**IndexIVFFlat** partitions the vector space into `nlist` Voronoi cells using k-means clustering during training. At search time it only visits the `nprobe` closest cells instead of the entire dataset, dramatically reducing comparisons. Raising `nprobe` toward `nlist` approaches brute-force recall; lowering it toward 1 maximizes speed. A common starting point: `nlist = 4 * sqrt(N)` where N is the number of vectors, and `nprobe = 16` for a first benchmark."
+        },
+        {
+          "type": "p",
+          "md": "**IndexHNSWFlat** builds a Hierarchical Navigable Small World graph over the vectors. Search starts at the top of the hierarchy and greedily walks toward the query through progressively denser layers. HNSW requires no training step and delivers excellent recall, but it stores the full graph structure in memory on top of the raw vectors, making it the most RAM-heavy option."
+        },
+        {
+          "type": "p",
+          "md": "**IndexIVFPQ** combines IVF partitioning with Product Quantization (PQ) compression. PQ splits each vector into `M` sub-vectors and replaces each sub-vector with an 8-bit code pointing to the nearest centroid in a learned codebook for that sub-vector. The result: a 768-dimension `float32` vector (3,072 bytes) can be compressed to as few as 64 bytes — a 48x reduction — while remaining searchable."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "How Product Quantization compresses a vector",
+            "root": {
+              "label": "768-dim float32 vector",
+              "sub": "3,072 bytes raw"
+            },
+            "children": [
+              {
+                "label": "Sub-vector 1",
+                "sub": "dims 1–96 → 8-bit code"
+              },
+              {
+                "label": "Sub-vector 2",
+                "sub": "dims 97–192 → 8-bit code"
+              },
+              {
+                "label": "Sub-vector 3",
+                "sub": "dims 193–288 → 8-bit code"
+              },
+              {
+                "label": "... (M=8 total)",
+                "sub": "final: 8 bytes total",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "FAISS also supports composite index strings like `\"IVF4096,PQ64\"` through its `index_factory` helper. You pass a description string and FAISS builds the composite index for you — handy for rapid experimentation without chaining constructors manually."
+        }
+      ]
+    },
+    {
+      "id": "faiss-python-quickstart",
+      "title": "Python quickstart",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The CPU package installs in one command. The GPU package is distributed through conda only (pip GPU builds were discontinued after version 1.7.3)."
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "code": "# CPU (pip)\npip install faiss-cpu\n\n# CPU (conda, recommended)\nconda install -c pytorch -c conda-forge faiss-cpu\n\n# GPU (conda only)\nconda install -c pytorch -c nvidia -c conda-forge faiss-gpu"
+        },
+        {
+          "type": "p",
+          "md": "Below is a complete example that creates three index types, indexes the same random data into each, and compares recall against the brute-force baseline."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "faiss_demo.py",
+          "code": "import numpy as np\nimport faiss\n\n# ---------------------------------------------------------------\n# Setup: 100 000 vectors of dimension 128, float32\n# ---------------------------------------------------------------\nd = 128          # dimension\nN = 100_000      # number of stored vectors\nk = 10           # nearest neighbors to retrieve\n\nnp.random.seed(42)\nvectors = np.random.random((N, d)).astype(\"float32\")\nquery   = np.random.random((1, d)).astype(\"float32\")\n\n# ---------------------------------------------------------------\n# 1. Exact baseline: IndexFlatL2\n# ---------------------------------------------------------------\nflat = faiss.IndexFlatL2(d)\nflat.add(vectors)\nD_exact, I_exact = flat.search(query, k)\nprint(\"Exact top-10 IDs:\", I_exact[0])\n\n# ---------------------------------------------------------------\n# 2. IVF with nlist=256, nprobe=8\n# ---------------------------------------------------------------\nquantizer = faiss.IndexFlatL2(d)          # coarse quantizer\nivf = faiss.IndexIVFFlat(quantizer, d, 256, faiss.METRIC_L2)\nivf.train(vectors)                        # required: learns cluster centroids\nivf.add(vectors)\nivf.nprobe = 8                            # search 8 of 256 clusters\nD_ivf, I_ivf = ivf.search(query, k)\n\n# ---------------------------------------------------------------\n# 3. HNSW (no training needed)\n# ---------------------------------------------------------------\nhnsw = faiss.IndexHNSWFlat(d, 32)         # 32 = M (graph degree)\nhnsw.hnsw.efConstruction = 200\nhnsw.add(vectors)\nhnsw.hnsw.efSearch = 64\nD_hnsw, I_hnsw = hnsw.search(query, k)\n\n# ---------------------------------------------------------------\n# Recall vs baseline\n# ---------------------------------------------------------------\nexact_set = set(I_exact[0])\nprint(f\"IVF recall:  {len(set(I_ivf[0]) & exact_set) / k:.0%}\")\nprint(f\"HNSW recall: {len(set(I_hnsw[0]) & exact_set) / k:.0%}\")\n\n# ---------------------------------------------------------------\n# Save / load (manual persistence)\n# ---------------------------------------------------------------\nfaiss.write_index(hnsw, \"hnsw.index\")\nhnsw2 = faiss.read_index(\"hnsw.index\")"
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "FAISS has no built-in persistence. `faiss.write_index` serializes the index to disk — you must call it yourself before your process exits, or your index is gone. If you need durable, always-on search, consider a dedicated vector database instead."
+        },
+        {
+          "type": "h3",
+          "text": "GPU in four extra lines"
+        },
+        {
+          "type": "p",
+          "md": "Moving an index to a GPU is a near-drop-in replacement. FAISS handles transfers to and from GPU memory automatically."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "import faiss\n\nres   = faiss.StandardGpuResources()\ncpu_index = faiss.IndexFlatL2(128)\ngpu_index = faiss.index_cpu_to_gpu(res, 0, cpu_index)  # 0 = first GPU\ngpu_index.add(vectors)\nD, I = gpu_index.search(query, 10)"
+        },
+        {
+          "type": "p",
+          "md": "GPU FAISS supports `GpuIndexFlatL2`, `GpuIndexFlatIP`, `GpuIndexIVFFlat`, `GpuIndexIVFScalarQuantizer`, and `GpuIndexIVFPQ`. HNSW does not have a GPU implementation, as its pointer-chasing graph traversal does not parallelize well on GPU hardware."
+        }
+      ]
+    },
+    {
+      "id": "faiss-vs-vector-databases",
+      "title": "FAISS vs. managed vector databases",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The question \"should I use FAISS or a vector database?\" comes down to what you are willing to build yourself. FAISS gives you the search kernel; a vector database wraps that kernel in a durable, queryable, scalable product."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "FAISS library vs. managed vector database",
+            "columns": [
+              {
+                "title": "FAISS (library)",
+                "items": [
+                  "In-process, no server",
+                  "No metadata filtering built-in",
+                  "Manual save/load for persistence",
+                  "No real-time add/delete",
+                  "GPU-native acceleration",
+                  "Zero network overhead",
+                  "You own the glue code"
+                ]
+              },
+              {
+                "title": "Vector database (e.g. Qdrant, Weaviate)",
+                "accent": true,
+                "items": [
+                  "Standalone server or managed cloud",
+                  "Built-in metadata + hybrid search",
+                  "Automatic durability + WAL",
+                  "Real-time upserts and deletes",
+                  "Vendor-managed hardware",
+                  "Network latency per query",
+                  "API handles the glue"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The sweet spot for FAISS: **batch pipelines and research experiments** where you build the index once (perhaps nightly), load it into a serving process, and query it at high throughput with no mutations. Classic examples include offline recommendation engines, document deduplication jobs, and RAG services where the knowledge base changes slowly."
+        },
+        {
+          "type": "p",
+          "md": "Vector databases earn their keep when your data **changes continuously**. FAISS indexes are not designed for constant insertions; some index types (IVFFlat, IVFPQ) become increasingly inaccurate after many `add()` calls without retraining, because the cluster centroids were computed on the original distribution. HNSW supports incremental adds without retraining, but FAISS provides no delete operation for it — once a vector is in, it stays. High-churn data almost always warrants a database."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Many managed vector databases — including Milvus and Weaviate — use FAISS or FAISS-derived code for their inner ANN kernels. Choosing a database does not mean abandoning FAISS's algorithms; it means wrapping them in a complete product."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you have basic search working, the next layer of FAISS expertise is **tuning the accuracy-speed-memory triangle**. Every index exposes knobs, and the defaults are conservative. Typical production iterations:"
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Establish a recall baseline** using `IndexFlatL2` on a sample. Record the ground-truth neighbors — you will compare every other index against these.",
+            "**Choose nlist for IVF** using the rule of thumb `nlist ≈ 4 * sqrt(N)`. For 10M vectors that's roughly 12,649; common values are the nearest power of two or multiple of 256.",
+            "**Sweep nprobe** from 1 to nlist/4. Plot recall vs. query latency. A recall of 95% at nprobe=16 is a typical sweet spot; 99% at nprobe=64 costs roughly 4x more CPU.",
+            "**Add PQ compression** if memory is the bottleneck. `M=64` sub-vectors with 8-bit codes compresses a 768-dim vector to 64 bytes (12x). Recall drops 3-8% depending on the data distribution — acceptable for most applications.",
+            "**Use index_factory** for composite indexes: `faiss.index_factory(d, \"IVF4096,PQ64\")` combines IVF clustering with PQ compression in one call."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Index selection decision tree"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "stack",
+            "title": "Choosing a FAISS index",
+            "layers": [
+              {
+                "label": "< 100K vectors?",
+                "sub": "IndexFlatL2 — exact, simplest"
+              },
+              {
+                "label": "100K – 1M, memory OK?",
+                "sub": "IndexHNSWFlat — fast, no training, high RAM"
+              },
+              {
+                "label": "1M – 100M, tunable recall?",
+                "sub": "IndexIVFFlat — train once, tune nprobe",
+                "accent": true
+              },
+              {
+                "label": "100M+ or RAM-constrained?",
+                "sub": "IndexIVFPQ — compressed, billion-scale"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Scalar quantization as a middle ground"
+        },
+        {
+          "type": "p",
+          "md": "Between full float32 and the aggressive compression of PQ sits **scalar quantization** (`IndexIVFScalarQuantizer`). It stores each vector component as an 8-bit integer instead of a 32-bit float, reducing memory by 4x with only a 1-2% recall penalty — often the best first step when memory is tight but you want to avoid the training complexity of PQ. It also has a GPU implementation, making it attractive for GPU-accelerated serving."
+        },
+        {
+          "type": "h3",
+          "text": "The index_factory string DSL"
+        },
+        {
+          "type": "p",
+          "md": "FAISS exposes a small domain-specific language for building composite indexes without chaining constructors. The string `\"IVF4096,PQ64\"` means: cluster into 4,096 cells, then compress each vector with 64 PQ sub-vectors. `\"IVF8192,Flat\"` means: cluster into 8,192 cells, store full float32 vectors in each cell. `\"HNSW32\"` means: HNSW graph with M=32. You can chain preprocessing transforms too — `\"OPQ64_128,IVF4096,PQ64\"` applies Optimized Product Quantization before indexing, which can boost recall by rotating the vector space to minimize PQ quantization error."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "import faiss\n\nd = 128\n\n# IVF with PQ compression\nindex = faiss.index_factory(d, \"IVF4096,PQ64\")\nindex.train(train_vectors)   # train centroids for IVF cells AND PQ codebooks\nindex.add(vectors)\nindex.nprobe = 32\nD, I = index.search(query, 10)\n\n# HNSW (no training)\nhnsw = faiss.index_factory(d, \"HNSW32\")\nhnsw.add(vectors)            # no .train() needed\n\n# OPQ pre-processing + IVF + PQ\nopq = faiss.index_factory(d, \"OPQ64_128,IVF4096,PQ64\")\nopq.train(train_vectors)\nopq.add(vectors)"
+        },
+        {
+          "type": "h3",
+          "text": "Sharding at scale"
+        },
+        {
+          "type": "p",
+          "md": "FAISS itself has no built-in distributed mode, but its `IndexShards` and `IndexReplicas` classes let you spread an index across multiple GPUs (or CPUs) in one process. For truly distributed search across machines, you shard the dataset manually — assign each node a partition of the vectors, fan out the query to all shards in parallel, and merge the top-k results. This is exactly what Milvus does internally. At the billion-vector scale described in the original FAISS paper, a shard of 100M vectors on one GPU with IVF-PQ can return top-100 results in under 10ms."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "LangChain and LlamaIndex both ship FAISS vector store wrappers (`FAISS` in LangChain, `FaissVectorStore` in LlamaIndex) that handle the ID-to-document mapping and persistence boilerplate for you — a practical starting point before rolling your own integration."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Is FAISS a vector database?",
+      "a": "No. FAISS is a library for similarity search — it runs inside your process and has no server, no REST API, no metadata storage, and no built-in persistence. Many vector databases use FAISS algorithms internally, but a database adds durability, filtering, sharding, and an access layer on top of the raw search kernel."
+    },
+    {
+      "q": "Does FAISS support GPU acceleration?",
+      "a": "Yes. FAISS ships GPU implementations of `IndexFlatL2`, `IndexIVFFlat`, `IndexIVFScalarQuantizer`, and `IndexIVFPQ`. You move a CPU index to the GPU with `faiss.index_cpu_to_gpu(res, device_id, index)`. The GPU package is distributed through conda only; pip GPU builds were discontinued after version 1.7.3."
+    },
+    {
+      "q": "What is nlist and nprobe in FAISS IVF indexes?",
+      "a": "`nlist` is the number of Voronoi clusters the vector space is partitioned into during training — a larger value gives finer granularity but requires more training time and memory. `nprobe` is how many of those clusters are searched at query time. Higher `nprobe` improves recall at the cost of speed; the ratio `nprobe / nlist` controls the accuracy-speed tradeoff."
+    },
+    {
+      "q": "How do I save and load a FAISS index?",
+      "a": "Use `faiss.write_index(index, \"path.index\")` to save and `faiss.read_index(\"path.index\")` to reload. FAISS does not auto-save; if your process exits without calling `write_index`, the index is lost. For durable, always-on systems consider wrapping FAISS in a service that saves on shutdown and loads on startup."
+    },
+    {
+      "q": "Which FAISS index should I start with?",
+      "a": "For fewer than 100K vectors use `IndexFlatL2` — it is exact and requires no setup. For 100K to a few million vectors, `IndexIVFFlat` or `IndexHNSWFlat` both work well; HNSW skips the training step and tends to have higher out-of-the-box recall. For tens of millions or more vectors with memory constraints, `IndexIVFPQ` compresses vectors dramatically and is the standard production choice."
+    },
+    {
+      "q": "Can FAISS do metadata filtering?",
+      "a": "Not natively. FAISS stores only vectors and integer IDs; it has no concept of fields, tags, or document types. The standard pattern is to run a FAISS search for a generous top-k (say, 200), then post-filter those IDs against a separate metadata store (Postgres, SQLite, a dict) to get the candidates that satisfy your filter. For complex filtering at scale, a dedicated vector database is often a better fit."
+    }
+  ],
+  "related": [
+    "what-are-embeddings",
+    "what-is-semantic-search",
+    "how-text-embeddings-work",
+    "how-to-choose-embedding-model"
+  ],
+  "furtherReading": [
+    {
+      "title": "The Faiss Library (arXiv paper, 2024)",
+      "url": "https://arxiv.org/abs/2401.08281"
+    },
+    {
+      "title": "FAISS GitHub repository (facebookresearch/faiss)",
+      "url": "https://github.com/facebookresearch/faiss"
+    },
+    {
+      "title": "Guidelines to choose an index (FAISS wiki)",
+      "url": "https://github.com/facebookresearch/faiss/wiki/Guidelines-to-choose-an-index"
+    }
+  ]
+}

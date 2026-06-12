@@ -1,0 +1,406 @@
+{
+  "slug": "agentic-workflow-patterns",
+  "title": "Agentic Workflow Patterns: Routing, Parallelization, and More",
+  "seoTitle": "Agentic Workflow Patterns: A Practical Guide",
+  "metaDescription": "Prompt chaining, routing, parallelization, orchestrator-workers, evaluator-optimizer: the workflow patterns that solve most jobs without a full agent.",
+  "keywords": [
+    "agentic workflow patterns",
+    "llm routing pattern explained",
+    "evaluator optimizer pattern",
+    "parallelization llm workflow",
+    "workflow vs agent design patterns"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn the five named workflow patterns that cover most real use cases — and how to combine them before reaching for a fully autonomous agent.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "An **agentic workflow** is a multi-step LLM pipeline where code decides what to do next — not a human typing at a chat window. Unlike a fully autonomous agent (which picks its own sequence of actions at runtime), a workflow follows a **predefined graph of LLM calls and tools** that a developer designed in advance."
+        },
+        {
+          "type": "p",
+          "md": "Think of a workflow as a **factory line** versus a **freelancer**. A factory line stamps out the same sequence of steps every time — fast, predictable, easy to inspect. A freelancer figures out the sequence on the fly — flexible, but slower and harder to audit. Workflows are the factory line; fully autonomous agents are the freelancer. Most real jobs belong on a factory line."
+        },
+        {
+          "type": "p",
+          "md": "In December 2024, Anthropic's engineering blog published *Building Effective Agents*, which named **five canonical workflow patterns** that their teams saw repeatedly across production deployments: **prompt chaining**, **routing**, **parallelization**, **orchestrator-workers**, and **evaluator-optimizer**. These five patterns (and combinations of them) cover the vast majority of LLM use cases that actually ship."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "**Rule of thumb:** if you can draw the full execution graph on a whiteboard before writing a single line of code, you want a workflow, not an agent. Add autonomy only when the shape of the task genuinely cannot be known until runtime."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Fully autonomous agents are powerful but expensive to run, expensive to debug, and prone to cascading errors — a single bad tool call early in a run can corrupt every step that follows. Workflows trade flexibility for **predictability**. That predictability is exactly what you want in production."
+        },
+        {
+          "type": "p",
+          "md": "Choosing an agent when a workflow would have worked typically costs five to twenty times more per task and produces harder-to-audit results. The five workflow patterns give builders a **vocabulary for matching a task shape to the right control structure** — so the decision is no longer \"agent or not?\" but \"which pattern?\"."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Cost control** — a workflow's LLM calls are bounded and predictable; an autonomous agent's are not.",
+            "**Debuggability** — each step's input and output can be logged separately, making failures obvious.",
+            "**Latency** — you can parallelize independent steps without waiting for a planner to invent that idea at runtime.",
+            "**Reliability** — programmatic checks between steps catch bad outputs before they propagate.",
+            "**Composability** — patterns stack cleanly; a routing step can dispatch to a chain, which fans out to parallel calls."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The Anthropic framework distinguishes **workflows** (predefined code paths) from **agents** (LLM-directed sequences). The five patterns described here are all workflows. A fully autonomous agent is the right tool only when the required actions are genuinely unpredictable in advance."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How each pattern works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Each pattern solves a distinct structural problem. Below is a brief sketch of all five, followed by a diagram showing how they relate, then a deeper look at each one."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "The Five Agentic Workflow Patterns",
+            "columns": [
+              {
+                "title": "Pattern",
+                "items": [
+                  "Prompt Chaining",
+                  "Routing",
+                  "Parallelization",
+                  "Orchestrator-Workers",
+                  "Evaluator-Optimizer"
+                ]
+              },
+              {
+                "title": "Shape",
+                "items": [
+                  "A → B → C (sequential)",
+                  "Input → classifier → branch A or B",
+                  "Input → [A, B, C] → merge",
+                  "Orchestrator → [worker 1, worker 2 ...] → merge",
+                  "Generator ⇄ Evaluator (loop)"
+                ]
+              },
+              {
+                "title": "Best for",
+                "items": [
+                  "Tasks with dependent sub-steps",
+                  "Inputs that need specialized handling",
+                  "Independent sub-tasks or redundant checks",
+                  "Complex tasks needing dynamic delegation",
+                  "Tasks with measurable quality criteria"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "1. Prompt chaining"
+        },
+        {
+          "type": "p",
+          "md": "The simplest pattern: the output of one LLM call becomes the input of the next. Each call handles a single, focused sub-task — **extract**, then **transform**, then **format**. Because each step is small, it is far easier to prompt well and to validate the output before proceeding."
+        },
+        {
+          "type": "p",
+          "md": "Intermediate steps also act as natural **checkpoints**. A programmatic gate (\"does the extracted JSON have all required fields?\") can halt the chain before a bad intermediate result corrupts downstream steps. This is the key difference from asking one big prompt to do everything at once."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "# Minimal prompt chain: extract → rewrite → format\ndef summarise_for_twitter(whitepaper: str) -> str:\n    # Step 1 — extract key points\n    points = llm(f\"Extract the 3-5 most important findings from:\\n{whitepaper}\")\n\n    # Programmatic gate — stop if extraction failed\n    assert len(points.strip()) > 20, \"Extraction returned too little content\"\n\n    # Step 2 — rewrite for a general audience\n    casual = llm(f\"Rewrite these findings in plain English for a non-expert:\\n{points}\")\n\n    # Step 3 — format as tweet thread\n    tweets = llm(f\"Format this as a numbered tweet thread (max 280 chars each):\\n{casual}\")\n    return tweets"
+        },
+        {
+          "type": "h3",
+          "text": "2. Routing"
+        },
+        {
+          "type": "p",
+          "md": "A **router** inspects the input and dispatches it to the most appropriate downstream handler. The router itself is usually a cheap LLM call (or even a simple classifier) that assigns a category — `billing`, `technical`, `general` — and then code branches accordingly. Each branch can have its own system prompt, tool set, and even model choice."
+        },
+        {
+          "type": "p",
+          "md": "Routing shines when different input types genuinely need different treatment. A single unified prompt that tries to handle both simple FAQ questions and complex multi-step technical queries will be mediocre at both. Routing lets you **specialize without duplicating the entry point**."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "Routing Pattern",
+            "root": {
+              "label": "User input",
+              "sub": "any query"
+            },
+            "children": [
+              {
+                "label": "Billing handler",
+                "sub": "price/invoice queries"
+              },
+              {
+                "label": "Tech support handler",
+                "sub": "bug/config queries"
+              },
+              {
+                "label": "General handler",
+                "sub": "everything else"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "3. Parallelization"
+        },
+        {
+          "type": "p",
+          "md": "When a task can be split into **independent sub-tasks**, run them concurrently instead of sequentially. This pattern has two sub-variants:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Sectioning** — decompose the input into independent chunks (e.g., different sections of a document), process each in parallel, then merge the results.",
+            "**Voting** — run the same prompt multiple times with independent context and aggregate via majority vote. Useful when correctness matters more than cost — for example, a content safety check or a factual verification step."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "In terms of latency, parallelization turns `n × (call time)` into roughly `1 × (call time) + merge overhead`. For three or more concurrent calls this is almost always worthwhile. The tradeoff is that the aggregation step must be designed carefully — poorly merged outputs can be worse than a single sequential output."
+        },
+        {
+          "type": "h3",
+          "text": "4. Orchestrator-workers"
+        },
+        {
+          "type": "p",
+          "md": "An **orchestrator** LLM receives a complex task and decomposes it into sub-tasks at runtime, then dispatches each sub-task to a **worker** (another LLM call, a tool, or even a nested workflow). Workers are stateless and domain-specific; they know nothing of each other. The orchestrator then merges the results."
+        },
+        {
+          "type": "p",
+          "md": "This is the pattern closest to a full agent — the orchestrator makes dynamic decisions about how to decompose the work. The key distinction from full autonomy is that the **orchestrator's action space is still bounded by the workflow code**: it can only delegate to the workers the developer has defined, not invent arbitrary new tool calls."
+        },
+        {
+          "type": "h3",
+          "text": "5. Evaluator-optimizer"
+        },
+        {
+          "type": "p",
+          "md": "A **generator** produces an initial output. An **evaluator** (a second LLM call, or the same model with a different prompt) scores or critiques it. If the score is below a threshold, the critique is fed back to the generator and the loop repeats. This continues until quality criteria are met or a max-iteration limit is hit."
+        },
+        {
+          "type": "p",
+          "md": "The insight behind this pattern is that it is hard for a single prompt to be simultaneously creative *and* self-critical. Separating the generator and evaluator roles lets each model focus: the generator can take risks, and the evaluator can be ruthlessly precise. This is particularly valuable for **code generation**, **translation quality**, and **structured data extraction** where \"good enough\" is well-defined."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "Evaluator-Optimizer Loop",
+            "steps": [
+              {
+                "label": "Generator",
+                "sub": "produce output"
+              },
+              {
+                "label": "Evaluator",
+                "sub": "score + critique"
+              },
+              {
+                "label": "Gate",
+                "sub": "pass threshold?"
+              },
+              {
+                "label": "Optimizer / retry",
+                "sub": "feed critique back"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "combining-patterns",
+      "title": "Combining patterns",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The patterns are designed to be **composable**. A real pipeline almost always combines two or more of them. A few common combinations:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Route → chain**: classify the input type, then run a specialized multi-step chain for that category.",
+            "**Orchestrator → parallelize**: the orchestrator decomposes a task and dispatches independent sub-tasks to workers that run in parallel.",
+            "**Chain → evaluate**: run the full pipeline, then apply an evaluator-optimizer pass on the final output before returning it.",
+            "**Parallelize → vote → chain**: gather multiple independent perspectives, pick the best via voting, then feed the winner into a subsequent formatting chain."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "When composing patterns, the main risk is **latency accumulation**. Each additional sequential step adds wall-clock time. As a rule, run parallel branches wherever possible, keep sequential chains short, and place the evaluator-optimizer loop only on the sub-task that most benefits from refinement — not on the entire pipeline."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "**Avoid over-nesting.** An orchestrator calling workers that are themselves orchestrators calling more workers creates communication overhead and debugging nightmares. Anthropic's guidance recommends keeping orchestration to at most two levels deep unless the complexity genuinely demands more."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Combination",
+            "When to reach for it",
+            "Watch out for"
+          ],
+          "rows": [
+            [
+              "Route → chain",
+              "Different input types need different multi-step handling",
+              "Router misclassification misdirects the whole chain"
+            ],
+            [
+              "Orchestrate → parallelize",
+              "Many independent sub-tasks of similar type",
+              "Orchestrator becoming a bottleneck at high throughput"
+            ],
+            [
+              "Chain → evaluate",
+              "Final output has a measurable quality bar",
+              "Infinite loops if the evaluator threshold is too strict"
+            ],
+            [
+              "Parallelize (vote)",
+              "High-stakes correctness checks",
+              "Cost: N parallel calls instead of 1"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "workflow-vs-agent",
+      "title": "Workflow vs. full agent: when to escalate",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A workflow encodes the control flow in code; an agent encodes it in the model's reasoning at runtime. Workflows win when the task's shape is **known in advance**. Agents win when the required sequence of steps **cannot be predicted** until the model has started working through the problem."
+        },
+        {
+          "type": "p",
+          "md": "The practical heuristic: if you can write the control-flow graph on a whiteboard before you start, use a workflow. If you genuinely cannot — for example, an open-ended research task where the number and type of searches depends on what each search reveals — then you need an agent."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Workflow signals**: fixed input format, bounded output format, identifiable error modes, easily stated quality criteria.",
+            "**Agent signals**: open-ended task, number of steps unknown in advance, task requires following unexpected threads, human-in-the-loop for major decisions is acceptable."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Many teams find that the **orchestrator-workers pattern** is a practical middle ground: the orchestrator adds a layer of runtime decision-making while workers stay deterministic and auditable. Start here before reaching for a fully autonomous agent loop."
+        },
+        {
+          "type": "p",
+          "md": "Escalating to a full agent when a workflow would have done the job has real costs: autonomous agents run five to twenty times more expensive per task, are significantly harder to debug when they fail (because the path taken is discovered at runtime, not designed in advance), and have a higher rate of compounding errors — a mistake in step 2 of an 8-step autonomous run can corrupt every subsequent step silently."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you are comfortable with the five core patterns, the next layer of complexity involves **dynamic workflow graphs**. Where static workflows hardcode the edges between nodes at development time, dynamic graphs generate those edges at runtime — conditioned on the input — using an LLM planner or a learned routing policy. The 2025 research landscape distinguishes between *template-based* approaches (modifying a reusable static graph) and *autoregressive* approaches (sampling a full DAG for each query from scratch)."
+        },
+        {
+          "type": "p",
+          "md": "**Cascade routing** is a cost-optimized variant of the routing pattern that sends each query first to a cheap model, and escalates to a larger model only if the cheap model's confidence is below a threshold. Real-world deployments report 40-60% cost reductions versus always routing to the large model, with minimal quality loss on most query types."
+        },
+        {
+          "type": "p",
+          "md": "**Human-in-the-loop checkpoints** are a first-class feature of production workflow design, not a fallback. For high-stakes steps — committing a database write, sending an external communication, making a financial decision — inserting an explicit approval gate transforms an otherwise autonomous loop into a supervised workflow. Anthropic refers to these as *interrupts*, and they are especially important in orchestrator-workers architectures where a worker mistake could cascade before the orchestrator reviews the result."
+        },
+        {
+          "type": "p",
+          "md": "**Evaluator design** is the most underestimated component of the evaluator-optimizer pattern. The quality of the loop is bounded by the quality of the evaluator prompt. Common mistakes include: evaluation rubrics that are too vague for the model to act on, max-iteration limits set too low to allow real convergence, and using the same model temperature for both the generator (where creativity helps) and the evaluator (where precision is required). Effective evaluators use structured scoring (e.g., a 1-5 rubric with per-criterion breakdowns) and pass specific, actionable feedback, not just a pass/fail signal."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "**Framework support**: LangGraph, LlamaIndex Workflows, and Spring AI all implement the five patterns natively. Anthropic's Claude cookbook (platform.claude.com/cookbook) has runnable Python examples for each pattern. For teams on AWS, the Prescriptive Guidance for Agentic AI Patterns documents production-hardened implementations of prompt chaining, routing, and the evaluator reflect-refine loop."
+        },
+        {
+          "type": "p",
+          "md": "As of mid-2026, the emerging frontier is **multi-framework interoperability**: workflows that span agents built in different frameworks using the Agent2Agent (A2A) protocol — a vendor-neutral standard for inter-agent delegation. An orchestrator running in LangGraph can now delegate a sub-task to a worker running in a different vendor's stack, with the A2A protocol handling capability discovery and result passing. This makes the orchestrator-workers pattern viable at organizational scale, not just within a single codebase."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is the difference between an agentic workflow and an AI agent?",
+      "a": "A workflow has a predefined control-flow graph that a developer designed in advance — the LLM fills in content at each node but does not decide the shape of the graph. An agent decides its own sequence of steps at runtime. Workflows are more predictable and cheaper; agents are more flexible but harder to audit."
+    },
+    {
+      "q": "When should I use prompt chaining instead of a single large prompt?",
+      "a": "Use prompt chaining when the task has distinct sequential sub-steps and you want to validate intermediate outputs before committing to the next step. A single large prompt cannot be gated mid-execution; a chain can. Chaining also allows you to use smaller, cheaper models for simpler sub-tasks and reserve larger models only where they are needed."
+    },
+    {
+      "q": "How many iterations should an evaluator-optimizer loop run?",
+      "a": "Most practitioners set a hard cap of three to five iterations. Beyond that, quality improvements tend to plateau and cost accumulates quickly. If the evaluator is still rejecting output after five rounds, the problem is usually in the generator prompt or the evaluator rubric — not a lack of iterations. Always instrument iteration counts in production."
+    },
+    {
+      "q": "Is the orchestrator-workers pattern the same as a multi-agent system?",
+      "a": "They overlap but are not identical. Orchestrator-workers describes a specific control-flow pattern (one planner, multiple specialists) and can be implemented entirely within a single process. Multi-agent systems is a broader term that includes peer-to-peer agent networks, hierarchical agent trees, and cross-framework delegation. Orchestrator-workers is the most common multi-agent topology in production."
+    },
+    {
+      "q": "Can I combine multiple workflow patterns in one pipeline?",
+      "a": "Yes, and this is the norm in production. Common combinations include routing into a chain, an orchestrator fanning out to parallel workers, and a chain followed by an evaluator-optimizer pass on the final output. Keep nesting shallow (at most two orchestration levels) to avoid debugging complexity and latency accumulation."
+    },
+    {
+      "q": "What does the voting variant of parallelization actually protect against?",
+      "a": "Voting guards against **random model errors** — cases where a single LLM call gives the wrong answer not because the prompt is bad, but because the model sampled an unlikely token sequence. Running the same prompt three to five times and taking the majority answer dramatically reduces that error rate. It is most commonly used for classification, factual verification, and content safety checks where a wrong answer has a real cost."
+    }
+  ],
+  "related": [
+    "what-is-an-ai-agent",
+    "agents-vs-workflows-vs-chatbots",
+    "do-you-need-an-agent",
+    "what-is-tool-use"
+  ],
+  "furtherReading": [
+    {
+      "title": "Building Effective Agents — Anthropic",
+      "url": "https://www.anthropic.com/research/building-effective-agents"
+    },
+    {
+      "title": "Workflow for Prompt Chaining — AWS Prescriptive Guidance",
+      "url": "https://docs.aws.amazon.com/prescriptive-guidance/latest/agentic-ai-patterns/workflow-for-prompt-chaining.html"
+    },
+    {
+      "title": "Evaluator-Optimizer Pattern — Claude Cookbook",
+      "url": "https://platform.claude.com/cookbook/patterns-agents-evaluator-optimizer"
+    }
+  ]
+}

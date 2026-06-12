@@ -1,0 +1,434 @@
+{
+  "slug": "fine-tuning-dataset-prep",
+  "title": "How to Prepare a Fine-Tuning Dataset: Format, Size, and Quality",
+  "seoTitle": "How to Prepare a Fine-Tuning Dataset (Format & Size)",
+  "metaDescription": "How many examples does fine-tuning need, what JSONL format looks like, and the data-quality checks that matter more than dataset size.",
+  "keywords": [
+    "how to prepare fine-tuning dataset",
+    "how many examples for fine-tuning",
+    "fine-tuning jsonl format",
+    "fine-tuning data quality checklist",
+    "training data for llm fine-tuning"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Know exactly how to format, size, clean, and split a training dataset so your fine-tune learns the right lessons instead of your data's bugs.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Fine-tuning a language model is really just showing it a pile of examples and saying \"I want you to do it like this.\" The model adjusts its weights to match the pattern it sees. That means **your dataset is the lesson plan** — and a bad lesson plan produces a confused student, not a useful model."
+        },
+        {
+          "type": "p",
+          "md": "Think of it as training an intern with a stack of past work. If the stack is full of typos, contradictions, and formats that change randomly from page to page, the intern learns exactly those inconsistencies. If the stack is crisp, consistent, and representative of every case they'll actually face, they pick up the right habits fast. A hundred sharp, consistent examples beat a thousand scattered ones every time."
+        },
+        {
+          "type": "p",
+          "md": "Dataset preparation covers three practical questions: **how to format the data** (what file shape the training framework expects), **how much data you need** (the size question most people over-engineer), and **what quality actually means** (the checks that determine whether the model learns the right thing or your data's bugs)."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This article focuses on **supervised fine-tuning (SFT)** datasets — input/output pairs where you supply the correct answer. Preference-tuning datasets (used in RLHF and DPO) have a different shape: they compare two outputs rather than labeling one as ground truth."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why dataset prep determines whether a fine-tune succeeds",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Most fine-tuning failures are blamed on the model, the learning rate, or the training framework. In practice, the majority trace back to the data. A model does not evaluate your examples critically — it copies the pattern, whatever that pattern is. If your labels are inconsistent across examples, the model learns to be inconsistent. If your outputs always end with the same artifact from a botched export script, the model learns to produce that artifact. Garbage in, garbage out is not a cliche here; it is a precise description of how backpropagation works."
+        },
+        {
+          "type": "p",
+          "md": "Research comparing high-quality versus larger-but-noisier datasets consistently finds a **15–30% accuracy improvement for the cleaner set**, even at a fraction of the size. The LIMA paper (NeurIPS 2023) showed that 1,000 carefully curated instruction pairs outperformed Alpaca's 52,000 machine-generated ones on most benchmarks. Quality does not just slightly beat quantity — it dominates it."
+        },
+        {
+          "type": "p",
+          "md": "Preparing data well also prevents subtler problems: biased outputs from unbalanced class distributions, leakage of test-set answers into training examples, and security vulnerabilities from untrusted data that can inject adversarial behavior into the final model."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Before spending any time on data collection, define your success metric first. What does a *good* model output look like, in concrete terms you can measure? If you cannot answer that question, you cannot evaluate whether your dataset is teaching the right thing."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How the data flows from file to trained model",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "From your raw examples to a finished fine-tune, there are several distinct stages. Understanding the pipeline makes it easier to see where data problems enter and why they hurt."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Fine-tuning dataset pipeline",
+            "steps": [
+              {
+                "label": "Raw examples",
+                "sub": "collected text, logs, annotations"
+              },
+              {
+                "label": "Clean & deduplicate",
+                "sub": "remove noise, near-duplicates, PII"
+              },
+              {
+                "label": "Format to JSONL",
+                "sub": "messages array per line"
+              },
+              {
+                "label": "Split",
+                "sub": "train / validation / test"
+              },
+              {
+                "label": "Validate",
+                "sub": "schema check, length check, spot review"
+              },
+              {
+                "label": "Training run",
+                "sub": "model sees train set; val set monitors loss",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "The JSONL format"
+        },
+        {
+          "type": "p",
+          "md": "Almost every major fine-tuning platform — OpenAI, Azure OpenAI, Hugging Face, Anyscale, and most open-source trainers — accepts **JSONL** (JSON Lines): a plain text file where each line is a self-contained JSON object representing one training example. One line, one example, no commas between lines. The format is streamable, easy to inspect with a text editor, and simple to generate from any language."
+        },
+        {
+          "type": "p",
+          "md": "For chat-style models the standard shape is a `messages` array with `role`/`content` pairs — the same structure used by the Chat Completions API. A `system` message sets the persona or task instructions, `user` provides the input, and `assistant` holds the target output the model should learn to produce."
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "title": "training-data.jsonl — chat format (one example per line)",
+          "code": "{\"messages\": [{\"role\": \"system\", \"content\": \"You are a support ticket classifier. Output exactly three fields: category, priority, and team.\"}, {\"role\": \"user\", \"content\": \"My invoice shows a duplicate charge from last month.\"}, {\"role\": \"assistant\", \"content\": \"category: billing\\npriority: high\\nteam: payments\"}]}\n{\"messages\": [{\"role\": \"system\", \"content\": \"You are a support ticket classifier. Output exactly three fields: category, priority, and team.\"}, {\"role\": \"user\", \"content\": \"How do I export all my contacts to CSV?\"}, {\"role\": \"assistant\", \"content\": \"category: how-to\\npriority: low\\nteam: support\"}]}\n{\"messages\": [{\"role\": \"system\", \"content\": \"You are a support ticket classifier. Output exactly three fields: category, priority, and team.\"}, {\"role\": \"user\", \"content\": \"The app crashes every time I open the dashboard.\"}, {\"role\": \"assistant\", \"content\": \"category: bug\\npriority: high\\nteam: engineering\"}]}"
+        },
+        {
+          "type": "p",
+          "md": "For instruction-style (non-chat) training, many frameworks also accept the **Alpaca format**: flat JSON objects with `instruction`, optional `input`, and `output` fields. The Alpaca format is simpler for single-turn tasks but cannot represent multi-turn conversations. The **ShareGPT format** uses a `conversations` array with `from`/`value` pairs and supports multiple turns and tool calls."
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "title": "Alpaca format (single-turn instruction tuning)",
+          "code": "{\"instruction\": \"Classify this support ticket.\", \"input\": \"My invoice shows a duplicate charge.\", \"output\": \"category: billing\\npriority: high\\nteam: payments\"}"
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Files must be **UTF-8 encoded** (without BOM for most platforms — check your provider's docs). A common gotcha: exporting from Excel produces UTF-16 or adds a BOM that silently breaks the first line of every file."
+        }
+      ]
+    },
+    {
+      "id": "dataset-size",
+      "title": "How many examples you actually need",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The most common fine-tuning question is \"how much data do I need?\" The honest answer is: far less than you probably think, and it depends on what you're teaching, not on a universal rule."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Task type",
+            "Fine-tuning method",
+            "Typical starting range",
+            "Notes"
+          ],
+          "rows": [
+            [
+              "Classification, extraction, tagging",
+              "LoRA / QLoRA",
+              "100–500 examples",
+              "Simple label sets may work with even fewer"
+            ],
+            [
+              "Style / tone / format transfer",
+              "LoRA / QLoRA",
+              "200–1,000 examples",
+              "More diversity needed if style varies widely"
+            ],
+            [
+              "Domain-specific Q&A, summarization",
+              "LoRA / QLoRA",
+              "500–3,000 examples",
+              "Aim for full coverage of input variation"
+            ],
+            [
+              "Instruction following, general assistant",
+              "LoRA / SFT",
+              "1,000–10,000 examples",
+              "LIMA showed 1k curated examples beats 52k sloppy ones"
+            ],
+            [
+              "Full fine-tuning (all weights)",
+              "Full SFT",
+              "10,000–100,000+",
+              "Expensive; rarely necessary with PEFT methods"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The ranges above are starting points, not guarantees. Start small and evaluate: if a held-out validation set shows the model has learned the pattern, you're done. If it's still inconsistent, collect more examples — but also ask whether the examples you already have are consistent with each other before adding more noise."
+        },
+        {
+          "type": "p",
+          "md": "**Minimum thresholds per class matter as much as total count.** If you're training a 5-class classifier, having 500 examples that are all class A and 5 each for classes B through E will produce a model that mostly predicts A. A rule of thumb: aim for at least 50–100 examples per distinct output class or output type in your task."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "OpenAI's fine-tuning documentation recommends starting with as few as 50–100 examples and iterating. Doubling a clean dataset tends to deliver diminishing returns faster than doubling a noisy one — so clean first, scale second."
+        }
+      ]
+    },
+    {
+      "id": "data-quality-checklist",
+      "title": "The data-quality checks that matter most",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "After format and size, quality is the variable that most strongly predicts whether your fine-tune will work. Quality is not one thing — it is a checklist of specific properties. Run through these before you start training."
+        },
+        {
+          "type": "h3",
+          "text": "1. Consistency"
+        },
+        {
+          "type": "p",
+          "md": "Every example that looks like input X should produce an output shaped like Y — not sometimes Y and sometimes Z. Mixed formats, evolving labeling guidelines, or outputs from multiple annotators with different standards all introduce contradictions. The model cannot resolve them; it learns to be inconsistent. **Spot-check at least 50–100 random examples yourself** to verify the labeling rules are being applied uniformly before running a single training step."
+        },
+        {
+          "type": "h3",
+          "text": "2. Deduplication"
+        },
+        {
+          "type": "p",
+          "md": "Duplicate or near-duplicate examples cause the model to overfit to those specific inputs — it memorizes the repeated exact text rather than generalizing. Remove exact duplicates first (a simple hash compare), then fuzzy duplicates (examples that differ by only a word or two). Tools like `datasketch` (MinHash) handle fuzzy dedup at scale. Even a 5–10% duplicate rate can measurably degrade generalization."
+        },
+        {
+          "type": "h3",
+          "text": "3. Representativeness and diversity"
+        },
+        {
+          "type": "p",
+          "md": "Your training set should cover the full distribution of inputs the model will see in production. If all your training tickets come from enterprise customers but the model will also see consumer tickets, it will underperform on the consumer cases — not because of a bug, but because it never saw those patterns. Map the expected input space and deliberately collect examples from every region of it."
+        },
+        {
+          "type": "h3",
+          "text": "4. No leakage from your test set"
+        },
+        {
+          "type": "p",
+          "md": "If any of your test or evaluation examples appear — even paraphrased — in your training data, your evaluation metrics will be optimistically wrong. This is called **data contamination**. Split your data *before* any cleaning or augmentation, so the test set is never touched by steps that could leak it back into training. Decontamination checks (n-gram overlap between train and test) are cheap insurance."
+        },
+        {
+          "type": "h3",
+          "text": "5. No PII or harmful content"
+        },
+        {
+          "type": "p",
+          "md": "Training data containing personal names, email addresses, phone numbers, or other personally identifiable information (PII) risks encoding that information in model weights in ways that are hard to audit or remove. Run a PII detection pass (tools like Microsoft Presidio or spaCy NER help) before training. Similarly, review data sourced from user-generated content for toxic or adversarial examples — malicious content in training data is a documented attack vector."
+        },
+        {
+          "type": "h3",
+          "text": "6. Output length and token budget"
+        },
+        {
+          "type": "p",
+          "md": "Training frameworks truncate inputs that exceed a maximum token length, typically 2,048 or 4,096 tokens depending on the model. If your examples are long and the target answer appears at the end, truncation silently removes the very thing the model is supposed to learn. Check that `max_length` is set high enough that your examples are not being cut, or restructure your examples so the target output appears early."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "High-quality vs. low-quality training data",
+            "columns": [
+              {
+                "title": "High quality",
+                "accent": true,
+                "items": [
+                  "Consistent label format across all examples",
+                  "Covers full input distribution",
+                  "Deduplicated (exact and near-duplicate)",
+                  "Correct answers verified by domain expert",
+                  "PII removed before training",
+                  "Test set held out before any cleaning"
+                ]
+              },
+              {
+                "title": "Low quality",
+                "items": [
+                  "Labels vary by annotator or date",
+                  "Over-represents common inputs only",
+                  "5–20% near-duplicates present",
+                  "Auto-labeled without spot-check review",
+                  "User emails, names embedded in text",
+                  "Test examples used to pick training params"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "train-val-test-split",
+      "title": "Splitting your data: train, validation, and test",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every dataset should be split into at least two subsets before training starts. Three is better."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Training set** — the examples the model actually trains on. Typically 80–90% of your data.",
+            "**Validation set** — examples the model never trains on, used during training to monitor the validation loss and decide when to stop (early stopping). Typically 5–15%. This is your signal for overfitting: if training loss keeps falling but validation loss starts rising, you're memorizing instead of generalizing.",
+            "**Test set** — a completely held-out set used *once*, after all training and hyperparameter decisions are made, to report honest final performance. Typically 5–10%. Never use the test set to make any training decision, or it becomes a second validation set."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The common 80/10/10 split is a reasonable default for datasets over a few hundred examples. For small datasets (under 200 total), consider k-fold cross-validation instead — holding out 10 examples for testing while training on 90 gives an unreliable signal either way."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "**Split before you clean, not after.** If you deduplicate across the whole dataset first and then split, you may remove duplicates where one copy would have gone to train and the other to test — artificially making your evaluation look cleaner than it is."
+        },
+        {
+          "type": "p",
+          "md": "For classification tasks, use **stratified splitting**: ensure each split has roughly the same proportion of each class as the full dataset. A random split on an imbalanced dataset can send all rare-class examples into the test set, leaving none in training."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Simple stratified train/val/test split with scikit-learn",
+          "code": "from sklearn.model_selection import train_test_split\n\n# examples is a list of dicts; labels is the list of class values\ntrain, temp, y_train, y_temp = train_test_split(\n    examples, labels, test_size=0.2, stratify=labels, random_state=42\n)\nval, test, _, _ = train_test_split(\n    temp, y_temp, test_size=0.5, stratify=y_temp, random_state=42\n)\n# Result: 80% train, 10% val, 10% test\nprint(len(train), len(val), len(test))"
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics are solid — consistent JSONL, reasonable size, clean split — several advanced techniques can extract more signal from the same data or make collection cheaper."
+        },
+        {
+          "type": "h3",
+          "text": "Synthetic data generation"
+        },
+        {
+          "type": "p",
+          "md": "If collecting real labeled examples is expensive, a larger model can generate training examples for a smaller one — a technique called **distillation-style synthetic data**. You write a handful of seed examples and a generation prompt, then use GPT-4, Claude, or another frontier model to produce hundreds more at low cost. The critical constraint is quality filtering: auto-generated examples need the same consistency and spot-check review as human-labeled ones, or you're fine-tuning on a model's hallucinations."
+        },
+        {
+          "type": "h3",
+          "text": "Data augmentation"
+        },
+        {
+          "type": "p",
+          "md": "For classification and extraction tasks, you can artificially expand the training set by paraphrasing existing inputs (swap synonyms, reorder clauses, change surface phrasing while keeping the label). This increases diversity without requiring new annotation. Be careful not to augment in ways that change the correct label — paraphrasing \"the charge was doubled\" into \"the charge appeared once\" changes both the meaning and the correct billing category."
+        },
+        {
+          "type": "h3",
+          "text": "Multi-turn and tool-call data"
+        },
+        {
+          "type": "p",
+          "md": "If your production use case involves multi-turn conversations or tool calls (function calling), your training data must reflect that. Single-turn examples teach single-turn behavior. For multi-turn tasks, each training example should be a full conversation, not just isolated turns — otherwise the model learns to answer in isolation but does not learn how to track context across a conversation or decide when to call a tool."
+        },
+        {
+          "type": "h3",
+          "text": "Adversarial data and data poisoning"
+        },
+        {
+          "type": "p",
+          "md": "Research has shown that as few as 50–250 poisoned examples can implant a backdoor behavior in a fine-tuned model, regardless of total dataset size. If your training data is sourced from external parties, user submissions, or web scraping, it is a potential attack surface. Audit a random sample of examples from untrusted sources, check for suspiciously consistent unusual patterns, and consider automated scanning for prompt-injection style content hidden in training inputs."
+        },
+        {
+          "type": "h3",
+          "text": "Dataset cards and versioning"
+        },
+        {
+          "type": "p",
+          "md": "As datasets grow and labeling guidelines evolve, version control becomes essential. Store your training data in a versioned artifact store (DVC, Hugging Face Datasets, or even a versioned S3 prefix), document labeling guidelines alongside the data, and record which dataset version produced which model checkpoint. Without this, debugging a model regression six months later becomes guesswork — you won't know if the quality changed because the model changed or because the data did."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The Hugging Face `datasets` library provides `push_to_hub()` to version and share datasets with full commit history. Even for private projects, treating your dataset as a versioned artifact rather than a CSV in a shared drive pays dividends when you need to reproduce a result."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "How many examples do I need to fine-tune an LLM?",
+      "a": "For most narrow tasks with LoRA or QLoRA, 100–500 high-quality examples are a reasonable starting point. Simple classification can work with even fewer; broad instruction-following needs closer to 1,000–10,000. Quality matters far more than quantity — a few hundred consistent, correct examples routinely outperform thousands of noisy ones."
+    },
+    {
+      "q": "What JSONL format does fine-tuning use?",
+      "a": "The standard chat-model format is a `messages` array per line, with `role` (system/user/assistant) and `content` fields — the same shape as the Chat Completions API. Each line is one self-contained JSON object. For instruction-only tasks, the Alpaca format (`instruction`, `input`, `output`) is a simpler alternative supported by many open-source trainers."
+    },
+    {
+      "q": "How should I split my fine-tuning dataset?",
+      "a": "A common split is 80% training, 10% validation, 10% test. Always split *before* cleaning or deduplication to prevent leakage. Use stratified splitting for classification tasks so rare classes are represented in all three sets. The test set should be used exactly once, only after all training decisions are made."
+    },
+    {
+      "q": "Why does data quality matter more than dataset size?",
+      "a": "A model does not evaluate your examples — it copies the pattern it sees. Inconsistent labels, duplicates, and wrong answers are all patterns too, and the model learns them faithfully. Studies show a 15–30% accuracy advantage for clean small datasets over larger noisy ones. Clean data first; only add more examples if the model still underperforms after cleaning."
+    },
+    {
+      "q": "How do I check for data contamination between my training and test sets?",
+      "a": "Run an n-gram overlap check between your train and test files — flag any test example where 4- or 5-gram sequences appear in the training set. Always split your raw data *before* any cleaning steps, since deduplication that crosses the split boundary can remove test examples that duplicated training ones, masking the leakage."
+    },
+    {
+      "q": "What is the risk of using untrusted data for fine-tuning?",
+      "a": "Malicious examples in training data can implant backdoor behaviors in the model — research shows as few as 50–250 poisoned examples are sufficient. If your data comes from external parties or user submissions, audit a random sample, scan for unusual repetitive patterns, and check for prompt-injection style text hidden inside training inputs."
+    }
+  ],
+  "related": [
+    "what-is-fine-tuning",
+    "when-to-fine-tune",
+    "what-fine-tuning-changes",
+    "fine-tuning-cost-breakdown",
+    "evaluate-fine-tuned-model"
+  ],
+  "furtherReading": [
+    {
+      "title": "Supervised fine-tuning guide — OpenAI API docs",
+      "url": "https://platform.openai.com/docs/guides/supervised-fine-tuning"
+    },
+    {
+      "title": "How to fine-tune: Focus on effective datasets — Meta AI Blog",
+      "url": "https://ai.meta.com/blog/how-to-fine-tune-llms-peft-dataset-curation/"
+    },
+    {
+      "title": "Mastering LLM Techniques: Text Data Processing — NVIDIA Developer Blog",
+      "url": "https://developer.nvidia.com/blog/mastering-llm-techniques-data-preprocessing/"
+    }
+  ]
+}

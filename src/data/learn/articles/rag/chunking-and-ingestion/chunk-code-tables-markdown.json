@@ -1,0 +1,372 @@
+{
+  "slug": "chunk-code-tables-markdown",
+  "title": "How to Chunk Code, Tables, and Markdown: The Tricky Cases",
+  "seoTitle": "Chunking Code, Tables, and Markdown for RAG",
+  "metaDescription": "Generic text splitters mangle code, tables, and Markdown. Learn structure-aware chunking strategies that keep functions, rows, and sections intact.",
+  "keywords": [
+    "how to chunk code for rag",
+    "chunking markdown documents rag",
+    "how to embed tables for rag",
+    "code splitting for embeddings"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You'll know how to chunk source code, tables, and Markdown without destroying the structure that makes them retrievable.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A generic text splitter sees every document as a flat string of characters. Split at 512 tokens, move on. For plain prose that approach is rough but workable. For source code, tables, and Markdown it quietly destroys the thing that made the content useful: a function loses its signature, a table row loses its header, a section loses its heading. The embedding you store represents garbage, and the retriever returns garbage."
+        },
+        {
+          "type": "p",
+          "md": "Think of it this way: a paragraph of prose is like a loaf of bread — you can cut it anywhere and still have bread. A Python function is like an Ikea flat-pack: cut it in half and neither half assembles into anything. A Markdown table is like a spreadsheet printed on paper — tear off the header row and the remaining rows are meaningless numbers without column labels. Structure-aware chunking respects those natural units instead of overriding them with a fixed token budget."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This article focuses on the three content types that most commonly break generic splitters: **source code**, **tables** (Markdown, CSV, HTML), and **Markdown documents** (headings, fenced code blocks, mixed content). The strategies for each are different because the structure they preserve is different."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why generic splitters fail these formats",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Generic text splitters fail structured content in predictable ways. Understanding the failure mode for each format tells you exactly what a structure-aware splitter needs to protect."
+        },
+        {
+          "type": "h3",
+          "text": "Source code: split mid-function"
+        },
+        {
+          "type": "p",
+          "md": "A 50-line Python function takes roughly 600-900 tokens. A 512-token fixed-size splitter will cut it somewhere in the body — separating the function signature and docstring from its return statement. The resulting chunk lacks context: one half has the parameter list but no implementation, the other has implementation but no name or contract. When a developer asks \"how does `calculate_discount` work?\", neither chunk retrieves correctly because neither contains a complete, self-contained unit of logic."
+        },
+        {
+          "type": "h3",
+          "text": "Tables: split mid-row or mid-table"
+        },
+        {
+          "type": "p",
+          "md": "A Markdown table with 30 rows fills about 600-800 tokens depending on cell width. A naive splitter cuts through the table body, producing two chunks: one with the header row and some body rows, another with the remaining rows and no header. The second chunk is uninterpretable — a sequence of pipe-delimited values with no column names. Ask \"what is the price of the Pro plan?\" and the chunk that contains that row may not contain the column header that identifies which cell is the price."
+        },
+        {
+          "type": "h3",
+          "text": "Markdown documents: orphaned headings and split code fences"
+        },
+        {
+          "type": "p",
+          "md": "A Markdown document interleaves headings, prose, fenced code blocks, and tables. Generic fixed-size splitting creates two specific hazards. First, a heading gets placed at the tail of a chunk while its content lands in the next chunk, so the heading never co-occurs with the text it labels. Second, a fenced code block (opened and closed with triple backticks) may be split, leaving one chunk with an unclosed fence — producing malformed Markdown that no renderer will display correctly and that embeds very poorly because its representation includes noise like partial syntax."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "These are not edge cases. Most real-world RAG corpora for software teams are at least 30% code and Markdown by document count. Fixing your generic splitter for these formats often produces a larger retrieval quality improvement than upgrading your embedding model."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How structure-aware chunking works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Structure-aware chunking works by parsing the document into a tree of logical units first, then applying size constraints at the level of those units — not at the level of raw characters. The diagram below shows the pipeline for each of the three content types."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Structure-aware chunking pipeline",
+            "steps": [
+              {
+                "label": "Parse document structure",
+                "sub": "AST for code, pipe-rows for tables, heading tree for Markdown"
+              },
+              {
+                "label": "Identify atomic units",
+                "sub": "function/class, table row group, heading section"
+              },
+              {
+                "label": "Apply token budget",
+                "sub": "keep units whole; merge small neighbours; split only when a single unit exceeds budget",
+                "accent": true
+              },
+              {
+                "label": "Attach context metadata",
+                "sub": "file path + class name, table header repeated, breadcrumb heading path"
+              },
+              {
+                "label": "Embed and store",
+                "sub": "each chunk self-contained and correctly scoped"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Code: AST-based splitting"
+        },
+        {
+          "type": "p",
+          "md": "The right unit for code is a **syntactic node** — a function, method, or class — not a line count. Abstract Syntax Tree (AST) parsing extracts these boundaries exactly. The tree-sitter library is the practical choice: it is battle-tested (it powers syntax highlighting in editors like Neovim, Helix, and Zed), supports virtually every mainstream language, and runs in microseconds per file."
+        },
+        {
+          "type": "p",
+          "md": "LlamaIndex's `CodeSplitter` wraps tree-sitter and exposes a simple interface: set `language`, `chunk_lines` (default 40), and `max_chars` (default 1500). It splits at function and class boundaries and falls back to line count only when a single function exceeds the budget. Each chunk is syntactically valid — it can be parsed in isolation."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "AST-based code chunking with LlamaIndex CodeSplitter",
+          "code": "# pip install llama-index-core tree-sitter tree-sitter-language-pack\nfrom llama_index.core.node_parser import CodeSplitter\nfrom llama_index.core import SimpleDirectoryReader\n\n# Load a Python file\ndocuments = SimpleDirectoryReader(input_files=[\"mymodule.py\"]).load_data()\n\nsplitter = CodeSplitter(\n    language=\"python\",\n    chunk_lines=50,          # target lines per chunk\n    chunk_lines_overlap=5,   # lines of overlap between chunks\n    max_chars=2000,          # hard cap (a very long function will still be split)\n)\n\nnodes = splitter.get_nodes_from_documents(documents)\nfor node in nodes:\n    print(f\"--- chunk ({len(node.text.splitlines())} lines) ---\")\n    print(node.text[:200])"
+        },
+        {
+          "type": "p",
+          "md": "For LangChain users, `RecursiveCharacterTextSplitter.from_language(language=Language.PYTHON)` applies language-aware separators: it tries to split on `\\nclass `, then `\\ndef `, then `\\n\\n`, falling back to character splits only when a function is too large. It is not a true AST parser, so it can miss nested classes or decorators that span multiple lines, but it is a large improvement over generic splitting and requires no extra dependency."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Language-aware splitting with LangChain",
+          "code": "from langchain_text_splitters import RecursiveCharacterTextSplitter, Language\n\n# LangChain supports: PYTHON, JS, TS, RUBY, RUST, GO, JAVA, CPP, C, SCALA, SWIFT, MARKDOWN, LATEX, HTML, SOL\npython_splitter = RecursiveCharacterTextSplitter.from_language(\n    language=Language.PYTHON,\n    chunk_size=2000,   # characters; functions average 300-800 tokens\n    chunk_overlap=200, # carry the end of one function into the next for context\n)\n\nwith open(\"mymodule.py\") as f:\n    source = f.read()\n\nchunks = python_splitter.create_documents(\n    texts=[source],\n    metadatas=[{\"source\": \"mymodule.py\"}]\n)\nprint(f\"{len(chunks)} chunks\")"
+        },
+        {
+          "type": "h3",
+          "text": "Tables: keep the header, repeat it when splitting"
+        },
+        {
+          "type": "p",
+          "md": "For Markdown tables, the rule is simple: **never split a table mid-row, and always include the header row in every chunk.** If the whole table fits in your token budget, emit it as one chunk. If it is too large, split it by rows but prepend the header row to each piece so every chunk is independently interpretable."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Table-safe chunking helper for Markdown",
+          "code": "import re\n\ndef chunk_markdown_table(table_text: str, max_rows_per_chunk: int = 20) -> list[str]:\n    \"\"\"\n    Split a Markdown table into chunks that each start with the header + separator.\n    table_text: the full table including header row.\n    \"\"\"\n    lines = table_text.strip().splitlines()\n    if len(lines) < 3:   # header + separator + at least one row\n        return [table_text]\n\n    header = lines[0]          # | Col A | Col B |\n    separator = lines[1]       # | --- | --- |\n    body_rows = lines[2:]\n\n    chunks = []\n    for i in range(0, len(body_rows), max_rows_per_chunk):\n        batch = body_rows[i : i + max_rows_per_chunk]\n        chunk = \"\\n\".join([header, separator] + batch)\n        chunks.append(chunk)\n    return chunks\n\n# Usage\ntable = \"\"\"| Model | Context | Price/1M tokens |\n| --- | --- | --- |\n| GPT-4o | 128k | $5.00 |\n| Claude 3.5 Sonnet | 200k | $3.00 |\"\"\"\n\nfor chunk in chunk_markdown_table(table, max_rows_per_chunk=1):\n    print(chunk)\n    print()"
+        },
+        {
+          "type": "p",
+          "md": "For HTML tables, use a parser like `BeautifulSoup` to extract `<tr>` rows and serialise them — either back to Markdown or into natural language. For spreadsheet/CSV data, convert each row to a structured sentence (e.g., *\"Model: GPT-4o, Context: 128k, Price: $5.00 per million tokens\"*) before embedding. Plain-text row sentences embed far better than raw pipe-delimited cell values because embedding models were trained on natural language, not tabular syntax."
+        },
+        {
+          "type": "h3",
+          "text": "Markdown documents: split on headings, carry breadcrumbs"
+        },
+        {
+          "type": "p",
+          "md": "LangChain's `MarkdownHeaderTextSplitter` splits a document at each heading boundary and attaches the heading hierarchy as metadata. A chunk from the section `## Installation > ### macOS` gets `{\"Header 1\": \"Installation\", \"Header 2\": \"macOS\"}` in its metadata. The text content never contains an orphaned heading, and the metadata provides the context the embedding itself cannot carry."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Markdown header splitting with LangChain",
+          "code": "from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter\n\n# Step 1: split on heading boundaries, extract hierarchy into metadata\nheader_splitter = MarkdownHeaderTextSplitter(\n    headers_to_split_on=[\n        (\"#\",  \"h1\"),\n        (\"##\", \"h2\"),\n        (\"###\",\"h3\"),\n    ],\n    strip_headers=False,  # keep heading text inside the chunk for embedding\n)\n\nwith open(\"README.md\") as f:\n    md_text = f.read()\n\nheader_chunks = header_splitter.split_text(md_text)\n\n# Step 2: each section may still be too long; apply recursive splitting within\ntext_splitter = RecursiveCharacterTextSplitter(\n    chunk_size=1500,\n    chunk_overlap=150,\n)\nfinal_chunks = text_splitter.split_documents(header_chunks)\n\nfor chunk in final_chunks[:3]:\n    print(\"metadata:\", chunk.metadata)   # {\"h1\": \"...\", \"h2\": \"...\"}\n    print(\"text:\", chunk.page_content[:120])\n    print()"
+        }
+      ]
+    },
+    {
+      "id": "context-and-metadata",
+      "title": "Attaching context: the often-skipped step",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Even perfect chunk boundaries do not help if the chunk is missing the context that makes it interpretable. A code chunk that contains a function body but not the class it belongs to is ambiguous. A table chunk that has the data but not the table's caption or surrounding prose cannot answer \"what does this table show?\" Attaching context solves this without bloating chunk size."
+        },
+        {
+          "type": "h3",
+          "text": "For code: include the scope chain in metadata"
+        },
+        {
+          "type": "p",
+          "md": "Every code chunk should carry, at minimum: the **file path**, the **enclosing class name** (if any), and the **function or method name**. This metadata can be prepended to the chunk text before embedding (a pattern called contextual retrieval) so the embedding captures that `calculate_discount` is a method on `OrderProcessor` in `billing/orders.py` — not just a stand-alone function whose name might appear in dozens of files."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Prepending scope context to a code chunk",
+          "code": "def build_code_chunk_text(file_path: str, class_name: str | None, func_name: str, body: str) -> str:\n    \"\"\"\n    Prepend a one-line context header so the embedding captures scope.\n    The header is not shown to the user, but it is embedded with the chunk.\n    \"\"\"\n    scope = f\"{file_path}\"\n    if class_name:\n        scope += f\" > {class_name}\"\n    scope += f\" > {func_name}\"\n    return f\"# {scope}\\n{body}\"\n\n# Example output embedded:\n# # billing/orders.py > OrderProcessor > calculate_discount\n# def calculate_discount(self, order_total: float, coupon: str) -> float:\n#     ..."
+        },
+        {
+          "type": "h3",
+          "text": "For Markdown: prepend the heading breadcrumb"
+        },
+        {
+          "type": "p",
+          "md": "When a Markdown section chunk is split further by `RecursiveCharacterTextSplitter`, the sub-chunks lose their heading. Prepend the heading path as a comment before storing: *\"[Guide > Installation > macOS] ...chunk text...\"*. This is the same principle as Anthropic's **contextual retrieval** technique — each chunk carries a short situating prefix so it can be interpreted in isolation."
+        },
+        {
+          "type": "h3",
+          "text": "For tables: serialize as natural language when possible"
+        },
+        {
+          "type": "p",
+          "md": "Raw table syntax (Markdown pipes, CSV commas, HTML tags) is noisy for embedding models. For small tables (under 10 rows), converting the entire table to a prose description using an LLM produces dramatically better retrieval: *\"The pricing table shows three plans. The Starter plan costs $9/month and includes 5 users. The Pro plan costs $29/month and includes 25 users...\"* The cost is one LLM call per table at ingestion time — paid once, offline. For large tables, serialise each row as a keyed sentence and embed rows individually."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Content type",
+            "Atomic unit",
+            "Context to attach",
+            "Fallback when unit too large"
+          ],
+          "rows": [
+            [
+              "Python/JS/TS code",
+              "Function or method",
+              "File path, class name, function name",
+              "Split at inner function/block boundaries via AST"
+            ],
+            [
+              "Markdown document",
+              "Section under a heading",
+              "Full heading breadcrumb (H1 > H2 > H3)",
+              "Recursive split within section, prepend breadcrumb to each sub-chunk"
+            ],
+            [
+              "Markdown table",
+              "Full table or row group",
+              "Table caption + surrounding paragraph",
+              "Repeat header row in each row-group chunk"
+            ],
+            [
+              "CSV / spreadsheet",
+              "Single row",
+              "Column headers as key prefix",
+              "Embed each row as a natural-language sentence"
+            ],
+            [
+              "HTML table",
+              "Full table or row group",
+              "Table caption, `<th>` headers",
+              "Serialize to Markdown first, then apply Markdown table strategy"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pitfalls",
+      "title": "Common pitfalls and how to avoid them",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "Pitfall 1: Using line count instead of token count for code"
+        },
+        {
+          "type": "p",
+          "md": "LlamaIndex `CodeSplitter` defaults to `chunk_lines=40`. That sounds safe, but a 40-line function with long chained method calls or dict literals can exceed 1500 tokens — beyond the 512-token window of embedding models like `text-embedding-3-small`. Always measure your actual function size distribution in tokens, not lines, and set `max_chars` accordingly. A practical rule: target 1000-1500 characters (roughly 300-400 tokens) as your soft budget for code chunks."
+        },
+        {
+          "type": "h3",
+          "text": "Pitfall 2: Splitting inside fenced code blocks in Markdown"
+        },
+        {
+          "type": "p",
+          "md": "Recursive character splitters that are not Markdown-aware will cut through fenced code blocks. The resulting chunks contain malformed Markdown: a closing fence in one chunk and an unclosed fence in the next. Always use a Markdown-aware splitter as the first pass — LangChain's `MarkdownHeaderTextSplitter` tracks fenced blocks and never cuts inside them. Apply `RecursiveCharacterTextSplitter` only on the per-section output of the header splitter, where code blocks are already whole."
+        },
+        {
+          "type": "h3",
+          "text": "Pitfall 3: Treating every table row as an independent chunk"
+        },
+        {
+          "type": "p",
+          "md": "Splitting a table into one chunk per row multiplies your chunk count and produces embeddings that are too narrow. A query like \"which plan supports SSO?\" should retrieve a chunk that shows the full feature row for the relevant plan — ideally with neighbouring rows for comparison. Group rows into batches of 5-20 and always prepend the header. One-row-per-chunk is only justified for very wide tables where a single row exceeds the token budget."
+        },
+        {
+          "type": "h3",
+          "text": "Pitfall 4: Ignoring imports and module-level context for code"
+        },
+        {
+          "type": "p",
+          "md": "A function chunk that calls `np.array()` without its import context will confuse the LLM about which `array` is meant. For code retrieval, consider prepending the file's import block (the top N lines of the file) to every chunk from that file. This adds token overhead but ensures the LLM can interpret type annotations, third-party calls, and module aliases without hallucinating."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Run a quick diagnostic before production: randomly sample 10 chunks from your index and ask whether each one is self-contained and interpretable in isolation. If you cannot answer a specific factual question from the chunk alone, your context attachment strategy needs work."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "For teams building production code-search RAG systems, the 2025 **cAST paper** (arXiv:2506.15655, ACL Findings 2025) is the current state of the art. It uses a split-then-merge algorithm: parse the entire repository into an AST node tree, greedily merge adjacent nodes until a size budget is reached, and recursively decompose oversized nodes. The evaluation reported a 4.3-point Recall@5 improvement on the RepoEval retrieval benchmark and a 2.67-point Pass@1 improvement on SWE-bench code generation compared to line-based splitting — a meaningful gain from a preprocessing change."
+        },
+        {
+          "type": "p",
+          "md": "**Contextual retrieval** (Anthropic, 2024) applies cleanly to all three formats. At ingestion time, send each chunk plus a few hundred tokens of surrounding context to a model and ask it to write a one-sentence situating summary: *\"This function implements the exponential backoff retry logic used by the HTTP client module.\"* Prepend that sentence to the chunk before embedding. Anthropic's internal evaluation found a 35-49% reduction in retrieval failures. The cost is one LLM call per chunk — paid once at ingest, amortised across all queries."
+        },
+        {
+          "type": "p",
+          "md": "**Late chunking** is an alternative that avoids the LLM preprocessing cost entirely. Instead of embedding fixed chunks, embed the entire document using a long-context embedding model that exposes token-level output (such as `jina-embeddings-v2-base-code` for code, which supports up to 8192 tokens). Then pool the token embeddings into chunk-sized windows. Because the embeddings were computed with full document attention, each chunk embedding already encodes cross-chunk context — a function embedding \"knows\" what imports and classes surround it. The trade-off is that not all embedding APIs expose token-level output, and very long files still need splitting before the embedding call."
+        },
+        {
+          "type": "p",
+          "md": "For large mixed-format corpora, the most robust production pattern is a **routing ingestion pipeline**: detect content type per document (or per block within a document), route code to an AST splitter, route Markdown tables to a table-safe splitter, route heading sections to the header splitter, and route plain prose to a recursive or semantic splitter. LlamaIndex and LangChain both support per-document splitter selection during ingestion. A 2026 benchmark on heterogeneous corpora found that strategy routing outperforms any single fixed chunker by a statistically significant margin — the gain comes entirely from not applying a prose splitter to code or a code splitter to prose."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Re-indexing is expensive, so decide on your structure-aware strategy before the first ingest. Treat chunk boundaries as part of your data schema: document the splitter configuration, pin the version, and only change it when you have retrieval metrics that justify a full re-index."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Can I use RecursiveCharacterTextSplitter for code files in LangChain?",
+      "a": "Yes, but use `RecursiveCharacterTextSplitter.from_language(language=Language.PYTHON)` (or another language) rather than the plain constructor. The `from_language` factory sets language-specific separators — for Python these are `\\nclass `, `\\ndef `, `\\n\\n`, and ` ` in priority order — so splits preferentially happen at class and function boundaries. It is not a true AST parser and can miss edge cases, but it is a major improvement over character-count splitting with no extra dependencies."
+    },
+    {
+      "q": "What is the right chunk size for source code functions?",
+      "a": "Most production systems target 1000-1500 characters (roughly 300-450 tokens) per code chunk, which covers the median function size across Python, TypeScript, and Go. The upper bound should be your embedding model's token window: `text-embedding-3-small` supports 8191 tokens, but dense semantic signal degrades past about 512 tokens for retrieval precision. Functions larger than ~1500 tokens should be split at inner block boundaries (nested functions, large `if` branches) via AST, not at arbitrary character positions."
+    },
+    {
+      "q": "How do I handle a Markdown table that is larger than my token budget?",
+      "a": "Split the table by rows into batches and **repeat the header row** at the top of each batch chunk. Never emit a batch without the header — the resulting chunk would be uninterpretable. If individual rows are still too large (e.g., cells contain long paragraphs), truncate cell content and store full cell text in a separate metadata field for the LLM to use after retrieval."
+    },
+    {
+      "q": "Should I embed raw CSV or convert it to natural language first?",
+      "a": "For small tables (under 10 rows), converting to natural-language sentences using an LLM produces noticeably better retrieval because embedding models are trained on prose, not pipe-delimited syntax. For large tables where LLM conversion is too expensive, convert each row to a keyed sentence at minimum: `\"Model: GPT-4o | Context: 128k | Price: $5.00\"` embeds better than `| GPT-4o | 128k | $5.00 |` because field names co-occur with values."
+    },
+    {
+      "q": "Will MarkdownHeaderTextSplitter handle fenced code blocks safely?",
+      "a": "Yes. LangChain's `MarkdownHeaderTextSplitter` tracks fenced code block state and will not split inside a fenced block. However, if a fenced block is very long and you then apply `RecursiveCharacterTextSplitter` to the header-split sections, the second pass may cut inside the fence. Include the triple-backtick fence marker in your `separators` list as a high-priority boundary, or use a code-aware splitter for the inner pass."
+    },
+    {
+      "q": "Does tree-sitter work for all programming languages?",
+      "a": "Tree-sitter supports grammars for over 100 languages including Python, JavaScript, TypeScript, Go, Rust, Java, C, C++, Ruby, and Swift. LlamaIndex `CodeSplitter` uses `tree-sitter-language-pack` which bundles grammars for the most common ones. For less common languages without a tree-sitter grammar, fall back to `RecursiveCharacterTextSplitter.from_language()` if supported, or a line-count heuristic that at least avoids splitting inside function signatures (look for `:` or `{` endings and keep the next N lines together)."
+    }
+  ],
+  "related": [
+    "what-is-chunking-in-rag",
+    "how-rag-pipeline-works",
+    "what-is-rag",
+    "build-your-first-rag-app"
+  ],
+  "furtherReading": [
+    {
+      "title": "cAST: Enhancing Code RAG with Structural Chunking via Abstract Syntax Tree (ACL 2025)",
+      "url": "https://aclanthology.org/2025.findings-emnlp.430/"
+    },
+    {
+      "title": "LlamaIndex CodeSplitter documentation and examples",
+      "url": "https://developers.llamaindex.ai/python/examples/node_parsers/code_splitter_chunking/"
+    },
+    {
+      "title": "Tokenizer-Aware Markdown Chunking That Doesn't Shred Tables — DEV Community",
+      "url": "https://dev.to/gabrielanhaia/tokenizer-aware-markdown-chunking-that-doesnt-shred-tables-3kd7"
+    }
+  ]
+}

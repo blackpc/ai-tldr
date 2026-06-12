@@ -1,0 +1,378 @@
+{
+  "slug": "llm-eval-metrics-explained",
+  "title": "Accuracy, Pass@k, and Rubric Scoring: Eval Metrics Explained",
+  "seoTitle": "LLM Eval Metrics: Accuracy, Pass@k, Rubrics Explained",
+  "metaDescription": "Accuracy, pass@k, F1, and rubric scores all measure different things. Learn what each LLM eval metric means and which one fits your use case.",
+  "keywords": [
+    "what is pass@k metric",
+    "llm evaluation metrics explained",
+    "rubric scoring llm outputs",
+    "accuracy vs f1 llm evals",
+    "how to score llm responses"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Be able to read accuracy, pass@k, F1, and rubric scores — and know which metric actually answers your question.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "An eval metric is the single number that collapses \"how did the model do on this task?\" into something you can track, compare, and argue about. Different metrics answer different questions, and picking the wrong one is surprisingly easy — a model can look great on accuracy and be completely useless in practice, or look mediocre on F1 while solving your actual problem 95% of the time."
+        },
+        {
+          "type": "p",
+          "md": "Here is the cleanest analogy. Imagine rating a restaurant. **Accuracy** is: out of every dish ordered, what fraction arrived at the right table? **F1** digs deeper: did the kitchen miss any orders (*recall*) and did it send out dishes nobody asked for (*precision*)? **Pass@k** is: if a diner orders the same dish up to *k* times, what is the chance at least one version is edible? **Rubric scoring** hands the plate to a food critic with a written checklist — freshness, presentation, seasoning — and asks for a score on each dimension. Each tells you something true. None of them tells you the whole story alone."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This article covers the four metrics you will see most often across LLM papers, benchmarks, and production eval suites. For a broader introduction to what evals are and why you need them, start with [What Are LLM Evals?](/learn/evaluation-safety/evaluation-basics/what-are-llm-evals)."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The metric you choose shapes the behavior you optimize for — and the blind spots you create. A support bot measured only on accuracy against a \"correct answer\" label might reach 90% and still hallucinate on 40% of the questions nobody labeled. A code assistant measured only on pass@1 might look weak when it is actually quite capable with a second attempt. Metric mismatch is one of the most common reasons eval results fail to predict real-world quality."
+        },
+        {
+          "type": "p",
+          "md": "There is also a communication reason to understand these metrics. Papers, benchmarks, and vendor scorecards throw these numbers at you constantly. GPT-4 scored X on HumanEval pass@1. Model Y improves F1 by 3.2 points. Rubric coherence score rose from 3.4 to 4.1. If you cannot translate those claims into \"what does this mean for my task,\" you cannot evaluate whether a model upgrade is worth the cost."
+        },
+        {
+          "type": "h3",
+          "text": "The metric selection problem"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Closed-domain classification** (sentiment, intent detection, label assignment) — accuracy and F1 are the natural fit.",
+            "**Question answering with a fixed correct answer** — exact match and token-level F1 are standard.",
+            "**Code generation** — pass@k is the only metric that captures functional correctness rather than token similarity.",
+            "**Open-ended generation** (summaries, rewrites, explanations) — rubric scoring or LLM-as-a-judge, because there is no single right answer.",
+            "**Anything safety-critical** — rubric scoring against explicit criteria, often with human validation on top."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How each metric works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The four metrics share the same outer loop — run a dataset through the model, collect outputs, score each one — but the scorer is completely different each time. Here is the pipeline, then each scorer in detail."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Eval pipeline",
+            "steps": [
+              {
+                "label": "Dataset",
+                "sub": "inputs + references"
+              },
+              {
+                "label": "Model",
+                "sub": "generates outputs",
+                "accent": true
+              },
+              {
+                "label": "Scorer",
+                "sub": "accuracy / F1 / pass@k / rubric"
+              },
+              {
+                "label": "Aggregate",
+                "sub": "one tracked number"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Accuracy"
+        },
+        {
+          "type": "p",
+          "md": "Accuracy is the fraction of outputs that exactly match the expected label: `correct / total`. It is the right metric when outputs are categorical and every category is equally important. The classic trap is **class imbalance**: if 92% of your support tickets are labeled `other`, a model that always outputs `other` scores 92% accuracy while being completely useless. Always look at per-class breakdowns alongside the headline accuracy number."
+        },
+        {
+          "type": "h3",
+          "text": "F1 (and precision / recall)"
+        },
+        {
+          "type": "p",
+          "md": "F1 is the harmonic mean of precision and recall. **Precision** answers: of everything the model labeled positive, what fraction was actually positive? **Recall** answers: of all the actual positives, what fraction did the model find? F1 = 2 * (precision * recall) / (precision + recall). The harmonic mean punishes extreme imbalances — a model that is perfect on precision but terrible on recall cannot hide behind a high average."
+        },
+        {
+          "type": "p",
+          "md": "In NLP and question-answering tasks, F1 is often computed at the **token level**: precision is the fraction of tokens in the prediction that appear in the reference, recall is the fraction of reference tokens that appear in the prediction. This token-overlap F1 was popularized by the SQuAD benchmark and is still used in reading comprehension and extractive QA tasks. It is more forgiving than exact match — a prediction that adds one extra word is not scored as total failure."
+        },
+        {
+          "type": "h3",
+          "text": "Pass@k"
+        },
+        {
+          "type": "p",
+          "md": "Pass@k was introduced for code evaluation in the Codex paper (Chen et al., 2021) alongside the HumanEval benchmark. The idea: for each programming problem, generate *n* candidate solutions (typically 20 or 200), run each against unit tests, and estimate the probability that at least one of *k* randomly chosen samples passes all tests. Pass@1 is the chance the model's first attempt works. Pass@10 is the chance that at least one of ten attempts works."
+        },
+        {
+          "type": "p",
+          "md": "The naive implementation — generate exactly k samples and check if any pass — has high variance. The paper instead generates a larger n samples, counts c correct ones, and computes an unbiased estimator: `pass@k = 1 - C(n-c, k) / C(n, k)`, where C is the binomial coefficient. If n - c < k, the answer is 1.0 (you cannot pick k samples without getting at least one correct). This estimator is standard; you will see it implemented as a one-liner in most code eval frameworks."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Unbiased pass@k estimator (from Chen et al. 2021)",
+          "code": "import numpy as np\n\ndef pass_at_k(n: int, c: int, k: int) -> float:\n    \"\"\"\n    n = total samples generated per problem\n    c = number of samples that pass all unit tests\n    k = the k in pass@k\n    \"\"\"\n    if n - c < k:\n        return 1.0\n    return 1.0 - np.prod(\n        1.0 - k / np.arange(n - c + 1, n + 1)\n    )\n\n# Example: generated 20 samples, 5 passed, evaluate pass@1 and pass@10\nprint(pass_at_k(n=20, c=5, k=1))   # ~0.25\nprint(pass_at_k(n=20, c=5, k=10))  # ~0.77"
+        },
+        {
+          "type": "h3",
+          "text": "Rubric scoring"
+        },
+        {
+          "type": "p",
+          "md": "Rubric scoring decomposes \"quality\" into a set of named criteria, each scored on a scale. A typical rubric for summarization might score *faithfulness* (does the summary add facts not in the source?), *relevance* (does it cover the important points?), *coherence* (does it read naturally?), and *conciseness* (is it appropriately short?). Each dimension gets a score from 1 to 5, and the scorer can be a human, a separate LLM, or both."
+        },
+        {
+          "type": "p",
+          "md": "The G-Eval framework formalized LLM-as-a-judge rubric scoring: it takes a natural-language criterion, auto-decomposes it into explicit evaluation steps via chain-of-thought, then uses token-level log probabilities to produce a continuous score rather than a discrete 1-5 rating. This reduces noise from rounding. Rubric scoring is the standard approach for any task where the output space is open-ended and there is no single correct answer."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Metric families at a glance",
+            "columns": [
+              {
+                "title": "Deterministic",
+                "items": [
+                  "Accuracy — exact label match",
+                  "Exact Match — full string match",
+                  "F1 — token overlap",
+                  "Pass@k — unit test pass"
+                ]
+              },
+              {
+                "title": "Model-graded",
+                "accent": true,
+                "items": [
+                  "Rubric scoring — criteria checklist",
+                  "G-Eval — CoT + log-probs",
+                  "LLM pairwise — A vs B preference",
+                  "Panel of judges — aggregated jury"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "metric-comparison",
+      "title": "Metric comparison: strengths and blind spots",
+      "blocks": [
+        {
+          "type": "table",
+          "headers": [
+            "Metric",
+            "Best task fit",
+            "Strength",
+            "Blind spot"
+          ],
+          "rows": [
+            [
+              "**Accuracy**",
+              "Classification, multiple choice",
+              "Fast, deterministic, easy to explain",
+              "Misleading on imbalanced classes"
+            ],
+            [
+              "**Token F1**",
+              "Extractive QA, NER, span matching",
+              "Tolerant of paraphrasing, catches partial credit",
+              "Ignores word order and semantic meaning"
+            ],
+            [
+              "**Exact Match**",
+              "Short factual answers, structured output",
+              "Zero-ambiguity, deterministic",
+              "One wrong token = total failure"
+            ],
+            [
+              "**Pass@k**",
+              "Code generation, math with verifiable answer",
+              "Tests functional correctness, not text similarity",
+              "Requires an oracle (unit tests or verifier)"
+            ],
+            [
+              "**Rubric score**",
+              "Summaries, explanations, creative writing",
+              "Captures multidimensional quality",
+              "Judge bias, prompt sensitivity, cost"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Notice that pass@k requires an **oracle** — something that can objectively verify whether an output is correct. For code that means unit tests. For math that means a symbolic solver or ground-truth answer. Without a reliable oracle, pass@k is not useful. This is why it dominates code evals (where unit tests are cheap) but rarely appears in open-ended language tasks."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "**Do not average rubric sub-scores into a single number before understanding each dimension.** A model that scores 4.8 on coherence and 1.2 on faithfulness averages to a misleadingly mediocre 3.0 — and the faithfulness failure is the dangerous one for a factual application. Track dimensions separately."
+        }
+      ]
+    },
+    {
+      "id": "choosing-a-metric",
+      "title": "Choosing the right metric for your task",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The question to ask is: **what failure mode am I actually trying to catch?** Each metric has a different answer to that question, and the best eval suites use two or three metrics that catch different failure modes rather than one metric that looks impressive."
+        },
+        {
+          "type": "h3",
+          "text": "Decision guide"
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Is the output categorical?** Yes → start with accuracy and per-class F1. Check class balance before trusting the headline.",
+            "**Is the output a short extractable span?** Yes → use exact match plus token F1 as a softened backup.",
+            "**Is the output code or a math answer?** Yes → pass@1 is the primary metric. Add pass@10 if users can retry. Never use BLEU or ROUGE on code.",
+            "**Is the output open-ended prose?** Yes → rubric scoring (faithfulness, relevance, coherence at minimum). Validate your judge against human labels on a sample.",
+            "**Are you comparing two prompt variants?** Consider A/B win rate (also a rubric, but framed as a preference) rather than an absolute score — relative judgments are easier for LLM judges to make reliably."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "A practical default for production eval suites: pick one deterministic metric and one rubric score. The deterministic metric gives you cheap, fast regression tests. The rubric score gives you the nuanced quality signal. If they agree, trust them. If they diverge, the divergence is itself the signal — investigate why."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "**Calibrate your rubric scores against human labels before using them to make decisions.** Run 50-100 samples through both a human rater and your LLM judge, measure agreement (Cohen's kappa or simple correlation), and treat scores with low agreement as unreliable. A rubric that sounds reasonable can still be measuring the judge's style preferences rather than the output's quality."
+        },
+        {
+          "type": "h3",
+          "text": "When pass@k hides information"
+        },
+        {
+          "type": "p",
+          "md": "Pass@k is a probability estimate, but it flattens an important distribution. A model with pass@10 = 0.80 could be one that nails 80% of problems on the first try and fails the rest completely, or one that almost-solves every problem but needs many tries. The first model is much more useful for a code-completion autocomplete, while the second might be better for a \"generate and test\" pipeline that automatically runs unit tests and retries. Decompose by problem difficulty and examine the pass@1 distribution before choosing between models based on pass@10."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you have a working eval with sensible metrics, a more subtle set of problems emerges. These are the traps that matter at scale."
+        },
+        {
+          "type": "h3",
+          "text": "Metric gaming and Goodhart's law"
+        },
+        {
+          "type": "p",
+          "md": "Goodhart's law says: once a measure becomes a target, it ceases to be a good measure. In LLM evals this is extremely real. Models fine-tuned on a benchmark often learn to exploit the metric rather than the underlying skill. BLEU and ROUGE scores can be inflated by repeating phrases from the reference. Token F1 in QA can be gamed by including the question text in the answer. Pass@k on HumanEval has been reported to plateau as models memorize test-adjacent training examples. This is why production teams rotate datasets, add held-out splits, and cross-check with rubric scoring: any single metric can be gamed."
+        },
+        {
+          "type": "h3",
+          "text": "Statistical significance of metric changes"
+        },
+        {
+          "type": "p",
+          "md": "A 1-point accuracy improvement on 200 examples is likely noise. Use bootstrapped confidence intervals or McNemar's test to know whether a change is real. For pass@k, the unbiased estimator has a well-defined variance — compute it, do not just report the point estimate. Rule of thumb: with fewer than 500 eval examples, treat differences smaller than 2-3 percentage points as inconclusive unless you compute the confidence interval."
+        },
+        {
+          "type": "h3",
+          "text": "Multi-dimensional rubric aggregation"
+        },
+        {
+          "type": "p",
+          "md": "When you have five rubric dimensions, resist collapsing them into one score for reporting. Different dimensions can move in opposite directions after a prompt change: faithfulness goes up, conciseness goes down. A weighted average hides the tradeoff. A better pattern is to define a **primary metric** (e.g., faithfulness for a factual assistant) and treat secondary dimensions as constraints — a response only passes if faithfulness >= 4.0, regardless of what coherence scores."
+        },
+        {
+          "type": "h3",
+          "text": "Combining metrics into a composite eval"
+        },
+        {
+          "type": "p",
+          "md": "Production evals for serious applications often combine metrics in a tiered structure. The first tier is a cheap exact-match or regex check (format, schema, safety keywords). The second tier is a fast deterministic metric (accuracy, F1, or pass@k). The third tier is a rubric score that only runs on examples that pass the first two tiers. This keeps costs manageable while ensuring quality checks are not skipped. The cost structure matters: rubric scoring with a capable judge model can be expensive at scale, while exact-match checks are essentially free."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "**Rubric scores and model biases are deeply intertwined.** LLM judges tend to favor longer outputs, prefer outputs that match their own writing style, and can be inconsistent across runs. The most robust mitigation for high-stakes evals is a panel of diverse judge models — their individual biases partially cancel in the aggregate. See [LLM-as-a-Judge Explained](/learn/evaluation-safety/llm-as-judge/llm-as-a-judge-explained) for a full treatment of judge biases and calibration."
+        },
+        {
+          "type": "h3",
+          "text": "Pass@k for non-code tasks"
+        },
+        {
+          "type": "p",
+          "md": "Pass@k is increasingly used outside of code whenever there is a verifiable oracle. Math benchmarks like MATH and AIME use it with answer-equivalence checking. Structured output tasks use it with schema validation. If you can write a function `is_correct(output) -> bool` that is reliable and cheap to call, pass@k is always worth adding alongside your other metrics — it directly measures whether the model can solve the problem, not whether it sounds like it can."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is pass@k in simple terms?",
+      "a": "Pass@k is the probability that at least one of k attempts by the model produces a correct answer. For code, \"correct\" means passing all unit tests. Pass@1 is the chance the first attempt works; pass@10 is the chance at least one of ten attempts works. It measures what you actually care about in code generation: functional correctness, not text similarity to a reference."
+    },
+    {
+      "q": "What is the difference between accuracy and F1 score for LLM evaluation?",
+      "a": "Accuracy counts the fraction of outputs that match the correct label — it treats all classes equally. F1 is the harmonic mean of precision and recall, which matters when classes are imbalanced or when both false positives and false negatives are costly. On a balanced dataset they tend to be similar; on an imbalanced one, accuracy can look great while F1 exposes that the model ignores the minority class."
+    },
+    {
+      "q": "When should I use rubric scoring instead of accuracy or F1?",
+      "a": "Use rubric scoring when there is no single correct answer — summaries, explanations, creative writing, conversational responses. Accuracy and F1 require a ground-truth label to compare against; rubric scoring instead asks a judge (human or LLM) to evaluate specific quality dimensions like faithfulness, relevance, and coherence. It is slower and more expensive, but it is the only option for open-ended generation tasks."
+    },
+    {
+      "q": "Why is exact match too strict for question answering?",
+      "a": "Exact match gives zero credit to any output that differs by even one character from the reference — a trailing period, a synonym, or a different number format all count as total failures. Token-level F1 is usually used alongside exact match in QA benchmarks because it gives partial credit for partially correct answers, making the metric more informative and more stable across paraphrasing."
+    },
+    {
+      "q": "How many samples do I need to generate for a reliable pass@k estimate?",
+      "a": "The standard in research is n=200 samples per problem for the unbiased estimator. For production evals, n=20 is often practical and gives reasonable estimates for pass@1 through pass@10. Fewer than 5 samples per problem makes the estimate unreliable. Always compute and report confidence intervals alongside the pass@k point estimate, especially if you are comparing two models."
+    },
+    {
+      "q": "Can I combine multiple eval metrics into a single score?",
+      "a": "Yes, but be careful. A tiered approach works well: first run cheap exact-match checks, then a deterministic metric like F1 or pass@k, then rubric scoring only on outputs that pass earlier tiers. Avoid collapsing rubric sub-scores into a single weighted average before you understand each dimension independently — averages can hide critical failures on one dimension that a threshold-based approach would catch."
+    }
+  ],
+  "related": [
+    "what-are-llm-evals",
+    "golden-dataset-llm-testing",
+    "code-vs-model-graded-evals",
+    "llm-as-a-judge-explained"
+  ],
+  "furtherReading": [
+    {
+      "title": "Evaluating Large Language Models Trained on Code (Codex / HumanEval paper)",
+      "url": "https://arxiv.org/abs/2107.03374"
+    },
+    {
+      "title": "G-Eval: NLG Evaluation Using GPT-4 with Better Human Alignment",
+      "url": "https://arxiv.org/abs/2303.16634"
+    },
+    {
+      "title": "LLM Evaluation Metrics: The Ultimate Guide — Confident AI",
+      "url": "https://www.confident-ai.com/blog/llm-evaluation-metrics-everything-you-need-for-llm-evaluation"
+    }
+  ]
+}

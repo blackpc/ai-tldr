@@ -1,0 +1,440 @@
+{
+  "slug": "designing-for-llm-latency",
+  "title": "Designing for LLM Latency: Streaming, Skeletons, and Stop Buttons",
+  "seoTitle": "Designing for LLM Latency: Streaming UX Patterns",
+  "metaDescription": "LLMs are slow — design for it. When to stream, when to show skeletons, why every generation needs a stop button, and perceived-speed tricks.",
+  "keywords": [
+    "designing for llm latency",
+    "streaming ux patterns ai apps",
+    "loading states for ai responses",
+    "stop button generative ui",
+    "perceived performance llm apps"
+  ],
+  "difficulty": "beginner",
+  "oneLiner": "Turn multi-second model latency into a UX feature instead of a support ticket.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "An LLM generating a response is not like a database returning a row. A database query takes milliseconds. An LLM generating 400 tokens at a typical hosted-API speed takes **3–10 seconds**, and a long reasoning response or document summary can run 30 seconds or more. That is not a bug — it is how the technology works. The model reads every token it has generated so far before deciding what to write next, so generation time grows with output length."
+        },
+        {
+          "type": "p",
+          "md": "Designing for LLM latency means making those seconds feel tolerable — or even reassuring — rather than broken. The three main tools are **streaming** (show each word as it is generated), **loading skeletons** (show a placeholder shaped like the expected answer while the first token is on its way), and a **stop button** (let users cancel a generation they no longer want). Together they transform a 7-second white-screen freeze into an experience that feels roughly as fast as watching someone type."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like watching a Polaroid develop. If someone handed you a blank white square and silently walked away, you'd assume something broke. But if you can *see* the image slowly appearing, the same 60-second wait feels intentional and alive. Streaming text is the LLM equivalent of that developing photograph."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This article focuses on the *frontend and API design* side of latency — the UX decisions that happen after you have picked a model. For model-level speed tuning (quantization, speculative decoding, hardware), see the Going Deeper section."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Latency is the most common reason users abandon an AI feature after the first try. Research on human-computer interaction consistently finds that **under 100 ms feels instant, under 1 second keeps the user's flow of thought intact, and over 10 seconds causes most users to lose attention or assume the page is broken**. LLMs routinely live in the 3–10 second range for a first response — solidly inside the danger zone where users start refreshing or switching tabs."
+        },
+        {
+          "type": "p",
+          "md": "There are three practical costs when you ignore latency design:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Abandoned sessions.** Users who see a spinner for 5+ seconds with no feedback frequently refresh the page, which cancels the request entirely, wastes the compute you already paid for, and leaves the user thinking the product is broken.",
+            "**Wasted API spend.** Without a stop button, a user who gets the answer they need in the first paragraph still waits (and you still pay) for the remaining 1,000 tokens the model is generating. On high-traffic apps this is measurable money.",
+            "**Trust erosion.** Silent waiting with no progress signal makes users *less* confident in the answer that finally arrives, not more. A skeleton that shows the response structure materialising is psychologically reassuring even if the actual text isn't there yet."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The flip side: when latency is designed well, it stops being a liability and becomes a *feature*. Watching a ChatGPT or Claude response stream in feels like watching a knowledgeable colleague think out loud. Users who see text appearing immediately rate the product as faster even when total generation time is identical to a batch response. **Perceived speed and actual speed are different quantities, and you can move perceived speed without changing a single line of model code.**"
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Three concepts underpin all LLM latency UX: **Time to First Token (TTFT)**, **inter-token latency**, and the **streaming protocol**. Understanding them tells you which UX pattern to reach for in which situation."
+        },
+        {
+          "type": "h3",
+          "text": "Time to First Token (TTFT)"
+        },
+        {
+          "type": "p",
+          "md": "TTFT is the gap between submitting a request and receiving the very first output token. During this window the model is reading your prompt, running attention over the full context, and warming up the key-value cache. Depending on prompt length, model size, and server load, TTFT typically ranges from **200 ms on a fast dedicated deployment up to 2–4 seconds on a busy shared API**. This is the window where a skeleton or a status message matters most — the user sees *nothing* happening unless you put something there deliberately."
+        },
+        {
+          "type": "h3",
+          "text": "Inter-token latency"
+        },
+        {
+          "type": "p",
+          "md": "Once the first token arrives, subsequent tokens follow at a rate determined by GPU throughput — typically **20–80 tokens per second** on major hosted APIs, which translates to roughly 15–60 words per second. At 40 tokens/s a 400-token reply fully streams in about 10 seconds, but the user is reading the whole time rather than waiting. This is why streaming transforms perceived latency so dramatically."
+        },
+        {
+          "type": "h3",
+          "text": "The streaming protocol: Server-Sent Events"
+        },
+        {
+          "type": "p",
+          "md": "Most LLM APIs — OpenAI, Anthropic, Google, and the Vercel AI SDK — deliver streamed tokens over **Server-Sent Events (SSE)**. SSE is a one-way HTTP channel: the server pushes small chunks of text whenever a token is ready, and the browser receives them incrementally. Each chunk is a small JSON payload (or a `data:` line in the SSE format) that your frontend appends to the displayed text. The connection closes when the model emits a `[DONE]` sentinel."
+        },
+        {
+          "type": "code",
+          "lang": "typescript",
+          "title": "Minimal streaming fetch with AbortController (TypeScript)",
+          "code": "const controller = new AbortController();\n\nconst response = await fetch('/api/chat', {\n  method: 'POST',\n  body: JSON.stringify({ messages }),\n  signal: controller.signal,   // <-- wired to the Stop button\n});\n\nconst reader = response.body!.getReader();\nconst decoder = new TextDecoder();\n\nwhile (true) {\n  const { done, value } = await reader.read();\n  if (done) break;\n  const chunk = decoder.decode(value);\n  appendToUI(chunk);           // show each token as it arrives\n}\n\n// Stop button handler:\nstopButton.onclick = () => controller.abort();"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Streaming LLM response lifecycle",
+            "steps": [
+              {
+                "label": "User submits prompt",
+                "sub": "UI shows skeleton / spinner"
+              },
+              {
+                "label": "Server receives request",
+                "sub": "Forwards to LLM API with stream=true"
+              },
+              {
+                "label": "TTFT window",
+                "sub": "Model reads context, no output yet (200ms–4s)"
+              },
+              {
+                "label": "First token arrives",
+                "sub": "Skeleton replaced by live streaming text"
+              },
+              {
+                "label": "Tokens stream in",
+                "sub": "UI appends each token; Stop button is visible"
+              },
+              {
+                "label": "Stream ends or user stops",
+                "sub": "Input re-enabled; partial text preserved"
+              }
+            ]
+          }
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The Vercel AI SDK's `useChat` hook handles SSE parsing, state management, and an `AbortController`-backed `stop()` call out of the box — it is worth the dependency for any React/Next.js project. For other stacks, the [Anthropic streaming docs](https://docs.anthropic.com/en/api/streaming) and [OpenAI streaming guide](https://platform.openai.com/docs/api-reference/streaming) both walk through raw SSE consumption."
+        }
+      ]
+    },
+    {
+      "id": "loading-states",
+      "title": "The right loading state for each phase",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Not every part of an LLM response lifecycle looks the same, and the right visual treatment differs by phase. Using a spinner everywhere is lazy and unhelpful; using a skeleton in the wrong moment creates false expectations. Here is how to think about it."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Phase",
+            "What the user sees",
+            "Best loading pattern"
+          ],
+          "rows": [
+            [
+              "TTFT window (0 → first token)",
+              "Nothing has arrived yet",
+              "Animated skeleton shaped like the expected output"
+            ],
+            [
+              "Streaming in progress",
+              "Tokens arriving steadily",
+              "Live text append with a blinking cursor at the tail"
+            ],
+            [
+              "Tool call / retrieval mid-stream",
+              "Model paused while fetching data",
+              "Inline status line: \"Searching…\" or \"Reading document…\""
+            ],
+            [
+              "Error or timeout",
+              "Generation stopped unexpectedly",
+              "Error message + Retry button; keep partial text visible"
+            ],
+            [
+              "User cancelled (Stop)",
+              "User clicked Stop",
+              "Preserve partial text; re-enable input immediately"
+            ]
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Skeletons: why they beat spinners for AI"
+        },
+        {
+          "type": "p",
+          "md": "A spinner says *something is happening*. A skeleton says *here is roughly what is about to appear*. For AI responses, skeletons are substantially better because they set spatial expectations — the user's eye is already positioned where the text will land, so when tokens arrive there is no jarring layout shift. Research on web UX finds that **skeleton screens feel 20% faster than spinners for identical wait times**, even though both are purely cosmetic. The pulse or shimmer animation on a skeleton also signals *ongoing progress* rather than static blocking — 300–700 ms cycles work best."
+        },
+        {
+          "type": "p",
+          "md": "For a chat interface, a good skeleton is two or three grey rounded lines of varying width sitting in the assistant bubble — close enough to the shape of a real reply that the transition from placeholder to text feels smooth rather than jumpy. For a document-generation feature, the skeleton might be a full-page layout of grey lines. The key rule: **the skeleton should look like the answer you expect, not a generic loader**."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Do **not** use a skeleton that implies more structure than the model will actually return. If the reply might be a single short sentence, a skeleton with five paragraph-length rows creates a false expectation and the collapse from skeleton to actual content feels like a bug."
+        },
+        {
+          "type": "h3",
+          "text": "Status lines for agentic flows"
+        },
+        {
+          "type": "p",
+          "md": "When an LLM is part of a multi-step agent — calling tools, running searches, reading files — there are often 5–20 seconds of *non-streaming* work between the user's message and the first output token. A skeleton alone is not enough; you need a **status line** that advances with each step. This is what you see in Perplexity's \"Searching the web…\", Claude's \"Reading document…\", or OpenAI's \"Running code…\" animations. Each line change tells the user the system is making progress and gives a hint about what kind of answer is coming."
+        }
+      ]
+    },
+    {
+      "id": "stop-button",
+      "title": "The stop button: why every generation needs one",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A stop button is not a nice-to-have. It is a first-class control that belongs in every AI interface that streams output. Here is why it matters from multiple angles:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**User control.** The model often starts going in the wrong direction within the first sentence. Without a Stop button, the user must wait for the full generation before they can ask again. That is an unnecessary 5–20 second tax on every misdirected prompt.",
+            "**Cost savings.** Tokens you generate but the user doesn't want still cost money. A stop button that actually cancels the upstream API call (via `AbortController`) saves real spend at scale.",
+            "**Responsiveness signal.** The presence of a Stop button tells users the system is *listening* even while it is generating. Products that hide or disable all controls during generation feel sluggish and disrespectful of the user's time."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Implementing a real stop"
+        },
+        {
+          "type": "p",
+          "md": "A stop button that only hides the spinner without cancelling the HTTP request is fake. The connection stays open, tokens keep arriving on the server, and you keep paying for them. A real stop requires threading an `AbortController` signal all the way from the UI button to the upstream API call."
+        },
+        {
+          "type": "code",
+          "lang": "typescript",
+          "title": "Server-side abort forwarding (Next.js App Router route handler)",
+          "code": "import Anthropic from '@anthropic-ai/sdk';\n\nexport async function POST(req: Request) {\n  const { messages } = await req.json();\n  const client = new Anthropic();\n\n  const stream = client.messages.stream({\n    model: 'claude-opus-4-5',\n    max_tokens: 1024,\n    messages,\n  });\n\n  // Forward the browser's abort signal to the Anthropic stream\n  req.signal.addEventListener('abort', () => stream.abort());\n\n  return new Response(\n    new ReadableStream({\n      async start(controller) {\n        for await (const chunk of stream) {\n          if (req.signal.aborted) break;\n          controller.enqueue(new TextEncoder().encode(JSON.stringify(chunk) + '\\n'));\n        }\n        controller.close();\n      },\n    }),\n    { headers: { 'Content-Type': 'application/x-ndjson' } }\n  );\n}"
+        },
+        {
+          "type": "p",
+          "md": "The critical line is `req.signal.addEventListener('abort', () => stream.abort())`. When the browser fires `controller.abort()`, the HTTP request's `AbortSignal` fires, which this handler forwards to the Anthropic client stream, which cancels the upstream API call. Without that chain, you have a UI affordance with no real effect."
+        },
+        {
+          "type": "h3",
+          "text": "What to do with partial output"
+        },
+        {
+          "type": "p",
+          "md": "When a user stops a generation, **keep the partial text visible** rather than clearing it. The partial response often contains exactly the information the user needed — that is frequently *why* they stopped. Clearing it forces them to regenerate. Mark the message visually as incomplete (a subtle \"Generation stopped\" label works) and re-enable the input immediately so they can follow up."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Disable the text input field and the submit button *during* streaming to prevent overlapping requests, which can scramble message order or exceed rate limits. Re-enable them the moment streaming ends or is aborted. The Stop button itself should replace the Submit button during streaming — same position, different icon — so the affordance is always exactly where the user's eye is."
+        }
+      ]
+    },
+    {
+      "id": "perceived-speed-tricks",
+      "title": "Perceived-speed tricks that cost nothing",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Beyond the core patterns, there is a set of low-effort techniques that measurably improve how fast an AI feature *feels* without any model changes:"
+        },
+        {
+          "type": "h3",
+          "text": "Show the user's message immediately (optimistic UI)"
+        },
+        {
+          "type": "p",
+          "md": "The moment the user presses Send, add their message to the conversation thread and show the assistant skeleton below it — before any network request has returned. This makes the round-trip latency feel like model latency only, not model latency *plus* network time. Users perceive the interface as responding to their action immediately."
+        },
+        {
+          "type": "h3",
+          "text": "Use a typing cursor, not a blinking box"
+        },
+        {
+          "type": "p",
+          "md": "A blinking block cursor at the end of the streaming text is a small detail that has a disproportionate impact. It signals *the system is still writing* in a way that matches how humans intuitively interpret someone typing. Without it, users often mistake a mid-stream pause (the model choosing a complex word) for a completed — or crashed — response."
+        },
+        {
+          "type": "h3",
+          "text": "Set expectations with a status word"
+        },
+        {
+          "type": "p",
+          "md": "For operations you know will be slow — a long document summary, a multi-step agent task — a single line of text before the skeleton pays dividends. \"Analysing your document...\" or \"Searching for recent news...\" reframes the wait from *broken* to *working on it*. Studies on conversational agents find that even a brief filler phrase reduces perceived delay and improves satisfaction ratings, independent of actual latency."
+        },
+        {
+          "type": "h3",
+          "text": "Avoid layout shifts when the response arrives"
+        },
+        {
+          "type": "p",
+          "md": "If the skeleton does not match the shape of the real response, the UI lurches when the transition happens. Reserve space in your layout for the assistant bubble *before* content arrives — either with a min-height on the container or a skeleton that approximates the expected response length. For known-length outputs (a one-line classification, a yes/no) use a single-line skeleton rather than the default multi-paragraph placeholder."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Without vs with latency UX design",
+            "columns": [
+              {
+                "title": "No latency design",
+                "items": [
+                  "Blank screen for 4–8 seconds",
+                  "No way to cancel generation",
+                  "Spinner that looks like a broken page",
+                  "Page jumps when answer appears",
+                  "Input stays blocked until done",
+                  "Users refresh and lose context"
+                ]
+              },
+              {
+                "title": "With latency design",
+                "accent": true,
+                "items": [
+                  "Skeleton appears in < 100 ms",
+                  "Stop button cancels generation",
+                  "Status line shows what model is doing",
+                  "Smooth skeleton-to-text transition",
+                  "Input blocked but Stop is always reachable",
+                  "Partial text preserved on cancel"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you have mastered the baseline patterns above, there are more sophisticated techniques for squeezing additional perceived — and actual — performance out of an LLM application."
+        },
+        {
+          "type": "h3",
+          "text": "Semantic caching"
+        },
+        {
+          "type": "p",
+          "md": "A semantic cache stores the *vector embedding* of previous prompts alongside their responses. When a new prompt is sufficiently similar (above a cosine-similarity threshold), the cached response is returned instantly without hitting the model at all. For apps where many users ask the same class of question — a customer support bot, a product FAQ assistant — hit rates of 30–60% are achievable, eliminating latency entirely for those requests. Redis, Upstash, and GPTCache are commonly used for this pattern."
+        },
+        {
+          "type": "h3",
+          "text": "Prompt caching (provider-level)"
+        },
+        {
+          "type": "p",
+          "md": "Both Anthropic and OpenAI offer **prompt caching**: if you send the same large system prompt or document prefix repeatedly, the key-value cache from the first call is reused on subsequent calls, reducing TTFT by 80–90% and cost by up to 90% for the cached portion. For apps with a fixed system prompt or a large static context (a 50-page manual, a codebase), enabling this is one of the highest-leverage latency improvements available with zero frontend work."
+        },
+        {
+          "type": "h3",
+          "text": "Speculative decoding and quantization"
+        },
+        {
+          "type": "p",
+          "md": "When self-hosting a model, **speculative decoding** uses a small fast draft model to predict several tokens ahead, then verifies them in parallel with the main model — achieving 2–3x throughput gains with no quality loss. **Quantization** (running the model in INT8 or INT4 instead of FP16) cuts memory bandwidth requirements and lifts tokens-per-second by 1.5–2x. Neither technique is something you configure in a hosted API call, but understanding them helps you evaluate provider benchmarks and choose between deployments."
+        },
+        {
+          "type": "h3",
+          "text": "Parallelising agent steps"
+        },
+        {
+          "type": "p",
+          "md": "Multi-step agentic workflows often run steps that are *independent* of each other serially by default. If your agent needs to search three different sources before drafting an answer, fetching them in parallel cuts wall-clock time by roughly 60–70%. Most orchestration frameworks (LangGraph, the Vercel AI SDK's `tool` parallelism) support parallel tool calls natively — you just need to structure your workflow to request them at the same time rather than in sequence."
+        },
+        {
+          "type": "h3",
+          "text": "Resumable streams"
+        },
+        {
+          "type": "p",
+          "md": "For long-running generations (code generation, document drafts), a network drop mid-stream means starting over. **Resumable streams** persist generation state server-side and allow the client to reconnect and continue from where it left off. The Vercel AI SDK's `resumeStream` feature and Anthropic's streaming API both support this pattern, though it requires careful state management: you must choose between resumability and instant abort (an abort on a resumable stream is treated as a disconnect, not a cancellation)."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The latency budget also shifts with model capability tier. A **reasoning model** (like Claude Sonnet's extended thinking or OpenAI's o-series) can take 30–120 seconds of silent \"thinking\" before the first output token. For these models, a static skeleton is insufficient — you need an animated thinking indicator, ideally with a visible token count or elapsed-time ticker so users know the model is making progress rather than frozen."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Does streaming actually make my app faster, or just feel faster?",
+      "a": "Streaming does not change total generation time at all — the model still generates the same number of tokens at the same speed. What changes is *perceived* speed: users see the first token within the TTFT window (often under 500 ms) rather than waiting for the full response. Research consistently shows users rate streamed interfaces as significantly faster even when total time is identical to a batch response."
+    },
+    {
+      "q": "When should I use a skeleton instead of a spinner?",
+      "a": "Use a skeleton whenever you know the rough *shape* of the response that is coming — a chat bubble, a card layout, a list. A skeleton sets spatial expectations so the transition from loading to real content is smooth. Use a spinner (or nothing) only when you have no idea what shape the response will take, or when the wait is under ~300 ms and a skeleton would flash too briefly to be useful."
+    },
+    {
+      "q": "How do I make the stop button actually cancel the API call?",
+      "a": "You need an `AbortController` whose `.signal` is passed to the `fetch()` call on the client, and whose abort event is forwarded to the upstream LLM API call on the server. Simply hiding the UI without cancelling the HTTP connection keeps the server generating tokens and keeps the billing meter running. Most frameworks like the Vercel AI SDK handle this automatically via their `stop()` helper, but you should verify the upstream request is truly cancelled."
+    },
+    {
+      "q": "What should I show when an LLM tool call takes a long time mid-stream?",
+      "a": "Show an inline status line that updates as each tool executes: \"Searching the web...\", \"Reading 3 documents...\", \"Running calculation...\". These status updates tell the user the system is making progress and prime their expectations for the type of answer coming. A skeleton with no status change during a 15-second tool call feels frozen — the status line is what differentiates a thinking system from a broken one."
+    },
+    {
+      "q": "Should I block the input field during streaming?",
+      "a": "Yes. Allowing a new submission while the current stream is in progress creates race conditions: responses can arrive out of order, the state machine gets complicated, and the UI can become incoherent. Block the submit button and text input during streaming, but keep the Stop button prominent and active at all times. Re-enable input the instant the stream ends or is cancelled."
+    },
+    {
+      "q": "What is TTFT and why does it matter more than tokens-per-second?",
+      "a": "TTFT (Time to First Token) is the delay between sending a request and seeing the first character of output. It is the dead-silent period that users experience as the model \"thinking\". Tokens-per-second determines how fast text *flows* once it starts. TTFT dominates perceived responsiveness — a model with 300 ms TTFT and 40 tokens/s will feel far faster than one with 4 s TTFT and 80 tokens/s, even though the second model has higher raw throughput."
+    }
+  ],
+  "related": [
+    "what-makes-good-ai-ux",
+    "chatbot-ux-patterns",
+    "modern-ai-app-stack",
+    "llm-streaming-explained",
+    "python-vs-typescript-ai"
+  ],
+  "furtherReading": [
+    {
+      "title": "Streaming LLM Responses: Make Your AI App Feel Fast — Redis",
+      "url": "https://redis.io/blog/streaming-llm-responses/"
+    },
+    {
+      "title": "Advanced: Stopping Streams — Vercel AI SDK",
+      "url": "https://ai-sdk.dev/docs/advanced/stopping-streams"
+    },
+    {
+      "title": "Time to First Token (TTFT) — FutureAGI Glossary",
+      "url": "https://futureagi.com/glossary/time-to-first-token/"
+    }
+  ]
+}

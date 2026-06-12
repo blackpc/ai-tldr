@@ -1,0 +1,382 @@
+{
+  "slug": "multi-turn-conversations",
+  "title": "How to Build Multi-Turn Conversations with a Stateless API",
+  "seoTitle": "Multi-Turn Conversations with a Stateless LLM API",
+  "metaDescription": "LLM APIs forget everything between calls. Learn how to build chat memory by resending history, trimming context, and managing conversation state.",
+  "keywords": [
+    "why do llm apis not remember conversations",
+    "how to build chat history with llm api",
+    "stateless api conversation state",
+    "send conversation history to llm",
+    "trim chat history context window"
+  ],
+  "difficulty": "beginner",
+  "oneLiner": "Learn why the API forgets everything between calls and how real chat apps fake memory by resending and trimming history.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every time you call an LLM API, the model starts completely blank. There is no session, no running process keeping your conversation alive between calls — each request is processed from scratch, exactly like the first one you ever sent. This is what engineers mean when they say the API is **stateless**: there is no state being held for you on the server between requests."
+        },
+        {
+          "type": "p",
+          "md": "The analogy that makes this click: imagine a very talented consultant who reads incredibly fast, but suffers complete amnesia the moment you hang up the phone. Every time you call back, you have to recap the whole conversation from the beginning before asking your next question. That is precisely what your app has to do with an LLM API. The 'memory' you experience in polished chat products is not magic — it is the application recapping the entire conversation transcript at the start of every single API call."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Statelessness is a deliberate design choice, not a limitation. It keeps servers simple and scales infinitely — any server can handle any request because nothing is stored between calls. The tradeoff is that **your application** is responsible for managing conversation state."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters for builders",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "If you skip history management, every message your user sends gets a response that ignores everything they said before. The model has no idea it already introduced itself, no idea the user said they prefer Python examples, no idea what question it just answered. The result is a frustrating, incoherent chat experience."
+        },
+        {
+          "type": "p",
+          "md": "Get it right, and you have a fully functional conversational app with no server-side state to maintain. Get it wrong in the other direction — and send too much history — and you hit two concrete problems: **cost** and **context limits**. Because every turn re-sends all previous turns as input tokens, a ten-turn conversation can cost dramatically more than ten times the first message. And every model has a hard limit on total tokens it will accept in a single request; exceed it and the API returns an error."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**No history at all**: model is incoherent, forgets everything between messages",
+            "**Too much history**: hits the model's context window limit, request fails with an error",
+            "**Unbounded history growth**: token costs compound with every turn, expensive at scale",
+            "**Right-sized history**: coherent conversation, predictable costs, requests always succeed"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works: the messages array",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Both major APIs — OpenAI's Chat Completions and Anthropic's Messages — represent a conversation as an **array of message objects**, where each object has a `role` and `content`. The roles are `user` (what the human said) and `assistant` (what the model replied). Some APIs also support a `system` role for a persistent instruction that frames the whole conversation."
+        },
+        {
+          "type": "p",
+          "md": "To build a multi-turn conversation, your application maintains this array in memory (or a database), appends each new turn, and sends the entire array with every API call. The model reads the full transcript top-to-bottom before generating its reply at the bottom — like reading a chat log and then responding."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Multi-turn conversation loop",
+            "steps": [
+              {
+                "label": "User sends a message",
+                "sub": "Your app receives user input"
+              },
+              {
+                "label": "Append to messages array",
+                "sub": "{role: \"user\", content: \"...\"}"
+              },
+              {
+                "label": "POST full array to API",
+                "sub": "All previous turns included"
+              },
+              {
+                "label": "Model reads full history",
+                "sub": "Processes transcript top to bottom"
+              },
+              {
+                "label": "API returns assistant reply",
+                "sub": "Response object with content"
+              },
+              {
+                "label": "Append reply to array",
+                "sub": "{role: \"assistant\", content: \"...\"}"
+              },
+              {
+                "label": "Wait for next user message",
+                "sub": "Loop repeats from step 1"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Here is what this looks like in practice with the OpenAI SDK in Python. The `messages` list starts with a system instruction, then grows with each turn:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "from openai import OpenAI\n\nclient = OpenAI()  # reads OPENAI_API_KEY from env\n\n# Seed with a system message (optional but common)\nmessages = [\n    {\"role\": \"system\", \"content\": \"You are a helpful assistant.\"}\n]\n\nwhile True:\n    user_input = input(\"You: \")\n    if user_input.lower() in (\"quit\", \"exit\"):\n        break\n\n    # 1. Append the new user turn\n    messages.append({\"role\": \"user\", \"content\": user_input})\n\n    # 2. Send the FULL messages array\n    response = client.chat.completions.create(\n        model=\"gpt-4o\",\n        messages=messages\n    )\n\n    assistant_reply = response.choices[0].message.content\n    print(f\"Assistant: {assistant_reply}\")\n\n    # 3. Append the assistant reply so next turn has context\n    messages.append({\"role\": \"assistant\", \"content\": assistant_reply})"
+        },
+        {
+          "type": "p",
+          "md": "The Anthropic Messages API works identically — same alternating `user`/`assistant` pattern, same principle of resending the full array each call:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "import anthropic\n\nclient = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from env\n\nmessages = []  # Anthropic uses a top-level system param instead\n\nwhile True:\n    user_input = input(\"You: \")\n    if user_input.lower() in (\"quit\", \"exit\"):\n        break\n\n    messages.append({\"role\": \"user\", \"content\": user_input})\n\n    response = client.messages.create(\n        model=\"claude-opus-4-8\",\n        max_tokens=1024,\n        system=\"You are a helpful assistant.\",\n        messages=messages  # full history every time\n    )\n\n    assistant_reply = response.content[0].text\n    print(f\"Assistant: {assistant_reply}\")\n\n    messages.append({\"role\": \"assistant\", \"content\": assistant_reply})"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Always append the **assistant's reply** before the next user message. The API expects roles to alternate: `user`, `assistant`, `user`, `assistant`... If you send two `user` messages in a row, most APIs will return a validation error."
+        }
+      ]
+    },
+    {
+      "id": "token-costs-reality",
+      "title": "The token cost reality",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Tokens are the currency you pay with — roughly three to four characters each. Every API request bills you for **all input tokens** (the entire messages array you send) plus the output tokens the model generates. Because you re-send the full history each turn, token costs grow with every message exchanged."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Turn",
+            "Input tokens sent",
+            "What is included"
+          ],
+          "rows": [
+            [
+              "1",
+              "~50",
+              "System prompt + first user message"
+            ],
+            [
+              "3",
+              "~300",
+              "System + turns 1-2 + new message"
+            ],
+            [
+              "10",
+              "~2 000",
+              "System + turns 1-9 + new message"
+            ],
+            [
+              "20",
+              "~6 000",
+              "System + turns 1-19 + new message"
+            ],
+            [
+              "50",
+              "~20 000",
+              "All prior turns accumulate"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Turn 50 in the table above sends roughly 400 times the tokens of turn 1. With GPT-4o at roughly $2.50 per million input tokens, a 50-turn conversation where each message is a few sentences can cost $0.05 or more — which sounds trivial until you multiply it by thousands of daily users. This is why production apps almost always trim history rather than sending it all indefinitely."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Context window limits are a hard ceiling, not a soft suggestion. GPT-4o supports 128 000 tokens total (input + output combined). Claude models currently support 200 000 tokens by default. Exceed the limit and the API returns an error — your app crashes unless you handle it."
+        }
+      ]
+    },
+    {
+      "id": "trimming-strategies",
+      "title": "Strategies for trimming conversation history",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you accept that you cannot send unlimited history forever, there are three practical strategies, each with different tradeoffs. Most production apps start with sliding window and graduate to summarization as the product matures."
+        },
+        {
+          "type": "h3",
+          "text": "Strategy 1: Sliding window (keep last N messages)"
+        },
+        {
+          "type": "p",
+          "md": "The simplest approach: keep only the most recent N messages (N is typically 10-20). Before each API call, slice the array to drop older turns. Fast, cheap, zero extra API calls."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "MAX_HISTORY = 20  # keep last 20 messages (10 turns)\n\ndef get_trimmed_messages(messages: list) -> list:\n    \"\"\"Return only the most recent MAX_HISTORY messages.\"\"\"\n    return messages[-MAX_HISTORY:]\n\n# Usage in the chat loop:\nresponse = client.chat.completions.create(\n    model=\"gpt-4o\",\n    messages=get_trimmed_messages(messages)  # trim before sending\n)"
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Sliding window drops context silently. If the user asks \"what was the first thing I told you?\" after 25 turns, the model genuinely will not know — that message was dropped. Tell users when context is being trimmed, or pick a higher N."
+        },
+        {
+          "type": "h3",
+          "text": "Strategy 2: Token-budget window"
+        },
+        {
+          "type": "p",
+          "md": "Rather than capping by message count, cap by **token count**. This is more precise because message lengths vary wildly — one user turn might be 5 tokens, another might be 500. Walk backwards through the history, counting tokens, and stop when you reach your budget."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "# Requires: pip install tiktoken  (for OpenAI models)\nimport tiktoken\n\nMAX_INPUT_TOKENS = 60_000  # leave headroom for system + output\n\ndef trim_by_tokens(messages: list, model: str = \"gpt-4o\") -> list:\n    enc = tiktoken.encoding_for_model(model)\n\n    def count(msg: dict) -> int:\n        return len(enc.encode(msg[\"content\"])) + 4  # ~4 tokens overhead\n\n    kept = []\n    total = 0\n    for msg in reversed(messages):  # walk newest-first\n        t = count(msg)\n        if total + t > MAX_INPUT_TOKENS:\n            break\n        kept.insert(0, msg)\n        total += t\n\n    return kept"
+        },
+        {
+          "type": "h3",
+          "text": "Strategy 3: Summarize old turns, keep recent ones verbatim"
+        },
+        {
+          "type": "p",
+          "md": "When context continuity matters more than cost, keep the last 10 or so messages in full, but replace older ones with a compact AI-generated summary. You call the LLM to summarize the old chunk, store the summary as a single `assistant` or `system` message, and discard the raw turns. Research from mem0 suggests this hybrid approach can cut token costs 80-90% while preserving most conversational coherence."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "def summarize_old_turns(\n    messages: list,\n    keep_recent: int = 10,\n    model: str = \"gpt-4o-mini\"\n) -> list:\n    \"\"\"Summarize messages older than `keep_recent` into one block.\"\"\"\n    if len(messages) <= keep_recent:\n        return messages\n\n    old_turns = messages[:-keep_recent]\n    recent_turns = messages[-keep_recent:]\n\n    # Ask a cheap model to summarize the old chunk\n    summary_resp = client.chat.completions.create(\n        model=model,\n        messages=[\n            {\"role\": \"system\", \"content\": \"Summarize this conversation concisely, preserving key facts, decisions, and user preferences.\"},\n            {\"role\": \"user\", \"content\": str(old_turns)}\n        ]\n    )\n    summary_text = summary_resp.choices[0].message.content\n\n    summary_message = {\n        \"role\": \"assistant\",\n        \"content\": f\"[Earlier conversation summary: {summary_text}]\"\n    }\n\n    return [summary_message] + recent_turns"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Strategy",
+            "Cost",
+            "Context quality",
+            "Complexity",
+            "Best for"
+          ],
+          "rows": [
+            [
+              "Sliding window (last N)",
+              "Low",
+              "Good for recent topics, poor for early context",
+              "Trivial",
+              "Most chat apps"
+            ],
+            [
+              "Token-budget window",
+              "Low",
+              "Same as sliding window but more accurate",
+              "Low",
+              "Variable-length messages"
+            ],
+            [
+              "Summarize + keep recent",
+              "Medium (extra call)",
+              "Good overall, detail lost in old turns",
+              "Medium",
+              "Long sessions, support bots"
+            ],
+            [
+              "Vector retrieval (RAG)",
+              "Medium-High",
+              "Excellent — retrieves relevant older context",
+              "High",
+              "Knowledge-heavy agents"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once your basic multi-turn loop works, several advanced patterns become relevant at production scale."
+        },
+        {
+          "type": "h3",
+          "text": "Persisting conversation history"
+        },
+        {
+          "type": "p",
+          "md": "An in-memory `messages` list disappears when the process restarts. Production apps store the history in a database (Postgres, Redis, DynamoDB — any will do) keyed by a `conversation_id`. Fetch it at the start of each HTTP request, append the new turn, save it back. This decouples your web servers from conversation state entirely."
+        },
+        {
+          "type": "h3",
+          "text": "Stateful API wrappers"
+        },
+        {
+          "type": "p",
+          "md": "OpenAI's newer **Responses API** (introduced in 2025) supports a `previous_response_id` parameter that lets the API server chain responses without you re-sending the full history. Anthropic and other providers are adding similar server-side state features. These reduce bandwidth and simplify client code, but you trade visibility and portability — you can no longer inspect or edit history without additional API calls, and you are locked into that provider's session storage."
+        },
+        {
+          "type": "h3",
+          "text": "Prompt caching"
+        },
+        {
+          "type": "p",
+          "md": "Both Anthropic and OpenAI offer **prompt caching**: if the prefix of your messages array matches a recent cached prefix on their servers, input tokens in the cached portion are billed at a significantly lower rate (Anthropic charges 10% of normal price for cache hits). Long system prompts and stable conversation history prefixes are ideal candidates. The implication for history management: try to keep the *start* of your messages array stable across turns, and only append to the end."
+        },
+        {
+          "type": "h3",
+          "text": "Vector-based long-term memory"
+        },
+        {
+          "type": "p",
+          "md": "For agents that need memory across many sessions — not just within one conversation — embedding past turns and retrieving semantically relevant ones at query time is the standard approach. Libraries like [mem0](https://mem0.ai) and LangChain's memory modules implement this. Instead of sending all history, you send only the most *relevant* past context. This scales to arbitrarily long histories but adds retrieval latency and requires a vector store."
+        },
+        {
+          "type": "h3",
+          "text": "Message roles and system prompts"
+        },
+        {
+          "type": "p",
+          "md": "The `system` role (or Anthropic's top-level `system` parameter) is not just a nice-to-have — it is the most token-efficient place to put instructions that persist through the whole conversation, because it appears once and is not repeated per turn. Keep per-conversation facts (user name, preferences, current task) in the system prompt rather than injecting them as user messages; this keeps the turn history clean and easier to trim."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Start with sliding window for every new project. It is two lines of code, near-zero cost, and handles the vast majority of real conversational use cases. Graduate to summarization only when users consistently hit the limit or when session length metrics show history growing beyond 30-40 turns."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Why does the LLM API not remember my previous messages automatically?",
+      "a": "LLM APIs are stateless by design — each HTTP request is processed independently with no server-side session kept between calls. This makes the infrastructure simple to scale, but it means your application is responsible for maintaining and resending the conversation history. Every major provider (OpenAI, Anthropic, Google) follows this model for the standard API, though some now offer optional stateful wrappers on top."
+    },
+    {
+      "q": "What happens if I send too many messages and exceed the context window?",
+      "a": "The API returns an error — typically a `400 Bad Request` or a specific context-length error code. Your application must handle this. The fix is to trim older messages from the history before the next call, using a sliding window, token-budget cut, or summarization strategy. It is good practice to check token counts proactively so you never hit the limit mid-conversation."
+    },
+    {
+      "q": "Do I need to resend the entire conversation history every single time?",
+      "a": "Yes, with the standard Chat Completions or Messages APIs. Every call is independent, so you must include all the context the model needs. OpenAI's newer Responses API lets you chain calls via `previous_response_id` so the server retains history, but you are still paying for those tokens — the history still exists, you just do not have to transmit it yourself."
+    },
+    {
+      "q": "How many tokens does a typical conversation consume?",
+      "a": "It depends on message length, but a rough estimate: each back-and-forth turn of a few sentences adds 100-300 tokens. A 20-turn conversation might accumulate 3 000-6 000 input tokens per call by the end. With GPT-4o at about $2.50 per million input tokens, that is fractions of a cent per request — but it compounds quickly at scale. Monitoring token usage from the API response object (`usage.prompt_tokens`) is the most accurate way to track real consumption."
+    },
+    {
+      "q": "What is the best way to trim history without losing important context?",
+      "a": "For most apps, keeping the last 10-20 messages (sliding window) is sufficient — recent context is almost always the most relevant. For longer sessions, a hybrid approach works well: keep the last 10 messages verbatim and replace everything older with a one-paragraph summary generated by a cheap model. Pure summarization loses specific details (dates, names, code snippets), so always preserve a recent verbatim window."
+    },
+    {
+      "q": "Should I store conversation history in my database or rely on the API?",
+      "a": "Store it in your own database. An in-memory messages list is lost when your server restarts. Persisting history to Postgres, Redis, or any other store keyed by a `conversation_id` lets you resume conversations across server restarts, scale horizontally across multiple servers, inspect or edit history for debugging, and apply your own retention or compliance policies. The API itself has no memory of past calls."
+    }
+  ],
+  "related": [
+    "what-is-llm-api",
+    "messages-roles-turns",
+    "api-keys-explained"
+  ],
+  "furtherReading": [
+    {
+      "title": "Using the Messages API — Anthropic Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/working-with-messages"
+    },
+    {
+      "title": "Conversation State — OpenAI Developers",
+      "url": "https://developers.openai.com/api/docs/guides/conversation-state"
+    },
+    {
+      "title": "LLM Chat History Summarization: Best Practices (mem0)",
+      "url": "https://mem0.ai/blog/llm-chat-history-summarization-guide-2025"
+    }
+  ]
+}

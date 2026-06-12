@@ -1,0 +1,325 @@
+{
+  "slug": "agent-without-framework",
+  "title": "How to Build an Agent Without a Framework: Just the API and a Loop",
+  "seoTitle": "Build an Agent Without a Framework: API + a Loop",
+  "metaDescription": "You don't need LangChain to build an agent. Walk through the bare-metal pattern: a while loop, an LLM API call, and tool execution — in plain code.",
+  "keywords": [
+    "build ai agent without framework",
+    "agent loop from scratch",
+    "llm agent with just api calls",
+    "do you need langchain to build agents",
+    "minimal ai agent in python"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "See exactly how little code an agent really is — a model call, a tool dispatch, and a loop — so every framework you meet afterward demystifies itself.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "An AI agent is, at its core, three things: a language model, a set of tools, and a loop. The model reads the conversation so far, decides whether to call a tool or give a final answer, and — if it calls a tool — your code executes that tool and feeds the result back. Repeat until done. That is the entire pattern. Every agent framework in existence is a packaged version of this same loop with extra features bolted on."
+        },
+        {
+          "type": "p",
+          "md": "A useful analogy: think of the loop as a game of telephone between a very smart colleague and your codebase. Your colleague (the model) reads the latest message, either answers or says \"go look up X for me,\" and then waits. You run the lookup, hand the result back, and your colleague continues. The loop keeps going until your colleague has enough information to stop asking and just answer."
+        },
+        {
+          "type": "p",
+          "md": "Understanding this bare-metal pattern is the most valuable thing you can do before adopting a framework. Once you have seen the raw loop, LangGraph's nodes, CrewAI's roles, and the OpenAI Agents SDK's `Runner` all become recognizable — they are dressing on the same skeleton. When a framework behaves unexpectedly, you will know exactly what layer of the skeleton to look at."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Building the bare loop yourself first is not about avoiding frameworks permanently. It is about understanding what a framework is buying you — so you can make a rational decision rather than a habitual one."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why building without a framework first matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Most tutorials skip straight to `pip install langchain` and leave engineers with a working prototype they cannot debug. When the agent calls the wrong tool, loops unexpectedly, or returns a garbled answer, the fix requires understanding the loop — but the loop is hidden behind framework abstractions. Going bare-metal first gives you that mental model before any abstraction gets in the way."
+        },
+        {
+          "type": "p",
+          "md": "There is also a practical argument: for a large class of real production agents, a raw API loop *is* the right choice. If your agent calls two or three tools, runs for at most five steps, and has no complex branching, the overhead of adopting a framework — its dependency tree, its version-churn, its opinionated abstractions — adds cost with no benefit. At Anthropic's own research blog on building effective agents, the recommendation is explicit: start with direct API usage; many patterns can be implemented in a handful of lines of code."
+        },
+        {
+          "type": "p",
+          "md": "Finally, every new LLM API capability (extended thinking, computer use, model-specific tool formats) lands in the provider SDK weeks before frameworks surface it. If you understand the raw loop, you can use new capabilities the day they ship. If you only know the framework layer, you are on a waiting list."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The OpenAI Agents SDK, released March 2025, and Anthropic's Claude Agent SDK are themselves deliberately thin wrappers — they each add only a small amount of scaffolding over the raw API loop, because their own teams concluded that less abstraction is better."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How the bare-metal loop works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The loop has four moving parts: a **message history**, a **tool registry**, the **model call**, and a **dispatch function**. On every iteration you call the model, inspect whether it produced tool calls or a final answer, execute any tool calls, append the results to the message history, and loop. The loop exits when the model's `finish_reason` (OpenAI) or `stop_reason` (Anthropic) indicates it is done rather than requesting more tools."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "The bare-metal agent loop",
+            "steps": [
+              {
+                "label": "Build request",
+                "sub": "messages + tool definitions"
+              },
+              {
+                "label": "Call the model",
+                "sub": "POST /chat/completions"
+              },
+              {
+                "label": "Check stop reason",
+                "sub": "tool_calls or stop/end_turn?"
+              },
+              {
+                "label": "Execute tools",
+                "sub": "run your Python/JS function"
+              },
+              {
+                "label": "Append results",
+                "sub": "add tool_result to messages"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "The four building blocks"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Message history** — a plain list of `{role, content}` dicts. Every user message, every assistant reply, and every tool result lives here. The model sees the full list on every turn; this is how it keeps context.",
+            "**Tool definitions** — JSON schema objects that describe each function: its name, a description the model reads, and the parameter types. You pass these on every call so the model knows what it can ask for.",
+            "**The model call** — a single `POST` to the provider's chat endpoint. You send the message history plus the tool definitions; the model returns either a text answer or a structured tool-call request.",
+            "**The dispatch function** — a `dict` (or `switch`) mapping tool names to actual Python or TypeScript functions. When the model requests `get_weather`, your code looks it up here and runs it."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "A working implementation in Python"
+        },
+        {
+          "type": "p",
+          "md": "The following uses the OpenAI Python SDK (`openai>=1.0`) with the standard tool-calling format. The same structure works with the Anthropic SDK — the field names change (`tool_use` blocks instead of `tool_calls`, `stop_reason: \"tool_use\"` instead of `finish_reason: \"tool_calls\"`) but the loop logic is identical."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Minimal agent loop (OpenAI SDK)",
+          "code": "import json\nfrom openai import OpenAI\n\nclient = OpenAI()  # reads OPENAI_API_KEY from env\n\n# ── Tool definitions ────────────────────────────────────────────\nTOOL_DEFINITIONS = [\n    {\n        \"type\": \"function\",\n        \"function\": {\n            \"name\": \"get_weather\",\n            \"description\": \"Return the current temperature for a city.\",\n            \"parameters\": {\n                \"type\": \"object\",\n                \"properties\": {\n                    \"city\": {\"type\": \"string\", \"description\": \"City name\"}\n                },\n                \"required\": [\"city\"],\n            },\n        },\n    }\n]\n\n# ── Tool implementations ─────────────────────────────────────────\ndef get_weather(city: str) -> str:\n    # Replace with a real API call in production.\n    return f\"The temperature in {city} is 22 C and sunny.\"\n\nTOOL_REGISTRY = {\"get_weather\": get_weather}\n\n# ── The agent loop ────────────────────────────────────────────────\ndef run_agent(user_message: str, max_steps: int = 20) -> str:\n    messages = [{\"role\": \"user\", \"content\": user_message}]\n\n    for step in range(max_steps):\n        response = client.chat.completions.create(\n            model=\"gpt-4o\",\n            messages=messages,\n            tools=TOOL_DEFINITIONS,\n        )\n        msg = response.choices[0].message\n        finish = response.choices[0].finish_reason\n\n        # Append the assistant turn to history.\n        messages.append(msg.to_dict())\n\n        if finish == \"stop\":\n            # Model is done — return its text answer.\n            return msg.content or \"\"\n\n        if finish == \"tool_calls\":\n            # Execute each requested tool and feed results back.\n            for tc in msg.tool_calls:\n                fn_name = tc.function.name\n                fn_args = json.loads(tc.function.arguments)\n                result = TOOL_REGISTRY[fn_name](**fn_args)\n                messages.append({\n                    \"role\": \"tool\",\n                    \"tool_call_id\": tc.id,\n                    \"content\": str(result),\n                })\n            # Loop again — let the model continue.\n            continue\n\n    # Hard cap reached — ask the model for a best-effort answer.\n    messages.append({\"role\": \"user\", \"content\": \"Max steps reached. Summarise what you found.\"})\n    fallback = client.chat.completions.create(model=\"gpt-4o\", messages=messages)\n    return fallback.choices[0].message.content or \"\"\n\n\nif __name__ == \"__main__\":\n    answer = run_agent(\"What is the weather in Paris right now?\")\n    print(answer)"
+        },
+        {
+          "type": "p",
+          "md": "The entire agent is about 60 lines of real Python. There is no hidden magic. Every line is traceable: you can add a `print(messages)` anywhere and see exactly what the model saw."
+        }
+      ]
+    },
+    {
+      "id": "loop-anatomy",
+      "title": "Dissecting each part of the loop",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "Message history is your agent's only memory"
+        },
+        {
+          "type": "p",
+          "md": "The model has no state between calls. Every turn, you send the full history and it re-reads everything. This means **memory is just list management**: you decide what to keep, what to trim, and what to summarise. Frameworks build elaborate memory subsystems on top of this, but the underlying mechanism is always the same list that you are managing manually here."
+        },
+        {
+          "type": "h3",
+          "text": "Tool definitions are a contract, not code"
+        },
+        {
+          "type": "p",
+          "md": "The JSON schema you pass in `tools` is a description for the model, not executable code. The model reads the `description` field heavily — it is how the model decides *when* to call a tool. A vague description like `\"gets data\"` leads to unreliable tool selection. A precise description like `\"Returns the real-time temperature in Celsius for a given city name\"` produces consistent behavior. Writing good tool descriptions is as important as writing the function itself."
+        },
+        {
+          "type": "h3",
+          "text": "Finish reason is the loop's exit signal"
+        },
+        {
+          "type": "p",
+          "md": "OpenAI uses `finish_reason: \"tool_calls\"` when the model wants to call a tool and `\"stop\"` when it is done. Anthropic uses `stop_reason: \"tool_use\"` and `\"end_turn\"` respectively. Always check this field — do not try to infer intent from whether the message has a tool call attached; edge cases exist where both are present at the same time. Treat `finish_reason` as authoritative."
+        },
+        {
+          "type": "h3",
+          "text": "The max-steps guard is not optional"
+        },
+        {
+          "type": "p",
+          "md": "Without a hard cap, a buggy tool or an ambiguous task can drive the model into an infinite loop that exhausts your API budget in minutes. A runaway loop calling GPT-4o can cost hundreds of dollars before you notice. The standard production value is 15–25 steps. When you hit the cap, do not silently error out — append a message asking for a best-effort summary and make one final call without tools. The model gets to synthesise whatever it gathered rather than returning nothing."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Provider",
+            "Tool-call stop reason",
+            "Done stop reason",
+            "Tool result role"
+          ],
+          "rows": [
+            [
+              "OpenAI",
+              "finish_reason: \"tool_calls\"",
+              "finish_reason: \"stop\"",
+              "role: \"tool\""
+            ],
+            [
+              "Anthropic",
+              "stop_reason: \"tool_use\"",
+              "stop_reason: \"end_turn\"",
+              "role: \"user\", type: \"tool_result\""
+            ],
+            [
+              "Google Gemini (OpenAI-compat)",
+              "finish_reason: \"STOP\" (inconsistent)",
+              "finish_reason: \"STOP\"",
+              "role: \"tool\""
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "when-to-reach-for-a-framework",
+      "title": "When the raw loop is not enough",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The bare loop handles a surprisingly large share of real agent use cases. But there are clear signals that you have outgrown it and a framework would genuinely help:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Multiple agents that hand off to each other.** Once you need Agent A to call Agent B as if it were a tool, you are managing nested loops and inter-agent message formats. CrewAI or the OpenAI Agents SDK's handoff model exist precisely for this.",
+            "**Branching conditional logic with more than two or three paths.** A plain `if/else` tree becomes unreadable fast. LangGraph's directed graph model — where nodes are steps and edges are conditions — is genuinely clearer for complex workflows.",
+            "**Durable state that must survive process restarts.** The raw loop holds state in a Python list that evaporates when your server crashes. LangGraph's checkpointing and AWS Strands Agents' durable execution let an agent resume mid-task after a failure.",
+            "**Observability at scale.** Logging a `print(messages)` works during development. A production agent running thousands of tasks per day needs traces, token cost per step, and error attribution. Frameworks that integrate with LangSmith, Langfuse, or OpenTelemetry save significant custom plumbing.",
+            "**Teams without Python/TypeScript expertise.** Visual builders like Dify and Flowise are not wrappers over a raw loop — they are full products. If your builders are non-engineers, skip the loop discussion and go straight to no-code tooling."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Reach for a framework when the **absence of one is actively slowing you down**, not preemptively. The cost of a framework — its learning curve, dependency overhead, and abstraction layer — is real. Pay it only when the benefit is equally real."
+        },
+        {
+          "type": "p",
+          "md": "A good rule of thumb from teams that have built agents in production: if you can describe your agent's control flow in five bullet points or fewer, you probably do not need a framework. If describing it requires a flowchart with branches and decision diamonds, a framework's abstractions start earning their keep."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "Parallel tool calls"
+        },
+        {
+          "type": "p",
+          "md": "Both OpenAI and Anthropic models can request multiple tool calls in a single response. The response contains a list of `tool_calls` (OpenAI) or a list of `tool_use` blocks (Anthropic), not just one. Your dispatch loop must handle all of them before continuing. Running them in parallel with `asyncio.gather` or `Promise.all` is worth doing for tools that involve I/O: a weather lookup and a calendar fetch that each take 200ms become a 200ms wait instead of a 400ms wait."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Parallel tool execution with asyncio",
+          "code": "import asyncio\nimport json\n\nasync def dispatch_all(tool_calls, registry):\n    \"\"\"Execute all requested tool calls in parallel.\"\"\"\n    async def run_one(tc):\n        fn = registry[tc.function.name]\n        args = json.loads(tc.function.arguments)\n        # If the function is a coroutine, await it; otherwise run in executor.\n        if asyncio.iscoroutinefunction(fn):\n            result = await fn(**args)\n        else:\n            loop = asyncio.get_event_loop()\n            result = await loop.run_in_executor(None, lambda: fn(**args))\n        return {\n            \"role\": \"tool\",\n            \"tool_call_id\": tc.id,\n            \"content\": str(result),\n        }\n    return await asyncio.gather(*[run_one(tc) for tc in tool_calls])"
+        },
+        {
+          "type": "h3",
+          "text": "Streaming the agent response"
+        },
+        {
+          "type": "p",
+          "md": "By default the loop blocks until the full model response arrives. For a user-facing agent, streaming the text output dramatically improves perceived latency. The pattern is to open a streaming call, accumulate `tool_calls` deltas until the stream closes, then execute tools and loop. Both the OpenAI and Anthropic Python SDKs expose streaming iterators. The loop logic is unchanged; you just read from a stream rather than a single response object."
+        },
+        {
+          "type": "h3",
+          "text": "System prompt design for tool-using agents"
+        },
+        {
+          "type": "p",
+          "md": "The system prompt of a tool-using agent should explicitly tell the model what it can and cannot do. Good patterns include: telling the model to call tools rather than guess (\"always look up current data using the provided tools rather than relying on your training knowledge\"), instructing it to stop when it has a high-confidence answer rather than calling additional tools \"just in case,\" and giving it a persona that matches the task domain. A system prompt that is too short produces an agent that hallucinate tool results; one that is too restrictive produces an agent that calls tools unnecessarily on simple questions."
+        },
+        {
+          "type": "h3",
+          "text": "Migrating from raw loop to a framework"
+        },
+        {
+          "type": "p",
+          "md": "When you eventually do move to a framework, the raw loop you built transfers cleanly. Your tool implementations stay the same — they are just plain functions. Your tool definitions stay the same — the JSON schema format is standard. The only thing that changes is the orchestration layer: instead of your `for step in range(max_steps)` loop, you call the framework's runner. The migration is mostly mechanical, and having built the loop yourself means you will recognise what the framework is doing on your behalf."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "A useful exercise before adopting any framework: read its source code for the main agent runner. Most lightweight frameworks — PydanticAI, the OpenAI Agents SDK, Strands Agents — have a core runner under 300 lines. You will recognise every part of the loop you built."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Do I need LangChain to build an AI agent?",
+      "a": "No. An agent is a while loop that calls an LLM, executes tool calls, and appends results to a message list. You can implement the entire pattern in roughly 50–70 lines of Python or TypeScript using only the provider's official SDK. LangChain and other frameworks add value when your workflow is complex, but they are not required."
+    },
+    {
+      "q": "What is the minimum code needed for a working agent?",
+      "a": "You need four things: a message history list, a tool definitions array (JSON schema), a call to the model's chat endpoint, and a dispatch function that maps tool names to your functions. A working single-tool agent in Python is about 50 lines. The loop exits when the model's `finish_reason` is `\"stop\"` (OpenAI) or `stop_reason` is `\"end_turn\"` (Anthropic)."
+    },
+    {
+      "q": "Why does the agent loop sometimes run forever?",
+      "a": "Infinite loops happen when a tool always fails or returns ambiguous data, leaving the model unable to make progress. The fix is a hard step cap (15–25 iterations is typical for production). When the cap is hit, make one final call without tools and ask the model for a best-effort summary of what it gathered. Never let the loop exit silently."
+    },
+    {
+      "q": "Can I use the same loop pattern with Anthropic Claude?",
+      "a": "Yes. The loop logic is identical. The field names differ: Anthropic uses `stop_reason: \"tool_use\"` instead of `finish_reason: \"tool_calls\"`, and tool results go back as `role: \"user\"` messages with a `tool_result` content block instead of `role: \"tool\"` messages. The Anthropic Python SDK documentation covers the exact message format."
+    },
+    {
+      "q": "How do I handle multiple tool calls in a single model response?",
+      "a": "Both OpenAI and Anthropic models can request several tool calls at once. Always iterate over the full `tool_calls` list (OpenAI) or `tool_use` blocks (Anthropic), execute all of them, and append all results before looping. Missing one tool result causes the model to stall or hallucinate. Running them with `asyncio.gather` in parallel is a good practice for I/O-bound tools."
+    },
+    {
+      "q": "When does a raw API loop stop being enough and require a framework?",
+      "a": "The raw loop is usually sufficient for a single agent with up to around ten tools and simple linear logic. You outgrow it when you need multiple agents handing off to each other, branching state that survives process restarts, or production-grade tracing and cost monitoring. At that point a framework's abstractions pay for their learning curve."
+    }
+  ],
+  "related": [
+    "what-is-agent-framework",
+    "choose-agent-framework",
+    "no-code-agent-builders",
+    "what-is-claude-agent-sdk"
+  ],
+  "furtherReading": [
+    {
+      "title": "Building Effective Agents — Anthropic Research",
+      "url": "https://www.anthropic.com/research/building-effective-agents"
+    },
+    {
+      "title": "OpenAI Function Calling Guide",
+      "url": "https://platform.openai.com/docs/guides/function-calling"
+    },
+    {
+      "title": "Anthropic Tool Use Documentation",
+      "url": "https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/overview"
+    }
+  ]
+}

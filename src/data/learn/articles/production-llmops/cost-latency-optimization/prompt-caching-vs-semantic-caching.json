@@ -1,0 +1,438 @@
+{
+  "slug": "prompt-caching-vs-semantic-caching",
+  "title": "Prompt Caching vs Semantic Caching: What's the Difference?",
+  "seoTitle": "Prompt Caching vs Semantic Caching: The Difference",
+  "metaDescription": "Prompt caching reuses an identical prefix; semantic caching reuses answers to similar questions. How the two caches differ and when to use each.",
+  "keywords": [
+    "prompt caching vs semantic caching",
+    "difference between prompt cache and semantic cache",
+    "which llm cache should i use",
+    "caching strategies for llm apps"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Stop confusing the two LLM caches: learn what each one stores, what each one saves, and how production stacks combine both.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "There are two fundamentally different caches in the LLM world and they are constantly confused — even in engineering discussions. They are not two names for the same thing. They operate at different layers, store different things, and solve different problems."
+        },
+        {
+          "type": "p",
+          "md": "**Prompt caching** lives inside the model inference pipeline. When you send a request, the model converts every input token into key-value (KV) tensors — the internal computation that lets the model attend to context. Prompt caching stores those tensors on the provider's servers so that the next request using the same prefix skips all that computation. The model still generates a fresh answer; it just doesn't have to re-read the 10,000-token context document you sent last time."
+        },
+        {
+          "type": "p",
+          "md": "**Semantic caching** lives entirely outside the model. It intercepts the incoming question *before* the model is even contacted, embeds the question into a vector, and checks whether a *meaningfully similar* question was already answered. If it was, it returns that stored answer immediately — no model call at all, no tokens billed, no generation time."
+        },
+        {
+          "type": "p",
+          "md": "The analogy: imagine a chef (the LLM) who makes custom dishes on demand. **Prompt caching** is like keeping pre-chopped mise en place in the fridge — the chef still cooks every meal, but the tedious prep work is already done. **Semantic caching** is like a ready meals shelf — if what the customer ordered is close enough to something already packaged, hand them the box and the chef never sets foot near the stove."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Both caches cut costs and latency but at completely different points in the request path. Prompt caching is a **provider feature** you configure per-request. Semantic caching is an **application layer** you build or deploy in front of the model."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "LLM calls are expensive and slow compared to everything else in a software stack. A single call to a frontier model can take 1–3 seconds and costs real money per token. At scale — thousands of daily users, millions of requests per month — those costs compound fast. The two caches attack this problem from opposite ends, and confusing them leads to misapplied tooling: teams bolt on semantic caching where prompt caching would do the job more simply, or they rely only on prompt caching when semantic caching would eliminate whole categories of model calls entirely."
+        },
+        {
+          "type": "h3",
+          "text": "What each one actually saves"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "",
+            "Prompt caching",
+            "Semantic caching"
+          ],
+          "rows": [
+            [
+              "**What is cached**",
+              "KV tensors (model's internal state)",
+              "Full LLM responses"
+            ],
+            [
+              "**Match condition**",
+              "Byte-for-byte identical prefix",
+              "Semantically similar question"
+            ],
+            [
+              "**Model called?**",
+              "Yes — answer still generated fresh",
+              "No — model is bypassed entirely"
+            ],
+            [
+              "**Input token cost**",
+              "Reduced by ~90% on cached prefix",
+              "Zero — no tokens billed at all"
+            ],
+            [
+              "**Output token cost**",
+              "No saving — output still generated",
+              "Zero — stored answer returned"
+            ],
+            [
+              "**Latency saving**",
+              "Reduces time-to-first-token up to 85%",
+              "Collapses to embedding + vector lookup (~5–15 ms)"
+            ],
+            [
+              "**Where it sits**",
+              "Provider infrastructure (server-side)",
+              "Your app or gateway (client-side)"
+            ],
+            [
+              "**Config needed**",
+              "cache_control flag in API request",
+              "Embedding model + vector store + threshold"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The key insight: prompt caching makes the model cheaper to run; semantic caching makes it possible to not run it at all. For workloads where different users ask the same underlying questions in different words — customer support, FAQ assistants, documentation bots — semantic caching can eliminate 30–60% of model calls. Prompt caching helps with the calls that do go through."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Because semantic caching bypasses the model entirely, it saves both input *and* output token costs on a hit. Prompt caching only reduces input costs. For long-answer workloads, this output-cost saving makes semantic caching disproportionately valuable."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How each one works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Understanding the mechanics makes the tradeoffs obvious."
+        },
+        {
+          "type": "h3",
+          "text": "Prompt caching — prefix KV storage"
+        },
+        {
+          "type": "p",
+          "md": "Every transformer layer computes key-value pairs as it processes tokens. Normally these are ephemeral — computed, used, discarded. Prompt caching serialises those KV tensors for a marked prefix and stores them server-side. On the next matching request, the model loads the tensors and processes only the tokens *after* the cache point. The prefix must be **byte-for-byte identical** — a single changed character busts the cache for everything that follows it."
+        },
+        {
+          "type": "p",
+          "md": "On Anthropic's API you opt in explicitly with a `cache_control` marker. You can place up to 4 breakpoints per request — one on the system prompt, one on a shared document, one on conversation history, one on the last assistant turn. The cache has a default TTL of 5 minutes (resetting on every hit) or an optional 1-hour TTL at 2x write cost. Cache writes cost 1.25x the normal input rate; reads cost 0.1x — a 10x discount."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Prompt caching: what happens on each request",
+            "steps": [
+              {
+                "label": "Request arrives",
+                "sub": "system prompt + document + user question"
+              },
+              {
+                "label": "Prefix check",
+                "sub": "does this exact prefix exist in KV store?"
+              },
+              {
+                "label": "Cache hit",
+                "sub": "load stored KV tensors (0.1x cost)"
+              },
+              {
+                "label": "Process suffix only",
+                "sub": "model reads new tokens after cache point"
+              },
+              {
+                "label": "Fresh answer generated",
+                "sub": "output tokens billed at normal rate"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Semantic caching — embedding similarity"
+        },
+        {
+          "type": "p",
+          "md": "A semantic cache intercepts the question before it reaches the model. It embeds the incoming question into a vector (a list of numbers capturing its meaning) and runs a nearest-neighbour search against previously cached question vectors stored in a vector database. If the closest stored question clears a **cosine similarity threshold**, the cache returns the stored answer immediately. If not, the request flows to the model, and the new question-answer pair is stored for future hits."
+        },
+        {
+          "type": "p",
+          "md": "The threshold is the critical knob. Too strict (high similarity required) and almost nothing matches — the cache rarely fires. Too loose (low similarity required) and the cache serves answers to questions that are merely adjacent, not actually the same. Most teams start conservative — around 0.85–0.92 cosine similarity — and tune downward based on real traffic while sampling hits for quality."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Semantic caching: the intercept path",
+            "steps": [
+              {
+                "label": "Question arrives",
+                "sub": "free-form user text"
+              },
+              {
+                "label": "Embed the question",
+                "sub": "question → vector (~3–8 ms)"
+              },
+              {
+                "label": "Vector similarity search",
+                "sub": "find nearest cached question"
+              },
+              {
+                "label": "Threshold check",
+                "sub": "cosine similarity ≥ threshold?"
+              },
+              {
+                "label": "Hit: return stored answer",
+                "sub": "zero tokens, ~10–15 ms total"
+              }
+            ]
+          }
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Semantic caching can return a wrong answer — a false hit. Two questions that look close in vector space may need genuinely different responses. Negations (\"can I cancel\" vs \"can I *not* cancel\"), specific entities (\"shoes policy\" vs \"electronics policy\"), and personalised queries are classic traps. Never cache user-specific answers in a shared cache — a false hit on personal data is a privacy leak."
+        }
+      ]
+    },
+    {
+      "id": "when-to-use-each",
+      "title": "When to use each",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The two caches are not substitutes — they address different shapes of redundancy. Choosing the wrong one (or assuming they are interchangeable) means leaving the biggest savings uncaptured."
+        },
+        {
+          "type": "h3",
+          "text": "Use prompt caching when"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**You have a large, stable prefix** — a long system prompt, a reference document, a set of tool schemas — that stays identical across many requests. Prompt caching is purpose-built for this.",
+            "**Every question is different but uses the same context** — e.g. a legal analyst asking different questions about the same 50-page contract. Semantic caching can't help (each question is unique); prompt caching ensures the document isn't re-processed each time.",
+            "**Your workload is agentic** — tool-calling loops that pass the same tool definitions and memory context on every iteration benefit enormously from caching those repeated blocks.",
+            "**You need a fresh answer every time** — if the response must be personalised or up-to-date, semantic caching is off-limits. Prompt caching still cuts costs without compromising freshness.",
+            "**Setup simplicity matters** — adding a `cache_control` flag to an existing API call takes minutes. Deploying a vector store, embedding model, and cache layer is a non-trivial infrastructure project."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Use semantic caching when"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Users ask the same questions in different words** — support bots, FAQ assistants, and documentation Q&A are classic fits. A cache hit eliminates the model call entirely rather than merely discounting it.",
+            "**Output token costs are significant** — if your answers are long, semantic caching saves both input and output spend on a hit; prompt caching saves only input.",
+            "**Traffic is repetitive and predictable** — cache hit rates of 30–60% are realistic for FAQ-style workloads. Highly diverse, creative, or one-off queries produce low hit rates and may not justify the overhead.",
+            "**You can tolerate some staleness** — semantic caching is appropriate for factual knowledge-base questions with slow-changing answers. Real-time data queries (prices, availability, current events) should be excluded or given aggressive TTLs."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "When neither helps"
+        },
+        {
+          "type": "list",
+          "items": [
+            "One-off requests with no shared prefix and no repeated intent — a creative writing assistant generating unique stories has nothing to cache.",
+            "Short prompts under the minimum token threshold (< 1,024 tokens for most Claude models) are not eligible for prompt caching.",
+            "Highly stateful, session-specific conversations where every turn depends on a unique prior context."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "the-hybrid-production-stack",
+      "title": "The hybrid production stack",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The best production stacks use both caches as complementary layers, not alternatives. They target different redundancy at different points in the request path and their benefits stack additively."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "stack",
+            "title": "Layered LLM cache architecture",
+            "layers": [
+              {
+                "label": "Exact-match cache",
+                "sub": "100% identical requests (hash key) — near-zero cost, instant"
+              },
+              {
+                "label": "Semantic cache",
+                "sub": "Similar questions (vector similarity) — skips model call entirely"
+              },
+              {
+                "label": "Model call + prompt caching",
+                "sub": "Novel questions — prefix KV reuse cuts input cost 10x"
+              },
+              {
+                "label": "LLM inference",
+                "sub": "Only truly novel, dynamic requests reach full computation"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "In this architecture, a request hits three caching checkpoints before reaching full inference. The exact-match cache handles perfectly repeated requests (rare in chat, common in batch jobs). The semantic cache handles the large category of rephrased questions. Prompt caching discounts the model calls that do get through. Each layer is fast and cheap to check; the layers before it are what justify the infrastructure cost."
+        },
+        {
+          "type": "h3",
+          "text": "Where to put the semantic cache"
+        },
+        {
+          "type": "p",
+          "md": "The cleanest production placement is inside an **LLM gateway** — the proxy your app calls instead of the provider directly. The gateway handles routing, rate limiting, logging, and the cache layers in one place. This keeps the caching logic out of application code, lets you apply different caching rules per endpoint (cache the FAQ route aggressively, never cache the personalised profile route), and makes it trivial to measure hit rates per route."
+        },
+        {
+          "type": "h3",
+          "text": "Concrete example: customer support bot"
+        },
+        {
+          "type": "p",
+          "md": "A customer support bot with a large product knowledge base is the canonical use case where both caches earn their keep simultaneously."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Prompt caching** handles the 8,000-token product knowledge base injected into every request. Without caching, those 8,000 tokens are billed at full rate on every conversation turn. With a `cache_control` breakpoint, they cost 0.1x on every hit after the first write.",
+            "**Semantic caching** handles repeated intents. If 40% of your tickets are some variant of \"how do I reset my password?\", 40% of those calls can bypass the model entirely after the first few cache-warming queries.",
+            "**Result**: on a 1,000-call-per-hour workload, prompt caching might cut input costs by 80%; semantic caching might eliminate 400 model calls per hour on top of that. The two effects multiply, not add."
+          ]
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "# Sketch of a layered cache gateway\nimport anthropic\nfrom your_vector_store import SemanticCache\n\nclient = anthropic.Anthropic()\nsemantic = SemanticCache(threshold=0.87)\n\nKNOWLEDGE_BASE = \"\"\"[8,000 tokens of product documentation...]\"\"\"\n\ndef handle_query(user_question: str) -> str:\n    # Layer 1: semantic cache (bypass model entirely on hit)\n    cached = semantic.lookup(user_question)\n    if cached:\n        return cached  # ~10 ms, zero tokens\n\n    # Layer 2: model call with prompt caching on the knowledge base\n    response = client.messages.create(\n        model=\"claude-sonnet-4-6\",\n        max_tokens=512,\n        system=[\n            {\n                \"type\": \"text\",\n                \"text\": KNOWLEDGE_BASE,\n                \"cache_control\": {\"type\": \"ephemeral\"}  # cache the static KB\n            }\n        ],\n        messages=[{\"role\": \"user\", \"content\": user_question}]\n    )\n    answer = response.content[0].text\n\n    # Store result for future semantic hits\n    semantic.store(user_question, answer)\n    return answer"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Always instrument both caches. Track `cache_read_input_tokens` in the Anthropic response for prompt-cache hits, and your own `hit_count / total_count` for semantic-cache hit rate. If the semantic hit rate is below 20% on a support-style workload, your similarity threshold is too strict or your traffic is more diverse than assumed."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once basic caching is live, several harder problems emerge."
+        },
+        {
+          "type": "h3",
+          "text": "Cache invalidation"
+        },
+        {
+          "type": "p",
+          "md": "Prompt caching relies on TTL — there is no cache-invalidation API on Anthropic. The 5-minute TTL resets on every hit, so active chat sessions rarely see expiry. The 1-hour TTL fits slower workloads like document analysis sessions or batch jobs. For semantic caching, you control TTL yourself: use short TTLs (hours to days) for anything factual that can change, and only cache timeless answers indefinitely. Aggressive TTLs are your main defence against staleness, which in production is a more common failure mode than incorrect similarity thresholds."
+        },
+        {
+          "type": "h3",
+          "text": "Evaluating semantic cache quality"
+        },
+        {
+          "type": "p",
+          "md": "A semantic cache without an evaluation loop is a footgun. The only way to know your false-hit rate is to sample cache hits — 1–5% of traffic — and have a judge (a strong LLM or human reviewer) compare the stored answer to what the model *would* have said for that specific query. Wire this into your monitoring pipeline; a cache that drifts to a 5% false-hit rate is a slow-motion outage. The false-hit rate belongs in the same dashboard as latency P99 and error rate."
+        },
+        {
+          "type": "h3",
+          "text": "Prompt structure for prompt-cache hits"
+        },
+        {
+          "type": "p",
+          "md": "Prompt caching requires the prefix to be byte-for-byte identical. The single most impactful structural rule is: **put stable content at the top, dynamic content at the bottom**. A timestamp, username, or request ID injected near the beginning of a system prompt breaks the cache for every token after it. Order your blocks as: (1) static system instructions, (2) shared reference documents, (3) conversation history, (4) current user message. Breakpoints go at the boundaries between stable and changing content."
+        },
+        {
+          "type": "h3",
+          "text": "Tooling landscape"
+        },
+        {
+          "type": "p",
+          "md": "For semantic caching, **GPTCache** (open-source, by Zilliz) provides a modular architecture — swap the embedder, vector store (Milvus, Faiss, Redis, Qdrant), and similarity evaluator independently. **Redis LangCache** is a managed option for teams already running Redis, with built-in TTL and eviction policies. LangChain exposes `RedisSemanticCache` as a drop-in replacement for the default chain cache. For prompt caching, support is built into every major provider: Anthropic (explicit `cache_control`), OpenAI (automatic, 50% discount, no configuration), and Google Gemini (context caching via the API)."
+        },
+        {
+          "type": "h3",
+          "text": "Multi-tenant and privacy considerations"
+        },
+        {
+          "type": "p",
+          "md": "Never share semantic cache entries across users unless the question-and-answer pair contains nothing user-specific. The standard pattern is to partition the cache by tenant or by content scope (e.g. a separate cache namespace per customer). Prompt caches on Anthropic are already partitioned per API key — a cache written with one key is not visible to another — but your semantic cache is only as private as you make it."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The two caches also differ in who controls them. Prompt caching is entirely provider-managed infrastructure — you opt in with a flag and the provider handles storage, eviction, and TTL. Semantic caching is infrastructure *you* operate. That ownership split is worth keeping in mind when estimating the real cost of each technique: the embedding model, vector store, and monitoring are on your bill."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is the core difference between prompt caching and semantic caching?",
+      "a": "Prompt caching stores the model's internal KV computation for an identical prefix so the model can skip re-processing it — the model still runs and generates a fresh answer. Semantic caching stores full LLM responses and returns them when a new question is similar enough to a past one — the model is bypassed entirely. They operate at different layers and save different costs."
+    },
+    {
+      "q": "Does semantic caching save more money than prompt caching?",
+      "a": "On a per-hit basis, yes — a semantic cache hit costs essentially nothing (just an embedding + vector lookup), while a prompt cache hit still bills output tokens and a discounted input token rate. But semantic caching requires a repetitive question pattern to produce hits, while prompt caching helps on every request that shares a stable prefix, even if the questions are all unique."
+    },
+    {
+      "q": "Can I use both caches at the same time?",
+      "a": "Yes — and most production stacks do. The standard pattern is semantic cache first (bypass the model on similar questions), then prompt caching on the calls that do reach the model (discount the shared context). The two effects are additive: semantic caching reduces the number of model calls; prompt caching reduces the cost of the calls that remain."
+    },
+    {
+      "q": "Is prompt caching the same as the KV cache inside a GPU?",
+      "a": "They use the same concept — storing key-value attention tensors — but at different scopes. The GPU KV cache (in-memory, per-request) is ephemeral and handles the attention computation within a single forward pass. Provider-side prompt caching persists those tensors across separate API requests, across users, for minutes to an hour. They are related mechanisms at different timescales."
+    },
+    {
+      "q": "What is a good similarity threshold for a semantic cache?",
+      "a": "Start conservative — cosine similarity around 0.85–0.92 — and tune downward on real traffic. At 0.92+ you get very low false-hit rates but also low hit rates. As you lower the threshold, hit rate climbs but so does the risk of serving a wrong answer. Always sample cache hits and measure the false-hit rate before relaxing the threshold further."
+    },
+    {
+      "q": "Which providers support prompt caching?",
+      "a": "As of mid-2026: Anthropic (explicit `cache_control` flag, 10x discount on reads, 5-min or 1-hour TTL); OpenAI (automatic, no configuration required, 50% discount on cached prefix tokens); Google Gemini (context caching via the API). Anthropic gives finer control with up to 4 explicit breakpoints; OpenAI's automatic approach requires no changes but is less configurable."
+    }
+  ],
+  "related": [
+    "what-is-llmops",
+    "production-llm-stack",
+    "llm-model-routing",
+    "llm-provider-failover",
+    "llm-prototype-to-production"
+  ],
+  "furtherReading": [
+    {
+      "title": "Prompt Caching — Anthropic API Documentation",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching"
+    },
+    {
+      "title": "Prompt Caching vs Semantic Caching — Redis Blog",
+      "url": "https://redis.io/blog/prompt-caching-vs-semantic-caching/"
+    },
+    {
+      "title": "GPTCache: An Open-Source Semantic Cache for LLM Applications (ACL Anthology)",
+      "url": "https://aclanthology.org/2023.nlposs-1.24/"
+    }
+  ]
+}

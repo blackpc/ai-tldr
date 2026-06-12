@@ -1,0 +1,405 @@
+{
+  "slug": "llm-provider-failover",
+  "title": "LLM Provider Outages: Fallbacks and Multi-Provider Failover",
+  "seoTitle": "LLM Provider Outages: Fallbacks and Failover",
+  "metaDescription": "When your LLM provider goes down, your app doesn't have to. How to build multi-provider fallbacks, retries, and failover without wrecking quality.",
+  "keywords": [
+    "llm provider outage fallback",
+    "multi provider llm failover",
+    "what to do when llm api is down",
+    "llm api redundancy strategy"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn to design fallbacks and multi-provider failover so a provider outage degrades your app instead of killing it.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**LLM provider failover** is the practice of automatically routing your API calls to a backup provider — or a backup model — the moment your primary one starts returning errors, timeouts, or rate-limit responses. Instead of your app showing a blank screen (or crashing), it quietly tries the next option on your list and returns an answer."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like a hospital's power supply. The hospital is wired to the grid, but there's a diesel generator in the basement. When the grid goes dark, the transfer switch trips in milliseconds and surgery keeps going. No one in the operating room noticed. Your failover stack is that transfer switch: it sits in the request path, watches for the grid to fail, and silently swaps the source of power."
+        },
+        {
+          "type": "p",
+          "md": "The key insight is that **failover and fallback are not the same thing**, even though people use the words interchangeably. *Failover* usually means swapping infrastructure when the provider is completely unreachable (HTTP 5xx, connection timeout). *Fallback* is broader: it also handles semantic failures — a 429 rate-limit, a context-window overflow, or a content-policy block — where the provider is technically up but can't serve *this* request. A robust production setup handles both."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "You don't need to build this yourself. Tools like [LiteLLM](https://docs.litellm.ai/docs/proxy/reliability), [Portkey](https://portkey.ai/features/ai-gateway), and other LLM gateways implement the full retry/fallback/circuit-breaker stack as configuration, not code."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "LLM providers go down more than traditional cloud infrastructure — and they go down globally. When an Azure region fails, Azure failover is geographic. When OpenAI's routing layer has a bug, it can take down every region at once. There is no automatic geographic failover built into the provider's API endpoint. Your only defense is to have a different provider ready."
+        },
+        {
+          "type": "h3",
+          "text": "Real outage numbers"
+        },
+        {
+          "type": "p",
+          "md": "The numbers are sobering. OpenAI reported nine distinct outages in a single quarter of 2024. Anthropic's Claude API measured roughly 99.32% uptime over a 30-day window — which sounds high until you realize it means nearly **five hours of downtime per month**. A multi-hour global outage hit OpenAI in June 2025; a routing-misconfiguration event followed in December 2025. Anthropic, Google Gemini, and others have had comparable incidents. These are not edge cases — they are the normal cadence of a rapidly scaling industry."
+        },
+        {
+          "type": "p",
+          "md": "For a user-facing product, five hours of monthly downtime is a support-ticket flood, a churn event, and potentially an SLA breach. For an autonomous agent running overnight jobs, a single-provider hard failure means the job simply doesn't complete. The cost of *not* having failover is visible in your on-call rotation and your renewal conversations."
+        },
+        {
+          "type": "h3",
+          "text": "What breaks without it"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**User-facing features go dark** during provider incidents, even when your own infrastructure is healthy.",
+            "**Async pipelines stall** — batch summarization, nightly evals, scheduled agents — because there's no fallback path when the primary times out.",
+            "**Rate limits cascade** — a burst of traffic exhausts your quota on one provider and every subsequent request fails, even though other providers have capacity.",
+            "**Context-window errors kill requests silently** — a prompt that just crossed 128k tokens errors out with no automatic retry on a model with a larger window."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A complete failover stack has three layers working together: **retries** (try the same provider again), **fallbacks** (try a different provider), and **circuit breakers** (stop trying a broken provider before it drags down your whole request queue). Each layer targets a different failure mode."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Request path through a failover stack",
+            "steps": [
+              {
+                "label": "Incoming request",
+                "sub": "your app code"
+              },
+              {
+                "label": "LLM Gateway / Router",
+                "sub": "normalizes provider APIs"
+              },
+              {
+                "label": "Retry with jitter",
+                "sub": "same provider, 2-3 attempts"
+              },
+              {
+                "label": "Circuit breaker check",
+                "sub": "is provider circuit open?"
+              },
+              {
+                "label": "Fallback chain",
+                "sub": "next provider in priority list"
+              },
+              {
+                "label": "Response returned",
+                "sub": "success or graceful error"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Layer 1 — Retries with exponential backoff and jitter"
+        },
+        {
+          "type": "p",
+          "md": "Transient errors — a momentary 503, a brief network blip — often resolve in seconds. A retry with a short delay catches these without switching providers at all. The standard pattern is **exponential backoff**: wait 1s, then 2s, then 4s between attempts, capped at some maximum. The critical addition is **jitter** — randomizing the wait by ±30-50%. Without jitter, all the clients that hit the same outage retry at exactly the same intervals, creating a thundering-herd wave that hammers the just-recovered provider and triggers a second outage. Jitter desynchronizes the wave."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "import random, time, httpx\n\ndef call_with_backoff(client, payload, max_retries=3):\n    delay = 1.0\n    for attempt in range(max_retries):\n        try:\n            return client.post(\"/chat/completions\", json=payload, timeout=30)\n        except (httpx.TimeoutException, httpx.HTTPStatusError) as e:\n            if attempt == max_retries - 1:\n                raise\n            jitter = random.uniform(0.5, 1.5)\n            time.sleep(delay * jitter)\n            delay *= 2  # exponential backoff"
+        },
+        {
+          "type": "h3",
+          "text": "Layer 2 — Fallback chains"
+        },
+        {
+          "type": "p",
+          "md": "Once retries are exhausted, the gateway walks a **fallback chain** — an ordered list of providers ranked by preference. A typical chain for a GPT-4o primary might be: GPT-4o → Claude 3.5 Sonnet → Gemini 1.5 Pro → a self-hosted open model. The first healthy provider in the chain gets the request. LiteLLM, for example, lets you configure typed fallbacks so that a rate-limit error (429) routes to a different backup than a context-window error, giving you fine-grained control without custom code."
+        },
+        {
+          "type": "h3",
+          "text": "Layer 3 — Circuit breakers"
+        },
+        {
+          "type": "p",
+          "md": "Retrying a provider that is fully down is expensive: each attempt burns latency and counts against rate limits on the *other* providers waiting in queue. A **circuit breaker** short-circuits this by tracking the error rate of each provider in a sliding window. When errors exceed a threshold (commonly 50% over the last 10 requests), the circuit **opens** and the provider is removed from the rotation for a cooldown period — typically 30-60 seconds. After the cooldown, the circuit enters a **half-open** state: one probe request is let through. If it succeeds, the circuit closes and full traffic resumes. If it fails, the cooldown restarts."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "Circuit breaker states",
+            "steps": [
+              {
+                "label": "Closed",
+                "sub": "all requests pass through; failures tracked"
+              },
+              {
+                "label": "Open",
+                "sub": "provider bypassed; requests go to fallback"
+              },
+              {
+                "label": "Half-Open",
+                "sub": "one probe request let through"
+              },
+              {
+                "label": "Closed",
+                "sub": "probe succeeded; normal traffic resumes"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "fallback-types",
+      "title": "Types of fallback triggers",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Not all failures should trigger the same response. Routing every error type to the same backup wastes capacity and can mask real problems. A mature failover stack distinguishes at least four failure classes:"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Failure type",
+            "HTTP signal",
+            "Recommended response"
+          ],
+          "rows": [
+            [
+              "Provider down / server error",
+              "5xx, connection timeout",
+              "Retry 1-2x, then failover to next provider"
+            ],
+            [
+              "Rate limit exhausted",
+              "429 Too Many Requests",
+              "Skip retries, immediately failover (retrying burns quota)"
+            ],
+            [
+              "Context window exceeded",
+              "400 with context error",
+              "Fallback to a model with a larger context window"
+            ],
+            [
+              "Content policy block",
+              "400 with policy error",
+              "Fallback to a provider with different guardrails, or return a structured error"
+            ],
+            [
+              "Latency SLO breach",
+              "200 but slow",
+              "Hedge or failover if P99 latency exceeds threshold"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "LiteLLM exposes this directly in its config: `fallbacks` (all errors), `context_window_fallbacks` (token-limit errors), and `content_policy_fallbacks` (policy violations). Portkey and other gateways offer similar typed routing. **Never use a single catch-all fallback** — a 429 and a 503 are completely different problems and the right secondary target may differ."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "**Rate limits need immediate failover, not retries.** If you got a 429, retrying after 1-2s just fires another blocked request. Switch providers immediately, then let the rate-limit window reset before sending traffic back to the primary."
+        }
+      ]
+    },
+    {
+      "id": "quality-parity",
+      "title": "Maintaining quality across providers",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The engineering challenge with failover is not availability — it's **output consistency**. The same prompt sent to GPT-4o, Claude 3.5 Sonnet, and Gemini 1.5 Pro will produce subtly different answers. For casual chat, this is fine. For a workflow that extracts structured JSON, classifies intent into a fixed taxonomy, or must follow a particular voice, the differences can matter."
+        },
+        {
+          "type": "h3",
+          "text": "Strategies for consistent output"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Test your fallback models explicitly.** Run your eval suite against every provider in your chain before going to production. Discover the gaps before your users do.",
+            "**Use provider-specific prompt variants.** The same instruction phrased differently can close a quality gap. A thin adapter layer can rewrite prompts per provider.",
+            "**Validate structured outputs on the way out.** If your pipeline needs a JSON object, parse and validate the response from the fallback model before passing it downstream — don't assume format parity.",
+            "**Log which provider served each request.** Tag your traces with the provider used so you can correlate quality regressions to failover events in your observability tool.",
+            "**Set graceful-degradation expectations.** Some flows can degrade gracefully — a summary with slightly different wording is fine. Others cannot — a tool-call output with a missing field breaks a downstream step. Know which is which before you're in an incident."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Pick fallback models that are close in capability to your primary. The goal is that users notice *nothing*. A fallback that is two capability tiers below the primary is a business-continuity choice, not a seamless handoff."
+        }
+      ]
+    },
+    {
+      "id": "tools-and-config",
+      "title": "Practical tools and configuration",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Building retry/fallback/circuit-breaker logic from scratch is a solved problem — use a gateway or library instead. Here are the leading options in 2025-2026:"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Tool",
+            "Type",
+            "Key strength"
+          ],
+          "rows": [
+            [
+              "LiteLLM",
+              "Open-source proxy + Python library",
+              "Typed fallbacks, 100+ provider support, YAML config"
+            ],
+            [
+              "Portkey",
+              "Managed gateway + open-source core",
+              "Circuit breakers on P99 latency, built-in observability"
+            ],
+            [
+              "Requesty",
+              "Managed gateway",
+              "Automatic health monitoring, zero-config failover"
+            ],
+            [
+              "Tenacity (Python)",
+              "Retry library",
+              "Flexible retry decorators with jitter; combine with any HTTP client"
+            ]
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "LiteLLM fallback config (YAML)"
+        },
+        {
+          "type": "p",
+          "md": "The following LiteLLM proxy config routes GPT-4o as primary, falls back to Claude 3.5 Sonnet on any error, and uses a wider-context Claude model if the context window overflows:"
+        },
+        {
+          "type": "code",
+          "lang": "yaml",
+          "code": "model_list:\n  - model_name: gpt-4o\n    litellm_params:\n      model: openai/gpt-4o\n      api_key: os.environ/OPENAI_API_KEY\n\n  - model_name: claude-sonnet\n    litellm_params:\n      model: anthropic/claude-3-5-sonnet-20241022\n      api_key: os.environ/ANTHROPIC_API_KEY\n\n  - model_name: claude-3-opus\n    litellm_params:\n      model: anthropic/claude-3-opus-20240229\n      api_key: os.environ/ANTHROPIC_API_KEY\n\nlitellm_settings:\n  num_retries: 2\n  request_timeout: 30\n  fallbacks:\n    - gpt-4o: [\"claude-sonnet\"]\n  context_window_fallbacks:\n    - gpt-4o: [\"claude-3-opus\"]"
+        },
+        {
+          "type": "p",
+          "md": "The proxy normalizes both providers to the OpenAI chat-completions schema, so your application code makes a single API call and never knows which provider served the response."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics are solid, three advanced patterns push your resilience further: **hedged requests**, **load balancing with weighted failover**, and **semantic health checks**."
+        },
+        {
+          "type": "h3",
+          "text": "Hedged requests"
+        },
+        {
+          "type": "p",
+          "md": "A hedged request fires the same prompt at two providers simultaneously and returns whichever responds first, cancelling the other. This is the most aggressive latency-tail strategy — it nearly eliminates P99 spikes — but it doubles your token spend. Use it only for latency-critical, user-facing interactions where the cost trade-off makes sense, not for batch workloads."
+        },
+        {
+          "type": "h3",
+          "text": "Weighted load balancing with failover exclusion"
+        },
+        {
+          "type": "p",
+          "md": "Rather than a strict primary/backup ordering, you can distribute traffic across providers by weight — say, 70% OpenAI, 20% Anthropic, 10% Google — and exclude any provider that trips the circuit breaker from the weight pool until it recovers. LiteLLM's router supports this via `routing_strategy: latency-based-routing` combined with `fallbacks`. This spreads rate-limit risk and keeps all providers warm so a failover event doesn't send cold traffic to a rarely-used backup."
+        },
+        {
+          "type": "h3",
+          "text": "Semantic health checks"
+        },
+        {
+          "type": "p",
+          "md": "Standard circuit breakers trigger on HTTP error codes. But an LLM can return HTTP 200 with a malformed or empty response body — technically not an error, but functionally broken. A **semantic health check** parses the response and validates it before declaring success: does it contain the expected JSON keys? Is the response non-empty? Does it pass a basic coherence check? This prevents a quietly-degraded provider from staying in the rotation just because it keeps the TCP connection alive."
+        },
+        {
+          "type": "h3",
+          "text": "Multi-region deployment of open models as a last-resort fallback"
+        },
+        {
+          "type": "p",
+          "md": "For teams with strict uptime SLAs, a self-hosted open model (Llama 3.1, Mistral, or similar via Ollama or vLLM) on your own infrastructure can serve as the final entry in the fallback chain — the one that is always up because you control it. Its quality may be lower than the frontier providers, but it keeps your app alive during a simultaneous multi-provider outage. Treat it as a circuit-breaker catch-all, not a primary."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "**Don't skip end-to-end testing of your fallback path.** Many teams configure failover but never actually test it with real traffic. Inject a deliberate 5xx from your primary in a staging environment and verify the fallback fires, the response is valid, and your observability tooling logs the switch correctly."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is the difference between LLM failover and LLM fallback?",
+      "a": "Failover typically refers to infrastructure-level switching when a provider is completely unreachable (5xx errors, connection timeouts). Fallback is broader: it includes semantic failures like rate limits (429), context-window overflows, and content-policy blocks. A robust setup handles both — retrying transient errors, circuit-breaking hard failures, and routing specific error classes to the right backup model."
+    },
+    {
+      "q": "How often do LLM providers actually go down?",
+      "a": "More often than most engineers expect. OpenAI reported nine outages in a single quarter in 2024. Anthropic's Claude API measured roughly 99.32% uptime over a 30-day window — nearly five hours of downtime per month. Major incidents affected OpenAI in June 2025 and December 2025. Planning for at least one multi-hour outage per month per provider is a realistic baseline."
+    },
+    {
+      "q": "Will my users notice if the fallback model is a different provider?",
+      "a": "Possibly, depending on the use case. For open-ended chat, output variation is usually invisible. For structured outputs (JSON extraction, classification), the fallback model may format things differently, so validate responses at the boundary. The best practice is to test your fallback models against your eval suite before going to production and to log which provider served each request for post-incident analysis."
+    },
+    {
+      "q": "What is exponential backoff with jitter and why does it matter?",
+      "a": "Exponential backoff means doubling the wait between retries: 1s, then 2s, then 4s. Jitter adds randomness (±30-50%) to that delay. Without jitter, all clients that hit the same outage retry at exactly the same moments, creating a thundering-herd wave that can cause a second outage on the just-recovered provider. Jitter desynchronizes the retries and is considered the single most important retry correctness fix in high-traffic LLM systems."
+    },
+    {
+      "q": "Do I need to build failover logic myself?",
+      "a": "No. Tools like LiteLLM (open-source) and Portkey (managed gateway) implement the full retry/fallback/circuit-breaker stack as configuration. Your application code makes a single API call to the gateway; the gateway handles provider selection, retries, and failover transparently. Building this from scratch is only worth it if your routing logic is highly custom."
+    },
+    {
+      "q": "Should I use a different backup model for rate limits versus server errors?",
+      "a": "Yes. A 429 rate-limit means the provider is up but your quota is exhausted — retrying the same provider wastes time. A 5xx means the provider may recover in seconds — a short retry is worth trying first. LiteLLM's typed fallbacks (`fallbacks` for general errors, `context_window_fallbacks`, `content_policy_fallbacks`) let you configure different backup targets per failure class."
+    }
+  ],
+  "related": [
+    "what-is-llmops",
+    "llm-model-routing",
+    "production-llm-stack",
+    "what-is-llm-observability"
+  ],
+  "furtherReading": [
+    {
+      "title": "LiteLLM Fallbacks and Reliability — official docs",
+      "url": "https://docs.litellm.ai/docs/proxy/reliability"
+    },
+    {
+      "title": "Failover routing strategies for LLMs in production — Portkey",
+      "url": "https://portkey.ai/blog/failover-routing-strategies-for-llms-in-production/"
+    },
+    {
+      "title": "Retries, fallbacks, and circuit breakers in LLM apps — Portkey",
+      "url": "https://portkey.ai/blog/retries-fallbacks-and-circuit-breakers-in-llm-apps/"
+    }
+  ]
+}

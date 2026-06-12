@@ -1,0 +1,481 @@
+{
+  "slug": "reduce-llm-latency",
+  "title": "How to Reduce LLM Latency: Streaming, Parallelism, and Smaller Models",
+  "seoTitle": "How to Reduce LLM Latency: 7 Techniques That Work",
+  "metaDescription": "Practical ways to make LLM apps feel fast: streaming, parallel calls, smaller models, shorter prompts, and caching — with the tradeoffs of each.",
+  "keywords": [
+    "how to reduce llm latency",
+    "make llm apps faster",
+    "llm streaming latency",
+    "parallel llm calls",
+    "llm latency optimization techniques"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Walk away with a toolbox of latency techniques — streaming, parallelism, smaller models — and the quality tradeoffs of each.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**LLM latency** is the delay between sending a prompt and receiving a usable response. There are two distinct feelings to it: how long before the first word appears (**Time to First Token**, or TTFT), and how quickly the rest of the words stream in (**Inter-Token Latency**, or ITL). Users tolerate a lot if something appears quickly; a blank screen for three seconds feels broken even when the underlying model is perfectly healthy."
+        },
+        {
+          "type": "p",
+          "md": "Think of ordering food at a restaurant. A slow kitchen that delivers your entire meal in one instant after 20 minutes feels worse than a kitchen that brings you warm bread in 30 seconds, then your starter, then your main. The total time might be similar but the *experience* is completely different. Streaming tokens to the screen works exactly the same way: users perceive streaming interfaces as roughly **40% faster** than buffered ones even when total generation time is identical, because they see progress immediately."
+        },
+        {
+          "type": "p",
+          "md": "LLM latency optimization is a layered discipline. Some techniques attack TTFT (get the first word out faster). Some attack ITL (generate tokens faster after that). Some avoid the LLM call entirely through caching. And some restructure *how* your app calls models — in parallel rather than in sequence — so the wall-clock time of multi-step pipelines collapses. This article walks through the practical toolkit, with the tradeoffs of each technique."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "TTFT and ITL pull in different directions. Optimizing TTFT often means sending the prompt to the model sooner (less preprocessing), which may conflict with prompt compression that reduces ITL. Treat them as separate metrics and know which one your users feel more."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Users tolerate about 1–2 seconds of wait before they disengage. For LLM apps running against frontier models, unoptimized pipelines easily take 4–8 seconds per call — and multi-step chains multiply that. Latency is therefore not a polish concern; it is the difference between a product people use and one they abandon."
+        },
+        {
+          "type": "p",
+          "md": "The business stakes are real: **latency and cost are coupled** in most architectures. A call that takes longer also ties up more server-side memory (because the KV cache stays live), consumes more tokens in a long-chain pipeline, and blocks your rate-limit headroom. Cutting latency often cuts cost at the same time. Conversely, some latency techniques spend extra compute to go faster — speculative decoding being the clearest example — so the tradeoffs are always worth inspecting."
+        },
+        {
+          "type": "h3",
+          "text": "Where the time goes"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Phase",
+            "What happens",
+            "Dominant technique to cut it"
+          ],
+          "rows": [
+            [
+              "Prefill (TTFT)",
+              "Model processes the full input prompt",
+              "Shorter prompts, prompt caching, smaller models"
+            ],
+            [
+              "Decode (ITL)",
+              "Model generates each output token one by one",
+              "Speculative decoding, quantization, smaller models"
+            ],
+            [
+              "Network round-trip",
+              "Bytes travel to/from the API",
+              "Streaming, regional deployment"
+            ],
+            [
+              "Application overhead",
+              "Your code, retries, serial calls",
+              "Parallelism, async clients"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Knowing where the time actually goes in your own app is the prerequisite to fixing it. Add tracing to your LLM calls with a tool like LangSmith, Langfuse, or OpenTelemetry before reaching for any optimization — otherwise you may spend a week cutting prefill time when your real bottleneck is a sequential chain of three serial API calls that could run in parallel."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How the techniques work",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Latency optimization is not a single dial you turn. It is a collection of mostly-independent levers. You choose which ones to pull based on where your specific bottleneck sits and how much quality risk you can accept. Below is the full map."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "Seven levers to cut LLM latency",
+            "root": {
+              "label": "Slow LLM app",
+              "sub": "users are waiting"
+            },
+            "children": [
+              {
+                "label": "1. Streaming",
+                "sub": "show tokens as they arrive"
+              },
+              {
+                "label": "2. Parallel calls",
+                "sub": "fan-out, not chain"
+              },
+              {
+                "label": "3. Smaller models",
+                "sub": "route easy tasks down"
+              },
+              {
+                "label": "4. Shorter prompts",
+                "sub": "less to prefill"
+              },
+              {
+                "label": "5. Prompt caching",
+                "sub": "reuse KV from prefix"
+              },
+              {
+                "label": "6. Semantic caching",
+                "sub": "skip the model entirely"
+              },
+              {
+                "label": "7. Speculative decoding",
+                "sub": "draft + verify in parallel"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Lever 1 — Streaming"
+        },
+        {
+          "type": "p",
+          "md": "Streaming is the highest-leverage change with the lowest risk. Instead of waiting for the full response before rendering anything, you open a **Server-Sent Events (SSE)** connection and render each token as it arrives. The model takes the same time to finish, but the user sees the first words in hundreds of milliseconds rather than seconds. This is how the ChatGPT web interface works, and it is why it *feels* fast even when a full response takes 10 seconds."
+        },
+        {
+          "type": "p",
+          "md": "Every major provider SDK (OpenAI, Anthropic, Google) supports streaming with a single flag. The tradeoff is that streaming complicates error handling and structured-output parsing — you must buffer the stream if your downstream code needs the full JSON object before proceeding."
+        },
+        {
+          "type": "h3",
+          "text": "Lever 2 — Parallel calls"
+        },
+        {
+          "type": "p",
+          "md": "Most multi-step LLM pipelines run their calls **serially** by default: step A finishes, then step B starts, then C. If A and B are independent — they don't need each other's output — running them in parallel cuts total latency to roughly `max(latency_A, latency_B)` instead of `latency_A + latency_B`. For a three-call pipeline where each call takes 1.5 seconds, serial execution takes 4.5 seconds; parallel takes 1.5 seconds. The speedup is real and costs nothing in quality."
+        },
+        {
+          "type": "p",
+          "md": "Fan-out patterns also appear within a single call: modern LLMs can invoke **multiple tools in one response** (parallel tool calling) rather than calling them one at a time. Benchmarks show 1.4x–2.4x latency improvements from parallelizing tool calls, with some agent tasks reaching 3.7x. The cost tradeoff is more input tokens per call, since all tool results must be provided together."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Serial vs parallel multi-step pipeline",
+            "columns": [
+              {
+                "title": "Serial (slow)",
+                "items": [
+                  "Call A starts → finishes",
+                  "Call B starts → finishes",
+                  "Call C starts → finishes",
+                  "Total = A + B + C seconds",
+                  "Simple to reason about"
+                ]
+              },
+              {
+                "title": "Parallel (fast)",
+                "accent": true,
+                "items": [
+                  "Calls A, B, C start together",
+                  "Each runs independently",
+                  "Wait for the slowest one",
+                  "Total ≈ max(A, B, C) seconds",
+                  "Requires async client code"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Lever 3 — Smaller models"
+        },
+        {
+          "type": "p",
+          "md": "A 7-billion-parameter model generates tokens 5–10x faster than a 70-billion-parameter model, and a 70B model generates 3–5x faster than a frontier model like GPT-4o or Claude Opus. For tasks that don't require frontier reasoning — classification, summarization, slot filling, simple Q&A — routing to a smaller model is the single largest latency cut available."
+        },
+        {
+          "type": "p",
+          "md": "**Model routing** (sending easy queries to cheap-and-fast models, hard queries to powerful-but-slow ones) captures most of this gain automatically. The tradeoff is accuracy: smaller models hallucinate more, follow complex instructions less reliably, and produce less nuanced prose. The router's own latency can partially offset the speedup on short prompts, so this technique pays off most on high-volume, repetitive query patterns."
+        },
+        {
+          "type": "h3",
+          "text": "Lever 4 — Shorter prompts"
+        },
+        {
+          "type": "p",
+          "md": "TTFT scales linearly with input token count: a 10,000-token prompt takes roughly 10x longer to prefill than a 1,000-token prompt. Research shows the average LLM API call wastes **40–60% of input tokens** on stale conversation history, redundant instructions, or boilerplate context the model doesn't need for that specific call. Trimming that waste shrinks TTFT, reduces cost, and often has zero impact on output quality because the model wasn't using the trimmed content anyway."
+        },
+        {
+          "type": "h3",
+          "text": "Lever 5 — Prompt (prefix) caching"
+        },
+        {
+          "type": "p",
+          "md": "When the same long prefix (system prompt, tool definitions, document context) appears at the start of many requests, the provider can **cache the attention key-value tensors** computed for that prefix and skip recomputing them on subsequent calls. Anthropic's prompt caching delivers up to **85% TTFT reduction** and 90% cost reduction on the cached portion of long prompts. OpenAI enables automatic prompt caching by default with 50% cost reduction."
+        },
+        {
+          "type": "p",
+          "md": "The constraint is that the prefix must be identical across requests and long enough for the cache savings to exceed the cache-write cost (typically 1,024+ tokens). This means keeping your system prompt stable, placing dynamic content at the *end* of the prompt, and structuring multi-turn conversations so the static prefix doesn't shift."
+        },
+        {
+          "type": "h3",
+          "text": "Lever 6 — Semantic caching"
+        },
+        {
+          "type": "p",
+          "md": "Semantic caching skips the LLM call entirely when a new question is close enough in meaning to one already answered. It works by embedding each question into a vector, searching a store of past question-answer pairs, and returning the cached answer if the nearest match clears a similarity threshold. A semantic cache hit takes milliseconds instead of seconds and costs nothing in API tokens. See the dedicated article on semantic caching for full details on threshold tuning and false-hit risk."
+        },
+        {
+          "type": "h3",
+          "text": "Lever 7 — Speculative decoding"
+        },
+        {
+          "type": "p",
+          "md": "**Speculative decoding** attacks the decode phase (ITL) by having a small, fast **draft model** propose several tokens ahead; the large target model then verifies all drafts in a single parallel forward pass. When the drafts are correct (acceptance rates reach ~80% with modern draft models), the target model effectively generates multiple tokens per forward pass instead of one, delivering **2–3x throughput improvement** without changing output quality. vLLM, TensorRT-LLM, and SGLang all ship production-ready speculative decoding as of 2025. The tradeoff is extra infrastructure complexity and higher GPU memory usage for the draft model."
+        }
+      ]
+    },
+    {
+      "id": "tradeoff-table",
+      "title": "Comparing the tradeoffs",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every technique comes with a cost. Knowing the tradeoffs before you commit is what separates a well-tuned production system from one that optimized latency at the expense of something it can't get back."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Technique",
+            "Latency win",
+            "Quality risk",
+            "Cost impact",
+            "Implementation effort"
+          ],
+          "rows": [
+            [
+              "Streaming",
+              "TTFT feels faster to user",
+              "None",
+              "None",
+              "Low — one SDK flag"
+            ],
+            [
+              "Parallel calls",
+              "Wall-clock total halved+",
+              "None",
+              "Same tokens, more concurrency",
+              "Medium — async refactor"
+            ],
+            [
+              "Smaller models",
+              "Large — 5-10x faster tokens",
+              "High — less capable",
+              "Lower API cost",
+              "Medium — routing logic"
+            ],
+            [
+              "Shorter prompts",
+              "TTFT proportional to trim",
+              "Low if pruning unused context",
+              "Proportional cost drop",
+              "Medium — prompt audit"
+            ],
+            [
+              "Prompt caching",
+              "TTFT down 50–85%",
+              "None",
+              "Large cost reduction",
+              "Low — stable prefix required"
+            ],
+            [
+              "Semantic caching",
+              "Eliminates call entirely",
+              "False-hit risk",
+              "Near-zero for hits",
+              "Medium — vector store needed"
+            ],
+            [
+              "Speculative decoding",
+              "2–3x decode throughput",
+              "None — same model output",
+              "More GPU memory",
+              "High — infra change"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Streaming and prompt caching are the two techniques worth applying to virtually every app immediately: both are low-effort, zero quality risk, and deliver immediately perceptible improvements. Parallel calls are the next priority if you have multi-step pipelines. Model routing and prompt trimming follow. Speculative decoding is an infrastructure-level choice that pays off at scale with self-hosted models."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Stack techniques — they are mostly complementary. Streaming makes TTFT feel instant while prompt caching reduces the prefill time that actually drives TTFT. Parallel calls shrink total pipeline time while semantic caching eliminates some calls entirely. A production system can use all seven simultaneously."
+        }
+      ]
+    },
+    {
+      "id": "code-examples",
+      "title": "Code patterns",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The two patterns that take the least time to implement and deliver the biggest per-effort win are streaming and parallel calls. Below are minimal but realistic examples of both."
+        },
+        {
+          "type": "h3",
+          "text": "Streaming with the Anthropic SDK"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "streaming_example.py",
+          "code": "import anthropic\n\nclient = anthropic.Anthropic()\n\n# stream=True opens an SSE connection; tokens arrive as they are generated\nwith client.messages.stream(\n    model=\"claude-opus-4-5\",\n    max_tokens=1024,\n    messages=[{\"role\": \"user\", \"content\": \"Explain quantum entanglement.\"}],\n) as stream:\n    for text in stream.text_stream:\n        print(text, end=\"\", flush=True)  # render each token immediately\n\n# The first token appears in hundreds of milliseconds;\n# the user sees progress long before the full answer is ready."
+        },
+        {
+          "type": "h3",
+          "text": "Parallel calls with asyncio"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "parallel_calls.py",
+          "code": "import asyncio\nimport anthropic\n\nclient = anthropic.AsyncAnthropic()\n\nasync def summarize(text: str) -> str:\n    msg = await client.messages.create(\n        model=\"claude-haiku-4-5\",\n        max_tokens=256,\n        messages=[{\"role\": \"user\", \"content\": f\"Summarize: {text}\"}],\n    )\n    return msg.content[0].text\n\nasync def main():\n    documents = [\n        \"Long document A...\",\n        \"Long document B...\",\n        \"Long document C...\",\n    ]\n    # All three calls start simultaneously; total time ≈ slowest single call.\n    results = await asyncio.gather(*[summarize(d) for d in documents])\n    print(results)\n\nasyncio.run(main())"
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Parallel calls multiply your rate-limit consumption. If you fan out 10 simultaneous requests you hit rate limits 10x faster. Implement a semaphore (`asyncio.Semaphore`) to cap concurrency at a safe level for your tier, and add retry logic with exponential back-off for 429 errors."
+        },
+        {
+          "type": "h3",
+          "text": "Measuring TTFT and ITL in production"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "measure_ttft.py",
+          "code": "import time\nimport anthropic\n\nclient = anthropic.Anthropic()\n\ndef timed_stream(prompt: str):\n    start = time.perf_counter()\n    ttft = None\n    tokens = 0\n    token_times = []\n\n    with client.messages.stream(\n        model=\"claude-haiku-4-5\",\n        max_tokens=512,\n        messages=[{\"role\": \"user\", \"content\": prompt}],\n    ) as stream:\n        for text in stream.text_stream:\n            now = time.perf_counter()\n            if ttft is None:\n                ttft = now - start\n                print(f\"TTFT: {ttft:.3f}s\")\n            token_times.append(now)\n            tokens += 1\n\n    total = time.perf_counter() - start\n    if len(token_times) > 1:\n        itl_avg = (token_times[-1] - token_times[0]) / (tokens - 1)\n        print(f\"Avg ITL: {itl_avg*1000:.1f}ms/token\")\n    print(f\"Total: {total:.2f}s | Tokens: {tokens}\")\n\ntimed_stream(\"Describe the history of the internet in three sentences.\")"
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you have streaming, prompt caching, and parallel calls in place, the remaining gains come from harder trade-offs: model selection strategy, output length limits, and infrastructure-level changes."
+        },
+        {
+          "type": "h3",
+          "text": "Model routing at scale"
+        },
+        {
+          "type": "p",
+          "md": "A well-designed routing layer sends each query to the smallest model capable of handling it correctly. Routing systems (like RouteLLM, Martian, or OpenRouter's auto-routing) use classifiers trained on quality benchmarks to make this call in real time, targeting 50x+ cost reduction while preserving measured accuracy. The router itself adds a small latency overhead — typically 20–100 ms — so it pays off most when the routed model is significantly faster and the query volume is high."
+        },
+        {
+          "type": "h3",
+          "text": "Output token limits"
+        },
+        {
+          "type": "p",
+          "md": "Decode latency (ITL phase) scales linearly with the number of tokens generated. Setting a tight `max_tokens` limit is the simplest way to cap worst-case latency — if your app only needs a 200-token answer, don't let the model produce 2,000. For structured tasks, requesting JSON output often produces shorter completions than prose explanations of the same data. Training users to phrase questions that call for concise answers (\"in one sentence\", \"list only\") works surprisingly well for conversational apps."
+        },
+        {
+          "type": "h3",
+          "text": "Continuous batching and self-hosted serving"
+        },
+        {
+          "type": "p",
+          "md": "If you run your own model with vLLM, TensorRT-LLM, or SGLang, **continuous batching** (also called PagedAttention in vLLM) dramatically improves throughput by filling GPU capacity across in-flight requests rather than processing requests sequentially. Tensor parallelism across multiple GPUs cuts per-token latency further — roughly 33% improvement at batch size 16 in published benchmarks. These are server-level knobs invisible to the API caller but essential to anyone operating their own inference stack."
+        },
+        {
+          "type": "h3",
+          "text": "Quantization"
+        },
+        {
+          "type": "p",
+          "md": "**Quantization** reduces model weight precision (e.g., from 16-bit floats to 4-bit integers), which cuts memory bandwidth requirements and speeds up token generation at the cost of some accuracy. INT4-quantized models run roughly 2x faster than their FP16 equivalents on the same hardware with acceptable quality degradation for most tasks. Tools like GGUF/llama.cpp and GPTQ make quantized local inference accessible without PhD-level infrastructure knowledge."
+        },
+        {
+          "type": "h3",
+          "text": "The latency-quality frontier"
+        },
+        {
+          "type": "p",
+          "md": "At the limit, every latency gain is a quality trade-off. Smaller models are faster but less accurate. Shorter prompts are cheaper but may omit context the model needs. Aggressive semantic caching risks false hits. The mature LLMOps approach is to treat quality metrics (evals) and latency metrics (TTFT, ITL, p95 response time) as two axes on the same graph — and explicitly pick your operating point rather than optimizing one blindly. A model that answers in 400 ms with 90% accuracy is often the right production choice over one that takes 4 seconds and hits 95% — but that depends on the application."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Establish a latency budget before writing optimization code: \"TTFT under 500 ms, total response under 3 s for 95th-percentile requests.\" Then trace your current p50 and p95 with real traffic. Optimizing without a budget leads to over-engineering the fast path while ignoring the 5% of requests that are actually causing user complaints."
+        },
+        {
+          "type": "h3",
+          "text": "Latency SLOs in production"
+        },
+        {
+          "type": "p",
+          "md": "Production teams define **Service Level Objectives (SLOs)** for LLM latency the same way they do for databases: a p50 target, a p95 target, and an alerting threshold. Because LLMs have heavy-tailed latency distributions (occasional long requests dominate the p99), tracking only averages is misleading. Wire TTFT, ITL, and end-to-end latency into your observability stack and set alerts on p95. When p95 regresses — which happens quietly when a model provider changes infrastructure or your prompt grows — you want to know before your users do."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is the fastest way to make an LLM app feel faster to users?",
+      "a": "Enable **streaming** first — it requires a single SDK flag and makes the app feel roughly 40% faster even with no reduction in actual generation time, because users see the first token in milliseconds instead of waiting for the full response. After that, enable prompt caching if you have a stable system prompt, since it cuts TTFT by 50–85% with zero code changes beyond putting stable content first in the prompt."
+    },
+    {
+      "q": "What is Time to First Token (TTFT) and why does it matter more than total latency?",
+      "a": "TTFT is the delay between submitting a prompt and receiving the first token of the response. It matters more than total latency for perceived speed because humans tolerate active progress (words appearing) much better than a blank wait. A 5-second response that shows the first word at 300 ms feels faster than a 3-second response that shows nothing until it's complete. TTFT is driven by prefill cost — how many input tokens the model must process before it can start generating."
+    },
+    {
+      "q": "How much faster are smaller models compared to frontier models?",
+      "a": "A 7-billion-parameter open model typically generates tokens 5–10x faster than a frontier model like GPT-4o or Claude Opus, and frontier-class models generate 3–5x faster than the largest reasoning models. The exact gap depends on hardware and quantization, but the rule of thumb is that each order-of-magnitude reduction in parameter count gives you roughly one order-of-magnitude improvement in token throughput — with a corresponding reduction in capability."
+    },
+    {
+      "q": "What is speculative decoding and does it change the model's output?",
+      "a": "Speculative decoding uses a small, fast draft model to propose several tokens ahead, then the large target model verifies all drafts in one parallel forward pass. When drafts are correct, the target model effectively produces multiple tokens per forward pass. Critically, it does **not** change output quality — the target model still makes the final decision on every token, and incorrect drafts are discarded. It delivers 2–3x throughput gains in production with vLLM and TensorRT-LLM at the cost of extra GPU memory for the draft model."
+    },
+    {
+      "q": "When should I run LLM calls in parallel instead of in sequence?",
+      "a": "Any time two or more LLM calls don't depend on each other's output, they can run in parallel. Common patterns include: summarizing multiple documents at once, generating several candidate responses to pick from, calling multiple tools simultaneously, and running a classification call alongside a generation call. The total wall-clock time drops from the sum of all calls to roughly the time of the slowest one. Use `asyncio.gather` in Python or `Promise.all` in JavaScript."
+    },
+    {
+      "q": "How do prompt caching and semantic caching differ?",
+      "a": "**Prompt caching** is a provider-side feature that reuses precomputed attention KV tensors for a repeated prompt prefix — the model still runs, but skips the expensive prefill computation for the cached portion. **Semantic caching** skips the model call entirely when a new question is similar enough to one already answered. They are complementary: prompt caching cuts TTFT for calls that do go through; semantic caching eliminates certain calls entirely. Most production systems use both."
+    }
+  ],
+  "related": [
+    "what-is-llmops",
+    "llm-model-routing",
+    "what-is-llm-gateway",
+    "production-llm-stack",
+    "llm-prototype-to-production"
+  ],
+  "furtherReading": [
+    {
+      "title": "Latency optimization guide — OpenAI API docs",
+      "url": "https://platform.openai.com/docs/guides/latency-optimization"
+    },
+    {
+      "title": "Prompt caching — Anthropic documentation",
+      "url": "https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching"
+    },
+    {
+      "title": "Speculative decoding — BentoML LLM Inference Handbook",
+      "url": "https://bentoml.com/llm/inference-optimization/speculative-decoding"
+    }
+  ]
+}

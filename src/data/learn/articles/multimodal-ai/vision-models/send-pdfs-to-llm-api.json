@@ -1,0 +1,428 @@
+{
+  "slug": "send-pdfs-to-llm-api",
+  "title": "How to Send PDFs to an LLM API (Document Inputs Explained)",
+  "seoTitle": "How to Send PDFs to an LLM API",
+  "metaDescription": "Claude, GPT, and Gemini all accept PDFs now. Learn the document input options — native PDF support, Files APIs, and when to parse to text instead.",
+  "keywords": [
+    "how to send pdf to claude api",
+    "openai api pdf input",
+    "gemini api pdf upload",
+    "llm files api explained",
+    "pdf input vs text extraction llm"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn every way to get a PDF into a model — native document inputs, Files APIs, and text extraction — and when each one is the right call.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A year ago, sending a PDF to a language model meant first converting it to text yourself — stripping out the formatting, losing the tables, and hoping the model could make sense of the garbled output. Today, the three biggest API providers — **Anthropic Claude**, **OpenAI GPT-4o**, and **Google Gemini** — all let you attach a PDF directly to a chat message, the same way you'd attach a file to an email. The model reads both the text and the visual layout, then replies in plain language."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like handing a physical report to a very fast reader. When you give them the real document — not a blurry photocopy of just the words — they can see the tables, the charts, the column headers, and the footnotes. The model does the same thing: it processes each page both as extracted text *and* as an image, so nothing meaningful is lost in translation."
+        },
+        {
+          "type": "p",
+          "md": "There are three distinct ways to get a PDF into a model call: **inline base64** (encode the bytes and paste them into the request JSON), **Files API** (upload once, reference by ID in many requests), and **text extraction** (parse the PDF yourself, send the resulting text). Each approach has a different cost profile, latency characteristic, and quality ceiling — and the right choice depends on your document type and usage pattern."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This article covers the **API-level mechanics**: how to format requests, which parameters to set, and when to pick each approach. For background on how vision models understand document layout and OCR, see the companion article on vision models for document AI."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "PDFs are the dominant format for contracts, invoices, research papers, financial filings, technical manuals, and regulatory documents. Before native PDF support, every document-processing pipeline needed a separate extraction layer — `pdfplumber`, `PyMuPDF`, Apache PDFBox, or a third-party OCR service — that added latency, cost, and failure modes of its own. Today that layer is optional, and removing it often improves quality."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Contract review**: attach a 60-page agreement and ask the model to flag non-standard clauses — no pre-processing required.",
+            "**Invoice extraction**: upload a scanned PDF invoice and receive structured JSON with line items, amounts, and dates.",
+            "**Research Q&A**: send a technical paper and ask follow-up questions page by page, with the model citing page numbers.",
+            "**Compliance checking**: compare a multi-section regulation PDF against a product description and identify gaps.",
+            "**Report summarisation**: feed a quarterly earnings PDF to a model and get a bullet-point summary in seconds."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Getting the input format right is the critical first step. An incorrectly encoded payload returns a cryptic 400 error; a missing beta header on the Claude Files API silently fails; an oversized inline payload trips a request-body limit that is separate from the per-file limit. This guide prevents all three."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When a provider receives a PDF, it does two things simultaneously: it extracts the raw text layer (if the PDF has one) and it renders each page as an image. Both representations are tokenised and fed into the model together, which is why native PDF input handles scanned documents and PDFs with embedded charts far better than text-only extraction."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "PDF → API → Model → Response",
+            "steps": [
+              {
+                "label": "Your PDF file",
+                "sub": "Local disk, S3, or URL"
+              },
+              {
+                "label": "Choose delivery method",
+                "sub": "Inline base64, Files API, or URL"
+              },
+              {
+                "label": "API request",
+                "sub": "JSON with document block + text prompt"
+              },
+              {
+                "label": "Provider processes PDF",
+                "sub": "Extracts text layer + renders page images"
+              },
+              {
+                "label": "Dual tokenisation",
+                "sub": "Text tokens + visual patch tokens merged"
+              },
+              {
+                "label": "Model inference",
+                "sub": "Reads text, layout, charts, and tables together"
+              },
+              {
+                "label": "Text response",
+                "sub": "Returned in the same chat message format"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "The three delivery methods compared"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Method",
+            "How it works",
+            "Best for",
+            "Watch out for"
+          ],
+          "rows": [
+            [
+              "Inline base64",
+              "PDF bytes encoded as a base64 string, sent inside the JSON request body",
+              "One-off calls, local files, no hosting needed",
+              "Inflates payload ~33%; 32 MB cap on Claude and OpenAI"
+            ],
+            [
+              "Files API (upload once)",
+              "Upload the PDF to the provider's storage, receive a file_id, reference it in any future request",
+              "Reusing the same document across many calls; multi-turn chats",
+              "Extra upload step; beta header required for Claude; files expire"
+            ],
+            [
+              "URL input (OpenAI / Gemini)",
+              "Pass a publicly accessible HTTPS URL; provider fetches the PDF at request time",
+              "PDFs already hosted on a CDN or public storage bucket",
+              "URL must be reachable from provider servers; secrets in URLs are exposed"
+            ],
+            [
+              "Text extraction (DIY)",
+              "Parse the PDF yourself with a library, send the resulting text as a normal string",
+              "Text-heavy docs where layout doesn't matter; lowest cost",
+              "Loses charts, tables, and scanned pages; adds pipeline complexity"
+            ]
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Provider limits at a glance"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Provider",
+            "Max pages",
+            "Max file size",
+            "Delivery options"
+          ],
+          "rows": [
+            [
+              "Anthropic Claude",
+              "100 pages",
+              "32 MB per request",
+              "Inline base64, Files API (file_id)"
+            ],
+            [
+              "OpenAI GPT-4o / o1",
+              "100 pages",
+              "32 MB total across files",
+              "Inline base64, Files API (file_id), HTTPS URL"
+            ],
+            [
+              "Google Gemini",
+              "1,000 pages",
+              "50 MB inline; 2 GB via Files API",
+              "Inline base64, Files API, GCS URL, HTTPS URL"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "code-examples",
+      "title": "Code examples: Claude, GPT-4o, and Gemini",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "Anthropic Claude — inline base64"
+        },
+        {
+          "type": "p",
+          "md": "Claude's Messages API accepts a `document` content block. Set `source.type` to `\"base64\"`, `source.media_type` to `\"application/pdf\"`, and supply the base64-encoded bytes in `source.data`. No special beta header is needed for inline PDF — that is generally available."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "import anthropic\nimport base64\n\nwith open(\"contract.pdf\", \"rb\") as f:\n    pdf_data = base64.standard_b64encode(f.read()).decode(\"utf-8\")\n\nclient = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from env\n\nresponse = client.messages.create(\n    model=\"claude-opus-4-5\",\n    max_tokens=2048,\n    messages=[\n        {\n            \"role\": \"user\",\n            \"content\": [\n                {\n                    \"type\": \"document\",\n                    \"source\": {\n                        \"type\": \"base64\",\n                        \"media_type\": \"application/pdf\",\n                        \"data\": pdf_data,\n                    },\n                },\n                {\n                    \"type\": \"text\",\n                    \"text\": \"Summarise the key obligations in this contract.\",\n                },\n            ],\n        }\n    ],\n)\nprint(response.content[0].text)"
+        },
+        {
+          "type": "h3",
+          "text": "Anthropic Claude — Files API (upload once, reuse)"
+        },
+        {
+          "type": "p",
+          "md": "For PDFs you query repeatedly — a product manual, a legal handbook, a reference specification — upload once with `client.beta.files.upload()` and reuse the `file_id` across as many calls as you like. You must include the `anthropic-beta: files-api-2025-04-14` header, which the SDK passes automatically when you use the `beta.files` namespace."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "import anthropic\n\nclient = anthropic.Anthropic()\n\n# Upload once\nwith open(\"technical-manual.pdf\", \"rb\") as f:\n    uploaded = client.beta.files.upload(\n        file=(\"technical-manual.pdf\", f, \"application/pdf\"),\n    )\nfile_id = uploaded.id  # e.g. \"file_abc123\"\n\n# Reuse in every subsequent call\nresponse = client.beta.messages.create(\n    model=\"claude-opus-4-5\",\n    max_tokens=1024,\n    messages=[\n        {\n            \"role\": \"user\",\n            \"content\": [\n                {\n                    \"type\": \"document\",\n                    \"source\": {\n                        \"type\": \"file\",\n                        \"file_id\": file_id,\n                    },\n                },\n                {\n                    \"type\": \"text\",\n                    \"text\": \"What does section 4 say about warranty exclusions?\",\n                },\n            ],\n        }\n    ],\n    betas=[\"files-api-2025-04-14\"],\n)\nprint(response.content[0].text)"
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "The single most common Claude Files API error is a **missing beta header**. If you call `client.messages.create()` instead of `client.beta.messages.create()` — or forget to pass `betas=[\"files-api-2025-04-14\"]` — the API will reject the `file_id` source type with a 400."
+        },
+        {
+          "type": "h3",
+          "text": "OpenAI GPT-4o — Responses API with file_id"
+        },
+        {
+          "type": "p",
+          "md": "OpenAI supports PDF inputs in both the Chat Completions API and the newer Responses API. Upload with `client.files.create(purpose=\"user_data\")`, then reference the returned `file_id` in the request. You can also send a base64 data URI or a public HTTPS URL directly."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "import openai\n\nclient = openai.OpenAI()  # reads OPENAI_API_KEY from env\n\n# Upload once\nwith open(\"earnings-report.pdf\", \"rb\") as f:\n    uploaded = client.files.create(file=f, purpose=\"user_data\")\nfile_id = uploaded.id  # e.g. \"file-abc123\"\n\n# Reference in a Responses API call\nresponse = client.responses.create(\n    model=\"gpt-4o\",\n    input=[\n        {\n            \"role\": \"user\",\n            \"content\": [\n                {\n                    \"type\": \"input_file\",\n                    \"file_id\": file_id,\n                },\n                {\n                    \"type\": \"input_text\",\n                    \"text\": \"What was the net revenue for Q3?\",\n                },\n            ],\n        }\n    ],\n)\nprint(response.output_text)"
+        },
+        {
+          "type": "h3",
+          "text": "Google Gemini — inline base64 and Files API"
+        },
+        {
+          "type": "p",
+          "md": "Gemini accepts PDFs either inline (base64 with `mime_type: \"application/pdf\"`) or via the Files API for larger documents. The inline limit is 50 MB; for larger PDFs use `client.files.upload()`. Gemini also accepts direct HTTPS URLs and Google Cloud Storage (`gs://`) URIs."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "import google.generativeai as genai\nimport base64\n\ngenai.configure(api_key=\"YOUR_GEMINI_API_KEY\")\n\n# --- Option A: inline base64 (up to 50 MB) ---\nwith open(\"research-paper.pdf\", \"rb\") as f:\n    pdf_bytes = f.read()\n\nmodel = genai.GenerativeModel(\"gemini-1.5-pro\")\nresponse = model.generate_content([\n    {\n        \"inline_data\": {\n            \"mime_type\": \"application/pdf\",\n            \"data\": base64.b64encode(pdf_bytes).decode(),\n        }\n    },\n    \"List the three main findings of this paper.\",\n])\nprint(response.text)\n\n# --- Option B: Files API (for larger or reused PDFs) ---\nuploaded = genai.upload_file(\"large-report.pdf\", mime_type=\"application/pdf\")\nresponse2 = model.generate_content([\n    uploaded,\n    \"Summarise the executive summary section.\",\n])\nprint(response2.text)"
+        }
+      ]
+    },
+    {
+      "id": "native-vs-text-extraction",
+      "title": "Native PDF input vs. text extraction: when to use each",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Native PDF input is not always the right call. Sending a PDF activates the model's visual pipeline, which reads every page as an image. That is powerful for complex layouts, but it costs more tokens than sending clean text, and it runs slower. For high-volume pipelines or simple text-heavy documents, pre-extracting the text with a library like `pdfplumber`, `PyMuPDF` (fitz), or Microsoft's open-source `markitdown` can cut costs by 50% or more while delivering equally good results."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Scenario",
+            "Recommended approach",
+            "Reason"
+          ],
+          "rows": [
+            [
+              "Scanned PDF (image-only, no text layer)",
+              "Native PDF input",
+              "No text to extract; model must use vision"
+            ],
+            [
+              "PDF with complex tables, charts, or mixed layout",
+              "Native PDF input",
+              "Visual pipeline preserves layout context that text strips away"
+            ],
+            [
+              "Text-heavy PDF with a clean text layer (contract, paper)",
+              "Text extraction (pdfplumber / PyMuPDF)",
+              "50%+ token savings; extraction quality is equivalent"
+            ],
+            [
+              "Same PDF queried many times",
+              "Files API upload (any provider)",
+              "Upload cost paid once; no repeated encoding overhead"
+            ],
+            [
+              "Large PDF > 32 MB / > 100 pages (Claude / OpenAI)",
+              "Gemini Files API or chunked text extraction",
+              "Claude and OpenAI hard limits; Gemini supports up to 1,000 pages"
+            ],
+            [
+              "RAG pipeline with many small chunks",
+              "Text extraction + embedding",
+              "Chunk boundaries controlled by you; cheaper than per-chunk PDF calls"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "A practical heuristic: **start with native PDF input** to get a working baseline quickly. If cost or latency becomes a concern, profile the document types flowing through your pipeline. Text-heavy PDFs with clean text layers are almost always cheaper to handle with extraction. Scanned PDFs and documents with embedded charts are where native input pays for itself."
+        },
+        {
+          "type": "h3",
+          "text": "Token cost reality check"
+        },
+        {
+          "type": "p",
+          "md": "Native PDF input tokenises each page twice — once as text tokens, once as visual patch tokens. A typical dense A4 page runs to roughly 1,500–2,500 tokens in combined form. A 50-page PDF can therefore consume 75,000–125,000 input tokens before you've written a single word of your prompt. At Claude Sonnet pricing of $3 per million input tokens, that is roughly $0.23–$0.38 per document query. Extracting the same text with `PyMuPDF` and sending it as a plain string typically halves that token count."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls and how to avoid them",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "**Missing beta header on Claude Files API.** Referencing a `file_id` without the `files-api-2025-04-14` beta header causes a 400. Always use `client.beta.messages.create()` and pass `betas=[\"files-api-2025-04-14\"]`.",
+            "**Confusing per-file size with request-body size.** Claude and OpenAI both have a 32 MB limit — but that is the *request body* limit, not a per-file limit. A 24 MB PDF becomes approximately 32 MB after base64 encoding, leaving almost no room for the prompt. Use the Files API for any PDF over ~20 MB.",
+            "**Password-protected PDFs.** Encrypted PDFs that require a password to open will fail silently or return garbage. Decrypt with `pikepdf` or `qpdf` before sending.",
+            "**Sending PDF via `image` block instead of `document` block (Claude).** Claude requires a `document` block with `media_type: \"application/pdf\"`. Using an `image` block with PDF data is rejected.",
+            "**Private or expiring URLs.** When using URL-based input on OpenAI or Gemini, the provider's servers must be able to fetch the URL at request time. A signed S3 URL that expires in 60 seconds, or a CDN behind IP allowlisting, will return a 403.",
+            "**Assuming page order is preserved in extraction.** When you extract text yourself with some libraries, multi-column layouts scramble reading order. If coherent reading order matters, test your extraction output before assuming it is correct."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic pipeline is working, several advanced patterns become worth exploring."
+        },
+        {
+          "type": "h3",
+          "text": "Citations and page-level grounding"
+        },
+        {
+          "type": "p",
+          "md": "Anthropic's Citations API (available in Amazon Bedrock and the direct API) lets the model return structured citations that point to the exact passage in the source document it drew from. This is especially valuable for legal, regulatory, and medical use cases where you need an audit trail. Pass `citations: {enabled: true}` in the request, and each sentence in the response can carry a `document_index` and `start_page_number` reference."
+        },
+        {
+          "type": "h3",
+          "text": "Multi-document comparison"
+        },
+        {
+          "type": "p",
+          "md": "All three providers support multiple document blocks in a single message. You can compare two contracts, diff two versions of a specification, or cross-reference a regulation against a product policy in one round-trip. Add each PDF as a separate content block and label them in your prompt (`Document A`, `Document B`) so the model can reference them unambiguously. Watch the token budget — two 50-page PDFs at 2,000 tokens per page will cost 200,000 input tokens per query."
+        },
+        {
+          "type": "h3",
+          "text": "Batch processing for high volume"
+        },
+        {
+          "type": "p",
+          "md": "When processing hundreds of PDFs, use the provider's **Batch API** rather than synchronous calls. Both Anthropic and OpenAI offer batch endpoints that accept a JSONL file of requests, run them asynchronously off-peak, and are billed at roughly half the standard rate. Upload your PDFs to the Files API first (paying the upload cost once), then reference the same `file_id` across thousands of batch items — you are not re-sending the bytes for each job."
+        },
+        {
+          "type": "h3",
+          "text": "Hybrid pipeline: OCR first, model second"
+        },
+        {
+          "type": "p",
+          "md": "For very large document archives where both cost and latency matter, consider a staged approach: run a lightweight OCR tool (Tesseract, AWS Textract, Google Document AI) to extract text and table structure from PDFs, then send the clean Markdown output to the LLM. The LLM call becomes a straightforward text-in, text-out task — fast and cheap. Reserve native PDF input for documents where the OCR quality is inadequate or where the visual layout is itself meaningful (engineering drawings, complex financial statements)."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Microsoft's open-source **MarkItDown** library converts PDFs, Word documents, and PowerPoint files to clean Markdown in one function call — a convenient drop-in for the text-extraction path that preserves heading structure and basic table formatting."
+        },
+        {
+          "type": "h3",
+          "text": "Structured output extraction from PDFs"
+        },
+        {
+          "type": "p",
+          "md": "Combine native PDF input with a JSON schema prompt to turn any document into a typed data structure. Describe the fields you want — `{\"invoice_number\": \"string\", \"line_items\": [{\"description\": \"string\", \"amount\": \"number\"}], \"total\": \"number\"}` — instruct the model to return only valid JSON, then pipe the output to `json.loads()`. For OpenAI, `response_format: {type: \"json_schema\", json_schema: {...}}` enforces the schema at the API level, eliminating parse failures entirely."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Does Claude's API support sending PDFs directly, or do I have to convert them first?",
+      "a": "Claude supports PDFs natively. You can send a PDF as an inline base64 `document` block without any pre-conversion. For PDFs you query repeatedly, Claude's Files API lets you upload once and reference the file by ID in every subsequent call, which is more efficient."
+    },
+    {
+      "q": "What is the difference between the Files API and sending a base64-encoded PDF?",
+      "a": "With **base64 inline**, the PDF bytes travel with every API request — convenient for one-off calls but expensive for repeated queries because you pay the encoding overhead each time. With the **Files API**, you upload the PDF once, get a persistent `file_id`, and reference that ID in as many requests as you like. The Files API also lets you stay well below request-body size limits for large documents."
+    },
+    {
+      "q": "How many pages can I send to the API at once?",
+      "a": "Claude and OpenAI both cap PDF inputs at **100 pages per request**. Google Gemini supports up to **1,000 pages** inline or via the Files API. If your document exceeds these limits, split it into chunks by page range before sending, or pre-extract the text."
+    },
+    {
+      "q": "When should I extract PDF text myself instead of sending the raw PDF?",
+      "a": "Text extraction makes sense for documents with a clean embedded text layer — contracts, research papers, plain reports — where the visual layout is not meaningful. It can cut token costs by 50% or more. Stick with native PDF input for scanned documents, PDFs with charts or complex tables, or any case where losing the visual context degrades the model's output quality."
+    },
+    {
+      "q": "Why am I getting a 400 error when I send a PDF to the Claude API?",
+      "a": "The two most common causes are (1) using the **wrong block type** — PDFs need a `document` block, not an `image` block — and (2) a **missing beta header** when using the Files API. If you are referencing a `file_id`, you must call `client.beta.messages.create()` and include `betas=[\"files-api-2025-04-14\"]`. Also check that the total request body (prompt + encoded PDF) does not exceed 32 MB."
+    },
+    {
+      "q": "Can I send a password-protected PDF to the API?",
+      "a": "No. All three providers will either reject an encrypted PDF or return empty or garbled content. Decrypt the PDF first using a library like `pikepdf` (Python) or `qpdf` (command-line), then send the decrypted file."
+    }
+  ],
+  "related": [
+    "what-is-vision-language-model",
+    "send-images-to-llm-api",
+    "ocr-with-vision-models",
+    "what-is-multimodal-ai"
+  ],
+  "furtherReading": [
+    {
+      "title": "Anthropic PDF Support Docs",
+      "url": "https://docs.anthropic.com/en/docs/build-with-claude/pdf-support"
+    },
+    {
+      "title": "OpenAI File Inputs Guide",
+      "url": "https://platform.openai.com/docs/guides/pdf-files"
+    },
+    {
+      "title": "Google Gemini Document Understanding",
+      "url": "https://ai.google.dev/gemini-api/docs/document-processing"
+    }
+  ]
+}

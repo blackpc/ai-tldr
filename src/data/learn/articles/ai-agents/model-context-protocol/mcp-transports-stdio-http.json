@@ -1,0 +1,320 @@
+{
+  "slug": "mcp-transports-stdio-http",
+  "title": "What Are MCP Transports? stdio vs Streamable HTTP",
+  "seoTitle": "MCP Transports: stdio vs Streamable HTTP",
+  "metaDescription": "stdio runs MCP servers locally as subprocesses; Streamable HTTP serves them remotely. Learn how each transport works and when to use which.",
+  "keywords": [
+    "mcp stdio vs http",
+    "mcp streamable http explained",
+    "mcp transport types",
+    "remote mcp server vs local",
+    "mcp sse deprecated"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Understand how MCP messages actually move — local subprocesses over stdio versus remote servers over Streamable HTTP — and when to pick each.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When two programs need to talk, they need a **transport** — a concrete pipe for the bytes to travel through. MCP (Model Context Protocol) is the shared language that hosts and servers speak, but the *transport* is how that language actually moves from one side to the other. MCP defines exactly two official transports: **stdio** and **Streamable HTTP**."
+        },
+        {
+          "type": "p",
+          "md": "Think of the difference like a phone call versus a letter. With **stdio**, the host (your AI app) dials up a local program on the same machine and the two talk back and forth through that open connection — low latency, no network, very direct. With **Streamable HTTP**, the server lives somewhere on the internet, and every exchange goes through standard web requests — the equivalent of sending letters that can be tracked, authenticated, and load-balanced across many post offices."
+        },
+        {
+          "type": "p",
+          "md": "**stdio** is short for *standard input/output* — the same streams that shell commands like `cat` and `grep` use. The host launches the MCP server as a child process, writes JSON-RPC messages to its `stdin`, and reads responses from its `stdout`. No sockets, no ports, no auth setup. **Streamable HTTP** is a single HTTP endpoint the server exposes. The host POSTs requests to it and the server either replies with a plain JSON body or upgrades the response to a Server-Sent Events stream when the server needs to push multiple messages back."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Both transports carry the same JSON-RPC 2.0 message format — only the *pipe* differs. Switching transports does not change what a server can do; it changes who can reach it and how it is deployed."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Choosing the wrong transport forces you to redesign your deployment later. A local tool that starts simple on stdio can hit hard ceilings the moment a second developer needs it. A remote service that starts on Streamable HTTP adds auth and network latency that may be unnecessary for a single-user script. Getting the choice right from the start saves you a painful migration."
+        },
+        {
+          "type": "p",
+          "md": "There is also a historical reason to understand transports: early MCP (spec version `2024-11-05`) shipped with **HTTP+SSE** as the remote transport — a dedicated SSE endpoint for server-to-client streaming paired with a separate POST endpoint for client messages. This design had real friction: two endpoints to manage, persistent SSE connections that fail behind many proxies and CDN edges, and awkward load-balancing semantics. The `2025-03-26` spec replaced HTTP+SSE with Streamable HTTP, which collapses everything to one endpoint. The old SSE transport is now **deprecated** and is scheduled to be removed by providers in mid-2026."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "If you are reading MCP tutorials from 2024 that reference an `/sse` endpoint and a separate `/messages` endpoint, those describe the **deprecated HTTP+SSE transport**. All new servers should use Streamable HTTP (`/mcp` as a single endpoint handling both POST and GET)."
+        },
+        {
+          "type": "p",
+          "md": "Understanding transports also matters for **security**. stdio servers run on the user's own machine with the user's own filesystem permissions — there is no network attack surface, but every tool invocation has full local access. Streamable HTTP servers sit behind HTTP auth layers (OAuth 2.1 is the recommended auth scheme), giving you the ability to restrict which clients can call which tools and to audit every request in a central log."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How each transport works",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "stdio in detail"
+        },
+        {
+          "type": "p",
+          "md": "The host process **spawns** the server binary as a child — for example, running `npx @modelcontextprotocol/server-filesystem /home/user/docs`. From that point on, all communication is newline-delimited JSON-RPC 2.0 over the process's `stdin` and `stdout`. Each message is one complete JSON object on a single line; embedded newlines are not allowed inside a message. The server may write UTF-8 log strings to `stderr`; the host can capture or ignore them. When the host is done, it terminates the subprocess — the OS cleans up automatically."
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "code": "// Client → Server (written to server's stdin)\n{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"my-host\",\"version\":\"1.0\"}}}\n\n// Server → Client (written to server's stdout)\n{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"filesystem\",\"version\":\"1.2\"}}}"
+        },
+        {
+          "type": "h3",
+          "text": "Streamable HTTP in detail"
+        },
+        {
+          "type": "p",
+          "md": "The server exposes **one HTTP endpoint** — typically `/mcp` — that accepts both POST and GET. The client POSTs a JSON-RPC message (or a JSON-RPC batch) to this URL. The server decides how to respond: for simple request-response exchanges it returns a `200 OK` with a `Content-Type: application/json` body; when the response involves long-running work or server-initiated notifications, it upgrades to `Content-Type: text/event-stream` and streams multiple Server-Sent Events over that same response. The client can also open a persistent SSE channel with a GET to the same endpoint, letting the server push notifications at any time."
+        },
+        {
+          "type": "p",
+          "md": "**Session management** is optional. If the server wants to maintain state across requests it issues a `Mcp-Session-Id` header in the `InitializeResult` response. The client then echoes that header on every subsequent request. For stateless deployments — including serverless functions or edge workers — the server skips session IDs entirely: every request carries the full context it needs."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "stdio vs Streamable HTTP — how messages flow",
+            "columns": [
+              {
+                "title": "stdio (local subprocess)",
+                "items": [
+                  "Host spawns server as child process",
+                  "Host writes JSON-RPC line to server stdin",
+                  "Server writes JSON-RPC line to stdout",
+                  "Server logs go to stderr (optional)",
+                  "Host terminates process when done",
+                  "No network, no auth, no ports"
+                ]
+              },
+              {
+                "title": "Streamable HTTP (remote server)",
+                "items": [
+                  "Server runs as independent HTTP service",
+                  "Client POSTs JSON-RPC to /mcp endpoint",
+                  "Server replies JSON or upgrades to SSE stream",
+                  "Client GETs /mcp to receive push notifications",
+                  "Optional Mcp-Session-Id for stateful sessions",
+                  "Standard HTTP auth (OAuth 2.1, API keys)"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Streamable HTTP request lifecycle",
+            "steps": [
+              {
+                "label": "Client sends POST",
+                "sub": "JSON-RPC message to /mcp"
+              },
+              {
+                "label": "Server decides response mode",
+                "sub": "Simple reply or streaming?"
+              },
+              {
+                "label": "Simple: 200 JSON body",
+                "sub": "Single response, connection closes"
+              },
+              {
+                "label": "Streaming: 200 SSE stream",
+                "sub": "Multiple events, server pushes progress"
+              },
+              {
+                "label": "Client receives final result",
+                "sub": "Parses last event or JSON body"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "when-to-use-which",
+      "title": "When to use which",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The right transport usually follows from who will run the server and who will call it."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Scenario",
+            "Recommended transport",
+            "Reason"
+          ],
+          "rows": [
+            [
+              "Single developer, local tools (filesystem, shell, local DB)",
+              "stdio",
+              "Zero setup, no auth complexity, fastest latency"
+            ],
+            [
+              "IDE plugin bundled with the editor (Cursor, VS Code)",
+              "stdio",
+              "Editor launches server process, same machine"
+            ],
+            [
+              "Company-wide internal tool accessed by a team",
+              "Streamable HTTP",
+              "One deployment, centralized auth and access control"
+            ],
+            [
+              "SaaS integration (GitHub, Notion, Stripe official MCP)",
+              "Streamable HTTP",
+              "Must serve many tenants, needs OAuth, audit logs"
+            ],
+            [
+              "Serverless or edge function",
+              "Streamable HTTP (stateless)",
+              "Stateless mode avoids session affinity problems"
+            ],
+            [
+              "Local prototype being shared with a co-worker",
+              "Streamable HTTP",
+              "stdio cannot serve across the network"
+            ],
+            [
+              "CI/CD pipeline step on the same runner",
+              "stdio",
+              "No external network, process isolation is sufficient"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Many production servers support **both transports** simultaneously — exposing stdio for developers running locally and Streamable HTTP for team or cloud use — so you do not have to make a final choice upfront. The TypeScript and Python MCP SDKs both offer dual-transport support out of the box."
+        },
+        {
+          "type": "p",
+          "md": "**Latency profile** is worth knowing concretely. stdio adds roughly the cost of a process spawn plus IPC — benchmarks put typical round-trip times at 4–9 ms for in-process calls. Streamable HTTP adds a full TCP round-trip plus any TLS handshake, typically 20–100 ms depending on geography. For interactive chat this difference is imperceptible; for an agent loop making thousands of tool calls in a tight batch, it can accumulate meaningfully."
+        }
+      ]
+    },
+    {
+      "id": "sse-deprecation-and-history",
+      "title": "SSE transport: what it was and why it was replaced",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The original remote transport in MCP spec `2024-11-05` was **HTTP+SSE**. It split communication across two separate endpoints: the server opened a persistent SSE channel at `/sse` for server-to-client messages, and the client POSTed to `/messages` for client-to-server calls. This had a fundamental problem — you needed a persistent SSE connection that survived load balancers, timeouts, and CDN edges. Many infrastructure setups that handle millions of standard HTTP requests would silently drop a long-lived SSE connection after 30–90 seconds."
+        },
+        {
+          "type": "p",
+          "md": "**Streamable HTTP** solves this by making SSE *optional and per-response* rather than always-on. The server streams when it needs to stream (during long-running tool calls) and responds with plain JSON when it does not. The connection is stateless by default. There is no persistent SSE socket to babysit, no two-endpoint split to configure, and no special proxy rules needed."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**`2024-11-05` spec** — HTTP+SSE was the remote transport; stdio was local",
+            "**`2025-03-26` spec** — Streamable HTTP introduced; HTTP+SSE deprecated",
+            "**TypeScript SDK 1.10.0 (April 2025)** — first SDK to ship Streamable HTTP support",
+            "**`2025-11-25` spec** — Streamable HTTP is the canonical remote transport; SSE kept only for backwards compat",
+            "**Mid-2026** — SSE removal deadlines from major providers (Atlassian Rovo: June 30, 2026)"
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "If your MCP server still exposes `/sse` as its primary remote endpoint, migrate to Streamable HTTP before your clients or hosting providers drop SSE support. The `2025-11-25` spec is explicit: SSE is not the future."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**Authorization on Streamable HTTP** follows OAuth 2.1 with PKCE. The spec defines a discovery mechanism: a client fetches `/.well-known/oauth-authorization-server` from the server host to learn token endpoints. This means MCP servers can participate in standard enterprise identity flows — SSO, short-lived tokens, per-user scopes — without inventing a bespoke auth layer. For stdio servers, credentials are typically passed as environment variables when the host spawns the process."
+        },
+        {
+          "type": "p",
+          "md": "**Resumability** is a feature introduced for long-running tool calls. When a Streamable HTTP server assigns an `event-id` to each SSE event, a disconnected client can send a `Last-Event-ID` header on reconnect and the server replays only the missed events. This makes tool calls robust against transient network drops — the client does not have to re-issue the request and risk triggering side effects twice."
+        },
+        {
+          "type": "p",
+          "md": "**Custom transports** are technically allowed. The MCP spec defines an abstract transport interface (initialize/send/close plus an `onmessage` handler) that SDKs expose. In-process transports — where client and server live in the same Node.js process — are common in tests and for sandboxed tool runners. WebSocket transports have been explored for browser-native clients. That said, the spec currently only *standardises* stdio and Streamable HTTP, so non-standard transports require explicit agreement on both sides."
+        },
+        {
+          "type": "p",
+          "md": "**Observability** differs substantially between transports. With stdio, every message flows through process pipes on one machine — you can intercept with a proxy shim or instrument the SDK directly. With Streamable HTTP, you get everything HTTP infrastructure gives you: access logs, distributed tracing (OpenTelemetry semantic conventions for MCP are defined in the OTel spec), request-level rate limiting, and WAF rules. For enterprise deployments, this is one of the strongest arguments for choosing Streamable HTTP even when stdio would technically work."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The MCP TypeScript SDK exposes `StdioServerTransport`, `StreamableHTTPServerTransport`, and `InMemoryTransport`. If you are building integration tests, `InMemoryTransport` lets you spin up a real MCP server and client in the same process with no I/O overhead — far faster than spawning a subprocess or starting an HTTP server."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Can I run an MCP server over WebSocket instead of stdio or Streamable HTTP?",
+      "a": "The MCP spec only standardises stdio and Streamable HTTP. WebSocket is not an official transport and requires both sides to explicitly agree on the protocol. For most use cases Streamable HTTP with its optional SSE streaming already provides the bidirectional, low-latency behaviour that makes WebSockets attractive."
+    },
+    {
+      "q": "Why does the Streamable HTTP transport use SSE for streaming if SSE was deprecated?",
+      "a": "The deprecated transport is **HTTP+SSE** — the *original* remote transport that used a persistent SSE connection as its primary channel. Streamable HTTP is different: SSE is only used *optionally* and *per-response* when the server needs to push multiple events. There is no always-on SSE socket. The SSE wire format is reused as a streaming mechanism, not as a standalone transport."
+    },
+    {
+      "q": "Is stdio secure enough for a production developer tool?",
+      "a": "For single-user local tooling, yes. stdio servers run under the user's own OS account, so they can only access what the user can access. There is no network-facing port to attack. The risk is not remote attackers but *local* trust: you are running arbitrary code the server author wrote, so vet your MCP servers the same way you vet any npm package or shell script."
+    },
+    {
+      "q": "Does Streamable HTTP need a persistent connection?",
+      "a": "No. In stateless mode (the recommended default) every request is independent — you can deploy to a serverless function or an edge worker with no special connection management. Only if the server opts into stateful sessions (by issuing a `Mcp-Session-Id`) does the client need to send that header on subsequent requests."
+    },
+    {
+      "q": "How do I migrate an existing HTTP+SSE server to Streamable HTTP?",
+      "a": "The core change is collapsing your `/sse` and `/messages` endpoints into a single `/mcp` endpoint that handles both GET (for opening a push stream) and POST (for sending messages). The `2025-11-25` spec recommends keeping the old SSE endpoint active alongside the new one during a transition period so existing clients are not broken. The TypeScript SDK's `StreamableHTTPServerTransport` handles this automatically."
+    },
+    {
+      "q": "Can one MCP server binary support both stdio and Streamable HTTP at the same time?",
+      "a": "Yes. Most SDKs let you instantiate either transport at startup based on a flag or environment variable. A common pattern is `if (process.env.MCP_TRANSPORT === 'http') { start StreamableHTTP } else { start Stdio }`. This lets the same server code work for local developers (stdio) and cloud deployments (Streamable HTTP) without a fork."
+    }
+  ],
+  "related": [
+    "what-is-an-ai-agent",
+    "agent-loop-explained",
+    "agentic-workflow-patterns"
+  ],
+  "furtherReading": [
+    {
+      "title": "MCP Transports — official spec (2025-11-25)",
+      "url": "https://modelcontextprotocol.io/specification/2025-11-25/basic/transports"
+    },
+    {
+      "title": "Why MCP Deprecated SSE and Went with Streamable HTTP",
+      "url": "https://blog.fka.dev/blog/2025-06-06-why-mcp-deprecated-sse-and-go-with-streamable-http/"
+    },
+    {
+      "title": "MCP Transport: stdio vs Streamable HTTP — Architecture and Benchmarks",
+      "url": "https://www.truefoundry.com/blog/mcp-stdio-vs-streamable-http-enterprise"
+    }
+  ]
+}

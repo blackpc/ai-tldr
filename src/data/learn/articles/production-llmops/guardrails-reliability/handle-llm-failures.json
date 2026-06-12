@@ -1,0 +1,447 @@
+{
+  "slug": "handle-llm-failures",
+  "title": "How to Handle LLM Failures: Fallbacks, Retries, and Degraded Modes",
+  "seoTitle": "Handling LLM Failures: Retries and Fallbacks",
+  "metaDescription": "Timeouts, refusals, garbage output — LLM calls fail in new ways. How to design retries, fallback models, and degraded modes users can live with.",
+  "keywords": [
+    "handle llm api failures",
+    "llm retry strategy",
+    "fallback model pattern",
+    "llm timeout handling",
+    "graceful degradation ai app"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Design retries, fallback models, and degraded modes so LLM failures become minor annoyances instead of outages.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "LLM API calls fail in ways that normal HTTP calls never do. A REST endpoint either returns valid JSON or it doesn't. An LLM can return HTTP 200, a well-formed JSON envelope, *and* a response that is garbled, refuses to answer, cuts off mid-sentence, or confidently answers a different question than the one you asked. Handling LLM failures means anticipating every rung of that ladder — network errors, rate limits, model refusals, and silent quality drops — and deciding in advance what to do at each one."
+        },
+        {
+          "type": "p",
+          "md": "The analogy that works here is a **flight with connection options**. Your first-choice flight (primary model) is delayed. The gate agent (your retry logic) tries to rebook you on the next departure of the same route. If that's full too (rate limit or provider outage), she puts you on a different airline to the same city (fallback model). If all flights are cancelled and you absolutely must get there, you rent a car (degraded mode — slower, less capable, but you arrive). The passenger (your user) experiences less of a disaster than if the gate agent just said \"sorry, go home\"."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "**Failure taxonomy matters before you write a single line of retry code.** Retrying a rate-limit error makes sense. Retrying a content-policy refusal on the same model with the same prompt will fail every time. Know what you're retrying before you retry."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "LLM providers are not perfectly reliable infrastructure. OpenAI's status page reported roughly 16 hours of downtime in the year ending Q1 2026 — and that's the headline number, which excludes degraded performance, elevated latency, and silent quality drops that never show up as incidents. During peak traffic windows, providers sometimes route requests to quantized model variants: your API call returns HTTP 200 and a structurally valid response, but the output quality has dropped significantly without any error signal."
+        },
+        {
+          "type": "p",
+          "md": "An app that treats the LLM as a perfectly reliable database will surface every one of those failures directly to users as hard errors. An app designed for failure turns most of them into a brief pause or a slightly less capable response. The gap between those two experiences is almost entirely the quality of your retry, fallback, and degradation logic."
+        },
+        {
+          "type": "h3",
+          "text": "The cost of doing nothing"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**User-facing 500 errors** every time the provider hiccups — even a 30-second outage causes visible failures if you have no retry at all.",
+            "**Thundering herds** if you do naive retries without backoff: every client retries at the same moment, hammering an already-stressed API and making the outage longer.",
+            "**Wasted spend** from retrying non-retryable errors (content refusals, context-length exceeded) that will never succeed.",
+            "**Silent degradation** going undetected if you watch only HTTP error rates — latency spikes and quality drops need separate monitoring signals."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Robust LLM failure handling combines three layers: **retry logic** (try the same provider again with smarter timing), **fallback routing** (switch to a different model or provider), and **degraded modes** (serve a reduced but useful response when all LLM paths are exhausted). These layers work in order — you only drop to the next layer when the current one has genuinely failed."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "LLM call with retry, fallback, and degraded mode",
+            "steps": [
+              {
+                "label": "LLM call",
+                "sub": "primary model"
+              },
+              {
+                "label": "Transient error?",
+                "sub": "429, 503, timeout"
+              },
+              {
+                "label": "Retry with backoff",
+                "sub": "up to N attempts"
+              },
+              {
+                "label": "Still failing?",
+                "sub": "retries exhausted"
+              },
+              {
+                "label": "Fallback model",
+                "sub": "cheaper or different provider"
+              },
+              {
+                "label": "Fallback fails?",
+                "sub": "all providers down"
+              },
+              {
+                "label": "Degraded mode",
+                "sub": "cache, stub, or partial response"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Layer 1 — Retry logic"
+        },
+        {
+          "type": "p",
+          "md": "Not every error deserves a retry. The first decision is whether the error is *transient* (likely to clear if you wait a moment) or *permanent* (will fail again no matter how many times you try). Transient errors are the retry candidates: `429 Too Many Requests`, `503 Service Unavailable`, network timeouts, and occasional `500` errors during provider incidents. Permanent errors are not: `400 Bad Request` with a context-length error, content-policy refusals, and authentication failures."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Error type",
+            "HTTP / signal",
+            "Retry?",
+            "Action"
+          ],
+          "rows": [
+            [
+              "Rate limit",
+              "429 + Retry-After header",
+              "Yes",
+              "Wait for header value, then retry"
+            ],
+            [
+              "Transient server error",
+              "503, occasional 500",
+              "Yes",
+              "Exponential backoff + jitter"
+            ],
+            [
+              "Timeout",
+              "No response in window",
+              "Yes",
+              "Widen timeout on retry, then fall back"
+            ],
+            [
+              "Context window exceeded",
+              "400, context_length_exceeded",
+              "No",
+              "Truncate input or route to longer-context model"
+            ],
+            [
+              "Content policy refusal",
+              "400, content_filter",
+              "No on same model",
+              "Rewrite prompt or route to less restrictive model"
+            ],
+            [
+              "Auth / billing error",
+              "401, 403, 429 quota",
+              "No",
+              "Alert ops, serve degraded mode"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "For the errors that *do* deserve retries, use **exponential backoff with full jitter**. The backoff doubles the wait time on each attempt (0.5 s, 1 s, 2 s, 4 s …) up to a ceiling (typically 8–10 s). The jitter adds a random fraction so that when dozens of clients all fail at the same moment they do not all retry in lockstep — that synchronized retry wave is the *thundering herd* problem, and it can extend a 30-second outage into a minutes-long cascade."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Read the `Retry-After` header on 429 responses before calculating your own backoff. Providers like OpenAI include it, and it tells you the *exact* moment the rate-limit window resets — ignoring it and sleeping for 4 s when the reset is in 0.3 s wastes latency."
+        },
+        {
+          "type": "h3",
+          "text": "Layer 2 — Fallback models"
+        },
+        {
+          "type": "p",
+          "md": "When retries are exhausted, the call moves to a fallback model. A well-designed fallback chain has two dimensions: *cheaper same-provider* (e.g. a smaller variant of the same model family) and *different-provider* (a completely independent API). The cheaper same-provider fallback is fast and cheap; the different-provider fallback provides genuine redundancy when the primary provider has an incident."
+        },
+        {
+          "type": "p",
+          "md": "A concrete production chain might look like: primary (frontier model, primary provider) → smaller model same provider (lower cost, still available during soft rate-limits) → equivalent model at a different provider (genuine independence) → self-hosted or local model (no external dependency at all). Each hop trades capability for availability. Not every application needs all four hops — a customer-support bot might only need two, while a high-stakes agentic workflow might want all four."
+        },
+        {
+          "type": "h3",
+          "text": "Layer 3 — Degraded modes"
+        },
+        {
+          "type": "p",
+          "md": "When every model path is unavailable, the question is what useful thing you can still do. Degraded mode is not failure — it is a deliberate decision to serve a reduced but honest response rather than an error page. Common degraded-mode strategies include: serving a recent cached response keyed by a hash of the prompt, returning a transparent \"AI is temporarily unavailable\" message with a human-escalation path, or surfacing static pre-written content for the most common queries."
+        }
+      ]
+    },
+    {
+      "id": "implementing-retry-and-fallback",
+      "title": "Implementing retries and fallbacks",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "In practice most teams reach for a library rather than rolling retry-and-fallback logic by hand. **LiteLLM Router** and **Portkey** are the two most widely adopted options in 2025."
+        },
+        {
+          "type": "h3",
+          "text": "LiteLLM Router"
+        },
+        {
+          "type": "p",
+          "md": "[LiteLLM](https://docs.litellm.ai/docs/routing) exposes a `Router` class that wraps multiple model deployments. You declare a list of models, their retry counts, and their fallback chains. The router handles exponential backoff (starting at 0.2 s, capped at 10 s, with jitter), `context_window_fallbacks` that automatically route to a longer-context model when the primary overflows, and `content_policy_fallbacks` for provider refusals. A `cooldown_time` setting marks a deployment unhealthy for a configurable window after repeated failures, preventing the router from hammering a dead endpoint."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "from litellm import Router\n\nrouter = Router(\n    model_list=[\n        {\n            \"model_name\": \"gpt-4o\",\n            \"litellm_params\": {\"model\": \"gpt-4o\", \"api_key\": \"...\"},\n        },\n        {\n            \"model_name\": \"claude-3-5-sonnet\",\n            \"litellm_params\": {\"model\": \"anthropic/claude-3-5-sonnet-20241022\", \"api_key\": \"...\"},\n        },\n    ],\n    fallbacks=[{\"gpt-4o\": [\"claude-3-5-sonnet\"]}],\n    context_window_fallbacks=[{\"gpt-4o\": [\"claude-3-5-sonnet\"]}],\n    num_retries=3,\n    retry_after=5,          # seconds between retries\n    cooldown_time=60,        # mark deployment unhealthy for 60 s after failure\n    set_verbose=False,\n)\n\nresponse = await router.acompletion(\n    model=\"gpt-4o\",\n    messages=[{\"role\": \"user\", \"content\": \"Summarise this document.\"}],\n)"
+        },
+        {
+          "type": "h3",
+          "text": "Portkey Gateway"
+        },
+        {
+          "type": "p",
+          "md": "[Portkey](https://portkey.ai/docs/product/ai-gateway/fallbacks) layers observability on top of the same primitives. Every request records which models were tried, why each failed, which fallback was used, and the cost at each hop. Fallbacks trigger on any non-2xx status by default; you can narrow them to specific codes like 429 and 503. Portkey retries up to five times with exponential backoff before escalating to the fallback chain. Because it processes over 10 billion tokens per day, its per-provider uptime statistics are current and actionable for routing decisions."
+        },
+        {
+          "type": "h3",
+          "text": "Rolling your own"
+        },
+        {
+          "type": "p",
+          "md": "If you need tighter control, the Python `tenacity` library makes the retry/backoff math straightforward. The pattern below retries on 429 and 503, respects the `Retry-After` header, and raises immediately on non-retryable errors."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "import time, random\nfrom tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception\n\nRETRYABLE = {429, 500, 502, 503, 504}\n\ndef is_retryable(exc: Exception) -> bool:\n    status = getattr(exc, \"status_code\", None)\n    return status in RETRYABLE\n\n@retry(\n    retry=retry_if_exception(is_retryable),\n    wait=wait_exponential(multiplier=0.5, min=0.5, max=10),\n    stop=stop_after_attempt(3),\n    reraise=True,\n)\nasync def call_llm(client, messages):\n    try:\n        return await client.chat.completions.create(\n            model=\"gpt-4o\",\n            messages=messages,\n            timeout=30,\n        )\n    except Exception as exc:\n        # Honour Retry-After if present\n        retry_after = getattr(exc, \"headers\", {}).get(\"Retry-After\")\n        if retry_after:\n            time.sleep(float(retry_after) + random.uniform(0, 0.5))\n        raise"
+        }
+      ]
+    },
+    {
+      "id": "circuit-breakers-and-quality-signals",
+      "title": "Circuit breakers and quality signals",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A circuit breaker sits in front of your retry logic. Instead of letting every failing request wait for three retries before surfacing an error, a circuit breaker *trips open* after a threshold of failures and immediately returns a fallback response for a configurable cooldown window — no wasted retries against a known-dead endpoint. After the cooldown the circuit enters a *half-open* state: it lets one probe request through, and if that succeeds it closes again."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "Circuit breaker states",
+            "steps": [
+              {
+                "label": "Closed",
+                "sub": "requests flow normally"
+              },
+              {
+                "label": "Open",
+                "sub": "fail fast, no requests sent"
+              },
+              {
+                "label": "Half-open",
+                "sub": "one probe request"
+              },
+              {
+                "label": "Closed",
+                "sub": "probe succeeded — reset"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "LLM circuit breakers need to go beyond what their distributed-systems ancestors watched. A classic circuit breaker trips on HTTP errors. But during peak load an LLM provider may return HTTP 200 with a subtly degraded response — shorter than expected, repetitive, or semantically off. **Quality signals** that production teams add to their circuit-breaker logic include: response length below a minimum threshold, latency climbing above 3–4x the baseline (indicating the provider is struggling before errors appear), and structured-output parse failures where the model stops emitting valid JSON."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Watch **latency, not just error rate**, as your primary health signal. In multiple documented production incidents, latency climbed from 2 s to 25 s per call before the first 429 appeared. An error-rate-only circuit breaker stays closed throughout that entire degradation window while costs spike and users wait."
+        },
+        {
+          "type": "p",
+          "md": "A practical trip threshold for user-facing LLM services: 5 consecutive failures (or quality violations) within a 60-second window trips the circuit open; a 60-second cooldown before the half-open probe; alert at a >5% error rate, escalate at >15%. These numbers come from community consensus across multiple production deployments and should be treated as starting points, not absolutes."
+        }
+      ]
+    },
+    {
+      "id": "pitfalls-and-tradeoffs",
+      "title": "Common pitfalls and tradeoffs",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "Retry amplification"
+        },
+        {
+          "type": "p",
+          "md": "Three retries per request sounds modest. Multiply it by your concurrency and you can send 3x the traffic to a provider that is already rate-limiting you. Cap total wall-clock time for user-facing requests (30 s is a common ceiling) and keep retry counts low (2–3 for synchronous calls, up to 5–7 for background jobs). For synchronous calls, prefer *fast fail + fallback* over patient retries against the primary."
+        },
+        {
+          "type": "h3",
+          "text": "Fallback capability mismatch"
+        },
+        {
+          "type": "p",
+          "md": "Your fallback model may not support the same features as your primary. Common mismatches: function / tool calling schemas differ between providers, maximum context windows are smaller on the fallback, structured output (JSON mode) is unsupported or uses a different parameter name. Test your fallback path explicitly, not just the happy path. A fallback that crashes due to a schema mismatch is worse than the original outage."
+        },
+        {
+          "type": "h3",
+          "text": "Cost blowout"
+        },
+        {
+          "type": "p",
+          "md": "Every retry and every fallback costs money. If your primary model is rate-limited and your fallback is a more expensive model on a different provider, a sustained incident can multiply your API spend rapidly. Set explicit cost guardrails: a per-request budget cap and a per-hour spend alert. Some gateway tools (LiteLLM, Portkey) let you enforce these in configuration rather than application code."
+        },
+        {
+          "type": "h3",
+          "text": "Treating all 429s identically"
+        },
+        {
+          "type": "p",
+          "md": "A 429 can mean three different things: you hit a *requests-per-minute* limit (reset in seconds), a *tokens-per-minute* limit (reset in seconds, but size your request down), or a *quota* limit (your billing tier is exhausted and no amount of waiting will help). The first two are worth retrying; the third should immediately trigger an ops alert and a degraded-mode response. Read the error body and headers — providers include structured detail."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "429 sub-type",
+            "Retry?",
+            "Action"
+          ],
+          "rows": [
+            [
+              "Requests-per-minute limit",
+              "Yes",
+              "Wait for Retry-After, then retry"
+            ],
+            [
+              "Tokens-per-minute limit",
+              "Yes",
+              "Reduce prompt length or wait"
+            ],
+            [
+              "Daily / monthly quota exhausted",
+              "No",
+              "Alert ops, serve degraded mode"
+            ],
+            [
+              "Organization limit (shared key)",
+              "No",
+              "Alert ops, check billing dashboard"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once basic retries and fallbacks are in place, more advanced patterns become relevant at scale."
+        },
+        {
+          "type": "h3",
+          "text": "Tail-tolerant retry policies"
+        },
+        {
+          "type": "p",
+          "md": "Standard retry logic waits for a request to fully time out before retrying. A **hedged request** (also called a speculative retry) fires a duplicate request to a second deployment *before* the first one times out — typically after a delay set at the 90th-percentile latency. If either response arrives first, the winner is used and the other is cancelled. This technique cuts p99 latency dramatically at the cost of slightly higher average spend, and is most valuable for latency-sensitive user-facing features where the long tail is painful."
+        },
+        {
+          "type": "h3",
+          "text": "Weighted failover and canary routing"
+        },
+        {
+          "type": "p",
+          "md": "LiteLLM's `enable_weighted_failover` setting retries within the primary model group by re-picking a different deployment using existing weights before escalating to a cross-provider fallback. This is the right default for multi-region deployments of the same model: exhaust your regional replicas first, then cross-provider. Canary routing — sending 5% of traffic to a new model and watching quality metrics before shifting more — uses the same weighted routing infrastructure but as a deployment strategy rather than a reliability one."
+        },
+        {
+          "type": "h3",
+          "text": "Observability is not optional"
+        },
+        {
+          "type": "p",
+          "md": "You cannot tune thresholds you cannot observe. Instrument every LLM call with at minimum: model used, provider, latency, input token count, output token count, HTTP status, which retry attempt (0 = first try), and whether a fallback was triggered. Aggregate these into a per-provider error rate and per-provider p95 latency dashboard. The signal you want to be able to answer in under 30 seconds: *which provider is degraded right now, and how much of my traffic is hitting it?*"
+        },
+        {
+          "type": "h3",
+          "text": "Idempotency and side-effects"
+        },
+        {
+          "type": "p",
+          "md": "Retries are safe for read-only LLM calls. They become dangerous if your LLM call has a side effect — a tool call that sends an email, writes to a database, or charges a card. Before adding retries to an agentic pipeline, audit every tool for idempotency. Wrap non-idempotent tools in a deduplication key so that a retried call that actually succeeded the first time (but you didn't get the response) does not trigger the action twice."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Use a **request ID** (`X-Request-Id` or equivalent) on every LLM call and pass it through to your observability backend. When you need to debug a failure — or a duplicate tool execution — you can reconstruct the full retry/fallback chain from a single trace ID."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "How many retries should I use for a user-facing LLM call?",
+      "a": "Two to three retries is the typical production ceiling for synchronous, user-facing requests. After three attempts you have already added meaningful latency; if the provider is not recovering in that window it is time to fall back to a different model, not retry more. Background jobs with no user waiting can safely go up to five to seven attempts."
+    },
+    {
+      "q": "What is the difference between a fallback model and a degraded mode?",
+      "a": "A fallback model is still a live LLM call — you switch to a different or cheaper model. Degraded mode is what you do when all LLM paths have failed: serve a cached response, return a static \"AI temporarily unavailable\" message, or route to a human. Fallback keeps quality high; degraded mode keeps the app running with reduced capability."
+    },
+    {
+      "q": "Should I always retry a 429 rate-limit error?",
+      "a": "It depends on the sub-type. A requests-per-minute or tokens-per-minute limit will clear in seconds — retry after reading the `Retry-After` header. A billing quota exhaustion (your tier is full for the month) will never clear on its own; retrying it is pure waste. Read the error body and headers to distinguish the two before writing your retry predicate."
+    },
+    {
+      "q": "How do I detect silent quality degradation if the HTTP status is still 200?",
+      "a": "Add secondary health signals beyond HTTP status: output length (dramatically shorter than normal is a canary), structured-output parse failures (model stopped emitting valid JSON), and per-provider p95 latency (climbing latency often precedes errors by minutes). Feed these signals to your circuit breaker and alerting pipeline alongside the error rate."
+    },
+    {
+      "q": "Is it safe to retry LLM calls inside an agentic pipeline that uses tools?",
+      "a": "Only if the tools are idempotent. A plain text generation call can be retried freely. A tool call that sends an email, writes to a database, or initiates a payment cannot — retrying a call that actually succeeded but returned no response will execute the action twice. Audit every tool for idempotency and wrap non-idempotent tools in a deduplication key before enabling retries."
+    },
+    {
+      "q": "Do I need a full LLM gateway like LiteLLM or Portkey, or can I handle this in application code?",
+      "a": "Application code works fine for simple retry-and-fallback at small scale. Gateways earn their keep when you have multiple models, multiple providers, team-wide cost visibility, and per-request tracing needs. The tipping point for most teams is around two or three models in production — at that point the cross-cutting observability and centralized configuration of a gateway pays off faster than maintaining the logic in every service."
+    }
+  ],
+  "related": [
+    "what-is-llmops",
+    "llm-prototype-to-production",
+    "production-llm-stack"
+  ],
+  "furtherReading": [
+    {
+      "title": "Retries, Fallbacks, and Circuit Breakers in LLM Apps — Maxim",
+      "url": "https://www.getmaxim.ai/articles/retries-fallbacks-and-circuit-breakers-in-llm-apps-a-production-guide/"
+    },
+    {
+      "title": "LiteLLM Router — Fallbacks and Reliability",
+      "url": "https://docs.litellm.ai/docs/proxy/reliability"
+    },
+    {
+      "title": "Portkey Fallbacks — AI Gateway Docs",
+      "url": "https://portkey.ai/docs/product/ai-gateway/fallbacks"
+    }
+  ]
+}

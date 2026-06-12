@@ -1,0 +1,372 @@
+{
+  "slug": "how-rag-pipeline-works",
+  "title": "How Does a RAG Pipeline Work? Ingest, Retrieve, Generate",
+  "seoTitle": "How a RAG Pipeline Works: Ingest, Retrieve, Generate",
+  "metaDescription": "Walk through the three stages of every RAG pipeline — ingesting documents, retrieving relevant chunks, and generating grounded answers with an LLM.",
+  "keywords": [
+    "how does a rag pipeline work",
+    "rag pipeline steps explained",
+    "rag architecture for beginners",
+    "rag ingestion retrieval generation"
+  ],
+  "difficulty": "beginner",
+  "oneLiner": "You'll be able to trace a question through every stage of a RAG pipeline — ingestion, retrieval, and generation — and know what each stage contributes.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Imagine a very smart intern who has perfect recall of every document you hand them, and who gives answers by quoting those documents directly rather than guessing. That is what a RAG pipeline does. **RAG** stands for **Retrieval-Augmented Generation**: you augment a language model's answer with information you retrieved from your own documents."
+        },
+        {
+          "type": "p",
+          "md": "The pipeline has three stages that always run in the same order: **Ingest**, **Retrieve**, and **Generate**. Ingest runs once, ahead of time, to prepare your documents. Retrieve and Generate run together on every question a user asks. Understanding these three stages — what each one does, what can go wrong, and what knobs you can turn — is the foundation for building any RAG-powered product."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The three-stage model is a simplification of a longer pipeline, but it is exactly the right mental model to start with. Once you have the three stages solid, you can add refinements (query rewriting, reranking, hybrid search) without losing track of the big picture."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why the pipeline structure matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Language models are trained on a fixed snapshot of text. They do not know about your company's internal documents, last month's product update, or the support ticket a customer filed an hour ago. Without a way to look things up, a model either admits ignorance or — more dangerously — invents a plausible-sounding answer. That invented answer is called a **hallucination**."
+        },
+        {
+          "type": "p",
+          "md": "RAG solves this by giving the model an open-book exam. Before generating an answer, the system *retrieves* the relevant passages from your documents and places them directly in the prompt. The model then writes its answer based on what it just read, not from fuzzy memory of its training data."
+        },
+        {
+          "type": "p",
+          "md": "The three-stage structure matters because each stage can fail independently, and most RAG quality problems trace back to one broken stage rather than to the language model itself. A bug in ingestion silently removes documents from the knowledge base. A poorly tuned retrieval stage fetches the wrong passages. A badly constructed prompt in the generation stage lets the model ignore the retrieved text. Knowing which stage owns which problem lets you debug systematically instead of blindly tuning the model."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Stage",
+            "When it runs",
+            "What breaks if it fails"
+          ],
+          "rows": [
+            [
+              "Ingest",
+              "Once, offline, when documents change",
+              "Documents are missing, corrupted, or unsearchable"
+            ],
+            [
+              "Retrieve",
+              "On every user query",
+              "Wrong passages reach the model; answer is irrelevant or incomplete"
+            ],
+            [
+              "Generate",
+              "On every user query, after retrieve",
+              "Model ignores context, hallucinates, or misattributes sources"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How the three stages work",
+      "blocks": [
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "The RAG pipeline: three stages",
+            "steps": [
+              {
+                "label": "Stage 1: Ingest",
+                "sub": "Documents become searchable chunks in a vector index"
+              },
+              {
+                "label": "Stage 2: Retrieve",
+                "sub": "User query finds the most relevant chunks"
+              },
+              {
+                "label": "Stage 3: Generate",
+                "sub": "LLM answers from the retrieved chunks"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Stage 1 — Ingest: turning documents into searchable chunks"
+        },
+        {
+          "type": "p",
+          "md": "Ingestion is the preparation phase. Your source material — PDFs, web pages, database records, help center articles, code files — arrives as raw text. The ingestion stage transforms that raw text into a set of compact, searchable units that the retrieval stage can find instantly."
+        },
+        {
+          "type": "p",
+          "md": "Ingestion has three sub-steps: **load**, **chunk**, and **embed**."
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Load** — parse the source file into plain text. A PDF parser extracts text from each page. A web scraper strips HTML tags. A database reader serializes rows to strings. The goal is clean, UTF-8 text with no stray formatting characters.",
+            "**Chunk** — split each document into short passages of roughly 256–512 tokens (about 200–400 words). A language model can only read a limited amount of text at once, and a single 10,000-word document would produce one averaged vector that retrieval can barely use. Smaller, focused chunks give retrieval something precise to match against. Overlap of 10–20% between consecutive chunks prevents a sentence from being split at a boundary and losing its meaning.",
+            "**Embed** — pass each chunk through an embedding model, which converts the text into a list of numbers called a vector. This vector encodes the chunk's meaning so that semantically similar chunks end up near each other in the vector space. The vectors are stored in a vector database alongside the original chunk text and metadata (source file, page number, date)."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "After ingestion, you have a **vector index**: a data structure that, given any new vector, can find the most similar stored vectors in milliseconds. Popular vector databases for this include Pinecone, Weaviate, Chroma, Qdrant, and pgvector."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Ingestion is the stage that runs **before** any user asks anything. You can take hours here. The online stages — retrieve and generate — must be fast, so invest your slow processing time in building a high-quality index up front."
+        },
+        {
+          "type": "h3",
+          "text": "Stage 2 — Retrieve: finding the right passages for each question"
+        },
+        {
+          "type": "p",
+          "md": "Every time a user asks a question, retrieval runs. The question is first passed through the **same embedding model** used during ingestion, producing a query vector. The vector database then performs a similarity search — it finds the stored chunk vectors that are closest to the query vector — and returns the top-k chunks, typically three to ten passages."
+        },
+        {
+          "type": "p",
+          "md": "\"Closest\" is measured by **cosine similarity**: a score between 0 and 1 that measures how aligned two vectors are in the high-dimensional space. A score of 1 means the vectors point in the exact same direction — the chunk and the question are about the same thing. A score near 0 means they are unrelated."
+        },
+        {
+          "type": "p",
+          "md": "The embedding model must be identical at query time and ingestion time. Each embedding model defines its own unique vector space: a vector produced by model A is meaningless when compared to vectors produced by model B. Mixing models is a silent bug that produces garbage similarity scores without throwing any error."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "If you ever swap your embedding model, you must **re-embed every chunk in your index**. The new model creates a different vector space, and old vectors are incompatible with new query vectors."
+        },
+        {
+          "type": "p",
+          "md": "The number of chunks returned — the **top-k** value — is a tunable parameter. Fetching three chunks keeps the prompt short and cheap but risks missing the relevant passage. Fetching twenty chunks gives the model more to work with but adds noise and cost. A common production pattern is to retrieve a larger candidate set (top-20) using fast vector search, then apply a **reranker** — a more precise cross-encoder model — to trim the list to the best three to five chunks before passing them to the generation stage."
+        },
+        {
+          "type": "h3",
+          "text": "Stage 3 — Generate: writing a grounded answer from retrieved passages"
+        },
+        {
+          "type": "p",
+          "md": "The final stage assembles the retrieved chunks and the user's question into an **augmented prompt**, then sends it to a large language model. The model's job is to synthesize an answer that is grounded in the provided text — not in its training data."
+        },
+        {
+          "type": "p",
+          "md": "The structure of the prompt matters more than most beginners expect. A well-designed prompt tells the model exactly what role the retrieved text plays, where the question starts, and what to do when the context does not contain the answer."
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "code": "You are a helpful assistant. Answer the question using ONLY the\ncontext passages provided below. If the answer is not in the\ncontext, say \"I don't have that information.\"\nDo not use knowledge from outside the context.\n\n--- CONTEXT ---\n[Passage 1 — source: returns-policy.md]\nPhysical items may be returned within 30 days of purchase,\nunopened and in original packaging.\n\n[Passage 2 — source: returns-policy.md]\nDigital products are non-refundable once the license key\nhas been activated.\n--- END CONTEXT ---\n\nQuestion: Can I return a software license I already activated?"
+        },
+        {
+          "type": "p",
+          "md": "Four practices make generation more reliable: label each passage with its source so the model can attribute its answer and you can surface citations in the UI; instruct the model to stay within the provided context to reduce hallucination; explicitly permit an honest \"I don't know\" so the model does not fill gaps with invented facts; and put the most relevant passage first, because models recall text near the start and end of a prompt better than text buried in the middle."
+        }
+      ]
+    },
+    {
+      "id": "a-concrete-example",
+      "title": "A concrete example: code for each stage",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The following Python snippets show the skeleton of each stage using LangChain and OpenAI's embedding model. They are simplified for clarity — a production system adds error handling, batching, and metadata — but the structure maps directly onto the three-stage model."
+        },
+        {
+          "type": "h3",
+          "text": "Ingest"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "from langchain.text_splitter import RecursiveCharacterTextSplitter\nfrom langchain_openai import OpenAIEmbeddings\nfrom langchain_community.vectorstores import Chroma\n\n# 1. Load raw text (simplified — use a real loader for PDFs, HTML, etc.)\nwith open(\"returns-policy.txt\") as f:\n    raw_text = f.read()\n\n# 2. Chunk: split into ~400-token passages with 10% overlap\nsplitter = RecursiveCharacterTextSplitter(\n    chunk_size=400,\n    chunk_overlap=40,\n)\nchunks = splitter.create_documents([raw_text])\n\n# 3. Embed and store in a local vector index\nembeddings = OpenAIEmbeddings(model=\"text-embedding-3-small\")\nvectorstore = Chroma.from_documents(chunks, embeddings, persist_directory=\"./index\")"
+        },
+        {
+          "type": "h3",
+          "text": "Retrieve"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "# Load the existing index\nvectorstore = Chroma(persist_directory=\"./index\", embedding_function=embeddings)\n\n# Retrieve the top-4 most relevant chunks for the user's question\nquestion = \"Can I return a software license I already activated?\"\nrelevant_chunks = vectorstore.similarity_search(question, k=4)"
+        },
+        {
+          "type": "h3",
+          "text": "Generate"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "from langchain_openai import ChatOpenAI\nfrom langchain.schema import HumanMessage, SystemMessage\n\n# Assemble the augmented prompt\ncontext = \"\\n\\n\".join(\n    f\"[Passage {i+1}]\\n{chunk.page_content}\"\n    for i, chunk in enumerate(relevant_chunks)\n)\n\nllm = ChatOpenAI(model=\"gpt-4o-mini\")\nresponse = llm.invoke([\n    SystemMessage(content=(\n        \"Answer using ONLY the context below. \"\n        \"If the answer is not in the context, say so.\\n\\n\"\n        f\"--- CONTEXT ---\\n{context}\\n--- END CONTEXT ---\"\n    )),\n    HumanMessage(content=question),\n])\n\nprint(response.content)"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "LlamaIndex offers a similarly concise API and specialises in document parsing. Both LangChain and LlamaIndex abstract the three stages into a `QueryEngine` or `RetrievalQA` chain, but it is worth building the stages explicitly once so you understand what is happening inside the abstraction."
+        }
+      ]
+    },
+    {
+      "id": "what-can-go-wrong",
+      "title": "What goes wrong at each stage",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Most RAG failures are not model failures — they are pipeline failures. The language model is very good at writing a fluent answer from whatever text you give it. The problem is you gave it the wrong text, or no text at all, because an upstream stage broke down."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "Common failure modes by stage",
+            "root": {
+              "label": "RAG pipeline failures"
+            },
+            "children": [
+              {
+                "label": "Ingest",
+                "sub": "Silent data loss: empty PDFs, broken parsers, chunks too large to embed"
+              },
+              {
+                "label": "Retrieve",
+                "sub": "Wrong chunks: mismatched embedding model, too small k, keyword mismatch"
+              },
+              {
+                "label": "Generate",
+                "sub": "Ignored context: vague system prompt, model over-relying on training data"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Ingest failures"
+        },
+        {
+          "type": "p",
+          "md": "The most dangerous ingest failure is **silent data loss**. A scanned PDF with no text layer returns an empty string; the document is indexed as nothing. HTML scraped from a web page may include cookie banners and navigation menus that dilute every chunk with noise. A document that exceeds the embedding model's token limit gets truncated silently. The fix is to **log a character count for every document** after parsing — any document with suspiciously few characters is a warning sign."
+        },
+        {
+          "type": "p",
+          "md": "Chunk size is the most impactful tunable at this stage. Chunks that are too large average over too many ideas, reducing retrieval precision. Chunks that are too small lack context, leaving the generation model with incomplete sentences. A 256–512 token range with 10–20% overlap works for most prose documents; code, tables, and legal text often need domain-specific strategies."
+        },
+        {
+          "type": "h3",
+          "text": "Retrieval failures"
+        },
+        {
+          "type": "p",
+          "md": "Retrieval fails when the right chunk exists in the index but does not rank in the top-k returned. The most common cause is a **mismatch between how the question is phrased and how the answer is phrased in the document**. The user asks \"how do I cancel my subscription?\" but the document says \"account termination procedures\". Semantic embeddings handle synonyms well but struggle with jargon gaps or very short queries."
+        },
+        {
+          "type": "p",
+          "md": "The standard fix is **hybrid search**: run both a semantic (vector) search and a keyword (BM25) search in parallel, then merge the two ranked lists. Keyword search handles exact product codes, names, and technical terms that semantic search can miss. Combining the two with Reciprocal Rank Fusion typically improves retrieval recall by 15–30% over semantic-only search."
+        },
+        {
+          "type": "h3",
+          "text": "Generation failures"
+        },
+        {
+          "type": "p",
+          "md": "Generation fails when the model ignores the retrieved context and answers from training data instead. This usually happens when the system prompt does not clearly instruct the model to stay within the context, or when the context is so long and disorganized that the model cannot find the relevant part. Keeping the prompt structure consistent — context block clearly delimited, question clearly separated, explicit instruction to refuse if unsure — prevents most of these failures."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you have a working three-stage pipeline that returns correct answers on your test questions, the next improvements almost always target retrieval quality — because retrieval is where most production RAG systems underperform."
+        },
+        {
+          "type": "p",
+          "md": "**Add a reranker.** After retrieving the top-20 chunks with fast vector search, pass all 20 to a cross-encoder reranker (Cohere Rerank, or a local model like `cross-encoder/ms-marco-MiniLM-L-6-v2`). The reranker reads the query and each chunk together and scores them far more accurately than cosine similarity alone can. Trim to the top five before generation. This single addition routinely improves answer accuracy more than any prompt change."
+        },
+        {
+          "type": "p",
+          "md": "**Query rewriting.** Before embedding the user's question, use an LLM to rewrite it into a form that retrieves better. \"That thing about the refund\" becomes \"refund policy for physical goods\". For conversational apps with multi-turn history, the rewriter can also resolve pronouns and references from earlier turns before the retrieval step sees the query."
+        },
+        {
+          "type": "p",
+          "md": "**Incremental ingestion.** In production, documents change. Rather than re-ingesting the entire corpus every time a single file updates, track which documents have changed (by hash or modification time), delete their old chunks from the index, and ingest only the updated files. This keeps the index current without the cost of a full re-embed."
+        },
+        {
+          "type": "p",
+          "md": "**Agentic RAG.** The most powerful evolution of the pipeline gives a language model retrieval as a callable tool and lets it decide when to search, what to search for, and whether one retrieval round is enough or it needs to refine. Instead of a fixed one-shot retrieve-then-generate pass, the model loops — retrieve, read, decide, retrieve again if needed — until it has enough to answer confidently. This is the architecture behind most production AI assistants today."
+        },
+        {
+          "type": "p",
+          "md": "**Evaluation is not optional.** You cannot tune a RAG pipeline you cannot measure. The minimum evaluation you need is: (1) a set of real or realistic questions with known correct answers, (2) a retrieval metric — does the right chunk appear in the top-k? — and (3) a generation metric — does the answer faithfully reflect the retrieved context? Running this evaluation after every change to chunking, embedding, or retrieval settings is what separates a prototype from a reliable system."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The most common beginner mistake is jumping straight to swapping LLMs when answers are bad. Almost always the problem is upstream: the wrong chunks were retrieved, or a document was missing from the index entirely. Check retrieval before you touch the model."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What are the three stages of a RAG pipeline?",
+      "a": "The three stages are **Ingest**, **Retrieve**, and **Generate**. Ingest runs offline once: it parses documents, splits them into chunks, converts each chunk to a vector with an embedding model, and stores the vectors in a vector index. Retrieve runs on every user query: it embeds the question with the same model and finds the most similar chunks. Generate assembles those chunks and the question into a prompt and calls the language model to write a grounded answer."
+    },
+    {
+      "q": "Why do I need to chunk documents instead of embedding the whole document?",
+      "a": "Embedding an entire document produces one vector that averages the meaning of every sentence in it. When a user asks about one specific paragraph, that averaged vector may not rank near the top of the similarity search, and the relevant passage is never retrieved. Shorter chunks give retrieval something precise to match against. A chunk size of 256–512 tokens with 10–20% overlap works well for most prose documents."
+    },
+    {
+      "q": "Does the embedding model I use for ingestion have to match the one I use for queries?",
+      "a": "Yes, exactly. Each embedding model defines its own vector space. A query vector produced by model A is meaningless when compared to chunk vectors produced by model B — the similarity scores will be random noise. If you ever change your embedding model, you must re-embed every chunk in your index before the new model is used for queries."
+    },
+    {
+      "q": "How many chunks should I retrieve (what k value should I use)?",
+      "a": "A top-k of 3–5 chunks is a common starting point. Smaller k keeps the prompt short and cheap but risks missing the relevant passage. A production pattern is to retrieve a larger candidate set (top-20) with fast vector search, then rerank to the top 3–5 with a cross-encoder before passing to the LLM. This gives you both broad coverage and precision."
+    },
+    {
+      "q": "What should I do if my RAG system gives wrong answers?",
+      "a": "Debug by stage. First, check retrieval: log which chunks the system retrieved for the failing question. If the right chunk is not in the retrieved set, your problem is ingest (the document may be missing or poorly chunked) or retrieval (k is too small, or the phrasing mismatch is too large for semantic search — try hybrid search). If the right chunk is present but the answer is still wrong, your problem is generation — inspect the prompt and make sure the context is clearly delimited."
+    },
+    {
+      "q": "Is a RAG pipeline always three stages, or can there be more?",
+      "a": "Three stages is the conceptual model. In practice, production systems add refinements inside each stage: query rewriting and HyDE inside retrieve, a reranker between retrieve and generate, incremental ingestion and metadata filtering inside ingest. Agentic RAG loops the retrieve and generate stages multiple times under model control. But every RAG system, no matter how sophisticated, reduces to: prepare a knowledge base, find the relevant parts, write a grounded answer."
+    }
+  ],
+  "related": [
+    "what-is-rag",
+    "what-is-chunking-in-rag",
+    "what-is-a-retriever",
+    "what-is-reranking",
+    "what-is-agentic-rag"
+  ],
+  "furtherReading": [
+    {
+      "title": "RAG Pipeline Deep Dive: Ingestion, Chunking, Embedding, and Vector Search",
+      "url": "https://dev.to/derrickryangiggs/rag-pipeline-deep-dive-ingestion-chunking-embedding-and-vector-search-2877"
+    },
+    {
+      "title": "Chunking Strategies to Improve LLM RAG Pipeline Performance — Weaviate",
+      "url": "https://weaviate.io/blog/chunking-strategies-for-rag"
+    },
+    {
+      "title": "Best Guide on RAG Pipeline, Use Cases and Diagrams — Dextra Labs",
+      "url": "https://dextralabs.com/blog/rag-pipeline-explained-diagram-implementation/"
+    }
+  ]
+}

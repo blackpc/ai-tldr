@@ -1,0 +1,325 @@
+{
+  "slug": "llm-prototype-to-production",
+  "title": "From Prototype to Production: Why LLM Apps Break at Scale",
+  "seoTitle": "From Prototype to Production: Why LLM Apps Break",
+  "metaDescription": "Your LLM demo worked, then real users arrived. The failure modes that only show up at scale — rate limits, weird inputs, drift — and how to prepare.",
+  "keywords": [
+    "llm prototype to production",
+    "why do llm apps fail in production",
+    "llm app scaling problems",
+    "productionizing llm applications"
+  ],
+  "difficulty": "beginner",
+  "oneLiner": "Learn the failure modes that only appear with real users — rate limits, weird inputs, runaway costs — and how to get ahead of them.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You built a demo. You ran it for yourself, showed it to colleagues, maybe posted a screen recording online. It worked beautifully. Then you opened it to real users — and things started breaking in ways you never anticipated."
+        },
+        {
+          "type": "p",
+          "md": "This is the most common story in AI engineering right now. The gap between *prototype* and *production* is not a small one you close by writing a bit more code. It's a category shift, like the difference between test-driving a car in a parking lot versus driving it across the country in all weather, with strangers in the back seat, and your job on the line if it breaks down."
+        },
+        {
+          "type": "p",
+          "md": "A prototype lives in a controlled bubble: you're the only user, you send well-formed inputs, the API never has a bad day, and you're not paying attention to the bill. **Production is the opposite of all four.** Strangers send inputs you never imagined, the API rate-limits you at the worst possible moment, costs compound silently, and the model you tuned your prompts against gets quietly updated by the provider."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The demo phase is roughly 20% of the work. The other 80% is making it reliable, observable, cost-controlled, and safe for real users. That 80% is what this article covers."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "LLM apps fail in production in ways that traditional software doesn't. Normal software is *deterministic*: the same input produces the same output, every time, and when it breaks you get a stack trace. LLMs are *nondeterministic* and *opaque*: they can return slightly different wording each time, they fail in ways that look like success (a fluent, confident answer that happens to be wrong), and they don't throw exceptions when they hallucinate."
+        },
+        {
+          "type": "p",
+          "md": "The business impact of ignoring these failure modes is real. Research in 2025 found that a fintech startup lost 12% of onboarding conversion because of prompt drift they didn't catch for months. An enterprise saw factual correctness drop 52% over four months — with zero prompt changes on their end — because the provider silently updated their model. Neither failure showed up in any error log."
+        },
+        {
+          "type": "h3",
+          "text": "The failure modes no demo reveals"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Rate limits:** providers enforce tokens-per-minute (TPM) and requests-per-minute (RPM) caps. One user is fine. One thousand concurrent users hits the wall and triggers cascading 429 errors.",
+            "**Weird inputs:** real users paste entire PDFs, write in five languages, ask off-topic questions, and occasionally try to jailbreak your app. Your carefully crafted prompt was not tested for any of this.",
+            "**Cost explosion:** LLM cost scales with *token count*, not request count. A 100K-token context window call costs 50-100x more than a 2K-token call. Most teams notice this only when the monthly bill arrives.",
+            "**Prompt drift:** the model your prompts were tuned against gets updated by the provider — sometimes silently. In April 2025, an unannounced GPT-4o update caused `json.loads()` to fail on roughly 15% of calls for developers who relied on structured output.",
+            "**Latency variance:** a typical REST API has a P50/P99 latency ratio of about 1:3. LLM APIs regularly show P50/P99 ratios of 1:8 to 1:15, with P99 latencies exceeding 30 seconds for large contexts.",
+            "**Silent quality regressions:** output quality degrades gradually and invisibly if you're not running automated evals. By the time a human notices, the damage is done."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The reason these failures surprise builders is that the prototype phase actively hides them. You self-select good inputs, you stay under rate limits, you restart when something goes wrong, and you haven't yet sent enough tokens to see the bill. Production removes all those filters at once."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How the gap opens up",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "To understand why production is harder, it helps to map the full lifecycle of an LLM request in a real app — and see where each failure mode lives."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Lifecycle of a production LLM request",
+            "steps": [
+              {
+                "label": "User input arrives",
+                "sub": "potentially malformed, adversarial, or in an unexpected language"
+              },
+              {
+                "label": "Input guardrails",
+                "sub": "PII redaction, length limits, injection detection"
+              },
+              {
+                "label": "Prompt assembly",
+                "sub": "system prompt + context + user message — token budget matters here"
+              },
+              {
+                "label": "LLM API call",
+                "sub": "rate limits, latency variance, and model version drift all live here"
+              },
+              {
+                "label": "Output validation",
+                "sub": "schema check, hallucination screening, safety classifiers"
+              },
+              {
+                "label": "Response returned",
+                "sub": "logged, traced, and attributed to a cost center"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Every arrow between stages is a place things can go wrong silently. The user input stage is where weird inputs arrive. The prompt assembly stage is where token budgets blow up. The API call stage is where rate limits bite and model drift hides. The output validation stage is where missing checks let bad answers through. The logging stage is where cost blindness lives."
+        },
+        {
+          "type": "h3",
+          "text": "Rate limits: the wall you hit at scale"
+        },
+        {
+          "type": "p",
+          "md": "Every major LLM provider — OpenAI, Anthropic, Google, and others — enforces per-organization and sometimes per-model rate limits measured in tokens-per-minute (TPM) and requests-per-minute (RPM). In the prototype, you never come close to these. With real traffic, especially if you have bursty usage patterns (everyone uses your app at 9am), you hit the wall and get HTTP 429 responses."
+        },
+        {
+          "type": "p",
+          "md": "The naive fix — retry immediately on a 429 — makes things worse: it hammers the endpoint during the back-off window and prolongs the outage. The production fix is an exponential-backoff retry strategy plus a request queue with concurrency limits, so bursts are absorbed rather than amplified."
+        },
+        {
+          "type": "h3",
+          "text": "Model drift: the silent update problem"
+        },
+        {
+          "type": "p",
+          "md": "Providers update model weights, safety filters, and decoding parameters without always publishing a changelog. Using a dated model alias (like `gpt-4o-2024-08-06`) helps but isn't a complete guarantee — even dated versions have been reported to change behavior. The production solution is an **eval suite with a golden dataset**: a frozen set of representative inputs and expected outputs that runs in CI on every deployment and flags degradation before it reaches users."
+        }
+      ]
+    },
+    {
+      "id": "failure-modes-in-depth",
+      "title": "The five failure modes, in depth",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Production LLM apps fail in a fairly predictable set of ways. The table below summarises each one, how it manifests, and the standard mitigation."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Failure mode",
+            "How it shows up",
+            "Mitigation"
+          ],
+          "rows": [
+            [
+              "Rate limits (TPM/RPM)",
+              "HTTP 429 errors during traffic spikes; downstream timeouts",
+              "Exponential backoff, request queues, multi-provider fallover"
+            ],
+            [
+              "Prompt drift / model updates",
+              "Silent quality drop; JSON parse errors; changed tone or refusals",
+              "Eval suite + golden dataset in CI; prompt versioning; canary rollouts"
+            ],
+            [
+              "Weird / adversarial inputs",
+              "Prompt injection, off-topic answers, PII leakage, broken structured output",
+              "Input guardrails: length limits, injection detection, schema pre-validation"
+            ],
+            [
+              "Runaway costs",
+              "Bill 10x higher than modelled; one tenant consuming 80% of budget",
+              "Token attribution per user/feature; hard budget caps; semantic caching"
+            ],
+            [
+              "Latency variance (P99 spikes)",
+              "Timeouts that kill UX; cascading failures in agent pipelines",
+              "Streaming responses; async handling; per-request timeout + fallback"
+            ]
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Weird inputs deserve their own moment"
+        },
+        {
+          "type": "p",
+          "md": "It's tempting to think of guardrails as a security feature and skip them if your app isn't safety-critical. Don't. Weird inputs break LLM apps in mundane ways too: a user who pastes a 40,000-token document blows your context budget; a user who writes in Thai when your prompt is in English produces garbled output; a user who accidentally sends an empty string hits an API error you haven't handled. None of these are attacks — they're just real users being real users."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Log every input in production for the first month. You will see input shapes you never imagined during development. Those logs become your next test cases."
+        },
+        {
+          "type": "h3",
+          "text": "Cost is a monitoring problem, not just a math problem"
+        },
+        {
+          "type": "p",
+          "md": "Most teams model LLM costs before launch and find them reasonable. Then costs explode and the post-mortem reveals one of a few culprits: a prompt that grew by 2,000 tokens in a refactor, one user who runs the most expensive flow all day, or a bug that sends every request twice. The only way to catch these is to **attribute token usage** by user, feature, and query type — not just watch the aggregate monthly total. Treat cost as a first-class monitoring signal, not an accounting artifact."
+        }
+      ]
+    },
+    {
+      "id": "production-checklist",
+      "title": "A minimal production readiness checklist",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You don't need a 40-tool observability stack on day one. The following is a minimal set of practices that addresses each of the five failure modes above, roughly ordered by the effort required versus the risk they prevent."
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Log every LLM call** — at minimum: timestamp, model, input tokens, output tokens, latency, and a request ID you can trace back to a user action.",
+            "**Add input validation before your first prompt** — truncate or reject inputs that are too long, detect and strip obvious prompt-injection attempts, and handle empty or null inputs gracefully.",
+            "**Build a golden eval dataset** — start with 20-50 real or realistic inputs and the expected output quality. Run this set in CI on every prompt change or model version bump.",
+            "**Add retry logic with exponential backoff** — handle 429 and 5xx errors without cascading. A simple implementation: retry up to 3 times with waits of 1s, 2s, 4s.",
+            "**Set per-user and per-feature token budgets** — even soft alerts beat finding out at the end of the month.",
+            "**Pin model versions** — use dated model aliases (e.g. `claude-3-5-sonnet-20241022`) instead of floating aliases like `latest`. This doesn't eliminate drift but makes it opt-in.",
+            "**Validate structured outputs** — if your app expects JSON, parse and schema-validate before passing downstream. Retry once on failure before falling back to an error state.",
+            "**Stream responses where possible** — streaming returns the first tokens in milliseconds, making P99 latency feel much faster to users even when total generation time is long."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "**Typecheck passing is not the same as production-ready.** Your TypeScript types can be perfectly sound while a prompt drift issue is silently dropping answer quality. Automated evals are the only way to know."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you've covered the basics above, the next frontier is **continuous evaluation in production** — not just in CI. The idea is to run a sample of live traffic through a lightweight LLM-as-a-judge scorer that checks groundedness, relevance, and safety on every call (or a random sample of them). This closes the feedback loop between what users actually send and what your eval suite tests."
+        },
+        {
+          "type": "p",
+          "md": "The feedback loop matters because user inputs in production drift over time. New user segments arrive with different writing styles and languages. Seasonal topics shift. Features get used in ways you didn't design for. A golden dataset frozen at launch will gradually become less representative. The production fix is to automatically promote failing production examples into the golden dataset — every new failure mode that reaches users becomes a permanent regression test."
+        },
+        {
+          "type": "h3",
+          "text": "Multi-provider failover"
+        },
+        {
+          "type": "p",
+          "md": "For high-availability apps, rate-limit headroom is only part of the resilience story. Provider outages happen. When they do, a single-provider app is down. The production pattern is an **LLM gateway** that maintains connections to multiple providers (e.g. OpenAI + Anthropic + a self-hosted fallback) and can automatically route requests to a healthy provider when the primary returns errors. This requires your prompts to be written in a provider-agnostic style — another reason to keep system prompts in a versioned store rather than hardcoded in application logic."
+        },
+        {
+          "type": "h3",
+          "text": "Prompt versioning as software"
+        },
+        {
+          "type": "p",
+          "md": "Treating prompts as versioned, deployable artifacts — stored in a registry, tagged, and rolled back if evals regress — is the practice that separates teams that can iterate safely from teams that are afraid to change anything. The key insight is that a prompt change is a *deployment*: it should go through the same review, eval gate, and canary rollout as a code change. Several tools support this, including LangSmith, Agenta, and PromptLayer, but even a simple git-tracked YAML file with a CI eval check is a massive improvement over prompts scattered across application code."
+        },
+        {
+          "type": "h3",
+          "text": "Cost reduction at scale"
+        },
+        {
+          "type": "p",
+          "md": "Once you have token attribution, three levers reduce cost without reducing quality. **Semantic caching** stores embeddings of past queries and returns cached answers when a new query is semantically similar enough — Redis LangCache and GPTCache report 50-73% cost reduction in high-repetition workloads. **Prompt compression** removes redundant context before sending (tools like LLMLingua can compress prompts by 3-20x with minimal quality loss). **Model routing** sends cheap, fast requests to a smaller model and only escalates complex queries to the frontier model — a pattern that can halve costs on mixed-complexity workloads."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The best time to instrument cost attribution is *before* launch, not after. Retrofitting observability into a running system while costs are already running hot is much harder than building it in from day one."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "My LLM demo worked perfectly — why does production keep breaking it?",
+      "a": "The demo hides all the hard problems: you self-select clean inputs, never hit rate limits, don't notice cost because you send few requests, and the model hasn't had time to drift. Production removes all those filters simultaneously. The five failure modes — rate limits, weird inputs, drift, cost, and latency spikes — only appear when real users arrive at real scale."
+    },
+    {
+      "q": "How do I handle LLM rate limits without breaking my app?",
+      "a": "Use exponential backoff on 429 errors (retry after 1s, 2s, 4s) and add a concurrency-limited request queue so traffic bursts are absorbed rather than amplified. For higher traffic, consider an LLM gateway that can spread load across multiple provider accounts or fall back to a secondary provider automatically."
+    },
+    {
+      "q": "What is prompt drift and how do I detect it?",
+      "a": "Prompt drift is when your LLM outputs change over time even though your prompt hasn't — usually because the provider updated the model. Detection requires a golden eval dataset: a frozen set of representative inputs with expected quality criteria, run automatically in CI on every deployment. If scores drop below a threshold, you catch the regression before users do."
+    },
+    {
+      "q": "Why did my LLM costs explode in production when my estimates looked fine?",
+      "a": "LLM cost scales with token count, not request count. Common culprits are: a prompt that grew during refactoring, a single power user running the most expensive flow repeatedly, a bug that sends requests twice, or context windows that grow unboundedly as conversation history accumulates. Token attribution per user and per feature is the only way to find the source."
+    },
+    {
+      "q": "Do I need all of this before I can launch anything?",
+      "a": "No — start with the minimum: log every call (timestamp, tokens, latency), add basic input validation, and handle 429 errors with a retry loop. The golden eval dataset and cost attribution can come shortly after launch once you have real traffic to learn from. The worst failure mode is shipping with zero observability; even minimal logging closes most of the blind spot."
+    },
+    {
+      "q": "Should I pin my model version or use the latest alias?",
+      "a": "Pin to a dated version alias (like `claude-3-5-sonnet-20241022` or `gpt-4o-2024-08-06`) rather than `latest` or `claude-3-5-sonnet`. This makes model updates opt-in rather than automatic, giving you time to re-run your eval suite before a new version hits production traffic. Even dated aliases aren't a 100% guarantee against drift, but they dramatically reduce surprise."
+    }
+  ],
+  "related": [
+    "what-is-llmops",
+    "what-is-llm-observability",
+    "llm-tracing-explained",
+    "what-are-llm-guardrails",
+    "testing-llm-apps"
+  ],
+  "furtherReading": [
+    {
+      "title": "Building LLM applications for production — Chip Huyen",
+      "url": "https://huyenchip.com/2023/04/11/llm-engineering.html"
+    },
+    {
+      "title": "Rate limiting for LLM applications — Portkey",
+      "url": "https://portkey.ai/blog/rate-limiting-for-llm-applications/"
+    },
+    {
+      "title": "Prompt Drift: The Hidden Failure Mode Undermining Agentic Systems — Comet",
+      "url": "https://www.comet.com/site/blog/prompt-drift/"
+    }
+  ]
+}

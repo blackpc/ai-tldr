@@ -1,0 +1,445 @@
+{
+  "slug": "fine-tuning-hyperparameters",
+  "title": "Epochs, Learning Rate, and Batch Size: Fine-Tuning Hyperparameters",
+  "seoTitle": "Fine-Tuning Hyperparameters: Epochs, LR, Batch Size",
+  "metaDescription": "How many epochs to fine-tune, what learning rate to start with, and how batch size affects results — practical defaults and overfitting warning signs.",
+  "keywords": [
+    "how many epochs for fine-tuning llm",
+    "learning rate for fine-tuning",
+    "fine-tuning hyperparameters explained",
+    "overfitting when fine-tuning llm",
+    "fine-tuning batch size"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn what each training knob does, the defaults that usually work, and how to read loss curves for overfitting.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you fine-tune an LLM, the training script exposes a handful of **hyperparameters** — numbers you set before training starts that control how the learning process unfolds. They don't describe *what* to learn (that's your dataset's job), they describe *how fast*, *how many times*, and *how many examples at once* the model trains. Get them roughly right and the model improves predictably. Get them badly wrong and you'll either waste compute watching nothing happen, or overwrite the model's existing knowledge and make it worse."
+        },
+        {
+          "type": "p",
+          "md": "A useful analogy: imagine teaching someone a new skill with a set of flashcards. The **learning rate** is how dramatically you revise your approach after every wrong answer — if it's too high you're constantly overcorrecting; too low and you barely adjust at all. The **number of epochs** is how many times you flip through the whole deck — once might not be enough for it to stick, but drilling the same fifty cards a hundred times leads to rote memorization without real understanding. The **batch size** is how many cards you review before pausing to consolidate what you've learned — a bigger stack between pauses is more efficient but needs more working memory."
+        },
+        {
+          "type": "p",
+          "md": "There are many other hyperparameters (weight decay, warmup steps, optimizer betas, LoRA rank and alpha), but **learning rate**, **epochs**, and **batch size** are the three you will encounter in virtually every training script and every hosted fine-tuning UI. Understanding these three carries you most of the way."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Hyperparameters have an outsized impact on whether a fine-tuning run succeeds or fails — and failures are often silent. The training loss can go down, the run can complete without errors, and the model can still come out noticeably worse than the base on your real task. The two classic failure modes are direct opposites of each other."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Overfitting:** the model memorizes your training examples instead of learning the underlying pattern. It scores perfectly on examples it has already seen and falls apart on anything new. Caused by too many epochs, a learning rate that's too high, or a training set that's too small and repetitive.",
+            "**Underfitting (or no learning):** the model barely changes. It still behaves like the base model and ignores what you showed it. Caused by a learning rate that's too low, too few epochs, or a training set with too little signal."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Both failures cost money — you pay for the compute whether or not the run produces something useful. And catching the problem requires a held-out **validation set**: a slice of your data the model never trains on, whose loss you track throughout training. The validation loss is the single most important number to watch."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Before touching any hyperparameter, split your dataset: keep 80-90% for training and hold out 10-20% for validation. Never touch the validation split during training — it's your ground truth for diagnosing overfitting."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Training works by repeatedly showing the model examples from your dataset, measuring how wrong its predictions are (the **loss**), and nudging the weights in the direction that reduces that error. The three hyperparameters each control a different dimension of this loop."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "How the three hyperparameters fit the training loop",
+            "steps": [
+              {
+                "label": "Load a batch",
+                "sub": "batch size = how many examples per step"
+              },
+              {
+                "label": "Forward pass",
+                "sub": "model predicts; loss is computed"
+              },
+              {
+                "label": "Backprop + optimizer step",
+                "sub": "learning rate = how big a weight update"
+              },
+              {
+                "label": "Repeat over full dataset",
+                "sub": "one pass = one epoch"
+              },
+              {
+                "label": "Evaluate on validation set",
+                "sub": "stop when val loss stops improving"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Learning rate"
+        },
+        {
+          "type": "p",
+          "md": "The **learning rate** (LR) controls the size of each weight update. After backpropagation computes the gradient — the direction to move each weight — the learning rate is multiplied by that gradient to determine how far to actually step. A value of `2e-4` means each weight moves 0.0002 times the gradient magnitude per step."
+        },
+        {
+          "type": "p",
+          "md": "For full fine-tuning of large models, typical ranges are `1e-5` to `5e-5`. For **LoRA / QLoRA fine-tuning** — where only newly initialized adapter weights are being trained — you can use higher rates, typically `1e-4` to `2e-4`, because the frozen base weights act as a safety net. Unsloth's published guide recommends starting LoRA runs at `2e-4` and exploring down to `5e-6` if the run is unstable."
+        },
+        {
+          "type": "p",
+          "md": "Raw constant learning rates are rarely used. The standard practice is a **learning rate schedule**: the rate starts low during a short **warmup phase** (to let the optimizer stabilize before taking big steps), rises to the peak value, and then decays — usually following a **cosine curve** — back toward zero by the end of training. A typical warmup ratio is 3-10% of total training steps."
+        },
+        {
+          "type": "h3",
+          "text": "Epochs"
+        },
+        {
+          "type": "p",
+          "md": "One **epoch** is one complete pass through your entire training dataset. At the end of epoch 1, every example has been shown to the model exactly once. An LLM already learned a vast amount during pretraining, so fine-tuning generally needs far fewer passes than training from scratch."
+        },
+        {
+          "type": "p",
+          "md": "Practical defaults: **1 to 3 epochs** for most instruction-tuning runs, **3 to 5 epochs** when the training set is larger and the task is more specialized. OpenAI's fine-tuning API defaults to 3-4 epochs depending on dataset size. Beyond 5 epochs the risk of overfitting rises sharply, and beyond 10 epochs the validation loss is almost always going the wrong way unless your dataset is extremely large and diverse."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "More epochs is not always better. The model's pretraining gave it broad knowledge; hammering the same small dataset over and over teaches it to parrot the training examples rather than generalize from them."
+        },
+        {
+          "type": "h3",
+          "text": "Batch size"
+        },
+        {
+          "type": "p",
+          "md": "The **batch size** is the number of training examples processed together before the optimizer takes a weight-update step. A batch size of 16 means the model sees 16 examples, their losses are averaged into one gradient, and then one update step happens."
+        },
+        {
+          "type": "p",
+          "md": "Larger batches give smoother, more stable gradient estimates and train faster in wall-clock time — but consume proportionally more GPU memory. Smaller batches update the weights more frequently, which can sometimes help escape local minima, but the noisier gradients make convergence less predictable. The standard recommendation is to use the largest batch size your GPU memory allows, commonly 8 to 32 for fine-tuning runs on consumer hardware."
+        },
+        {
+          "type": "p",
+          "md": "When memory is the constraint, **gradient accumulation** lets you simulate a larger effective batch without needing more VRAM. Instead of updating weights after every batch, you accumulate gradients across several small batches and update once. A physical batch size of 4 with gradient accumulation of 4 steps is mathematically equivalent to a batch size of 16. The Unsloth guide targets an effective batch size of 16 (e.g., batch 2 with accumulation 8) as a stable default."
+        }
+      ]
+    },
+    {
+      "id": "practical-defaults",
+      "title": "Practical defaults and a starting config",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The table below summarizes the starting values that appear most consistently across published guides, library documentation, and practitioner recommendations as of 2025-2026. These are starting points, not guarantees — you should always monitor validation loss and adjust."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Hyperparameter",
+            "LoRA / QLoRA default",
+            "Full fine-tuning default",
+            "Notes"
+          ],
+          "rows": [
+            [
+              "Learning rate",
+              "2e-4",
+              "2e-5 to 5e-5",
+              "Cosine schedule with 3-10% warmup steps"
+            ],
+            [
+              "Epochs",
+              "1-3",
+              "2-4",
+              "Stop early if val loss rises"
+            ],
+            [
+              "Batch size (per device)",
+              "2-8",
+              "1-4",
+              "Scale up with gradient accumulation"
+            ],
+            [
+              "Effective batch size (target)",
+              "16-32",
+              "16-64",
+              "Use grad accumulation to hit this"
+            ],
+            [
+              "Warmup ratio",
+              "0.03 (3%)",
+              "0.03-0.10",
+              "Higher warmup for unstable runs"
+            ],
+            [
+              "LR schedule",
+              "cosine",
+              "cosine or linear",
+              "Constant LR is rarely competitive"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Here is a minimal but realistic `TrainingArguments` config using Hugging Face Transformers. It follows the defaults above and enables cosine scheduling with warmup."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "from transformers import TrainingArguments\n\nargs = TrainingArguments(\n    output_dir=\"my-fine-tuned-model\",\n\n    # Epochs and batch size\n    num_train_epochs=3,\n    per_device_train_batch_size=4,\n    per_device_eval_batch_size=4,\n    gradient_accumulation_steps=4,       # effective batch = 4 * 4 = 16\n\n    # Learning rate + schedule\n    learning_rate=2e-4,                  # LoRA default; use 2e-5 for full fine-tune\n    lr_scheduler_type=\"cosine\",\n    warmup_ratio=0.03,                   # 3% of steps used for warmup\n\n    # Evaluation and early stopping\n    evaluation_strategy=\"steps\",\n    eval_steps=50,\n    save_strategy=\"steps\",\n    save_steps=50,\n    load_best_model_at_end=True,         # keeps the checkpoint with lowest val loss\n    metric_for_best_model=\"eval_loss\",\n    greater_is_better=False,\n\n    # Stability\n    fp16=True,                           # use bf16=True on Ampere GPUs\n    logging_steps=10,\n)"
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "OpenAI's hosted fine-tuning API exposes a `learning_rate_multiplier` that scales its internal default rate. The default multiplier is around 0.05-0.2 depending on batch size. If outputs look too conservative, raise the multiplier slightly; if outputs are erratic or the model loses general coherence, lower it."
+        }
+      ]
+    },
+    {
+      "id": "reading-loss-curves",
+      "title": "Reading loss curves to catch overfitting",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every serious fine-tuning run should log both **training loss** and **validation loss** throughout training. Plotting them together gives you the most direct signal about what your hyperparameters are doing — far more useful than the final loss number alone."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Loss curve patterns and what they mean",
+            "columns": [
+              {
+                "title": "Healthy training",
+                "items": [
+                  "Training loss falls steadily",
+                  "Validation loss tracks closely",
+                  "Both converge and plateau",
+                  "Small gap between train and val loss",
+                  "Action: run is good, can stop here"
+                ]
+              },
+              {
+                "title": "Overfitting",
+                "items": [
+                  "Training loss keeps falling",
+                  "Validation loss plateaus then rises",
+                  "Gap between curves widens over time",
+                  "Model memorizing training examples",
+                  "Action: stop earlier, reduce epochs or LR"
+                ]
+              },
+              {
+                "title": "Underfitting / no learning",
+                "items": [
+                  "Both losses stay flat or fall very slowly",
+                  "Loss barely moves from initial value",
+                  "No divergence but no improvement either",
+                  "LR too small or dataset has no signal",
+                  "Action: raise LR, check data quality"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The overfitting signature is the one to watch most carefully: **training loss falls while validation loss flattens or rises**. When you see validation loss climb for two or three consecutive evaluation checkpoints, the model is memorizing. The right response is **early stopping** — keeping the checkpoint from just before the divergence began rather than the final checkpoint from the end of training."
+        },
+        {
+          "type": "p",
+          "md": "The setting `load_best_model_at_end=True` in Hugging Face Transformers does this automatically: it tracks the best validation loss seen during the run and restores that checkpoint at the end, even if later checkpoints had lower training loss. This is worth enabling on every run."
+        },
+        {
+          "type": "h3",
+          "text": "Practical signs that overfitting is happening"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Training loss approaches zero** while val loss stays stubbornly flat — especially common with small datasets (under 500 examples).",
+            "**The model starts reproducing training examples verbatim** when prompted with similar inputs.",
+            "**Output diversity collapses** — you see the same phrasing, structures, or filler sentences regardless of input variation.",
+            "**General capability degrades** — the model gets slightly worse at things outside the training distribution, like a simple factual question it previously answered correctly."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "A quick sanity check: after training, run the model on five examples from your *training set* and five from your *validation set*. If the training examples feel crisply accurate but the validation examples feel off, you've overfit."
+        }
+      ]
+    },
+    {
+      "id": "hyperparameter-interactions",
+      "title": "How the three hyperparameters interact",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Learning rate, epochs, and batch size are not independent. Changing one often requires you to revisit another — particularly the learning rate and batch size relationship."
+        },
+        {
+          "type": "p",
+          "md": "**Batch size and learning rate scale together.** The standard heuristic, known as **linear scaling**, says that if you double the batch size, you should roughly double the learning rate to maintain the same effective update per example. In practice this relationship holds loosely for the batch size ranges common in fine-tuning (8-64), but breaks down at extremes. When in doubt: run a quick 1-epoch sweep at batch sizes of 8, 16, and 32 and compare validation loss to find your hardware's sweet spot before committing to a full run."
+        },
+        {
+          "type": "p",
+          "md": "**Epochs and dataset size interact.** The number of training *steps* — not epochs — is what actually controls how much the model updates. With 500 examples, a batch size of 8, and 3 epochs, you get roughly 188 optimizer steps. With 5,000 examples under the same settings, you'd get 1,875 steps. Smaller datasets need fewer epochs because the model sees each example proportionally more often per step count. A useful cross-check: aim for a total of roughly 500-2,000 optimizer steps for typical fine-tuning tasks, and adjust epoch count to hit that range given your dataset size."
+        },
+        {
+          "type": "p",
+          "md": "**For LoRA, the rank and learning rate interact.** LoRA's `r` parameter (rank) controls how much capacity the adapter has. Higher rank (32-64) means more parameters to train, so you may need a slightly lower learning rate to keep training stable. Lower rank (8-16) is more constrained and can tolerate a slightly higher rate. The `alpha` parameter is typically set equal to the rank (`alpha = r`) or double it (`alpha = 2r`) — this controls the relative scaling of the adapter outputs."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Scenario",
+            "Recommended adjustment"
+          ],
+          "rows": [
+            [
+              "Small dataset (< 500 examples)",
+              "Use 1-2 epochs max; lower LR slightly"
+            ],
+            [
+              "Large dataset (> 10,000 examples)",
+              "3-5 epochs; standard LR is fine"
+            ],
+            [
+              "Model losing general coherence",
+              "Lower learning rate; reduce epochs"
+            ],
+            [
+              "Model not learning your format",
+              "Increase epochs by 1-2; check data quality"
+            ],
+            [
+              "Out-of-memory on GPU",
+              "Halve batch size; double gradient accumulation steps"
+            ],
+            [
+              "Very unstable loss (spikes)",
+              "Lower LR; increase warmup ratio to 0.05-0.10"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you have the basics dialed in, a few more advanced techniques become relevant — particularly for longer runs, larger models, or when you need to squeeze out the last few percentage points of quality."
+        },
+        {
+          "type": "h3",
+          "text": "Layer-wise learning rate decay (LLRD)"
+        },
+        {
+          "type": "p",
+          "md": "Not all layers need the same learning rate. The intuition: **early transformer layers** hold low-level language representations that are broadly useful and should change very little. **Later layers** are more task-specific and benefit from slightly larger updates. Layer-wise learning rate decay applies a multiplier (typically 0.8-0.9 per layer) so that each successive layer from the top receives a slightly smaller learning rate. Research from 2024 shows this can improve downstream performance compared to a flat global rate, particularly for full fine-tuning of larger models."
+        },
+        {
+          "type": "h3",
+          "text": "Hyperparameter search"
+        },
+        {
+          "type": "p",
+          "md": "Manual tuning is practical for small runs, but systematic search pays off when compute budget allows. The most efficient approach is **1-epoch sweeps**: hold epoch count fixed at 1, sweep over 3-5 learning rate values (e.g., 5e-5, 1e-4, 2e-4, 5e-4), pick the one that produces the lowest validation loss, then tune epochs. This avoids the expensive mistake of running many full multi-epoch runs to find the right learning rate. Libraries like Optuna and Ray Tune integrate with Hugging Face Trainer to automate this."
+        },
+        {
+          "type": "h3",
+          "text": "Weight decay and regularization"
+        },
+        {
+          "type": "p",
+          "md": "**Weight decay** (AdamW's `weight_decay` parameter, commonly 0.01) is a light regularizer that penalizes large weight values — it nudges the model toward smaller, more generalizable updates and is another tool against overfitting. It's usually left at the default of 0.01 for fine-tuning, but raising it slightly to 0.05 or 0.1 can help when you're seeing signs of overfitting and don't want to reduce the learning rate."
+        },
+        {
+          "type": "h3",
+          "text": "When training loss hits zero"
+        },
+        {
+          "type": "p",
+          "md": "A training loss of exactly 0.0 is almost always a problem. With a small dataset and too many epochs, the model can memorize every training example — the loss hits zero because it has learned to reproduce the training set perfectly. This is the clearest overfitting signal you will see, and the fix is almost always to reduce epochs and re-run from the base checkpoint. A healthy fine-tuning run ends with a training loss in the range of 0.5-1.5 for most instruction-tuning tasks, not near zero."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The Unsloth documentation and the Lightning AI LoRA insights post (based on hundreds of experiments) are two of the most practically grounded public references for LoRA hyperparameter choices. Both confirm that 1-3 epochs, a learning rate of 2e-4, and an effective batch size of 16 form a reliable baseline for the majority of fine-tuning tasks."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "How many epochs should I use to fine-tune an LLM?",
+      "a": "Start with 1-3 epochs for most tasks. Three to five epochs is reasonable when your dataset is larger and the task is specialized. Beyond five epochs, overfitting risk climbs sharply unless your dataset is very large and diverse. The right number is determined by validation loss, not a fixed rule — stop when validation loss plateaus or starts rising."
+    },
+    {
+      "q": "What learning rate should I use for fine-tuning?",
+      "a": "For LoRA and QLoRA fine-tuning, `2e-4` is the most commonly recommended starting point. For full fine-tuning of a large model, start lower: `1e-5` to `5e-5`. Pair any learning rate with a cosine decay schedule and a short warmup phase (3-5% of total steps) — a flat constant learning rate is rarely competitive."
+    },
+    {
+      "q": "What batch size should I use for LLM fine-tuning?",
+      "a": "Use the largest batch size your GPU memory allows, targeting an **effective** batch size of 16-32. If your hardware can only fit a batch of 2 or 4 in memory, use gradient accumulation to simulate the larger batch — accumulating over 4 steps with a batch of 4 gives an effective batch of 16."
+    },
+    {
+      "q": "How do I know if my fine-tuned model is overfitting?",
+      "a": "The clearest signal is a diverging loss curve: training loss keeps falling while validation loss plateaus or rises. Other signs include outputs that closely echo training examples verbatim, loss of output diversity, and degraded performance on tasks outside the training distribution. Always hold out a validation split and evaluate on it regularly during training."
+    },
+    {
+      "q": "What is gradient accumulation and when should I use it?",
+      "a": "Gradient accumulation lets you simulate a larger batch size without extra GPU memory. Instead of taking an optimizer step after every batch, you accumulate gradients across several small batches and update once. Use it when your GPU can only hold a small batch (1-4 examples) but you want the stability of an effective batch of 16 or more."
+    },
+    {
+      "q": "Does changing batch size mean I also need to change the learning rate?",
+      "a": "Often yes. A common heuristic is linear scaling: if you double the batch size, double the learning rate. The intuition is that a larger batch gives a more accurate gradient estimate per step, so you can afford a bigger step. In practice this rule holds loosely for the typical fine-tuning batch size range of 8-64, but you should verify with a quick validation loss comparison before committing to a long run."
+    }
+  ],
+  "related": [
+    "what-is-fine-tuning",
+    "fine-tuning-dataset-prep",
+    "full-fine-tuning-vs-peft",
+    "what-fine-tuning-changes",
+    "fine-tuning-cost-breakdown"
+  ],
+  "furtherReading": [
+    {
+      "title": "LoRA Fine-Tuning Hyperparameters Guide — Unsloth Documentation",
+      "url": "https://unsloth.ai/docs/get-started/fine-tuning-llms-guide/lora-hyperparameters-guide"
+    },
+    {
+      "title": "Finetuning LLMs with LoRA and QLoRA: Insights from Hundreds of Experiments — Lightning AI",
+      "url": "https://lightning.ai/pages/community/lora-insights/"
+    },
+    {
+      "title": "Fine-Tuning LLMs: Hyperparameter Best Practices — Latitude",
+      "url": "https://latitude.so/blog/fine-tuning-llms-hyperparameter-best-practices"
+    }
+  ]
+}

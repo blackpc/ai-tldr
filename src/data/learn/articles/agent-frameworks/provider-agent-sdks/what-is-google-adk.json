@@ -1,0 +1,449 @@
+{
+  "slug": "what-is-google-adk",
+  "title": "What Is Google ADK? Agent Development the Google Way",
+  "seoTitle": "What Is Google ADK? Agent Development Kit Guide",
+  "metaDescription": "Google's Agent Development Kit (ADK) brings code-first agents to Gemini and Vertex AI. Learn its core concepts, workflow agents, and when to pick it.",
+  "keywords": [
+    "what is google adk",
+    "google agent development kit tutorial",
+    "google adk vs langgraph",
+    "build agents with gemini adk",
+    "vertex ai agent builder vs adk"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Understand Google ADK's code-first approach to agents — workflow agents, tools, and deployment on Vertex AI — and where it fits in the ecosystem.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**Google ADK** (Agent Development Kit) is an open-source, code-first framework for building AI agents and multi-agent systems. Google announced it at Cloud Next in April 2025. You install it with `pip install google-adk` (Python) or the equivalent npm package for TypeScript, and you describe agents as plain Python or TypeScript objects — no drag-and-drop required."
+        },
+        {
+          "type": "p",
+          "md": "The everyday analogy: think of ADK as a staffing agency for software bots. You hire a **coordinator** (the root agent), describe what it manages, then hire **specialists** (sub-agents with narrow roles like research, writing, or database look-ups). The coordinator knows who to call for each job, and ADK handles all the communication plumbing between them. You define the org chart; ADK runs the office."
+        },
+        {
+          "type": "p",
+          "md": "At the lowest level, a single ADK agent is an `LlmAgent`: a model (by default Gemini, but anything reachable through Vertex AI Model Garden or LiteLLM will work), a natural-language instruction, and a list of tools. ADK's runtime calls the model, executes whatever tool the model requests, feeds the result back, and repeats until the model declares the task done. You write the *what*; the framework handles the *loop*."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "ADK also ships TypeScript, Java, Go, and Kotlin SDKs. Python is the most mature and best-documented as of mid-2026, but the core concepts (LlmAgent, SequentialAgent, tools) are identical across languages."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Before ADK, building a reliable multi-agent system on Google Cloud required stitching together raw Gemini API calls, custom tool-execution loops, manual state passing between agents, and bespoke deployment scripts. Each team solved the same plumbing differently and reinvented the same bugs. ADK gives that plumbing a name and a contract, so the engineering conversation can move up the stack."
+        },
+        {
+          "type": "p",
+          "md": "The framework solves three concrete problems that trip up teams building their first production agents:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Orchestration boilerplate.** Writing a reliable agent loop — tool calls, error handling, retries, result injection back into context — is tedious and surprisingly subtle. ADK's runtime does it for you.",
+            "**Multi-agent coordination.** Splitting work across specialist agents that share state, delegate cleanly, and stay within their scope is hard to design by hand. ADK's agent-tree model enforces clean handoff boundaries.",
+            "**Path to production.** Getting from a local prototype to a horizontally-scaled cloud service normally requires a separate containerization and orchestration project. ADK's built-in `adk deploy` command targets Cloud Run or Vertex AI Agent Engine directly."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "For teams already using Google Cloud, ADK is especially compelling because it integrates natively with Vertex AI for model serving, Cloud Run for hosting, and Gemini's built-in tools like Google Search grounding and sandboxed code execution — capabilities that would otherwise require separate API integrations."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "If you're on a Google Cloud shop and your use-case involves multiple cooperating agents (e.g., a triage agent that routes to a billing specialist or a fraud detector), ADK is worth evaluating first. For simpler single-agent scripts, the raw Gemini API may be all you need."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "ADK's architecture has four layers: **agents**, **tools**, **sessions + state**, and the **runner** that wires them together."
+        },
+        {
+          "type": "h3",
+          "text": "Agents"
+        },
+        {
+          "type": "p",
+          "md": "Every entity in ADK is an agent. There are two families: **LlmAgent** (calls a language model to reason about what to do next) and **Workflow Agents** (deterministic orchestrators that never call an LLM themselves — they just route execution). Within the workflow family there are three built-in shapes: `SequentialAgent`, `ParallelAgent`, and `LoopAgent`. Agents form a **tree**: a parent delegates work to children; children can be LLM agents or further workflow agents. Only the currently active agent can pass control to another agent in its immediate subtree, which keeps routing predictable."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "ADK agent tree — root delegates to specialists",
+            "root": {
+              "label": "Root LlmAgent",
+              "sub": "coordinator / router"
+            },
+            "children": [
+              {
+                "label": "SequentialAgent",
+                "sub": "step A → B → C"
+              },
+              {
+                "label": "ParallelAgent",
+                "sub": "A + B concurrently"
+              },
+              {
+                "label": "LoopAgent",
+                "sub": "iterate until done"
+              },
+              {
+                "label": "LlmAgent (leaf)",
+                "sub": "specialist with tools"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Workflow agent shapes"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Agent type",
+            "What it does",
+            "Best for"
+          ],
+          "rows": [
+            [
+              "SequentialAgent",
+              "Runs sub-agents one after another; each sees the previous output in shared state",
+              "Pipelines where step B needs step A's result"
+            ],
+            [
+              "ParallelAgent",
+              "Runs all sub-agents concurrently, then merges results into shared state",
+              "Independent research or analysis tasks that can fan out"
+            ],
+            [
+              "LoopAgent",
+              "Runs sub-agents in a cycle until max_iterations is hit or a sub-agent calls exit_loop",
+              "Iterative refinement — e.g. draft → critique → revise"
+            ]
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Tools"
+        },
+        {
+          "type": "p",
+          "md": "Tools are typed Python functions that an `LlmAgent` can invoke. ADK inspects the function's name, docstring, type hints, and parameters to auto-generate the schema it passes to the model. There are four categories:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Function tools** — regular Python functions you write. ADK wraps them automatically.",
+            "**Built-in tools** — `google_search` for real-time web grounding, `code_execution` for sandboxed Python eval inside Gemini. Note: you can attach only one built-in tool per agent.",
+            "**MCP tools** — ADK's `MCPToolset` connects to any Model Context Protocol server over stdio or SSE, so existing MCP tooling works out of the box.",
+            "**Agent-as-tool** — wrap a child agent as a tool callable by the parent, enabling hierarchical delegation with a clean input/output contract."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Sessions, state, and the runner"
+        },
+        {
+          "type": "p",
+          "md": "ADK's `Session` object is the conversation boundary — it holds the message history and a mutable `state` dict that all agents in the same tree can read and write. The `Runner` (or `InMemoryRunner` for local testing) drives the event loop: receive a user turn, route to the active agent, execute tool calls, write state updates, emit the response, repeat. Deploying to Vertex AI Agent Engine hands the session management off to Google's managed service; you stop worrying about horizontal scale."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "ADK agent execution cycle",
+            "steps": [
+              {
+                "label": "User turn arrives",
+                "sub": "Runner receives message"
+              },
+              {
+                "label": "LlmAgent calls model",
+                "sub": "Gemini or other LLM"
+              },
+              {
+                "label": "Model requests tool",
+                "sub": "structured tool call"
+              },
+              {
+                "label": "ADK executes tool",
+                "sub": "writes result to state"
+              },
+              {
+                "label": "Result injected",
+                "sub": "back into context window"
+              },
+              {
+                "label": "Model responds or loops",
+                "sub": "emit reply or continue"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "building-your-first-agent",
+      "title": "Building your first ADK agent",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The minimum viable ADK agent is roughly 15 lines of Python. Here is a weather-lookup agent that demonstrates the full pattern: defining a custom tool, attaching it to an `LlmAgent`, and running it with the in-memory runner."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Minimal ADK agent with a custom function tool",
+          "code": "from google.adk.agents import LlmAgent\nfrom google.adk.runners import InMemoryRunner\n\n# 1. Define a tool — any typed Python function works.\ndef get_weather(city: str) -> str:\n    \"\"\"Return current weather conditions for the given city.\"\"\"\n    # In production, call a real weather API here.\n    return f\"Sunny, 22 C in {city}\"\n\n# 2. Build the agent — model, instruction, tools.\nagent = LlmAgent(\n    name=\"WeatherAgent\",\n    model=\"gemini-2.0-flash\",\n    instruction=\"You are a helpful weather assistant. Use get_weather for any city lookup.\",\n    tools=[get_weather],\n)\n\n# 3. Run it locally.\nrunner = InMemoryRunner(agent=agent)\nfor event in runner.run(user_id=\"u1\", session_id=\"s1\", message=\"What's the weather in Tokyo?\"):\n    if event.is_final_response():\n        print(event.content)"
+        },
+        {
+          "type": "p",
+          "md": "To compose a **multi-agent pipeline**, swap the single agent for a `SequentialAgent` that chains two or more `LlmAgent` instances. Each agent writes its output into `ctx.state`, which the next agent reads automatically."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Sequential two-agent pipeline",
+          "code": "from google.adk.agents import LlmAgent, SequentialAgent\n\nresearcher = LlmAgent(\n    name=\"Researcher\",\n    model=\"gemini-2.0-flash\",\n    instruction=\"Research the topic and write a factual summary. Store it in state['summary'].\",\n    output_key=\"summary\",  # ADK writes the output to state automatically\n)\n\nwriter = LlmAgent(\n    name=\"Writer\",\n    model=\"gemini-2.0-flash\",\n    instruction=\"Take state['summary'] and rewrite it as an engaging blog post.\",\n    input_key=\"summary\",\n)\n\npipeline = SequentialAgent(\n    name=\"ResearchAndWrite\",\n    sub_agents=[researcher, writer],\n)"
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "ADK has a few sharp edges to know before shipping: (1) You can attach **only one built-in tool per agent** and cannot mix built-in tools with custom tools on the same agent. (2) Python function tools **do not support default parameter values** — every parameter must be explicitly provided by the model. (3) The folder and file structure must match ADK conventions exactly, or the CLI will fail with unhelpful errors."
+        }
+      ]
+    },
+    {
+      "id": "adk-vs-other-frameworks",
+      "title": "ADK vs LangGraph vs CrewAI",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "ADK is not the only agent framework, and it won't be the right choice for every team. Here is how it stacks up against the two most popular alternatives."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Framework comparison at a glance",
+            "columns": [
+              {
+                "title": "Google ADK",
+                "accent": true,
+                "items": [
+                  "Code-first, Python/TS/Java/Go",
+                  "Built-in SequentialAgent, ParallelAgent, LoopAgent",
+                  "Native Gemini + Vertex AI integration",
+                  "A2A protocol for cross-framework agent calls",
+                  "Best for: Google Cloud teams, multi-agent pipelines",
+                  "Watch out: strict file structure, built-in tool limits"
+                ]
+              },
+              {
+                "title": "LangGraph",
+                "items": [
+                  "Graph/state-machine model — nodes + edges",
+                  "Fine-grained control over every transition",
+                  "LangSmith for observability and tracing",
+                  "Largest search interest; most tutorials online",
+                  "Best for: complex branching logic, deep observability needs",
+                  "Watch out: steeper learning curve, more boilerplate"
+                ]
+              },
+              {
+                "title": "CrewAI",
+                "items": [
+                  "Role-based abstraction — crew, agents, tasks",
+                  "Lowest boilerplate; 20 lines to start",
+                  "Intuitive 'team of people' mental model",
+                  "Growing ecosystem and integrations",
+                  "Best for: rapid prototyping, non-engineers",
+                  "Watch out: less control over execution details"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The key differentiator for ADK is its **native Google Cloud integration**. If your production environment is already Vertex AI and you want to ship Gemini-powered agents without extra glue code, ADK removes significant friction. Conversely, if you need platform-agnostic portability or you're primarily using OpenAI models, LangGraph or CrewAI may be more practical starting points."
+        },
+        {
+          "type": "p",
+          "md": "It's also worth noting that these frameworks are becoming **complementary rather than mutually exclusive**. ADK supports the A2A (Agent-to-Agent) protocol, meaning an ADK agent can call a LangGraph agent as a remote sub-agent and vice versa. Vertex AI Agent Engine can host agents built with any of the three frameworks. The winner-take-all framing misses the real story: each framework covers a different slice of the design space."
+        }
+      ]
+    },
+    {
+      "id": "deployment-and-agentic-stack",
+      "title": "Deployment: from laptop to Vertex AI",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "ADK's deployment story is one of its strongest selling points. You move through three environments with the same agent code:"
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Local development** — `adk run` starts an interactive CLI session; `adk web` opens a visual step-through debugger at localhost where you can inspect every tool call and state change.",
+            "**Cloud Run** — `adk deploy cloud_run` containerizes and deploys the agent as a scalable HTTPS endpoint in minutes.",
+            "**Vertex AI Agent Engine** — the fully managed, auto-scaling runtime. You call `client.agent_engines.create(agent=app, ...)` and Agent Engine handles sessions, horizontal scale, and SLA. Requires `google-cloud-aiplatform[agent_engines,adk]`."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Agent Engine is the production target for most teams. It manages the `Session` lifecycle server-side, meaning you don't build or operate any session store. When a user sends a follow-up message, Agent Engine routes it back to the correct session and its accumulated state automatically."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "ADK deployment path",
+            "steps": [
+              {
+                "label": "Local dev",
+                "sub": "adk run / adk web"
+              },
+              {
+                "label": "Containerize",
+                "sub": "adk deploy cloud_run"
+              },
+              {
+                "label": "Vertex AI Agent Engine",
+                "sub": "managed, auto-scaled sessions"
+              }
+            ]
+          }
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Use `adk web` during development — the visual debugger shows the full event trace: which agent was active, what tool was called, what it returned, and how state changed. This alone saves hours of printf-debugging."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you're comfortable with `LlmAgent` and the three workflow agent types, several advanced capabilities unlock significantly more sophisticated systems."
+        },
+        {
+          "type": "h3",
+          "text": "A2A (Agent-to-Agent) protocol"
+        },
+        {
+          "type": "p",
+          "md": "ADK is a first-class participant in Google's open **A2A protocol** — a standard for agent-to-agent communication across frameworks and even across companies. An ADK agent can expose itself as an A2A server, and any A2A-compatible client (including agents built in LangGraph, CrewAI, or a completely custom stack) can call it. This matters for enterprise deployments where different teams own different agent services and need standardized handoff contracts."
+        },
+        {
+          "type": "h3",
+          "text": "MCP tool consumption"
+        },
+        {
+          "type": "p",
+          "md": "The `MCPToolset` class lets any ADK agent consume tools from Model Context Protocol servers over stdio or SSE. This means the growing ecosystem of MCP servers — file systems, databases, GitHub, Slack integrations — is immediately available to ADK agents without writing any wrapper code. ADK can also *expose* its tools as an MCP server for other clients."
+        },
+        {
+          "type": "h3",
+          "text": "Evaluation and testing"
+        },
+        {
+          "type": "p",
+          "md": "ADK ships a built-in evaluation framework accessible via `adk eval`. You define test cases with expected outputs or intermediate steps, and the runner scores your agent against them. This is separate from unit-testing your tool functions (which you should also do) — it specifically tests the agent's *decision-making*: did it call the right tool, in the right order, with the right arguments?"
+        },
+        {
+          "type": "h3",
+          "text": "Streaming and multimodal conversations"
+        },
+        {
+          "type": "p",
+          "md": "ADK supports **bidirectional audio and video streaming** through Gemini Live, enabling voice-to-voice agent interactions with near-realtime latency. This is not common in other agent frameworks and reflects Google's broader investment in the Gemini multimodal stack. If your agent use-case involves a voice interface — customer support, in-car assistant, live tutoring — ADK's streaming support is a significant advantage."
+        },
+        {
+          "type": "h3",
+          "text": "Callbacks and custom workflow templates"
+        },
+        {
+          "type": "p",
+          "md": "Beyond the three built-in workflow agents, ADK lets you subclass `BaseAgent` and implement `_run_async_impl` to create fully custom orchestration logic — conditional branching, human-in-the-loop approval gates, dynamic sub-agent lists assembled at runtime. Callbacks (before/after model calls and tool executions) let you add logging, guardrails, or telemetry without modifying agent logic."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "ADK's model-agnostic design means you are not locked into Gemini. Via **LiteLLM integration**, you can point an `LlmAgent` at Anthropic Claude, Meta Llama, Mistral, or any other provider accessible through LiteLLM. The Google Cloud deployment story obviously works best with Gemini, but the framework itself is not exclusive."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Is Google ADK only for Gemini models?",
+      "a": "No. ADK defaults to Gemini but is model-agnostic. You can use any model accessible through Vertex AI Model Garden or any provider supported by LiteLLM (including Anthropic Claude, Meta Llama, and Mistral). The tightest native integrations — built-in Google Search grounding, code execution, streaming — do require Gemini."
+    },
+    {
+      "q": "What is the difference between Vertex AI Agent Builder and Google ADK?",
+      "a": "Vertex AI Agent Builder (sometimes called Agent Engine) is the **managed runtime** — it handles hosting, scaling, and session management for deployed agents. ADK is the **development framework** you use to write those agents in code. They are complementary: you build with ADK locally, then deploy to Agent Engine. You can also deploy non-ADK agents (LangGraph, CrewAI) to Agent Engine."
+    },
+    {
+      "q": "How does Google ADK handle state between agents in a pipeline?",
+      "a": "ADK maintains a shared `state` dict on the `Session` object. Any agent in the tree can read from and write to it. Workflow agents like `SequentialAgent` pass state automatically between steps: set `output_key` on an upstream agent and `input_key` on the downstream one, and ADK handles the transfer without explicit code."
+    },
+    {
+      "q": "Can I use Google ADK with LangGraph or CrewAI together?",
+      "a": "Yes, through the A2A (Agent-to-Agent) protocol. ADK agents can call remote A2A-compliant agents regardless of which framework built them, and vice versa. Vertex AI Agent Engine also hosts agents from all three frameworks side by side. The frameworks are interoperable at the deployment level."
+    },
+    {
+      "q": "What Python version and package do I need to get started with ADK?",
+      "a": "ADK requires Python 3.11 or higher. Install it with `pip install google-adk`. For Vertex AI Agent Engine deployment, you also need `pip install google-cloud-aiplatform[agent_engines,adk]`. A quickstart can have a working agent in under 20 minutes."
+    },
+    {
+      "q": "Does Google ADK support TypeScript?",
+      "a": "Yes. ADK ships official SDKs for Python, TypeScript/JavaScript, Java, Go, and Kotlin. Python is the most mature as of mid-2026. The core concepts — `LlmAgent`, `SequentialAgent`, tools — are available in all languages with consistent APIs."
+    }
+  ],
+  "related": [
+    "what-is-agent-framework",
+    "choose-agent-framework",
+    "what-is-claude-agent-sdk",
+    "agent-framework-mental-models",
+    "no-code-agent-builders"
+  ],
+  "furtherReading": [
+    {
+      "title": "Google ADK official documentation",
+      "url": "https://google.github.io/adk-docs/"
+    },
+    {
+      "title": "Agent Development Kit on GitHub (Python)",
+      "url": "https://github.com/google/adk-python"
+    },
+    {
+      "title": "Google Developers Blog: ADK launch announcement",
+      "url": "https://developers.googleblog.com/en/agent-development-kit-easy-to-build-multi-agent-applications/"
+    }
+  ]
+}

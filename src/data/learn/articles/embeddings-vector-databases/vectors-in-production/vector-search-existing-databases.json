@@ -1,0 +1,368 @@
+{
+  "slug": "vector-search-existing-databases",
+  "title": "Vector Search in Elasticsearch, Redis, and MongoDB",
+  "seoTitle": "Vector Search in Elasticsearch, Redis & MongoDB",
+  "metaDescription": "Elasticsearch, OpenSearch, Redis, and MongoDB all do vector search now. Learn how their kNN features compare to dedicated vector databases.",
+  "keywords": [
+    "elasticsearch vector search knn",
+    "redis vector search explained",
+    "mongodb atlas vector search",
+    "vector search without a new database",
+    "opensearch knn vs dedicated vector db"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Use the database you already operate for embeddings — what each engine's vector support can and can't do.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "Vector Search Without a New Database",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A few years ago, adding vector search to an application meant adopting a completely new piece of infrastructure — a dedicated vector database sitting beside your existing stack. Today that is no longer true. Elasticsearch, OpenSearch, Redis, and MongoDB all ship production-grade vector search as a first-class feature, so if you are already running any of them you may already have everything you need."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like a supermarket that now sells hardware. The hardware section is real and useful — you can buy a hammer without visiting a specialist store. But a dedicated hardware store still has a wider selection, better staff knowledge, and optimised floor space. The same logic applies here: general-purpose databases have added solid vector capabilities, and for many workloads they are the right choice. For the heaviest purely-vector workloads you may still want a specialist."
+        },
+        {
+          "type": "p",
+          "md": "Each engine stores your embedding vectors alongside your existing documents, exposes a similarity-search API, and lets you combine vector ranking with metadata filters — all inside the database you already know how to operate, monitor, and back up."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why Keeping Vectors In-House Matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Adding a dedicated vector database to a production stack is not free. You pay in operational overhead (another service to deploy, monitor, and tune), in synchronisation complexity (keeping vectors in sync with the source of truth), and in latency (a cross-service hop on every query). When your vectors are colocated with the rest of your data, all three problems shrink or disappear."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Single data store** — documents and their embeddings live together, so atomic updates are straightforward and you cannot have a \"vector orphan\" pointing at a deleted document.",
+            "**Hybrid search in one query** — combine a semantic kNN clause with BM25 keyword scoring and metadata filters without fan-out to a second service.",
+            "**Familiar tooling** — existing Kibana dashboards, Redis Insight views, or MongoDB Atlas UI still work; no new observability stack to learn.",
+            "**Simpler security posture** — one service perimeter, one auth model, one network policy.",
+            "**Lower total cost of ownership** — especially for teams already paying for a managed tier of these services."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The catch is that these engines were not designed from the ground up for vector workloads, so they carry trade-offs around memory consumption, indexing throughput, and filtered-search accuracy that dedicated engines have spent more time optimising. Understanding those trade-offs is what lets you make the right call."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How Each Engine Implements Vector Search",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "All four engines use **Hierarchical Navigable Small World (HNSW)** graphs as their primary approximate nearest-neighbour (ANN) index. HNSW builds a multi-layer graph where higher layers act as fast motorways and the bottom layer contains every vector. A query navigates from a random entry point on the top layer, greedily descending towards the query vector, then refines the result on the bottom layer. This gives sub-linear query time with high recall."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "How a kNN Query Flows Through an HNSW-Backed Engine",
+            "steps": [
+              {
+                "label": "Application",
+                "sub": "sends query text + filters"
+              },
+              {
+                "label": "Embedding",
+                "sub": "text converted to float32 vector"
+              },
+              {
+                "label": "HNSW graph entry",
+                "sub": "random node on top layer"
+              },
+              {
+                "label": "Greedy descent",
+                "sub": "traverse layers toward nearest neighbours"
+              },
+              {
+                "label": "Bottom-layer refinement",
+                "sub": "final candidate set (ef_search candidates)"
+              },
+              {
+                "label": "Score & filter merge",
+                "sub": "combine ANN scores with metadata predicates"
+              },
+              {
+                "label": "Return top-k",
+                "sub": "ranked documents sent back to app"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Elasticsearch"
+        },
+        {
+          "type": "p",
+          "md": "Elasticsearch stores vectors in a `dense_vector` mapping field and indexes them with Lucene's native HNSW implementation. Since version 8.12 you can issue a `knn` clause directly in the top-level query DSL or use the newer **retriever** API. The retriever approach is preferred for hybrid search because it lets you compose a `standard` BM25 retriever with a `knn` retriever and fuse the results with Reciprocal Rank Fusion (RRF) in a single request."
+        },
+        {
+          "type": "p",
+          "md": "In Elasticsearch 9.1, **Better Binary Quantization (BBQ)** became the default index type for vectors of 384 dimensions or more. BBQ compresses each float32 dimension to a single bit plus small corrective factors, shrinking memory use by roughly 32x while preserving high recall. Elasticsearch 9.2 added **DiskBBQ**, which stores quantised vectors on disk rather than in heap, making billion-scale vector search practical without proportionally scaling RAM."
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "code": "// Elasticsearch: mapping a dense_vector field\nPUT /articles\n{\n  \"mappings\": {\n    \"properties\": {\n      \"content_embedding\": {\n        \"type\": \"dense_vector\",\n        \"dims\": 1536,\n        \"index\": true,\n        \"similarity\": \"cosine\"\n      }\n    }\n  }\n}"
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "code": "// Elasticsearch: hybrid kNN + BM25 query with RRF\nGET /articles/_search\n{\n  \"retriever\": {\n    \"rrf\": {\n      \"retrievers\": [\n        {\n          \"standard\": {\n            \"query\": { \"match\": { \"body\": \"transformer architecture\" } }\n          }\n        },\n        {\n          \"knn\": {\n            \"field\": \"content_embedding\",\n            \"query_vector\": [0.12, -0.34, 0.09],\n            \"num_candidates\": 100\n          }\n        }\n      ],\n      \"rank_window_size\": 50\n    }\n  },\n  \"size\": 10\n}"
+        },
+        {
+          "type": "h3",
+          "text": "OpenSearch"
+        },
+        {
+          "type": "p",
+          "md": "OpenSearch (the AWS-led fork of Elasticsearch) exposes vector search through its **k-NN plugin**. You declare `\"index.knn\": true` at index creation time — unlike Elasticsearch, this decision is made at the index level rather than per-field, which is a meaningful constraint. OpenSearch supports three backing engines: **Lucene** (HNSW, similar to Elasticsearch), **Faiss** (HNSW + IVF + product quantisation), and **nmslib** (deprecated). Faiss unlocks higher-dimensional vectors (up to 16,000 dims) and IVF-based indexing that can be more memory-efficient at very large scale."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "OpenSearch and Elasticsearch diverged significantly after 2021. OpenSearch's Faiss engine supports vectors up to 16,000 dimensions while Elasticsearch caps at 4,096 (as of 8.x). Elasticsearch's BBQ and DiskBBQ quantisation options have no direct OpenSearch equivalent yet."
+        },
+        {
+          "type": "h3",
+          "text": "Redis"
+        },
+        {
+          "type": "p",
+          "md": "Redis has two vector search paths. The older path, available since RediSearch 2.4, stores vectors inside a search index using either a **FLAT** (brute-force scan) or **HNSW** index type via `FT.CREATE`. The newer path, introduced in Redis 8.0, is **Vector Sets** — a native Redis data type where you add elements with `VADD` and query with `VSIM`. Vector Sets use HNSW internally and default to int8 quantisation, cutting memory roughly 4x versus float32 with minimal recall loss. Redis 8.2 added **SVS-VAMANA**, a single-layer graph algorithm that is more memory-efficient than HNSW for very large sets."
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "code": "# Redis Vector Sets: add and search\n# VADD key HNSW vector_bytes label [attributes]\nVADD articles:embeddings HNSW BLOB $vector_bytes \"doc:42\"\n\n# VSIM returns (element, score) pairs\nVSIM articles:embeddings ELE \"doc:42\" TOPK 10"
+        },
+        {
+          "type": "p",
+          "md": "Because Redis lives entirely in memory by default, vector search latency is extremely low — typically under 5 ms even for large sets. The trade-off is cost per gigabyte: storing a million 1536-dimensional float32 vectors consumes roughly 6 GB of RAM. Redis's benchmarks report ~50,000 VSIM operations per second for a million 300-dimensional int8 vectors on a single host."
+        },
+        {
+          "type": "h3",
+          "text": "MongoDB Atlas"
+        },
+        {
+          "type": "p",
+          "md": "MongoDB Atlas Vector Search uses the `$vectorSearch` aggregation stage, which must appear as the **first stage** of a pipeline (before any `$match` or `$project`). It supports both ANN (HNSW) and ENN (exact) search. ANN is the production default; ENN is available for small collections (under ~10,000 documents) where perfect recall matters more than speed. As of 2025 the dimension limit is 8,192 — up from the earlier 4,096 cap."
+        },
+        {
+          "type": "code",
+          "lang": "javascript",
+          "code": "// MongoDB Atlas: $vectorSearch aggregation pipeline\ndb.articles.aggregate([\n  {\n    $vectorSearch: {\n      index: \"content_vector_index\",\n      path: \"content_embedding\",\n      queryVector: [0.12, -0.34, 0.09],\n      numCandidates: 150,\n      limit: 10,\n      filter: { category: \"technology\" }\n    }\n  },\n  {\n    $project: {\n      title: 1,\n      score: { $meta: \"vectorSearchScore\" }\n    }\n  }\n])"
+        }
+      ]
+    },
+    {
+      "id": "engine-comparison",
+      "title": "Side-by-Side Comparison",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The table below summarises the key parameters for each engine as of mid-2026. Use it as a quick reference when deciding which engine fits your needs."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Engine",
+            "ANN Algorithm",
+            "Max Dims",
+            "Quantisation",
+            "Hybrid Search",
+            "Self-Hosted?"
+          ],
+          "rows": [
+            [
+              "Elasticsearch 9.x",
+              "HNSW (Lucene)",
+              "4,096",
+              "BBQ (default >=384d), int8, bfloat16",
+              "BM25 + kNN via RRF",
+              "Yes (also Elastic Cloud)"
+            ],
+            [
+              "OpenSearch 2.x",
+              "HNSW / FAISS IVF",
+              "16,000 (Faiss)",
+              "PQ via Faiss",
+              "BM25 + kNN via hybrid query",
+              "Yes (also AWS OpenSearch)"
+            ],
+            [
+              "Redis 8.x",
+              "HNSW / SVS-VAMANA",
+              "32,768",
+              "int8 default, binary optional",
+              "Limited (combine with FT.SEARCH)",
+              "Yes (also Redis Cloud)"
+            ],
+            [
+              "MongoDB Atlas",
+              "HNSW",
+              "8,192",
+              "Scalar quantisation (2025)",
+              "Vector + $match filter in pipeline",
+              "Atlas only (no self-hosted vector search)"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "MongoDB Atlas Vector Search requires Atlas (the managed cloud service). There is no equivalent in Community Edition that reaches production-scale ANN performance — self-managed MongoDB does not include the Atlas Search infrastructure."
+        }
+      ]
+    },
+    {
+      "id": "pitfalls-and-limits",
+      "title": "Common Pitfalls and Limits",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "Filtered Vector Search Accuracy"
+        },
+        {
+          "type": "p",
+          "md": "All four engines face the same fundamental challenge with filtered ANN: if you run an approximate search and then discard results that fail a metadata filter, you may end up with far fewer than `k` results — or even zero — even though matching documents exist. Dedicated vector databases such as Pinecone and Qdrant have invested heavily in **pre-filtering** (filter during graph traversal) versus **post-filtering** (filter after ANN). The general-purpose engines are catching up: Elasticsearch 9.1 added **ACORN** (a filter-aware graph traversal algorithm) specifically to address this, but it is worth testing your filter selectivity before committing to a production deployment."
+        },
+        {
+          "type": "h3",
+          "text": "Indexing Throughput vs. Query Throughput"
+        },
+        {
+          "type": "p",
+          "md": "HNSW indexing is CPU-intensive: building or updating the graph while also serving queries competes for cores. Redis's own benchmarks note that `VADD` throughput is \"a few thousands per second\" — far below its query throughput. Elasticsearch mitigates this by building HNSW segments in the background and merging them, at the cost of \"freshness\": newly indexed vectors are searchable within seconds, not milliseconds. If your workload involves constant high-velocity embedding ingestion with simultaneous low-latency queries, benchmark this specifically."
+        },
+        {
+          "type": "h3",
+          "text": "Memory Footprint Without Quantisation"
+        },
+        {
+          "type": "p",
+          "md": "One million vectors at 1,536 dimensions in float32 occupies roughly **6 GB of RAM** for the raw vectors alone, before HNSW graph overhead (typically 30–60% on top). Quantisation is the main lever: int8 cuts that to ~1.5 GB, BBQ cuts it to ~200 MB. Enabling quantisation should be a conscious decision with a recall regression test, not an afterthought."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Run a recall benchmark on a sample of your production queries before and after enabling quantisation. A drop from 0.99 to 0.95 top-10 recall is usually acceptable; a drop to 0.80 is not. Elasticsearch's `int8_hnsw` and `int4_hnsw` index types let you choose your memory-recall trade-off explicitly."
+        },
+        {
+          "type": "h3",
+          "text": "The $vectorSearch Must-Be-First Constraint (MongoDB)"
+        },
+        {
+          "type": "p",
+          "md": "MongoDB's `$vectorSearch` must be the first stage in the aggregation pipeline, which means you cannot pre-filter with `$match` before the vector lookup. Pre-filtering is handled by passing a `filter` document inside the `$vectorSearch` stage itself, using Atlas Search index-level filters. This is a common stumbling block when porting SQL-style \"WHERE x = y AND VECTOR_SEARCH(...)\" patterns."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going Deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you have basic vector search working inside an existing database, the next level of sophistication involves three areas: **quantisation tuning**, **hybrid retrieval fusion**, and **knowing when to migrate to a dedicated engine**."
+        },
+        {
+          "type": "h3",
+          "text": "Quantisation Tuning"
+        },
+        {
+          "type": "p",
+          "md": "Elasticsearch's BBQ (Better Binary Quantization) goes furthest: it compresses each dimension from 32 bits to 1 bit plus small corrective factors stored alongside the index. The net effect is a ~32x memory reduction with less than 5% recall loss on most embedding models. BBQ works best on high-dimensional embeddings (>=384 dims) — on lower-dimensional vectors the corrective overhead is proportionally larger. For Redis, the default int8 quantisation is a good balance; the binary (`BIN`) option halves memory again but recall drops noticeably for typical NLP embeddings."
+        },
+        {
+          "type": "h3",
+          "text": "Hybrid Retrieval Fusion Strategies"
+        },
+        {
+          "type": "p",
+          "md": "Reciprocal Rank Fusion (RRF) — natively supported in Elasticsearch and OpenSearch — is often the most robust starting point for hybrid search. It combines a BM25 ranked list with a kNN ranked list by assigning each document a score of `1 / (rank + k)` and summing across lists. This avoids the painful normalisation problem of mixing BM25 scores (unbounded) with cosine similarity scores (0–1). A 2025 benchmark on the WANDS furniture dataset found that RRF immediately outperformed either BM25 alone (0.6983 NDCG@10) or pure kNN (0.6953), reaching 0.7068 — and domain-tuned query boosting on top pushed it further to 0.7497."
+        },
+        {
+          "type": "h3",
+          "text": "When to Consider a Dedicated Vector Database"
+        },
+        {
+          "type": "p",
+          "md": "The general-purpose engines cover the majority of production use cases, but dedicated vector databases still lead in three areas:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Billion-scale vectors** — Pinecone's serverless tier and Qdrant's distributed mode are purpose-built for this; Elasticsearch's DiskBBQ closes the gap but requires careful tuning.",
+            "**Filtered search at high selectivity** — if most of your queries use filters that eliminate >90% of the corpus, dedicated engines' pre-filtering graph traversal (e.g., Qdrant's HNSW with payload indexes) consistently outperforms post-filter approaches.",
+            "**Multi-vector-per-document models** — late-interaction models like ColBERT store multiple vectors per document. Dedicated engines have native support; general-purpose databases require workarounds such as nested objects or separate index segments."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The good news is that for RAG pipelines handling up to tens of millions of chunks — the vast majority of real-world deployments — Elasticsearch, Redis, or MongoDB will handle the load cleanly while letting you avoid a second service boundary. Benchmark your specific query mix, measure recall at your target quantisation level, and only reach for a dedicated engine when the numbers demand it."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Do I need Elasticsearch Cloud or can I self-host vector search?",
+      "a": "You can self-host Elasticsearch and get full vector search support including HNSW and BBQ quantisation. The same applies to OpenSearch and Redis. The exception is MongoDB: Atlas Vector Search is a managed-only feature. Community Edition MongoDB does not include the Atlas Search infrastructure needed for production ANN search."
+    },
+    {
+      "q": "How many vectors can Elasticsearch handle before it struggles?",
+      "a": "There is no hard limit, but practical guidance is that a single shard should hold no more than a few hundred million vectors with BBQ quantisation enabled. For larger corpora, distribute across multiple shards. Elasticsearch 9.2's DiskBBQ mode stores quantised vectors on disk rather than in RAM, making billion-scale deployments feasible without proportionally scaling memory."
+    },
+    {
+      "q": "Does Redis Vector Search require a paid tier?",
+      "a": "Basic vector search via the RediSearch module and the newer Vector Sets data type are both available in open-source Redis 8.x and in Redis Cloud's free tier. More advanced features like active-active geo-replication require paid Redis Enterprise. The core `VADD` / `VSIM` commands are free and open source."
+    },
+    {
+      "q": "Can I run vector search in MongoDB without Atlas?",
+      "a": "MongoDB added `$vectorSearch` support to Community Edition as a public preview in 2025, which lowers the barrier for development and experimentation. For production-scale ANN performance, Atlas is still the recommended path because it includes the dedicated Search Nodes that isolate vector index workloads from the main `mongod` process."
+    },
+    {
+      "q": "Is OpenSearch or Elasticsearch better for vector search?",
+      "a": "It depends on your workload. Elasticsearch 9.x leads on quantisation (BBQ, DiskBBQ) and has a cleaner hybrid-search API via the retriever framework. OpenSearch's Faiss engine supports higher-dimensional vectors (up to 16,000 vs Elasticsearch's 4,096) and offers IVF-based indexing that can be more memory-efficient at very large scale. An independent March 2025 Trail of Bits benchmark found OpenSearch v2.17 was about 11% faster than Elasticsearch v8.15 on a vector workload, though Elastic's own benchmarks show the reverse."
+    },
+    {
+      "q": "What happens to recall when I enable quantisation?",
+      "a": "Typical results: int8 quantisation drops top-10 recall by 1–3% versus float32; BBQ drops it by 3–6% on well-conditioned embeddings (>=384 dims). Always measure on a representative sample of your own queries before enabling quantisation in production — different embedding models and query distributions have different sensitivity. Elasticsearch lets you store the original float32 vectors alongside the quantised index (`store: true`) so you can re-score the top candidates with exact distances after the ANN pass."
+    }
+  ],
+  "related": [
+    "what-are-embeddings",
+    "how-text-embeddings-work",
+    "what-is-semantic-search",
+    "cosine-similarity-vs-dot-product",
+    "how-to-choose-embedding-model"
+  ],
+  "furtherReading": [
+    {
+      "title": "elastic.co — Elasticsearch 9 1 Bbq Acorn Vector Search",
+      "url": "https://www.elastic.co/search-labs/blog/elasticsearch-9-1-bbq-acorn-vector-search"
+    },
+    {
+      "title": "redis.io — Vector Sets",
+      "url": "https://redis.io/docs/latest/develop/data-types/vector-sets/"
+    },
+    {
+      "title": "mongodb.com — Vector Search Overview",
+      "url": "https://www.mongodb.com/docs/atlas/atlas-vector-search/vector-search-overview/"
+    }
+  ]
+}

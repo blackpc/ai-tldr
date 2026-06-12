@@ -1,0 +1,446 @@
+{
+  "slug": "connect-first-mcp-server",
+  "title": "How to Connect Your First MCP Server",
+  "seoTitle": "How to Connect Your First MCP Server",
+  "metaDescription": "A step-by-step beginner guide to connecting an MCP server to Claude or another AI app: install it, configure it, and call your first MCP tool.",
+  "keywords": [
+    "how to connect mcp server",
+    "add mcp server to claude",
+    "mcp server setup tutorial",
+    "mcp configuration json example",
+    "install mcp server beginner"
+  ],
+  "difficulty": "beginner",
+  "oneLiner": "Go from zero to a working MCP connection: install a server, point your AI app at it, and watch the model call its first MCP tool.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "An **MCP server** is a small program that wraps a capability — your local files, a GitHub account, a database — and exposes it to any AI app over the Model Context Protocol. Once connected, the AI app can discover every tool the server offers and call them automatically during a conversation."
+        },
+        {
+          "type": "p",
+          "md": "The best analogy is a **printer driver**. When you plug in a new printer, you install a small driver that tells your operating system what the printer can do. After that, every app on your computer can print without knowing anything about the hardware. An MCP server is the driver; the AI host (Claude Desktop, VS Code, Cursor) is the operating system; the tools inside the server are the printer commands."
+        },
+        {
+          "type": "p",
+          "md": "This article walks you through the connection side — you pick a server that already exists, point your AI app at it with a few lines of JSON, restart, and start calling its tools. If you want to *build* a server from scratch instead, see the companion article on building MCP servers."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "No coding is required for this guide. You will edit one JSON config file and run one install command. The server itself is a published package someone else wrote — you are just wiring it up."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why connecting an MCP server matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "AI models are powerful reasoners that are, by default, completely isolated. They cannot read your files, query your calendar, hit a live API, or open a pull request. Every useful thing a model does *outside* pure text generation requires a bridge to the real world — and MCP is now the standard way to build that bridge."
+        },
+        {
+          "type": "p",
+          "md": "Before MCP, every AI app vendor built its own connector for each service. Connecting the same GitHub account to three different AI tools meant setting up three separate integrations. MCP collapses that: **one server, every compatible host**. You configure the filesystem server once and it works in Claude Desktop, VS Code Copilot, Cursor, and any other host that speaks MCP."
+        },
+        {
+          "type": "p",
+          "md": "For a builder, this matters because the gap between a demo and a useful agent is almost always the tools. A model that can actually read your codebase, check a live API, or write to a file is orders of magnitude more useful than one that cannot. Connecting your first MCP server is the fastest way to feel that difference."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Immediate capability boost** — the model gains real tools without you writing any server code",
+            "**Reusable across hosts** — one config works wherever MCP is supported",
+            "**Community ecosystem** — hundreds of pre-built servers exist for GitHub, Slack, Postgres, Google Drive, and more",
+            "**Foundation for agents** — every agent that does real work needs at least one MCP server behind it"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How the connection works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you add an MCP server entry to your host's config file, the host launches the server as a **child process** (for local servers) or opens an HTTP connection (for remote servers). The two sides speak **JSON-RPC 2.0** — a simple message format where every request has an `id`, a `method`, and optional `params`, and every response echoes the `id` back with a `result` or `error`."
+        },
+        {
+          "type": "p",
+          "md": "The handshake is automatic. On startup the host sends an `initialize` request; the server replies with the protocol version it supports and a list of its capabilities. The host then sends `tools/list` to discover every tool the server exposes — name, description, and JSON Schema for the parameters. From that point on the model can call any tool by name whenever it decides one is needed."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "What happens when Claude calls an MCP tool",
+            "steps": [
+              {
+                "label": "User message arrives",
+                "sub": "\"List the files in my project folder\""
+              },
+              {
+                "label": "Host sends tools/list",
+                "sub": "Discovers available MCP tools on startup"
+              },
+              {
+                "label": "Model decides to call a tool",
+                "sub": "Picks list_directory from the filesystem server"
+              },
+              {
+                "label": "Host sends tools/call",
+                "sub": "JSON-RPC request with tool name + arguments"
+              },
+              {
+                "label": "Server executes the tool",
+                "sub": "Reads the directory, returns a file listing"
+              },
+              {
+                "label": "Result injected into context",
+                "sub": "Model sees the file list and writes its reply"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "For local servers the default transport is **stdio** — the host writes JSON-RPC messages to the server's standard input and reads responses from standard output. This is why the config asks for a `command` and `args`: the host needs to know how to start the process. For remote servers the transport switches to HTTP with Server-Sent Events or Streamable HTTP, and the config provides a `url` instead."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The model never directly touches the MCP server. The **host** (Claude Desktop, VS Code, etc.) manages the process, translates between the model's tool-call requests and JSON-RPC messages, and hands results back to the model as context. The model just sees tool names and results."
+        }
+      ]
+    },
+    {
+      "id": "step-by-step-setup",
+      "title": "Step-by-step: connecting the filesystem server to Claude Desktop",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The **filesystem MCP server** (`@modelcontextprotocol/server-filesystem`) is the standard first server to connect. It lets Claude read directory listings, read file contents, and write files — all scoped to whichever folders you allow. It ships as an npm package, so it runs with `npx` and needs no global install."
+        },
+        {
+          "type": "h3",
+          "text": "1. Prerequisites"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Claude Desktop** installed and signed in (download from claude.ai/download)",
+            "**Node.js 18+** installed — `node --version` in a terminal should print v18 or higher",
+            "A text editor that can edit JSON files (Notepad, VS Code, anything)"
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "On macOS, Node.js is easiest to install via [Homebrew](https://brew.sh): `brew install node`. On Windows, grab the LTS installer from nodejs.org. After install, open a new terminal and confirm `node --version` works before continuing."
+        },
+        {
+          "type": "h3",
+          "text": "2. Open the config file"
+        },
+        {
+          "type": "p",
+          "md": "In Claude Desktop, open **Settings** (gear icon), go to the **Developer** tab, and click **Edit Config**. This opens your `claude_desktop_config.json` file in your default text editor. The file location differs by OS:"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "OS",
+            "Config file path"
+          ],
+          "rows": [
+            [
+              "macOS",
+              "~/Library/Application Support/Claude/claude_desktop_config.json"
+            ],
+            [
+              "Windows",
+              "%APPDATA%\\Claude\\claude_desktop_config.json"
+            ]
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "3. Add the server entry"
+        },
+        {
+          "type": "p",
+          "md": "Replace the entire file contents with the JSON below (or merge the `mcpServers` block into your existing config if you already have other servers). Swap `/Users/yourname/projects` for an actual folder you want Claude to access:"
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "code": "{\n  \"mcpServers\": {\n    \"filesystem\": {\n      \"command\": \"npx\",\n      \"args\": [\n        \"-y\",\n        \"@modelcontextprotocol/server-filesystem\",\n        \"/Users/yourname/projects\"\n      ]\n    }\n  }\n}"
+        },
+        {
+          "type": "p",
+          "md": "On Windows, use a Windows-style path such as `C:\\\\Users\\\\yourname\\\\projects`. You can list multiple folders by appending more path arguments after the first one — each becomes an allowed root the server can access."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "JSON is strict: one trailing comma, one unmatched bracket, or one unescaped backslash breaks the whole file and Claude Desktop will refuse to start. Use a JSON validator (like [jsonlint.com](https://jsonlint.com)) if you are unsure."
+        },
+        {
+          "type": "h3",
+          "text": "4. Restart Claude Desktop completely"
+        },
+        {
+          "type": "p",
+          "md": "Save the config file, then **fully quit** Claude Desktop — do not just close the window. On macOS use Cmd+Q or right-click the dock icon and choose Quit. On Windows, right-click the system tray icon and choose Exit. Then reopen it. Claude Desktop only reads the config on startup."
+        },
+        {
+          "type": "h3",
+          "text": "5. Verify the connection"
+        },
+        {
+          "type": "p",
+          "md": "After restarting, look for a **hammer icon** (tools) in the bottom-left of the chat input box. Click it to see a list of connected MCP tools — you should see entries like `list_directory`, `read_file`, and `write_file` under the `filesystem` server. If the icon is absent or the server shows an error badge, check the troubleshooting section below."
+        },
+        {
+          "type": "h3",
+          "text": "6. Call your first tool"
+        },
+        {
+          "type": "p",
+          "md": "Type a prompt that naturally requires the filesystem: *\"List the files in my projects folder.\"* Claude will call `list_directory` automatically, show you the result, and continue the conversation with that context in place. You just watched the model use an MCP tool."
+        }
+      ]
+    },
+    {
+      "id": "other-hosts-and-servers",
+      "title": "Other hosts and popular servers",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Claude Desktop is the most common starting point, but MCP is supported across several hosts. The config structure is nearly identical in each — you are always providing a server name, a `command`/`args` (or `url`), and optional environment variables."
+        },
+        {
+          "type": "h3",
+          "text": "VS Code (GitHub Copilot Chat)"
+        },
+        {
+          "type": "p",
+          "md": "Create a file at `.vscode/mcp.json` in your workspace (or edit the global user `mcp.json`). The key difference is that VS Code uses `\"servers\"` instead of `\"mcpServers\"` at the top level:"
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "code": "{\n  \"servers\": {\n    \"filesystem\": {\n      \"command\": \"npx\",\n      \"args\": [\n        \"-y\",\n        \"@modelcontextprotocol/server-filesystem\",\n        \"${workspaceFolder}\"\n      ]\n    }\n  }\n}"
+        },
+        {
+          "type": "h3",
+          "text": "Passing API keys securely"
+        },
+        {
+          "type": "p",
+          "md": "Many servers (GitHub, Slack, Notion) need an API token. Pass it in the `env` block of the server config — never hardcode it in `args` where it might end up in logs:"
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "code": "{\n  \"mcpServers\": {\n    \"github\": {\n      \"command\": \"npx\",\n      \"args\": [\"-y\", \"@modelcontextprotocol/server-github\"],\n      \"env\": {\n        \"GITHUB_PERSONAL_ACCESS_TOKEN\": \"ghp_yourtoken\"\n      }\n    }\n  }\n}"
+        },
+        {
+          "type": "h3",
+          "text": "Popular ready-to-use servers"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Server",
+            "npm / PyPI package",
+            "What it gives the model"
+          ],
+          "rows": [
+            [
+              "Filesystem",
+              "@modelcontextprotocol/server-filesystem",
+              "Read, write, and list local files"
+            ],
+            [
+              "GitHub",
+              "@modelcontextprotocol/server-github",
+              "Repos, issues, PRs, file contents"
+            ],
+            [
+              "Fetch (web)",
+              "@modelcontextprotocol/server-fetch",
+              "Fetch any public URL as Markdown"
+            ],
+            [
+              "Memory",
+              "@modelcontextprotocol/server-memory",
+              "Persistent key-value store across conversations"
+            ],
+            [
+              "Postgres",
+              "@modelcontextprotocol/server-postgres",
+              "Query a Postgres database with natural language"
+            ],
+            [
+              "Time",
+              "mcp-server-time (Python/uvx)",
+              "Current time and timezone conversions"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Python-based servers use `uvx` instead of `npx` as the command. Install `uv` first (`pip install uv` or the official install script), then use `\"command\": \"uvx\"` with the PyPI package name in `args`."
+        }
+      ]
+    },
+    {
+      "id": "troubleshooting",
+      "title": "Troubleshooting common connection problems",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Most MCP connection failures fall into one of four categories: the binary cannot be found, the JSON config has a syntax error, an environment variable is missing, or the host was not fully restarted. Work through this checklist before diving deeper."
+        },
+        {
+          "type": "h3",
+          "text": "Server shows an error badge or does not appear"
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Check the JSON syntax.** Open the config file and paste it into jsonlint.com. Even a single trailing comma causes a silent failure.",
+            "**Verify Node.js is in PATH.** Open a *new* terminal (not one already open before install) and run `node --version`. On macOS with nvm, the GUI app may not inherit your shell PATH — use the full path to `npx` instead, e.g. `/usr/local/bin/npx`.",
+            "**Fully quit and restart the host.** Closing the window is not enough — the process must exit entirely before it re-reads the config.",
+            "**Run the server command manually.** Copy the `command` and `args` from your config and run them in a terminal. Any error printed to the terminal is the real error — not a vague badge."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Server connects but no tools appear"
+        },
+        {
+          "type": "p",
+          "md": "The server started successfully but the `tools/list` handshake returned nothing. This usually means a missing API key (the server authenticated but has no scope), a version mismatch between the server and the host's protocol version, or a server that only exposes resources and prompts (not tools). Check the server's README for required environment variables and minimum SDK versions."
+        },
+        {
+          "type": "h3",
+          "text": "\"spawn ENOENT\" error"
+        },
+        {
+          "type": "p",
+          "md": "`ENOENT` means the host could not find the executable named in `command`. On macOS this is almost always a PATH problem: the GUI app does not run your `.zshrc` or `.bashrc`, so `npx` is not on its PATH. Fix: run `which npx` in your terminal and use that full path (e.g. `/opt/homebrew/bin/npx`) in your config."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The **MCP Inspector** is an official debugging tool that lets you connect directly to any MCP server and call `tools/list` from a browser UI — isolating whether the problem is the server or the host config. Install it with `npx @modelcontextprotocol/inspector`."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you have a server running and tools responding, a few natural next steps open up:"
+        },
+        {
+          "type": "h3",
+          "text": "Add more servers"
+        },
+        {
+          "type": "p",
+          "md": "The `mcpServers` object accepts as many entries as you like. Each key is the server's display name in the host UI; each value is its config. Servers run in parallel as separate processes and do not interfere with each other. Add a GitHub server, a database server, and a web-fetch server alongside your filesystem server and the model gains all of them at once."
+        },
+        {
+          "type": "h3",
+          "text": "Remote (HTTP) servers"
+        },
+        {
+          "type": "p",
+          "md": "Local stdio servers run on your machine and are private. Remote HTTP servers are hosted services any client can reach over a URL. Many SaaS vendors now publish public MCP endpoints. For these you provide a `url` key instead of `command`/`args`, and the host connects over HTTP rather than spawning a process. VS Code and Cursor support both; Claude Desktop (as of mid-2026) supports remote servers through the Extensions directory."
+        },
+        {
+          "type": "h3",
+          "text": "Resources and prompts"
+        },
+        {
+          "type": "p",
+          "md": "Tools are the most visible MCP primitive but not the only one. **Resources** are file-like data the model can read — think documentation pages, database rows, or config files exposed as MCP URIs rather than tool calls. **Prompts** are parameterized templates the host can inject at conversation start. Many servers expose all three; the host's UI shows each type separately."
+        },
+        {
+          "type": "h3",
+          "text": "Building your own server"
+        },
+        {
+          "type": "p",
+          "md": "Every internal system, proprietary API, or custom workflow that does not have a published MCP server is an opportunity to write one. The official Python SDK (`mcp` on PyPI) and TypeScript SDK (`@modelcontextprotocol/sdk` on npm) make it straightforward — you define tools as decorated functions, call `server.run()`, and the SDK handles all the JSON-RPC machinery. The companion article on building MCP servers walks through this in detail."
+        },
+        {
+          "type": "h3",
+          "text": "Security considerations"
+        },
+        {
+          "type": "p",
+          "md": "Every MCP server you connect expands the surface the model can act on. A few rules of thumb: scope filesystem servers to the *minimum* folders the model needs, not your entire home directory; rotate API tokens regularly and store them in `env` blocks rather than `args`; review what each server's tools actually do before connecting it — a server that can delete files or push to production can cause real damage if the model misunderstands a request."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Do I need to know how to code to connect an MCP server?",
+      "a": "No. Connecting a published MCP server only requires editing a JSON config file — one block with a server name, a command, and some arguments. The hard part (writing the server) was done by whoever published the package. If you can edit a text file and run a terminal command, you can connect an MCP server."
+    },
+    {
+      "q": "Why does Claude Desktop need to be fully restarted after editing the config?",
+      "a": "Claude Desktop reads `claude_desktop_config.json` once on startup and launches each MCP server as a child process at that time. Editing the file while the app is running has no effect — the old processes keep running and the new config is ignored until the next startup. A full quit (not just closing the window) is required."
+    },
+    {
+      "q": "What is the difference between npx and uvx for MCP servers?",
+      "a": "`npx` is the runner for JavaScript/TypeScript packages published on npm. `uvx` is the Python equivalent — it is part of the `uv` package manager and runs Python packages from PyPI without a global install. Use `npx` for servers with `@modelcontextprotocol/server-*` package names; use `uvx` for servers documented as PyPI packages. Both are zero-install runners — they download the package on first use."
+    },
+    {
+      "q": "Can I connect more than one MCP server at the same time?",
+      "a": "Yes. The `mcpServers` object in your config is a map — add as many entries as you need. Each runs as a separate process. The model sees all their tools combined and can call any of them. There is no hard limit, though very large numbers of tools can push more tokens into the model's context window."
+    },
+    {
+      "q": "What should I do if the server connects but the model never uses its tools?",
+      "a": "First confirm the tools are visible: click the hammer icon in Claude Desktop and check the tool list. If tools appear but the model ignores them, your prompt may not be phrasing the task in a way that triggers tool use. Try being explicit: *\"Use the filesystem server to list the files in my projects folder.\"* Also check whether the model has permission to use tools — some hosts require you to explicitly enable tool use per conversation."
+    },
+    {
+      "q": "Is it safe to give an MCP server access to my entire home directory?",
+      "a": "It is not recommended. Scope the filesystem server to only the specific folders the model needs for your task. The model can misinterpret a request and issue a destructive tool call — for example, deleting a file it thinks is a duplicate. Limiting the allowed roots to a project folder is a simple guardrail that prevents most accidents."
+    }
+  ],
+  "related": [
+    "what-is-an-ai-agent",
+    "do-you-need-an-agent",
+    "agentic-workflow-patterns"
+  ],
+  "furtherReading": [
+    {
+      "title": "Connect to local MCP servers — Model Context Protocol official docs",
+      "url": "https://modelcontextprotocol.io/docs/develop/connect-local-servers"
+    },
+    {
+      "title": "Getting Started with Local MCP Servers on Claude Desktop — Claude Help Center",
+      "url": "https://support.claude.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop"
+    },
+    {
+      "title": "modelcontextprotocol/servers — official reference server implementations on GitHub",
+      "url": "https://github.com/modelcontextprotocol/servers"
+    }
+  ]
+}

@@ -1,0 +1,454 @@
+{
+  "slug": "production-llm-stack",
+  "title": "What Does a Production LLM Stack Look Like? A Reference Architecture",
+  "seoTitle": "Production LLM Stack: A Reference Architecture",
+  "metaDescription": "A reference architecture for production LLM apps: gateway, cache, observability, evals, and guardrails — what each layer does and when you need it.",
+  "keywords": [
+    "production llm stack architecture",
+    "llm app reference architecture",
+    "llm infrastructure components",
+    "what does a production llm system look like"
+  ],
+  "difficulty": "beginner",
+  "oneLiner": "See the full layered architecture of a production LLM app and understand what each layer is for and when to add it.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A **production LLM stack** is all the infrastructure that sits around your language model so it can reliably serve real users at scale. The model itself — GPT-4o, Claude, Llama, or any other — is actually a small part of the picture. What surrounds it does most of the heavy lifting."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like a commercial kitchen. The chef (the LLM) is the talent, but without the pass-through window (gateway), the ticket system (observability), the refrigerators (cache), the health inspector (guardrails), and the recipe testing process (evals), you cannot run a restaurant. You can have the world's best chef and still produce an inconsistent, expensive, unreliable dining experience if the kitchen infrastructure is missing."
+        },
+        {
+          "type": "p",
+          "md": "On day one of a side project, you need almost none of this: call the model API directly, ship the feature, see if anyone cares. But the moment you have real users, real costs, or real consequences for a bad output, each layer of the production stack starts earning its place."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The stack is not a checklist to implement all at once. It is a growth path — start with direct API calls, then add layers as specific pain points emerge."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Moving from a prototype to production exposes a cluster of problems that do not exist in demos. Understanding the full stack helps you anticipate those problems before they hit users."
+        },
+        {
+          "type": "h3",
+          "text": "Cost surprise"
+        },
+        {
+          "type": "p",
+          "md": "LLM API costs scale with token volume, and token volume grows non-linearly as features get added — longer system prompts, retrieval context, multi-turn history. Without a caching layer and per-request cost tracking, a single viral day can generate an unexpected four-figure bill. Semantic caching alone can eliminate 15–30% of API calls for typical conversational workloads."
+        },
+        {
+          "type": "h3",
+          "text": "Reliability gaps"
+        },
+        {
+          "type": "p",
+          "md": "Provider APIs go down. Rate limits get hit. Model versions get deprecated. Without a gateway that handles failover and retry logic, any of these events becomes a user-facing outage. The gateway is the reliability buffer between your app and the non-deterministic world of hosted model providers."
+        },
+        {
+          "type": "h3",
+          "text": "Silent quality degradation"
+        },
+        {
+          "type": "p",
+          "md": "Prompts drift. Model providers silently update their underlying models. A change in retrieval logic can degrade answer quality without raising an error. Without continuous evaluation, you discover quality regressions from user complaints — which is always too late."
+        },
+        {
+          "type": "h3",
+          "text": "Safety and compliance"
+        },
+        {
+          "type": "p",
+          "md": "In any customer-facing product, the LLM can be prompted by adversarial users. Guardrails intercept prompt injections, block policy-violating outputs, and strip PII before it reaches the model — work that provider-level content filters do not fully cover."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A mature production LLM stack has six distinct layers. A request from your app travels through all of them on the way to the model and back. Each layer can be a hosted service, an open-source library, or a thin wrapper you write yourself."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "stack",
+            "title": "Production LLM Stack (top = request entry, bottom = model)",
+            "layers": [
+              {
+                "label": "Your Application",
+                "sub": "chat UI, API endpoint, agent loop"
+              },
+              {
+                "label": "LLM Gateway",
+                "sub": "routing, auth, rate limits, failover"
+              },
+              {
+                "label": "Cache Layer",
+                "sub": "semantic cache + provider prefix cache"
+              },
+              {
+                "label": "Guardrails",
+                "sub": "input validation, PII stripping, output checks"
+              },
+              {
+                "label": "Retrieval / Memory",
+                "sub": "vector search, conversation history, tool results"
+              },
+              {
+                "label": "Observability",
+                "sub": "traces, metrics, cost, latency"
+              },
+              {
+                "label": "Model Provider(s)",
+                "sub": "OpenAI, Anthropic, self-hosted, etc."
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Layer 1: The LLM Gateway"
+        },
+        {
+          "type": "p",
+          "md": "The **gateway** is a single API endpoint your application calls instead of calling model providers directly. It handles authentication (your app never touches raw provider API keys), rate limiting, per-customer spend budgets, intelligent routing (send cheap tasks to a small model, complex ones to a large model), and automatic failover when a provider goes down. Purpose-built LLM gateways like Portkey, LiteLLM, and OpenRouter typically add only 2–20ms of latency, which is negligible against 500–2000ms LLM response times."
+        },
+        {
+          "type": "h3",
+          "text": "Layer 2: The Cache Layer"
+        },
+        {
+          "type": "p",
+          "md": "There are two distinct caching mechanisms, and they operate at different levels:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Semantic cache** — compares the incoming prompt against past prompts using vector similarity. If a new request is semantically equivalent to a cached one (above a cosine-similarity threshold), the stored response is returned in 3–8ms instead of making a full LLM call. Studies of production workloads show 15–31% of queries qualify for semantic cache hits.",
+            "**Provider prefix cache** — operates inside the model provider's inference infrastructure. Long, repeated prefixes (system prompts, document context) are kept in the provider's KV cache across requests. Anthropic's prefix caching delivers up to 90% cost reduction and 85% latency reduction for long prompts; OpenAI's automatic caching saves 50% on cached input tokens."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Layer 3: Guardrails"
+        },
+        {
+          "type": "p",
+          "md": "Guardrails run on every request — both the user input (input rails) and the model's response (output rails). Common open-source tools include NVIDIA's **NeMo Guardrails** (a Colang-based DSL for defining conversational policies), **Llama Guard 4** (a 12B-parameter safety classifier from Meta for content moderation on both text and images), and **Guardrails AI** (an output validation and correction library). Many teams also run Microsoft Presidio at ingress to detect and strip PII before it reaches the model."
+        },
+        {
+          "type": "h3",
+          "text": "Layer 4: Retrieval and Memory"
+        },
+        {
+          "type": "p",
+          "md": "Most production apps need context the base model does not have: company documents, conversation history, user data, tool results. This layer handles the retrieval-augmented generation (RAG) pipeline — embedding queries, searching a vector store, and assembling the retrieved context into the prompt. Conversation memory management also lives here: deciding how much history to retain and how to compress it as context windows fill up."
+        },
+        {
+          "type": "h3",
+          "text": "Layer 5: Observability"
+        },
+        {
+          "type": "p",
+          "md": "Every request generates a trace: the full prompt, model response, latency, token counts, and cost. Aggregate traces become dashboards — P50/P99 latency, error rates, spend per user, and regression alerts. Tools like **Langfuse** (open-source, self-hostable, 50K free events/month on cloud), **LangSmith** (tight LangChain integration, 5K free traces/month), and **Helicone** (proxy-based, zero-SDK setup, 100K free requests/month) all serve this role."
+        },
+        {
+          "type": "h3",
+          "text": "Layer 6: Evals"
+        },
+        {
+          "type": "p",
+          "md": "Evals are the automated test suite for your LLM feature. They run on a labeled dataset of prompt-response pairs and measure correctness, tone, safety, and task-specific quality. Evals catch quality regressions when you change a model, update a prompt, or modify retrieval logic — the same role unit tests play for regular code. Frameworks like Braintrust, Deepeval, and the built-in eval tooling in LangSmith all provide structured pipelines for running and scoring eval suites."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Request lifecycle through the production stack",
+            "steps": [
+              {
+                "label": "User sends prompt",
+                "sub": "from app / chat UI"
+              },
+              {
+                "label": "Gateway checks auth + limits",
+                "sub": "rate limit, budget, routing decision"
+              },
+              {
+                "label": "Cache lookup",
+                "sub": "return hit in <10ms, or continue"
+              },
+              {
+                "label": "Input guardrails",
+                "sub": "PII strip, injection detect, policy check"
+              },
+              {
+                "label": "Retrieval",
+                "sub": "vector search, history, tool calls"
+              },
+              {
+                "label": "LLM call",
+                "sub": "provider API or self-hosted model"
+              },
+              {
+                "label": "Output guardrails",
+                "sub": "safety classify, schema validate"
+              },
+              {
+                "label": "Trace logged",
+                "sub": "latency, tokens, cost, response"
+              },
+              {
+                "label": "Response returned to user",
+                "sub": ""
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "when-to-add-each-layer",
+      "title": "When to add each layer",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Not every team needs the full stack on day one. The right time to add each layer is when the pain it solves becomes concrete."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Layer",
+            "Add it when...",
+            "Skip for now if..."
+          ],
+          "rows": [
+            [
+              "Gateway",
+              "You use more than one model provider, or a provider outage would hurt your business",
+              "Single provider, low traffic, outage is tolerable"
+            ],
+            [
+              "Semantic cache",
+              "Your workload has many similar or repeated prompts (support bots, FAQ assistants)",
+              "Every prompt is unique (creative writing, code generation)"
+            ],
+            [
+              "Provider prefix cache",
+              "You have a long system prompt or large document context repeated across calls",
+              "Short prompts with no repeated prefix"
+            ],
+            [
+              "Guardrails",
+              "You have a public-facing product or handle sensitive data",
+              "Internal tool with trusted users only"
+            ],
+            [
+              "Retrieval / RAG",
+              "The model needs facts it was not trained on (your docs, recent data)",
+              "General-purpose chat where base model knowledge is enough"
+            ],
+            [
+              "Observability",
+              "You want to debug quality issues or track cost by customer",
+              "Local dev / early prototype stage"
+            ],
+            [
+              "Evals",
+              "You are about to change the model, prompt, or retrieval logic",
+              "Still in initial prompt iteration"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "**Minimum viable production stack**: direct API call + basic observability (even just logging prompts and responses to a file) + a simple output validator. You can get surprisingly far before needing everything else."
+        }
+      ]
+    },
+    {
+      "id": "tools-at-each-layer",
+      "title": "Common tools at each layer",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The LLM tooling ecosystem is young and moves fast. The table below shows the most widely adopted options as of mid-2026, with brief notes on their positioning."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Layer",
+            "Open-source / self-host",
+            "Hosted / managed"
+          ],
+          "rows": [
+            [
+              "Gateway",
+              "LiteLLM (Python, 100+ provider integrations)",
+              "Portkey, OpenRouter, Requesty"
+            ],
+            [
+              "Semantic cache",
+              "GPTCache, Redis with vector index",
+              "Portkey cache, LiteLLM cache"
+            ],
+            [
+              "Guardrails",
+              "NeMo Guardrails, Guardrails AI, Presidio, Llama Guard 4",
+              "Lakera Guard, Galileo Luna guardrails"
+            ],
+            [
+              "Vector store / RAG",
+              "Chroma, Qdrant, pgvector, Weaviate",
+              "Pinecone, Weaviate Cloud, MongoDB Atlas Vector"
+            ],
+            [
+              "Observability",
+              "Langfuse, Phoenix (Arize)",
+              "LangSmith, Helicone, Braintrust"
+            ],
+            [
+              "Evals",
+              "Deepeval, RAGAS, promptfoo",
+              "Braintrust, LangSmith Evals, Confident AI"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Many teams combine a proxy-based gateway (e.g., Portkey) for routing/caching with a separate observability tool (e.g., Langfuse) for deep tracing. Gateway tools log aggregate metrics; tracing tools capture the full prompt tree of multi-step agent calls."
+        },
+        {
+          "type": "h3",
+          "text": "The gateway-as-control-plane pattern"
+        },
+        {
+          "type": "p",
+          "md": "A popular architectural pattern is to treat the gateway as the central control plane for everything except tracing. Routing, caching, budget enforcement, and basic guardrails all flow through one gateway process. Observability is wired as a side-channel (webhook, SDK callback, or proxy mirror) so it does not add latency to the critical path. Evals run offline in CI/CD, not in the hot path."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "As your stack matures, a few more concerns emerge that the basic reference architecture does not address."
+        },
+        {
+          "type": "h3",
+          "text": "Model routing and cost tiers"
+        },
+        {
+          "type": "p",
+          "md": "Not all requests need the same model. A well-designed gateway can route by intent classification: send simple factual lookups to a cheap small model (e.g., GPT-4o mini), escalate complex reasoning to a frontier model only when needed. This tiered routing can cut per-request costs by 60–80% on mixed-complexity workloads without a visible quality change to users."
+        },
+        {
+          "type": "h3",
+          "text": "Agent loops and multi-step tracing"
+        },
+        {
+          "type": "p",
+          "md": "When your LLM feature becomes an *agent* — calling tools, spawning sub-agents, running loops — the flat request/response model breaks down. You need traces that capture the whole tree: which tool calls were made, how long each step took, where costs accumulated. OpenTelemetry-compatible tracing (which Langfuse, Phoenix, and LangSmith all support) is the right foundation here."
+        },
+        {
+          "type": "h3",
+          "text": "Prompt versioning and rollback"
+        },
+        {
+          "type": "p",
+          "md": "Prompts are code. They should live in version control, have a deployment process, and be rollback-able. A prompt change that degrades quality can be harder to detect than a code bug — it passes all type-checks and unit tests — so pairing prompt deployments with an eval run before rollout is the production-grade pattern."
+        },
+        {
+          "type": "h3",
+          "text": "Self-hosted vs. managed models"
+        },
+        {
+          "type": "p",
+          "md": "For high-volume or privacy-sensitive workloads, self-hosting an open model (via vLLM, Ollama, or TGI on your own GPUs or a cloud GPU provider) can reduce cost and eliminate provider dependency. The vLLM Production Stack project provides a Kubernetes-native reference implementation with a request router that maximises KV cache reuse across a cluster of model replicas. Self-hosting shifts ops burden from the gateway to the inference infrastructure but removes per-token API cost entirely above your fixed GPU cost."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Self-hosting a model does not remove the need for a gateway — you still need routing, rate limiting, and observability. It just changes what sits behind the gateway."
+        },
+        {
+          "type": "h3",
+          "text": "Continuous evals in CI/CD"
+        },
+        {
+          "type": "p",
+          "md": "The gold standard for production LLM quality is running your eval suite automatically on every pull request that changes a prompt, retrieval configuration, or model version. This surfaces regressions before deployment, the same way automated tests do for regular code. The eval suite grows over time: every production bug that slips through becomes a new test case."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Do I need all these layers for a simple LLM chatbot?",
+      "a": "No. A simple chatbot calling a single provider directly with basic logging is a legitimate production setup for low-traffic or internal tools. The full stack is the *destination* as you scale, not the starting point. Add layers when the specific pain they solve (cost, reliability, safety, quality) becomes real for your use case."
+    },
+    {
+      "q": "What is the difference between a gateway and an observability tool?",
+      "a": "A gateway sits on the critical path of every request and enforces routing, rate limits, caching, and failover in real time. An observability tool records what happened and lets you analyze it later. Some gateways include basic logging (making them also observability tools), but deep tracing of multi-step agent calls usually requires a dedicated observability layer."
+    },
+    {
+      "q": "Does adding a gateway increase latency?",
+      "a": "Purpose-built LLM gateways typically add 2–20ms of overhead, which is negligible against LLM response times of 500ms to several seconds. Cache hits actually reduce overall latency dramatically because they skip the LLM call entirely — a semantic cache hit returns in 3–8ms."
+    },
+    {
+      "q": "What is semantic caching and how is it different from regular caching?",
+      "a": "Regular caching requires an exact match on the request key. Semantic caching uses vector similarity to find *functionally equivalent* past prompts — so 'What is the capital of France?' and 'Tell me the capital city of France' both hit the same cache entry. It is built on a vector index and uses a configurable cosine-similarity threshold to decide what counts as a match."
+    },
+    {
+      "q": "What are LLM guardrails and are they the same as provider content filters?",
+      "a": "Provider content filters (e.g., OpenAI's moderation API) are coarse-grained and applied by the provider before your app receives a response. Application-level guardrails are more granular: they enforce *your* policies, strip PII before the prompt reaches the model, detect prompt injection attacks, validate that outputs match an expected schema, and can block specific topics or formats. You need both for a comprehensive safety layer."
+    },
+    {
+      "q": "When should I start running evals?",
+      "a": "The best time is before you make your first model or prompt change. Even a small eval set of 20–50 hand-labeled examples lets you detect regressions early. The practical trigger is: the moment you are considering changing the model, rewriting a prompt, or modifying retrieval logic, create the eval set first so you can measure the impact of the change."
+    }
+  ],
+  "related": [
+    "what-is-llmops",
+    "what-is-llm-observability",
+    "what-are-llm-guardrails",
+    "semantic-caching-llm",
+    "what-are-llm-evals"
+  ],
+  "furtherReading": [
+    {
+      "title": "Emerging Architectures for LLM Applications — a16z",
+      "url": "https://a16z.com/emerging-architectures-for-llm-applications/"
+    },
+    {
+      "title": "LLM Gateway: What It Is and How to Choose One — OpenRouter",
+      "url": "https://openrouter.ai/blog/insights/llm-gateway/"
+    },
+    {
+      "title": "The Complete Guide to LLM Observability — Portkey",
+      "url": "https://portkey.ai/blog/the-complete-guide-to-llm-observability/"
+    }
+  ]
+}

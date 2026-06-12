@@ -1,0 +1,364 @@
+{
+  "slug": "tree-of-thought-prompting",
+  "title": "What Is Tree-of-Thought Prompting?",
+  "seoTitle": "Tree-of-Thought Prompting: How It Works",
+  "metaDescription": "Tree-of-thought explained: how exploring and scoring multiple reasoning branches works, how it differs from chain-of-thought, and when to use it.",
+  "keywords": [
+    "what is tree of thought prompting",
+    "tree of thought vs chain of thought",
+    "tree of thoughts explained",
+    "tot prompting example",
+    "when to use tree of thought"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "See how tree-of-thought turns one linear reasoning chain into an explored, scored search tree — and why it is overkill for most tasks.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Imagine you're solving a maze. One approach is to pick a direction and walk until you hit a dead end, then backtrack. Another is to stand at each junction, mentally trace every corridor in front of you, score how promising each one looks, and only then commit to the best path. The second approach is slower, but it finds the exit far more reliably when the maze is complex."
+        },
+        {
+          "type": "p",
+          "md": "**Tree-of-thought prompting** (ToT) applies that second approach to LLM reasoning. Instead of generating one linear sequence of reasoning steps — the single-path chain of thought — the model produces *several candidate next steps* at each decision point, evaluates how promising each one is, and uses a search strategy (typically breadth-first or depth-first) to explore the most likely solution paths. Unpromising branches get pruned; the best path is extended. The result is a tree of reasoning rather than a chain."
+        },
+        {
+          "type": "p",
+          "md": "The technique was introduced in the paper *Tree of Thoughts: Deliberate Problem Solving with Large Language Models* by Shunyu Yao, Dian Yu, Jeffrey Zhao, and colleagues, published at NeurIPS 2023. It builds directly on chain-of-thought prompting but adds two critical ingredients that CoT lacks: **deliberate exploration** of multiple reasoning paths, and **self-evaluation** to judge which paths are worth pursuing."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The name mirrors classic search-tree algorithms from computer science — the same BFS and DFS you learned in an algorithms class. ToT applies those algorithms at the level of language model outputs rather than graph nodes."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Chain-of-thought prompting is powerful but has a structural weakness: it generates reasoning in one pass, left to right, with no ability to backtrack. If the model takes a wrong turn early — choosing a flawed sub-goal, making an arithmetic error, or misreading a constraint — the rest of the chain builds on that mistake, and the final answer is wrong. The model doesn't get to say \"wait, that path leads nowhere\" and try something else."
+        },
+        {
+          "type": "p",
+          "md": "This matters a lot for problems that require **planning and search**: puzzles with discrete solution spaces, multi-step coding challenges where an early design decision constrains everything downstream, or complex logical proofs where there are genuinely many ways to decompose the problem. On these tasks, a single forward pass through a chain of thought is like solving a chess problem by always moving the first piece that looks reasonable — workable on easy positions, unreliable on hard ones."
+        },
+        {
+          "type": "p",
+          "md": "The numbers bear this out. In the original ToT paper, on the *Game of 24* task (using arithmetic operations to make four numbers equal 24), GPT-4 with standard chain-of-thought prompting solved only **4%** of problems. ToT with a breadth of 5 candidates per step reached **74%** — a roughly 18x improvement. Self-consistency sampling (running CoT many times and majority-voting) reached just 9%, so the gain is not simply from running the model multiple times but from the structured exploration."
+        },
+        {
+          "type": "p",
+          "md": "For builders, ToT opens the door to tasks that were previously too unreliable to automate:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Combinatorial puzzles and logic games** where wrong early choices cascade into unsolvable states.",
+            "**Multi-step planning problems** where you need to evaluate several strategies before committing.",
+            "**Creative tasks with hard constraints** — writing a paragraph that satisfies many simultaneous rules, for example.",
+            "**Debugging and root-cause analysis** where the cause could lie in multiple independent subsystems."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "ToT is not a free upgrade over CoT. Each explored branch requires additional LLM calls, which means higher API costs, more latency, and more orchestration complexity. For most everyday tasks — summarisation, extraction, simple Q&A — chain-of-thought (or no explicit reasoning at all) is the right tool."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A ToT inference run has four components: a **thought generator**, a **state evaluator**, a **search algorithm**, and a **solution extractor**. Each runs as separate LLM prompts (or rule-based heuristics for evaluation)."
+        },
+        {
+          "type": "h3",
+          "text": "1. Thought generation"
+        },
+        {
+          "type": "p",
+          "md": "At each step, the model is asked to produce *k* candidate \"thoughts\" — coherent intermediate reasoning steps. Two strategies exist. **Sampling** generates k independent thoughts from the same prompt (good for broad, open-ended problems). **Proposal prompting** generates thoughts sequentially, where each one is conditioned on the previous (better for constrained problems where thoughts must be distinct and non-redundant). Typical values of k are 3–5; going beyond that quickly balloons cost with diminishing returns."
+        },
+        {
+          "type": "h3",
+          "text": "2. State evaluation"
+        },
+        {
+          "type": "p",
+          "md": "The evaluator scores each generated state to guide the search. There are two approaches. **Value scoring** uses a separate prompt to ask the model to rate the state on a scale (e.g. 1–10) or classify it (\"sure\", \"likely\", \"impossible\"). **Vote scoring** compares several candidate states against each other and picks the best — useful when absolute scoring is hard but relative ranking is easier. Evaluations don't need to be perfect; they just need to be *approximately informative* so the search algorithm focuses effort on the right branches."
+        },
+        {
+          "type": "h3",
+          "text": "3. Search algorithm"
+        },
+        {
+          "type": "p",
+          "md": "The framework supports any tree search algorithm. In practice, two are used most. **Breadth-first search (BFS)** keeps the top-b most promising states at each depth level before expanding further — appropriate when the tree is not too deep and you want broad coverage. **Depth-first search (DFS)** follows the most promising branch as deeply as possible, backtracking only when the evaluator marks a state as hopeless — appropriate for very deep trees where BFS would be too expensive."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Tree-of-thought inference loop",
+            "steps": [
+              {
+                "label": "Root state",
+                "sub": "problem + initial context"
+              },
+              {
+                "label": "Generate k thoughts",
+                "sub": "k candidate next steps",
+                "accent": true
+              },
+              {
+                "label": "Evaluate each state",
+                "sub": "score or vote across candidates",
+                "accent": true
+              },
+              {
+                "label": "Search selects best",
+                "sub": "BFS keeps top-b; DFS goes deep"
+              },
+              {
+                "label": "Expand or prune",
+                "sub": "promising branches grow; dead ends dropped"
+              },
+              {
+                "label": "Solution found",
+                "sub": "extract reasoning path"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "4. Solution extraction"
+        },
+        {
+          "type": "p",
+          "md": "Once the search terminates — either because a complete solution is found or the budget (maximum steps or API calls) is exhausted — the reasoning path from root to the highest-scoring leaf node is extracted and returned. That path is the ToT equivalent of the chain of thought: an ordered list of intermediate steps leading to the final answer."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "ToT branches vs CoT single chain",
+            "root": {
+              "label": "Problem",
+              "sub": "same starting state"
+            },
+            "children": [
+              {
+                "label": "Branch A",
+                "sub": "evaluated + kept"
+              },
+              {
+                "label": "Branch B (pruned)",
+                "sub": "score too low"
+              },
+              {
+                "label": "Branch C",
+                "sub": "evaluated + kept"
+              }
+            ]
+          }
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "You can approximate ToT behaviour in a single LLM call using a prompt like: *\"Imagine three different experts are each answering this question. Each expert writes down one step of their thinking, then shares it with the group. If any expert realises their approach is wrong, they drop out. Continue until the answer is reached.\"* This \"three experts\" trick won't match full ToT on hard problems, but it introduces multi-perspective exploration at zero orchestration cost."
+        }
+      ]
+    },
+    {
+      "id": "tot-vs-cot-comparison",
+      "title": "Tree-of-thought vs chain-of-thought",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "CoT and ToT sit on the same spectrum — both spend tokens on intermediate reasoning before giving a final answer — but they differ fundamentally in structure, cost, and the type of problems they suit."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Property",
+            "Chain-of-thought",
+            "Tree-of-thought"
+          ],
+          "rows": [
+            [
+              "Reasoning structure",
+              "Single linear sequence",
+              "Branching search tree"
+            ],
+            [
+              "Backtracking",
+              "None — errors propagate forward",
+              "Yes — dead ends pruned by evaluator"
+            ],
+            [
+              "LLM calls per problem",
+              "1 (or a few with self-consistency)",
+              "Many — scales with k and tree depth"
+            ],
+            [
+              "API cost",
+              "Low",
+              "High (3–10x or more)"
+            ],
+            [
+              "Implementation complexity",
+              "One prompt edit",
+              "Orchestration loop required"
+            ],
+            [
+              "Best problem type",
+              "Multi-step arithmetic, logic",
+              "Search, planning, combinatorial puzzles"
+            ],
+            [
+              "When added in 2022/2023",
+              "Wei et al., 2022",
+              "Yao et al., NeurIPS 2023"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The rule of thumb is simple: use CoT unless you have evidence the model is failing because it commits to a wrong early step and cannot recover. If running CoT three times with self-consistency still produces wrong answers on a task that clearly has a unique correct solution, ToT is worth trying. If the errors look like knowledge gaps or hallucinations rather than reasoning dead ends, more search won't help."
+        },
+        {
+          "type": "p",
+          "md": "There is also a middle ground worth mentioning: **self-consistency prompting** samples multiple independent CoT chains and takes a majority vote. It shares ToT's multi-run cost but has no backtracking — it bets that different runs make different mistakes and the vote washes them out. Self-consistency is easier to implement than ToT and often nearly as good on tasks where the main error source is random rather than systematic."
+        }
+      ]
+    },
+    {
+      "id": "practical-tradeoffs",
+      "title": "Practical tradeoffs and when to skip it",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Before committing to a ToT pipeline in production, it is worth being honest about the costs. Every additional branch means additional LLM calls. A tree with depth 4 and branching factor 3 can require up to 40 calls to explore — compared to 1 for a direct prompt or 3–5 for self-consistency sampling. At typical API rates, that cost difference is real and it compounds with problem volume."
+        },
+        {
+          "type": "h3",
+          "text": "Latency"
+        },
+        {
+          "type": "p",
+          "md": "Even with parallel branch evaluation, ToT adds significant latency. A single-chain CoT response might take 2–5 seconds; a ToT run with parallel branching and evaluation could take 15–30 seconds for the same problem. For user-facing applications, that is often unacceptable. ToT is more suited to **offline or batch pipelines** where correctness matters more than speed."
+        },
+        {
+          "type": "h3",
+          "text": "Evaluation quality"
+        },
+        {
+          "type": "p",
+          "md": "The search is only as good as the evaluator. If the scoring prompt is vague or the model's self-assessment is poorly calibrated for the task domain, the algorithm will cheerfully expand wrong branches and prune right ones. You often need to design and tune the evaluation prompt separately from the generation prompt — which is additional engineering work that is easy to underestimate."
+        },
+        {
+          "type": "h3",
+          "text": "Tasks where ToT is overkill"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Factual Q&A and retrieval** — the answer is either in the model or it isn't; more search doesn't help.",
+            "**Summarisation and extraction** — linear tasks that don't benefit from backtracking.",
+            "**Simple arithmetic** — CoT already handles this reliably.",
+            "**Creative generation with loose constraints** — open-ended creativity doesn't map well to a scored search tree.",
+            "**Any task where modern reasoning models already succeed** — o3, Claude Sonnet, and similar reasoning-first models effectively do internal tree search during their hidden thinking phase; bolting external ToT on top is redundant."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "A practical escalation ladder: first try a direct prompt, then CoT, then self-consistency, then ToT. Stop at whichever rung gives acceptable accuracy — each step up multiplies cost and complexity."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**ToT is one node in a larger family of reasoning-as-search methods.** The original paper was quickly followed by *Graph of Thoughts* (Besta et al., 2023), which generalises the tree structure to an arbitrary directed graph — allowing thoughts to merge, branch, and recombine, which the tree structure cannot express. *Algorithm of Thoughts* (AoT) takes a different angle: rather than running search externally, it distils a search algorithm into the model's context window so that a single in-context pass implicitly performs exploration. Each variant trades off cost, flexibility, and implementation complexity differently."
+        },
+        {
+          "type": "p",
+          "md": "**The relationship to reasoning models is important to understand.** Models like OpenAI o3 and Claude's extended thinking mode effectively perform a form of internal tree search during their hidden reasoning phase — the model explores, backtracks, and evaluates candidate steps before producing a response. From the user's perspective the API is simple (one call, one answer); the search complexity is handled inside the model. For most production uses, reaching for a reasoning model is now a better trade-off than implementing external ToT: you get the backtracking benefit without the orchestration overhead. External ToT remains relevant when you need fine-grained control over the branching strategy, or when you are working with a model that doesn't support extended reasoning."
+        },
+        {
+          "type": "p",
+          "md": "**Implementing ToT with an orchestration framework.** LangChain's experimental `langchain_experimental.tot` module provides a basic ToT chain with configurable thought generation and checker strategies. You set `k` (thoughts per step), `c` (max tree depth), and pass in a `BaseChecker` that evaluates each state. The GitHub repository `princeton-nlp/tree-of-thought-llm` hosts the original NeurIPS 2023 reference implementation in Python, useful for studying the exact prompts used in the paper's Game of 24 and creative writing experiments."
+        },
+        {
+          "type": "p",
+          "md": "**Test-time compute scaling.** ToT is an early example of a broader research direction: rather than making models bigger, spend more computation *at inference time* on hard problems. The original transformer runs a fixed amount of compute per token; ToT multiplies that by generating and evaluating many candidate tokens per problem step. Subsequent work on process reward models (PRMs) — models trained to score individual reasoning steps rather than just final answers — can replace the LLM-as-evaluator with a dedicated scorer, which is cheaper and often more reliable. This line of research ultimately fed into the training methodology for o1 and subsequent reasoning models."
+        },
+        {
+          "type": "p",
+          "md": "**Prompt design tips for your own ToT setup.** Keep the generation prompt tightly scoped — instruct the model to produce exactly k distinct, non-overlapping candidate steps, not rambling paragraphs. Keep the evaluation prompt binary or ordinal rather than asking for a free-form explanation — you want a score, not an essay. Set a hard cap on tree depth and total LLM calls before you start; runaway searches are expensive and rarely converge to a better answer than one found within reasonable budget. Log the full tree: the discarded branches often reveal why the task is hard and point directly at the evaluation prompt's weaknesses."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Is tree-of-thought prompting the same as chain-of-thought?",
+      "a": "They are related but not the same. Chain-of-thought generates one linear sequence of reasoning steps in a single pass. Tree-of-thought generates multiple candidate steps at each point, scores them, and uses a search algorithm to explore the most promising branches — including backtracking from dead ends. CoT is a single path; ToT is a explored tree of paths."
+    },
+    {
+      "q": "How many API calls does tree-of-thought actually use?",
+      "a": "It depends on branching factor k, tree depth d, and the evaluation strategy. A tree with k=3 branches and d=4 levels can require up to 40 LLM calls (one per generated thought plus one per evaluation). In practice, pruning reduces this, but you should budget for 5–20x the calls of a single CoT prompt. Always set a maximum call budget before starting a search."
+    },
+    {
+      "q": "Do I need to implement ToT myself, or are there libraries?",
+      "a": "LangChain's experimental module (`langchain_experimental.tot`) provides a ready-made ToT chain. The original reference implementation is at `github.com/princeton-nlp/tree-of-thought-llm`. For most production use cases today, switching to a reasoning model (o3, Claude with extended thinking) achieves similar backtracking benefits in a single API call without orchestration overhead."
+    },
+    {
+      "q": "Does tree-of-thought work on any LLM, or only large ones?",
+      "a": "ToT relies heavily on the model's ability to accurately evaluate its own reasoning states. Small models tend to produce poorly calibrated self-assessments, so the evaluator becomes noise and the search explores wrong branches. The original NeurIPS 2023 paper used GPT-4. Realistically, you need a model with strong instruction following and reasonable self-evaluation ability — frontier-class models or close to it."
+    },
+    {
+      "q": "What is the \"three experts\" single-prompt version of ToT?",
+      "a": "A simple approximation that requires no multi-call orchestration: prompt the model with something like *\"Imagine three experts each working on this problem. Each writes one reasoning step, they compare notes, anyone who spots a fatal flaw in their approach drops out, and they continue.\"* This elicits multi-perspective thinking in one call. It is less rigorous than full ToT but useful for quick wins on moderately complex problems."
+    },
+    {
+      "q": "When should I use self-consistency instead of tree-of-thought?",
+      "a": "Self-consistency (sampling multiple CoT chains and majority-voting) is cheaper to implement and works well when errors are random — different runs fail for different reasons and the vote cancels them out. ToT is better when errors are systematic — the model consistently chooses a bad early step and all forward paths from that step are wrong. If self-consistency with 5–10 samples still fails, ToT is worth trying."
+    }
+  ],
+  "related": [
+    "what-is-prompt-engineering",
+    "zero-shot-vs-few-shot",
+    "what-is-system-prompt",
+    "structure-prompts-xml-markdown"
+  ],
+  "furtherReading": [
+    {
+      "title": "Tree of Thoughts: Deliberate Problem Solving with Large Language Models (Yao et al., NeurIPS 2023)",
+      "url": "https://arxiv.org/abs/2305.10601"
+    },
+    {
+      "title": "Tree of Thoughts — Prompt Engineering Guide",
+      "url": "https://www.promptingguide.ai/techniques/tot"
+    },
+    {
+      "title": "princeton-nlp/tree-of-thought-llm — reference implementation",
+      "url": "https://github.com/princeton-nlp/tree-of-thought-llm"
+    }
+  ]
+}

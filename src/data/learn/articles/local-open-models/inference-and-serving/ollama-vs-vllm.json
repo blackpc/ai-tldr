@@ -1,0 +1,368 @@
+{
+  "slug": "ollama-vs-vllm",
+  "title": "Ollama vs vLLM: Local Development vs Production Serving",
+  "seoTitle": "Ollama vs vLLM: Which Should You Use?",
+  "metaDescription": "Ollama is built for one user on one machine; vLLM is built for throughput. Compare performance, concurrency, and when to graduate from one to the other.",
+  "keywords": [
+    "ollama vs vllm",
+    "ollama vs vllm performance",
+    "when to switch from ollama to vllm",
+    "vllm or ollama for production",
+    "ollama concurrency limits"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Know exactly when Ollama's simplicity wins, when vLLM's throughput wins, and how to migrate between them.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**Ollama** and **vLLM** both let you run open-weight language models locally — but they answer different questions. Ollama asks: *how do I get a model running on my laptop in under five minutes?* vLLM asks: *how do I serve a model to hundreds of concurrent users as efficiently as possible?* Picking the wrong one for your stage of development wastes either your time (setting up vLLM when you only need a quick prototype) or your users' patience (leaving Ollama in production when your traffic has outgrown it)."
+        },
+        {
+          "type": "p",
+          "md": "A useful mental model: Ollama is like a single-user espresso machine — beautiful, simple, and perfect for you and maybe a guest or two. vLLM is like a commercial espresso bar with multiple baristas working in shifts — far more complex to set up, but the only sensible choice when a queue of customers is forming. The espresso is the same model; the machinery is what differs."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Both tools expose an **OpenAI-compatible `/v1/chat/completions` endpoint**, so you can often switch between them by changing one URL in your code. The API surface is nearly identical — the difference is entirely in how they handle concurrency and memory under the hood."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why the choice matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Most AI engineering projects start with Ollama — and that is the right call. But teams that skip understanding the distinction often hit a wall: they ship Ollama into a product, concurrency increases, latency spikes, and they are suddenly debugging a production incident instead of building features. Knowing the break-even point in advance means you plan the migration before it becomes urgent."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Developer experience** — Ollama installs in one command, downloads models with `ollama pull`, and requires zero GPU configuration. vLLM requires Python, CUDA, and a modern NVIDIA GPU. That setup cost is real.",
+            "**Concurrency ceiling** — Ollama defaults to processing 4 requests in parallel (controlled by `OLLAMA_NUM_PARALLEL`). Under higher load, additional requests queue. vLLM has no hardcoded parallel limit; it fills the GPU's entire available memory budget with concurrent requests via continuous batching.",
+            "**Hardware flexibility** — Ollama runs on Mac (Apple Silicon via Metal), Windows, Linux, and even CPU-only. vLLM requires NVIDIA CUDA (AMD ROCm support exists but is less mature). If your machine is a MacBook, Ollama is your only real option of the two.",
+            "**Throughput at scale** — Red Hat's August 2025 benchmark showed vLLM achieving roughly 793 tokens per second versus Ollama's 41 TPS on the same hardware under load — a roughly 19x gap that only widens as concurrency increases.",
+            "**Model format** — Ollama uses GGUF (the llama.cpp quantized format). vLLM uses Hugging Face safetensors. You cannot point vLLM at an Ollama model file; migrating requires re-downloading the HF checkpoint."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How each engine works under the hood",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The performance gap between the two tools is not accidental — it comes from fundamentally different architectural priorities."
+        },
+        {
+          "type": "h3",
+          "text": "Ollama's architecture: simplicity first"
+        },
+        {
+          "type": "p",
+          "md": "Ollama wraps **llama.cpp**, a C++ inference engine that runs GGUF-format quantized models. When you call `ollama run`, it loads the model into memory (GPU VRAM if available, otherwise CPU/RAM), exposes a REST API, and processes requests. Requests beyond the `OLLAMA_NUM_PARALLEL` limit are queued in a first-in-first-out queue (default depth 512). The design goal is zero-friction setup, not throughput maximization. Ollama handles one model at a time by default (`OLLAMA_MAX_LOADED_MODELS=1`), swapping models in and out of VRAM as needed."
+        },
+        {
+          "type": "h3",
+          "text": "vLLM's architecture: throughput engineering"
+        },
+        {
+          "type": "p",
+          "md": "vLLM was built by the UC Berkeley Sky Computing Lab and introduced two mechanisms that together transform how a GPU serves LLMs. **PagedAttention** manages the KV cache — the growing scratchpad of intermediate attention results — using a technique borrowed from OS virtual memory. Instead of reserving one large contiguous block per request, it allocates small 16-token pages on demand and tracks them through a per-request block table. Memory waste falls from 60–80% to under 4%, meaning many more requests fit in VRAM simultaneously. **Continuous batching** completes the picture: rather than waiting for an entire batch to finish before starting the next, vLLM checks after every single token step whether any request has finished, frees its pages, and admits a waiting request immediately. The GPU never idles waiting for the slowest member of a static batch."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Ollama vs vLLM: how requests flow through each engine",
+            "columns": [
+              {
+                "title": "Ollama",
+                "items": [
+                  "Request arrives at REST API",
+                  "Queued if > OLLAMA_NUM_PARALLEL active",
+                  "llama.cpp processes GGUF model",
+                  "KV cache in contiguous VRAM block",
+                  "Response streams back",
+                  "Slot freed, next request starts"
+                ]
+              },
+              {
+                "title": "vLLM",
+                "items": [
+                  "Request arrives at OpenAI-compatible API",
+                  "Scheduler checks memory budget",
+                  "PagedAttention allocates KV pages on demand",
+                  "Continuous batching groups with live requests",
+                  "Every token step: evict done, admit new",
+                  "Response streams back; pages freed immediately"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "What this means for latency and throughput"
+        },
+        {
+          "type": "p",
+          "md": "At very low concurrency (1–2 users), Ollama and vLLM produce similar time-to-first-token. Ollama's low overhead can actually win by a small margin for a single user. The gap opens as concurrency climbs. At 16+ concurrent users, vLLM's continuous batching keeps the GPU saturated while Ollama's parallel limit causes a queue to build. By 128 concurrent requests, benchmarks show vLLM delivering 3–19x more total throughput. Ollama's inter-token latency stays stable — because it is throttling requests and keeping its active set small — but many users are simply waiting longer to get into that active set at all."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "vLLM continuous batching: one token step",
+            "steps": [
+              {
+                "label": "Token step N completes",
+                "sub": "3 requests finish generating"
+              },
+              {
+                "label": "Scheduler evicts finished requests",
+                "sub": "their KV pages freed immediately"
+              },
+              {
+                "label": "3 waiting requests admitted",
+                "sub": "KV pages allocated from freed pool"
+              },
+              {
+                "label": "New batch formed",
+                "sub": "GPU stays fully loaded"
+              },
+              {
+                "label": "Token step N+1 executes",
+                "sub": "all requests advance in parallel",
+                "accent": true
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "when-to-use-each",
+      "title": "When to use Ollama vs vLLM",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The decision is mostly about the number of simultaneous users and the hardware you have available."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Situation",
+            "Use Ollama",
+            "Use vLLM"
+          ],
+          "rows": [
+            [
+              "Hardware",
+              "MacBook, Windows PC, CPU-only, any GPU",
+              "NVIDIA GPU (CUDA required)"
+            ],
+            [
+              "Users",
+              "1–5 concurrent",
+              "5+ concurrent, growing load"
+            ],
+            [
+              "Setup time",
+              "You want running in < 5 min",
+              "You can invest an hour + Docker/Python env"
+            ],
+            [
+              "Stage",
+              "Prototyping, experimentation, demos",
+              "Staging environment, production serving"
+            ],
+            [
+              "Model format",
+              "GGUF (quantized, smaller files)",
+              "Hugging Face safetensors"
+            ],
+            [
+              "Throughput priority",
+              "Latency for one user matters more",
+              "Total tokens/sec across all users matters most"
+            ],
+            [
+              "Ops burden",
+              "Zero — single binary",
+              "Needs monitoring, GPU memory tuning, restarts"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "A practical threshold: if you are serving **fewer than five concurrent users** and are not optimizing cost per token, stay on Ollama. If you are building a product endpoint that multiple real users hit simultaneously, benchmark vLLM — the setup cost pays off quickly."
+        },
+        {
+          "type": "h3",
+          "text": "Ollama is not a toy"
+        },
+        {
+          "type": "p",
+          "md": "It is worth resisting the framing that Ollama is only for hobby projects. Many serious engineering use cases live permanently on Ollama: a developer's local coding assistant, a private RAG setup for a single researcher, an offline air-gapped deployment, or a CI pipeline that needs a small model to run tests. Ollama does these jobs well and requires zero infrastructure. The case for vLLM only opens when concurrency or throughput requirements grow beyond what Ollama's architecture can satisfy."
+        }
+      ]
+    },
+    {
+      "id": "migrating-ollama-to-vllm",
+      "title": "How to migrate from Ollama to vLLM",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you are ready to graduate from Ollama to vLLM, the migration has three steps: install vLLM, find the equivalent Hugging Face checkpoint, and update your client URL. There is no application-layer rewrite required if you have been using the OpenAI-compatible endpoint."
+        },
+        {
+          "type": "h3",
+          "text": "Step 1: Install vLLM and start the server"
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "code": "# Install vLLM (Python 3.9+, CUDA 11.8+ required)\npip install vllm\n\n# Serve the Llama 3.1 8B model (same model family as ollama pull llama3.1:8b)\nvllm serve meta-llama/Llama-3.1-8B-Instruct \\\n  --max-model-len 8192 \\\n  --gpu-memory-utilization 0.90\n\n# API is now available at http://localhost:8000/v1"
+        },
+        {
+          "type": "h3",
+          "text": "Step 2: Find the equivalent Hugging Face model"
+        },
+        {
+          "type": "p",
+          "md": "Ollama uses GGUF files; vLLM uses Hugging Face safetensors. You **cannot** point vLLM at a `.gguf` file. The mapping is usually straightforward: `ollama pull llama3.1:8b` corresponds to `meta-llama/Llama-3.1-8B-Instruct` on Hugging Face. vLLM supports quantized variants (AWQ, GPTQ, FP8) available on HF, so you can still use a smaller model if VRAM is limited — for example `meta-llama/Llama-3.1-8B-Instruct-AWQ` rather than the full BF16 checkpoint."
+        },
+        {
+          "type": "h3",
+          "text": "Step 3: Update your client"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "from openai import OpenAI\n\n# Before (Ollama)\nclient_ollama = OpenAI(\n    base_url=\"http://localhost:11434/v1\",\n    api_key=\"ollama\",\n)\n\n# After (vLLM) — one line changes\nclient_vllm = OpenAI(\n    base_url=\"http://localhost:8000/v1\",\n    api_key=\"not-required\",\n)\n\n# The rest of your code — messages, streaming, temperature — is identical\nresponse = client_vllm.chat.completions.create(\n    model=\"meta-llama/Llama-3.1-8B-Instruct\",\n    messages=[{\"role\": \"user\", \"content\": \"Hello!\"}],\n)\nprint(response.choices[0].message.content)"
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "If you used Ollama's **native API** (`/api/generate` or `/api/chat`) rather than its OpenAI-compatible endpoint (`/v1/chat/completions`), you will need to refactor those calls. vLLM implements the OpenAI protocol only — it does not implement Ollama's native API format."
+        },
+        {
+          "type": "h3",
+          "text": "Running both in parallel during transition"
+        },
+        {
+          "type": "p",
+          "md": "A low-risk migration strategy is to run vLLM alongside Ollama (different ports) and route a small fraction of traffic to vLLM first. Confirm output quality matches, then shift traffic gradually — 10%, 50%, 100%. Both processes share the same GPU if they are not running simultaneously, or you can deploy them on separate machines. Because the API is identical, a single proxy like Nginx can split traffic by percentage without touching application code."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you understand the core trade-off, a few advanced areas are worth knowing about before you commit to either tool in production."
+        },
+        {
+          "type": "h3",
+          "text": "Ollama tuning for higher concurrency"
+        },
+        {
+          "type": "p",
+          "md": "If you need moderate concurrency but vLLM's CUDA requirement is a blocker (e.g., you only have Apple Silicon or AMD hardware), Ollama can be tuned. The key environment variables are `OLLAMA_NUM_PARALLEL` (how many requests share the active model slot, default auto-selects 4 or 1 based on available memory), `OLLAMA_MAX_LOADED_MODELS` (how many distinct models stay resident in VRAM), and `OLLAMA_MAX_QUEUE` (how many requests are buffered before Ollama starts returning 503s, default 512). Increasing `OLLAMA_NUM_PARALLEL` uses more VRAM because it effectively multiplies the context length — four parallel requests at 2K context consume the same KV memory as one request at 8K context. Tune conservatively and benchmark."
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "code": "# Example: allow up to 8 parallel requests on a high-VRAM machine\nexport OLLAMA_NUM_PARALLEL=8\nexport OLLAMA_MAX_LOADED_MODELS=2\nexport OLLAMA_MAX_QUEUE=1024\nollama serve"
+        },
+        {
+          "type": "h3",
+          "text": "vLLM prefix caching for shared context"
+        },
+        {
+          "type": "p",
+          "md": "vLLM supports **automatic prefix caching** (`--enable-prefix-caching`): when multiple requests share a common prefix — a system prompt, a retrieved document chunk — vLLM computes that prefix's KV pages once and reuses them across all matching requests. For RAG workloads and agent loops that resend the same context repeatedly, this can reduce time-to-first-token from seconds to milliseconds. This feature has no equivalent in Ollama."
+        },
+        {
+          "type": "h3",
+          "text": "Multi-GPU serving with tensor parallelism"
+        },
+        {
+          "type": "p",
+          "md": "Models that do not fit in a single GPU's VRAM can be sharded across multiple GPUs using vLLM's tensor parallelism flag. A single `vllm serve` command with `--tensor-parallel-size 4` will coordinate four GPUs and present them as one API endpoint — no additional orchestration code needed. Ollama has no equivalent; you would need to use llama.cpp's experimental multi-GPU support separately."
+        },
+        {
+          "type": "h3",
+          "text": "The emerging middle ground"
+        },
+        {
+          "type": "p",
+          "md": "The gap between Ollama and vLLM is narrowing from both sides. Ollama has steadily improved its concurrency handling and GPU utilization across releases. vLLM has worked to reduce its setup complexity, adding better Docker images and documentation. Tools like **LiteLLM** act as a unified proxy layer in front of either, letting you write one client that routes to Ollama in dev and vLLM in production transparently. If you are building a product, designing your application to talk to an OpenAI-compatible endpoint abstraction — not hard-coding `localhost:11434` — is the single architectural decision that makes future migration painless."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The best migration trigger is a **latency measurement, not a feeling**. Add p95 response time tracking to your Ollama deployment early. When p95 latency crosses an SLO threshold you define (e.g., 5 seconds) under normal load, that is your signal to benchmark vLLM. Migration driven by data is much smoother than migration driven by a production outage."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Is Ollama good enough for production?",
+      "a": "Ollama works well in production for low-concurrency scenarios — internal tools, single-user assistants, small teams. It struggles when many users hit it simultaneously, because its default parallel limit (auto-selected as 4 or 1 based on available memory) means additional requests queue rather than being batched efficiently. If your p95 latency is acceptable and you have fewer than five concurrent users, Ollama is a perfectly valid production choice."
+    },
+    {
+      "q": "How much faster is vLLM than Ollama?",
+      "a": "At low concurrency (1–2 users), the difference is small and sometimes favors Ollama due to lower overhead. Under realistic multi-user load, benchmarks published by Red Hat in 2025 showed vLLM achieving roughly 793 tokens per second versus Ollama's 41 TPS on the same hardware — a roughly 19x gap. More conservative benchmarks show a 3–5x advantage at 128 concurrent requests. The gap is largest when many requests are in flight simultaneously."
+    },
+    {
+      "q": "Can I run vLLM on a Mac or on CPU?",
+      "a": "vLLM requires an NVIDIA GPU with CUDA support. It does not run on Apple Silicon (no Metal backend) or CPU-only machines. If you are on a Mac or a machine without an NVIDIA GPU, Ollama is effectively the better choice of the two — it runs natively on Apple Silicon via the Metal GPU backend and also works CPU-only, albeit slowly."
+    },
+    {
+      "q": "Do Ollama and vLLM use the same model files?",
+      "a": "No. Ollama uses GGUF format — the quantized model format from llama.cpp, downloaded via `ollama pull`. vLLM uses Hugging Face safetensors format, downloaded automatically from huggingface.co. You cannot point vLLM at a `.gguf` file. When migrating, find the equivalent Hugging Face model repository and let vLLM download it. vLLM supports quantized checkpoints (AWQ, GPTQ, FP8) if VRAM is limited."
+    },
+    {
+      "q": "What is OLLAMA_NUM_PARALLEL and how does it affect performance?",
+      "a": "`OLLAMA_NUM_PARALLEL` sets how many requests Ollama processes at the same time for a given loaded model. The default auto-selects 4 or 1 based on available memory. Raising it allows more simultaneous users but multiplies VRAM consumption — four parallel requests at a 2K context use the same KV memory as one request at 8K context. Increase it carefully and test for out-of-memory errors before deploying."
+    },
+    {
+      "q": "Is switching from Ollama to vLLM a big rewrite?",
+      "a": "If you have used Ollama's OpenAI-compatible endpoint (`/v1/chat/completions`), the migration is essentially one line of code — changing the `base_url` in your OpenAI client. The bigger work is finding the equivalent Hugging Face checkpoint and setting up the CUDA environment for vLLM. If you used Ollama's native API format (`/api/generate`), those calls need to be refactored to the standard OpenAI format, which vLLM implements."
+    }
+  ],
+  "related": [
+    "what-is-local-llm",
+    "what-is-ollama",
+    "lm-studio-vs-ollama",
+    "what-is-llama-cpp",
+    "local-llm-hardware-requirements"
+  ],
+  "furtherReading": [
+    {
+      "title": "Ollama vs. vLLM: A Deep Dive into Performance Benchmarking (Red Hat Developer)",
+      "url": "https://developers.redhat.com/articles/2025/08/08/ollama-vs-vllm-deep-dive-performance-benchmarking"
+    },
+    {
+      "title": "vLLM Quickstart and OpenAI-Compatible Server (official docs)",
+      "url": "https://docs.vllm.ai/en/latest/getting_started/quickstart/"
+    },
+    {
+      "title": "Ollama FAQ and environment variable reference (official docs)",
+      "url": "https://docs.ollama.com/faq"
+    }
+  ]
+}

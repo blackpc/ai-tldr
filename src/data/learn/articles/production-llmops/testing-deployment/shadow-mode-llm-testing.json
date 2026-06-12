@@ -1,0 +1,458 @@
+{
+  "slug": "shadow-mode-llm-testing",
+  "title": "What Is Shadow Mode? Testing a New Model on Real Traffic Silently",
+  "seoTitle": "Shadow Mode: Test a New Model on Real Traffic",
+  "metaDescription": "Shadow mode runs a new model on live traffic without showing users its output. How to set it up, compare results, and decide when to switch.",
+  "keywords": [
+    "what is shadow mode testing",
+    "shadow deployment llm",
+    "test new model on production traffic",
+    "shadow mode vs canary release"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Understand how to run a candidate model silently on live traffic and compare results before any user sees them.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Shadow mode is a deployment technique where a new model — the *candidate* — receives the exact same live requests as your production model, but its responses are never shown to users. The production model answers users as normal. The candidate runs silently in the background, its outputs logged and compared to the production model's. Users notice nothing. You learn everything."
+        },
+        {
+          "type": "p",
+          "md": "The analogy that makes it click: think of a flight simulator running in parallel with a real cockpit. The trainee co-pilot (the candidate model) sees every instrument reading and makes every decision, but their hands are not on the controls. The instructor (your team) watches the trainee's decisions alongside the real pilot's and decides whether the trainee is ready to fly solo — without ever putting passengers at risk."
+        },
+        {
+          "type": "p",
+          "md": "In LLM terms, the flight simulator is a **mirrored request pipeline**. Every inbound request is duplicated: one copy goes to your live model, which returns its response to the user; an identical copy is dispatched asynchronously to the candidate model. Both responses and their associated metadata (latency, token counts, error codes) are written to a log store. Analysis happens offline, after the fact, with no user-facing impact whatsoever."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Shadow mode is sometimes called **dark launch** or **shadow deployment**. The terms are interchangeable in most LLMOps writing. \"Shadow traffic testing\" usually refers specifically to the period during which the candidate is receiving and logging mirrored requests."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Switching models is one of the highest-risk operations in a production LLM system. Eval datasets, no matter how carefully curated, never perfectly capture the full distribution of live traffic. A candidate that aces your benchmark may still behave unexpectedly on the long tail of edge cases that real users send every day."
+        },
+        {
+          "type": "p",
+          "md": "Shadow mode solves this by letting you stress-test the candidate against the real input distribution before any user ever sees its output. The benefits cluster into three categories:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Zero user risk.** The candidate's responses are invisible to users. Even if the candidate produces garbled, harmful, or wildly incorrect output, no user is affected.",
+            "**Real distribution coverage.** Live traffic includes rare prompts, unusual languages, adversarial inputs, and edge cases that synthetic eval sets routinely miss. Shadow mode is the only way to measure performance on all of them.",
+            "**Baseline before commitment.** You establish an objective quality, latency, and cost baseline for the candidate before you have to make any go/no-go decision. That baseline is what makes the canary or full rollout that follows trustworthy.",
+            "**Regression detection.** If the candidate is worse than production on any metric — even a metric you didn't anticipate — shadow logs will surface it. You can catch regressions you didn't know to test for."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The economics matter too. Running a shadow for 24–48 hours on a sampled slice of traffic (say, 10–20% of requests) is far cheaper than a botched rollout that degrades user experience, triggers refund requests, or triggers escalations to your on-call team at 2 a.m."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The core mechanics are straightforward: duplicate the request, dispatch asynchronously, log both responses, compare offline. The engineering details determine whether the shadow run gives you trustworthy signal."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Shadow mode request flow",
+            "steps": [
+              {
+                "label": "Inbound request",
+                "sub": "User sends a prompt to your API"
+              },
+              {
+                "label": "Traffic mirror",
+                "sub": "Gateway duplicates the request (async copy to candidate)"
+              },
+              {
+                "label": "Production model",
+                "sub": "Responds to user as normal; response logged"
+              },
+              {
+                "label": "Candidate model",
+                "sub": "Receives identical input; response logged silently"
+              },
+              {
+                "label": "Log store",
+                "sub": "Both responses, latency, token counts written together"
+              },
+              {
+                "label": "Offline analysis",
+                "sub": "LLM judge or human reviewers compare paired responses"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Where to insert the mirror"
+        },
+        {
+          "type": "p",
+          "md": "The mirror can live at several layers of your stack, each with tradeoffs:"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Layer",
+            "How it works",
+            "Best for"
+          ],
+          "rows": [
+            [
+              "API gateway / proxy",
+              "The gateway (e.g. an LLM gateway, Nginx, Envoy) clones the request before forwarding to production",
+              "Teams with a centralised gateway; minimal application code change"
+            ],
+            [
+              "Application code",
+              "The app explicitly calls both models and discards the candidate's response before returning",
+              "Maximum control; works without infra changes"
+            ],
+            [
+              "Service mesh (Istio, Envoy)",
+              "The mesh mirrors TCP traffic at the sidecar level before it reaches the model endpoint",
+              "Kubernetes-native deployments; works transparently across services"
+            ],
+            [
+              "Platform feature (SageMaker)",
+              "Managed shadow variant on the same endpoint; AWS handles the mirroring and logging",
+              "Teams already on SageMaker; lowest operational overhead"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "**Never make the candidate call synchronous.** If the candidate model is slow or throws an error, it must not add latency to the user-facing response. Dispatch the shadow call on a separate async thread, goroutine, or background task. The production path should be completely isolated from the candidate path."
+        },
+        {
+          "type": "h3",
+          "text": "Sampling rate"
+        },
+        {
+          "type": "p",
+          "md": "You do not need to shadow 100% of traffic. Starting at 10–20% is sensible: it controls extra cost, limits load on the candidate endpoint, and still accumulates enough samples for statistical comparison within hours on a moderately trafficked service. Once you are confident the candidate is stable, you can raise the sampling rate to 100% to maximise coverage of edge cases before your canary."
+        },
+        {
+          "type": "h3",
+          "text": "What to log"
+        },
+        {
+          "type": "list",
+          "items": [
+            "The full request payload (prompt, system message, parameters)",
+            "The production model's response text and finish reason",
+            "The candidate model's response text and finish reason",
+            "Latency for both: time-to-first-token (TTFT) and total duration",
+            "Token counts (prompt tokens, completion tokens) for cost estimation",
+            "Error codes and HTTP status for both",
+            "A shared `request_id` to join the two rows in analysis"
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Log to an append-only store (S3, BigQuery, ClickHouse) rather than a relational database. Shadow runs can generate high write throughput, and you want the logging path to be fire-and-forget — never block on a write."
+        }
+      ]
+    },
+    {
+      "id": "comparing-outputs",
+      "title": "Comparing shadow outputs",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Collecting logs is the easy half. Turning logs into a go/no-go decision is the hard half. There are three complementary approaches, and production teams typically use all three together."
+        },
+        {
+          "type": "h3",
+          "text": "Structural metrics (automatic)"
+        },
+        {
+          "type": "p",
+          "md": "These require no human judgment and run in real time or near-real time:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Error rate** — does the candidate refuse, time out, or return malformed JSON at a higher rate than production?",
+            "**Latency percentiles** — compare p50, p95, p99 TTFT and total duration. A faster candidate is great; a slower one that will hurt streaming UX is a blocker.",
+            "**Token counts** — completion length differences matter for cost. A candidate that consistently generates 40% longer responses may cost more despite a lower per-token price.",
+            "**Format compliance** — if your system prompt instructs the model to respond in JSON, does the candidate comply as reliably as production?"
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "LLM-as-judge (scalable quality signal)"
+        },
+        {
+          "type": "p",
+          "md": "For quality comparison, the most scalable approach is to send paired responses — (production output, candidate output) — to a judge model (often a capable, frontier-tier model like Claude or GPT-4o) and ask it to rate which response is better on dimensions you care about: correctness, groundedness, helpfulness, tone, safety."
+        },
+        {
+          "type": "p",
+          "md": "According to LangChain's 2025 State of AI Agents survey, 53% of teams with deployed agents already use LLM-as-judge for automated evaluation, and research shows sophisticated judge models can align with human preferences at roughly 85% agreement — higher than inter-human agreement (81%). The key implementation discipline is **randomising the order** of the two responses before presenting them to the judge to avoid position bias, which can flip verdicts in 10–30% of comparisons when left uncorrected."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "import anthropic\nimport random\n\nclient = anthropic.Anthropic()\n\ndef judge_pair(prompt: str, prod_response: str, cand_response: str) -> dict:\n    \"\"\"Ask a judge model to compare two responses. Order is randomised.\"\"\"\n    responses = [(\"A\", prod_response), (\"B\", cand_response)]\n    random.shuffle(responses)  # Avoid position bias\n    label_a, text_a = responses[0]\n    label_b, text_b = responses[1]\n\n    judge_prompt = f\"\"\"\nUser prompt: {prompt}\n\nResponse {label_a}: {text_a}\n\nResponse {label_b}: {text_b}\n\nWhich response is better? Reply with a JSON object:\n{{\"winner\": \"A\" or \"B\", \"reason\": \"one sentence\"}}\n\"\"\"\n    result = client.messages.create(\n        model=\"claude-opus-4-5\",\n        max_tokens=256,\n        messages=[{\"role\": \"user\", \"content\": judge_prompt}],\n    )\n    import json\n    verdict = json.loads(result.content[0].text)\n    # Remap winner back to prod/candidate\n    winner_label = verdict[\"winner\"]\n    winner = \"prod\" if winner_label == label_a and label_a == \"A\" else \"candidate\"\n    return {\"winner\": winner, \"reason\": verdict[\"reason\"]}"
+        },
+        {
+          "type": "h3",
+          "text": "Human review (ground truth for high-stakes decisions)"
+        },
+        {
+          "type": "p",
+          "md": "For a final go/no-go decision on a high-traffic or safety-sensitive feature, human reviewers should evaluate a random sample of paired responses — typically 100–300 pairs is enough to detect a meaningful quality difference. Human review is slow and expensive, which is why you use it only for the final gate, after structural metrics and the LLM judge have already filtered out the clearly bad candidates."
+        },
+        {
+          "type": "h3",
+          "text": "Defining release gates before you start"
+        },
+        {
+          "type": "p",
+          "md": "Decide your pass/fail thresholds before the shadow run begins, not after you see the numbers. Typical gates:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "Error rate delta <= +0.5 percentage points vs. production",
+            "p99 latency delta <= +200 ms",
+            "LLM judge win rate for candidate >= 50% (parity) or >= 55% (clear improvement)",
+            "Format compliance rate >= production rate",
+            "Cost per request delta within budget (e.g., <= +20%)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "shadow-vs-canary",
+      "title": "Shadow mode vs. canary release",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Shadow mode and canary releases are often confused because both involve running two model versions simultaneously on production traffic. The difference is fundamental: **in shadow mode, users never see the candidate's output. In a canary release, a small fraction of real users see the candidate's output and experience its effects.**"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Shadow mode vs. canary release",
+            "columns": [
+              {
+                "title": "Shadow mode",
+                "items": [
+                  "Candidate output logged, never served",
+                  "Zero user impact even if candidate fails badly",
+                  "No user behaviour signal (no clicks, ratings, or conversions)",
+                  "Best for: early validation, catching crashes and regressions",
+                  "Typical duration: 24-72 hours"
+                ]
+              },
+              {
+                "title": "Canary release",
+                "items": [
+                  "Candidate output served to 1-10% of real users",
+                  "Real user impact if candidate is broken",
+                  "Captures downstream business metrics (engagement, retention)",
+                  "Best for: final pre-rollout validation after shadow passes",
+                  "Typical duration: 24 hours to 2 weeks"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The recommended sequencing in modern LLMOps is: **offline eval → shadow mode → canary → full rollout**. Each stage builds confidence before the next. Shadow mode de-risks the canary by ensuring the candidate is not fundamentally broken before any user is exposed to it. If your candidate passes shadow gates, you can run a canary at a meaningful traffic percentage (5–10%) without the fear that you are gambling on unknown behaviour."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Some teams skip shadow mode and go straight to canary. This is acceptable for small, low-risk prompt changes where you have strong offline eval coverage. For model swaps (e.g., moving from GPT-4o to a fine-tuned open model, or upgrading to a new provider), shadow mode is strongly recommended — the surface area of potential regressions is much larger."
+        }
+      ]
+    },
+    {
+      "id": "pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Shadow mode looks simple in diagrams but has several practical failure modes that teams repeatedly encounter."
+        },
+        {
+          "type": "h3",
+          "text": "Doubling your inference bill"
+        },
+        {
+          "type": "p",
+          "md": "Shadow mode temporarily doubles the number of LLM API calls you make. If you are on a per-token pricing plan, your daily bill doubles for the duration. Budget for this before you start, set billing alerts, and consider shadowing only a 10–20% sample rather than 100% of traffic. The cost is worth it, but it needs to be expected."
+        },
+        {
+          "type": "h3",
+          "text": "Treating the shadow as a true A/B test"
+        },
+        {
+          "type": "p",
+          "md": "Shadow mode is not a user-experience A/B test. Because users never see the candidate's responses, you cannot measure downstream behavioural outcomes — engagement, satisfaction scores, conversion rates — during the shadow phase. Shadow mode measures *model output quality*, not *user response to that quality*. If you need to measure user outcomes, you need a canary or an A/B test."
+        },
+        {
+          "type": "h3",
+          "text": "Non-determinism making comparison noisy"
+        },
+        {
+          "type": "p",
+          "md": "LLMs are stochastic. Even two calls to the same model with identical inputs will produce slightly different outputs. When the production model and the candidate are different versions, the difference you observe in shadow logs is a combination of the genuine quality difference *plus* random variation. Make sure your sample size is large enough (typically a few hundred to a few thousand requests) to let the signal emerge from the noise before drawing conclusions."
+        },
+        {
+          "type": "h3",
+          "text": "Side effects in tool-calling or agentic systems"
+        },
+        {
+          "type": "p",
+          "md": "If your LLM system calls external tools — databases, APIs, file systems — the shadow candidate must **never execute those tools for real**. The candidate should run with tool calling stubbed out or redirected to a sandbox environment. Calling a real payment API or writing to a production database during a shadow run is a serious incident waiting to happen. This is the single most dangerous pitfall in agentic shadow testing."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Ramp (the spend management company) runs agents in shadow mode by having the agent predict what tool action it *would* take, then comparing that prediction to what a human actually did — without executing the action. If your agent calls real APIs, build a similar prediction-only shadow mode rather than a full-execution shadow mode."
+        },
+        {
+          "type": "h3",
+          "text": "Log store becoming a bottleneck"
+        },
+        {
+          "type": "p",
+          "md": "Shadow logging adds write volume proportional to your traffic. If the logging path is synchronous and the log store is slow, it will add latency to user-facing requests. Always write shadow logs on a separate async worker thread and decouple the logging path completely from the response path."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you have the basics working, there are several directions worth exploring to make shadow testing more powerful."
+        },
+        {
+          "type": "h3",
+          "text": "Continuous shadow mode"
+        },
+        {
+          "type": "p",
+          "md": "Rather than running shadow mode only when you want to ship a new model, some teams keep a shadow lane permanently active and rotate candidate models through it continuously. This gives you an always-on regression signal: any future model update is automatically shadowed before promotion. The cost is a permanent 10–20% overhead on inference spend, but the benefit is that regressions are caught within hours rather than weeks."
+        },
+        {
+          "type": "h3",
+          "text": "Replay-based shadow testing"
+        },
+        {
+          "type": "p",
+          "md": "If you cannot run the candidate on live traffic (because you are testing before a new model is deployed at all, or because you need deterministic results), you can *replay* logged historical requests against the candidate. Replay testing is less realistic than live shadowing — the request distribution may have shifted since the logs were collected — but it is a useful first pass and requires no infrastructure changes to your production system."
+        },
+        {
+          "type": "h3",
+          "text": "Platform features to know"
+        },
+        {
+          "type": "p",
+          "md": "Several platforms have first-class shadow testing support:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**AWS SageMaker** — the managed endpoint concept supports named shadow variants; SageMaker handles traffic mirroring and comparison dashboards natively.",
+            "**Seldon Core** — the open-source Kubernetes model server supports shadow deployments via its `SeldonDeployment` custom resource, routing mirrored traffic to a shadow predictor without serving its responses.",
+            "**Envoy / Istio** — the service mesh's traffic mirroring feature (via `VirtualService` mirror configuration) can shadow any HTTP traffic, including LLM API calls, at the infrastructure layer.",
+            "**LLM gateway proxies** — products like Portkey, LiteLLM, and Brainboard allow shadow routing to be configured in a YAML/JSON config without any application code changes."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Automating the promotion decision"
+        },
+        {
+          "type": "p",
+          "md": "The end goal is a fully automated shadow-to-canary pipeline. The pattern looks like this: the shadow run is triggered automatically when a new model version is registered in your model registry; a CI/CD job monitors the shadow metrics against your pre-defined release gates; if all gates pass after a minimum observation window (24–48 hours is common), the pipeline automatically promotes the candidate to a 5% canary and pages your team to review the dashboard. Human approval is still required for the final promotion to 100%, but the shadow phase is fully automated. This approach is described as a core LLMOps maturity milestone in the ZenML 2025 survey of 1,200 production deployments."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Define your release gates as code (a YAML config or a Python assertion file) checked into the same repository as your model configuration. This makes the gates reviewable, versionable, and auditable — and prevents the temptation to silently lower the bar when a candidate is close but not quite passing."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Does shadow mode require double the API budget?",
+      "a": "Yes, during the shadow period you are making two inference calls per shadowed request. To control cost, shadow only a fraction of traffic (10–20% is common) rather than 100%. The spend is temporary and bounded — a typical shadow run lasts 24–72 hours — and is far cheaper than a bad rollout."
+    },
+    {
+      "q": "Can I use shadow mode to test a completely different model provider?",
+      "a": "Absolutely. Shadow mode is provider-agnostic. You can mirror traffic from a GPT-4o production endpoint to a Claude or Gemini candidate, or from a cloud-hosted model to a self-hosted open-weight model. The only requirement is that both endpoints accept the same request format — if they differ, add a thin adapter layer before the candidate call."
+    },
+    {
+      "q": "How is shadow mode different from A/B testing?",
+      "a": "In shadow mode, users never see the candidate's output, so you cannot measure user behaviour. A/B testing splits live traffic so that real users see one variant or the other, which lets you measure downstream outcomes like engagement or satisfaction. Shadow mode validates technical correctness and quality before any user exposure; A/B testing measures user response after you are confident the candidate is production-safe."
+    },
+    {
+      "q": "How long should a shadow run last?",
+      "a": "Long enough to accumulate a statistically meaningful sample across your traffic patterns. For most services, 24–48 hours at a 10–20% sampling rate is sufficient. If your traffic has strong day-of-week variation (e.g., B2B tools that spike on weekdays), run the shadow for at least one full business cycle — typically 5–7 days — to cover the full distribution."
+    },
+    {
+      "q": "What happens if the candidate model errors out during the shadow run?",
+      "a": "Nothing visible to users — that is the whole point. The error is logged, the production model's response is returned to the user as normal, and the error rate in the shadow logs becomes a data point in your go/no-go analysis. A high error rate in shadow mode is exactly the kind of regression you want to catch before promoting the candidate."
+    },
+    {
+      "q": "Is shadow mode safe to use with LLM agents that call external tools?",
+      "a": "Only if you stub out or sandbox the tool calls. A shadow agent must never write to a production database, call a payment API, or send emails — it should only predict what it *would* do without actually doing it. Build a mock tool layer for the shadow path, or use a sandboxed environment with fake credentials."
+    }
+  ],
+  "related": [
+    "what-is-llmops",
+    "llm-prototype-to-production",
+    "production-llm-stack",
+    "llm-model-routing",
+    "llm-provider-failover"
+  ],
+  "furtherReading": [
+    {
+      "title": "Shadow Mode Deployment for ML Model Testing",
+      "url": "https://mljourney.com/shadow-mode-deployment-for-ml-model-testing/"
+    },
+    {
+      "title": "Deploy shadow ML models in Amazon SageMaker",
+      "url": "https://aws.amazon.com/blogs/machine-learning/deploy-shadow-ml-models-in-amazon-sagemaker/"
+    },
+    {
+      "title": "Releasing AI Features Without Breaking Production: Shadow Mode, Canary Deployments, and A/B Testing for LLMs",
+      "url": "https://tianpan.co/blog/2026-04-09-llm-gradual-rollout-shadow-canary-ab-testing"
+    }
+  ]
+}

@@ -1,0 +1,406 @@
+{
+  "slug": "weaviate-explained",
+  "title": "What Is Weaviate? A Beginner's Guide",
+  "seoTitle": "What Is Weaviate? Vector Database Beginner Guide",
+  "metaDescription": "Weaviate is an open-source vector database with built-in vectorizers and hybrid search. Learn its schema model, modules, and when to choose it.",
+  "keywords": [
+    "what is weaviate",
+    "weaviate tutorial for beginners",
+    "weaviate hybrid search explained",
+    "weaviate vs qdrant comparison",
+    "weaviate vectorizer modules"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Understand Weaviate's schema-first approach, built-in embedding modules, and native hybrid search in one read.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "What Is Weaviate?",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Weaviate is an **open-source vector database** written in Go that stores data objects alongside their vector embeddings and lets you search by meaning, exact keywords, or a blend of both — all in a single query. Where a traditional database asks \"does this row contain the word?\" Weaviate asks \"how close in meaning is this object to what you're looking for?\""
+        },
+        {
+          "type": "p",
+          "md": "The easiest mental model: imagine your document library physically arranged on a map, where documents about similar ideas are shelved near each other. A keyword database gives you an index card sorted alphabetically; Weaviate gives you a **map of meaning** where the search query walks to its neighbourhood and grabs the closest neighbours. The nearer two documents sit on the map, the more semantically similar their content."
+        },
+        {
+          "type": "p",
+          "md": "Weaviate's biggest differentiator from other vector databases is that **embedding generation is built in**. Rather than running a separate pipeline to turn text into vectors before inserting, you declare a vectorizer module on your collection — for instance `text2vec-openai` — and Weaviate calls the OpenAI Embeddings API automatically every time you insert or query. The database handles the plumbing, so your application code stays clean."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Weaviate is open-source under the BSD-3-Clause licence. You can self-host it for free with Docker or Kubernetes, or use **Weaviate Cloud** (managed service) with a free sandbox tier. The core feature set — hybrid search, modules, multi-tenancy — is identical across both."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why Builders Choose Weaviate",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The dominant use case is **Retrieval-Augmented Generation (RAG)**: embed a knowledge base, store the vectors in Weaviate, and at inference time pull the most relevant chunks to give an LLM accurate, up-to-date context. Weaviate shortens the path from raw data to working RAG because you do not need a separate embedding service wired to a separate queue — the vectorizer module handles that inside the database."
+        },
+        {
+          "type": "p",
+          "md": "Before purpose-built vector databases existed, teams had to deploy FAISS on a self-managed server, rebuild the index on every data change, and add their own keyword layer for exact-match queries. Weaviate bundles all three concerns — vector ANN index, inverted keyword index, and schema validation — into one process. That collapses a three-service architecture into one."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**RAG / LLM grounding** — retrieve grounded context chunks with a single `near_text` or `hybrid` query, then pass them to any LLM",
+            "**Semantic search** — find documents by intent, not just vocabulary; handles synonyms and paraphrases naturally",
+            "**Multi-modal search** — the `img2vec-neural` module lets you store and search images alongside text in the same collection",
+            "**Recommendation engines** — retrieve items similar to a seed object using its stored vector, with optional metadata filters",
+            "**Native RAG (generative modules)** — attach a `generative-openai` or `generative-cohere` module and Weaviate calls the LLM for you mid-query, returning a generated answer alongside raw results",
+            "**Multi-tenant SaaS** — isolate each customer's data in a separate tenant within one shared collection, cutting infrastructure cost"
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "If you want to go from zero data to a working RAG API in a day without managing an embedding pipeline, Weaviate's built-in modules are the fastest path. If you need maximum raw query throughput with complex payload filters, consider Qdrant — which trades built-in vectorization for a faster Rust core."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How Weaviate Works Under the Hood",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Weaviate organises data in **collections** (previously called classes), each of which is roughly equivalent to a table in a relational database. Every object in a collection has typed **properties** (text, number, date, geo, boolean, cross-reference, and more) plus one or more **vector representations** generated by the configured vectorizer module."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Weaviate Write Path",
+            "steps": [
+              {
+                "label": "Application",
+                "sub": "INSERT object JSON"
+              },
+              {
+                "label": "Vectorizer Module",
+                "sub": "e.g. text2vec-openai calls Embeddings API"
+              },
+              {
+                "label": "Object Store",
+                "sub": "Stores properties in RocksDB"
+              },
+              {
+                "label": "HNSW Index",
+                "sub": "Inserts vector into ANN graph"
+              },
+              {
+                "label": "Inverted Index",
+                "sub": "Tokenizes text for BM25F keyword search"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "The HNSW vector index"
+        },
+        {
+          "type": "p",
+          "md": "Vector similarity search uses **HNSW (Hierarchical Navigable Small World)** — a graph-based Approximate Nearest Neighbour (ANN) algorithm. HNSW builds a multi-layer graph where each node (vector) is connected to a small set of nearby neighbours. A query starts at the top layer, greedily hops towards the query vector, then descends layer by layer until it has a highly accurate set of top-k candidates. This trades a small amount of recall for dramatically better throughput and latency compared to brute-force comparison."
+        },
+        {
+          "type": "p",
+          "md": "Weaviate also supports a **flat index** (exact brute-force, zero recall loss) for small collections, and a **dynamic index** that automatically migrates from flat to HNSW once the object count crosses a configurable threshold. For large-scale production deployments, quantisation options such as Product Quantisation (PQ) and Rotational Quantisation (RQ) compress stored vectors in memory — RQ is Weaviate's recommended starting point because it offers large memory savings with minimal accuracy loss."
+        },
+        {
+          "type": "h3",
+          "text": "Hybrid search internals"
+        },
+        {
+          "type": "p",
+          "md": "A hybrid query runs two searches in parallel: a dense vector search over the HNSW index, and a sparse keyword search over the **BM25F inverted index** (BM25F is a field-weighted variant of BM25). The two ranked result lists are then merged using **Reciprocal Rank Fusion (RRF)** or a **relative score fusion** algorithm, depending on the `fusionType` you configure. You control the blend with the `alpha` parameter: `alpha=0` is pure BM25 keyword search, `alpha=1` is pure vector search, and `alpha=0.75` (the default) weights the result more toward semantic similarity while still surfacing exact-match hits."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "Hybrid Search — Parallel Retrieval and Fusion",
+            "root": {
+              "label": "Query: 'fast vector search open source'"
+            },
+            "children": [
+              {
+                "label": "Dense search (HNSW)",
+                "sub": "Finds semantically similar vectors"
+              },
+              {
+                "label": "Sparse search (BM25F)",
+                "sub": "Matches exact keywords in inverted index"
+              },
+              {
+                "label": "Fusion (RRF)",
+                "sub": "Merges ranked lists; alpha controls weight"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Vectorizer and generative modules"
+        },
+        {
+          "type": "p",
+          "md": "Weaviate's **module system** is what separates it from lower-level vector stores. At collection-definition time you declare which modules to activate. **Vectorizer modules** (`text2vec-openai`, `text2vec-cohere`, `text2vec-huggingface`, `text2vec-transformers`, `img2vec-neural`, and others) intercept every insert and query to call the appropriate embedding API automatically. **Generative modules** (`generative-openai`, `generative-cohere`, `generative-google`, `generative-aws`) let you tack an LLM generation step onto any search query — Weaviate retrieves the top-k results and passes them to the LLM, returning a synthesised answer alongside the raw objects."
+        }
+      ]
+    },
+    {
+      "id": "schema-and-collections",
+      "title": "Defining Collections and Properties",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every Weaviate collection has an explicit **schema** — a typed list of properties and the modules attached to it. This schema-first approach is stricter than document databases like MongoDB, but it gives you automatic validation, consistent tokenization settings per property, and the ability to apply different vectorizers to different properties or even name multiple vector fields on the same object."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "import weaviate\nfrom weaviate.classes.config import Configure, Property, DataType\n\nclient = weaviate.connect_to_weaviate_cloud(\n    cluster_url=\"https://<your-cluster>.weaviate.network\",\n    auth_credentials=weaviate.auth.AuthApiKey(\"<your-api-key>\"),\n)\n\n# Create a collection with an OpenAI vectorizer\nclient.collections.create(\n    name=\"Article\",\n    vectorizer_config=Configure.Vectorizer.text2vec_openai(),\n    generative_config=Configure.Generative.openai(),\n    properties=[\n        Property(name=\"title\", data_type=DataType.TEXT),\n        Property(name=\"body\",  data_type=DataType.TEXT),\n        Property(name=\"publishedAt\", data_type=DataType.DATE),\n    ],\n)\n\nprint(\"Collection created.\")\nclient.close()"
+        },
+        {
+          "type": "p",
+          "md": "With the collection defined, every `insert` call automatically vectorizes the `title` and `body` fields via the OpenAI Embeddings API before storing them. You never write embedding code in your application layer — just insert plain objects and let the module handle the rest."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "articles = client.collections.get(\"Article\")\n\n# Semantic (near_text) search\nresults = articles.query.near_text(\n    query=\"open source vector search engines\",\n    limit=5,\n)\nfor obj in results.objects:\n    print(obj.properties[\"title\"])\n\n# Hybrid search — alpha=0.6 weights toward vectors\nhybrid_results = articles.query.hybrid(\n    query=\"open source vector search engines\",\n    alpha=0.6,\n    limit=5,\n)\n\n# RAG — generate a summary from the top results\nrag_result = articles.generate.near_text(\n    query=\"open source vector search engines\",\n    single_prompt=\"Summarise this article in one sentence: {title} {body}\",\n    limit=3,\n)\nfor obj in rag_result.objects:\n    print(obj.generated)"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Use the `hybrid()` method with `alpha=0.75` as your default starting point. Drop `alpha` toward `0.5` if your domain has a lot of jargon or product codes where exact keyword matching matters more."
+        }
+      ]
+    },
+    {
+      "id": "weaviate-vs-alternatives",
+      "title": "Weaviate vs Other Vector Databases",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Choosing a vector database usually comes down to three dimensions: **how much ops burden you will accept**, **whether you need built-in vectorization**, and **how demanding your filtering requirements are**. The table below compares the most common open-source alternatives at a high level."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "",
+            "Weaviate",
+            "Qdrant",
+            "ChromaDB",
+            "pgvector"
+          ],
+          "rows": [
+            [
+              "Language",
+              "Go",
+              "Rust",
+              "Python",
+              "C (PostgreSQL extension)"
+            ],
+            [
+              "Built-in vectorizers",
+              "Yes — module system",
+              "No",
+              "Yes (simple)",
+              "No"
+            ],
+            [
+              "Hybrid search",
+              "Yes — BM25F + HNSW",
+              "Yes — sparse + dense",
+              "No",
+              "Via `tsvector` + manual fusion"
+            ],
+            [
+              "Native RAG (generative module)",
+              "Yes",
+              "No",
+              "No",
+              "No"
+            ],
+            [
+              "ANN algorithm",
+              "HNSW (+ flat, dynamic)",
+              "HNSW + IVF",
+              "HNSW",
+              "IVFFlat or HNSW"
+            ],
+            [
+              "Multi-tenancy",
+              "First-class support",
+              "Collections-level isolation",
+              "Basic namespaces",
+              "Row-level security"
+            ],
+            [
+              "Managed cloud",
+              "Weaviate Cloud",
+              "Qdrant Cloud",
+              "No official cloud",
+              "Various PG hosts"
+            ],
+            [
+              "Best for",
+              "RAG + semantic search with low pipeline overhead",
+              "High-throughput filtered search",
+              "Local prototyping",
+              "Existing PostgreSQL stack"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "**Weaviate vs Qdrant** is the most common head-to-head. Qdrant's Rust core delivers roughly 4x higher requests-per-second on pure vector workloads and excels at complex payload filtering (it builds per-filter HNSW graphs rather than post-filtering). Weaviate wins on developer experience when you want built-in vectorization, native hybrid search, and a generative module — less code, fewer services. For a production system handling hundreds of millions of vectors with strict latency SLAs, Qdrant is often the better foundation; for a team shipping a RAG product quickly without a dedicated ML infra engineer, Weaviate cuts build time significantly."
+        },
+        {
+          "type": "p",
+          "md": "**Weaviate vs ChromaDB**: Chroma is optimised for local development and fast prototyping — it starts with a single `pip install` and no configuration. Weaviate is production-grade from the start: replication, sharding, multi-tenancy, and HNSW all ship out of the box. Move from Chroma to Weaviate when your data outgrows a single machine or you need hybrid search."
+        }
+      ]
+    },
+    {
+      "id": "deployment-and-multi-tenancy",
+      "title": "Deployment, Multi-Tenancy, and Pricing",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Weaviate ships as a single Docker image, so the fastest way to start locally is a one-liner that also spins up the `text2vec-transformers` module as a sidecar:"
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "code": "# Minimal local setup with OpenAI vectorizer (no sidecar needed)\ndocker run -p 8080:8080 -p 50051:50051 \\\n  -e ENABLE_MODULES='text2vec-openai,generative-openai' \\\n  -e OPENAI_APIKEY='sk-...' \\\n  cr.weaviate.io/semitechnologies/weaviate:latest"
+        },
+        {
+          "type": "p",
+          "md": "For production, Weaviate Cloud (managed service) removed the ops burden of running Kubernetes. As of late 2025 it offers three tiers: **Flex** (shared cloud, ~$45/month, 99.5% SLA), **Plus** (dedicated or shared, ~$280/month annual, 99.9% SLA), and **Premium** (custom pricing, dedicated or Bring-Your-Own-Cloud, 99.95% SLA, HIPAA eligible). Billing is metric-based — you pay per million vector dimensions stored per month, per GiB of object storage, and per GiB of backup storage."
+        },
+        {
+          "type": "p",
+          "md": "**Multi-tenancy** in Weaviate lets one collection serve thousands of isolated customers with no cross-contamination of data. Each tenant gets its own storage shard — you can individually activate or deactivate tenants to control memory usage. This matters for SaaS builders: instead of creating a separate Weaviate cluster per customer, you create one collection with multi-tenancy enabled and pass a `tenant` parameter on every read and write."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Multi-tenancy is configured **at collection creation time** and cannot be changed afterwards. Decide whether you need it before you create the collection, because migrating data into a new multi-tenant collection requires a full re-import."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going Deeper with Weaviate",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you are comfortable with basic hybrid search and the vectorizer modules, the following features become relevant as your use case grows."
+        },
+        {
+          "type": "h3",
+          "text": "Named vectors (multi-vector objects)"
+        },
+        {
+          "type": "p",
+          "md": "A single Weaviate object can carry **multiple named vector representations**. For example, an e-commerce product might have one vector for its text description (via `text2vec-openai`) and a separate vector for its thumbnail image (via `img2vec-neural`). You query against a specific named vector, letting you run a text query against the description vector and an image query against the image vector on the same collection without duplicating objects."
+        },
+        {
+          "type": "h3",
+          "text": "Cross-references and graph traversal"
+        },
+        {
+          "type": "p",
+          "md": "Weaviate supports **cross-references** between objects in different collections, similar to a foreign key. You can model a `Review` collection that references a `Product` collection and traverse the link in a single query to fetch the product's properties alongside the review's vector search result. This makes Weaviate a lightweight knowledge-graph layer on top of a vector index — useful when your RAG chunks need to carry structured metadata about the entities they mention."
+        },
+        {
+          "type": "h3",
+          "text": "Quantisation and memory optimisation"
+        },
+        {
+          "type": "p",
+          "md": "At large scale, HNSW in-memory cost dominates. Weaviate offers **Product Quantisation (PQ)** — which compresses each 1536-dimension OpenAI embedding from ~6 KB to under 100 bytes — and **Rotational Quantisation (RQ)**, the recommended default since it provides comparable compression with almost no drop in recall. Enable quantisation at index creation time by setting `quantizer` in the vector index configuration; it cannot be applied retroactively to an existing non-quantised index."
+        },
+        {
+          "type": "h3",
+          "text": "Replication and sharding"
+        },
+        {
+          "type": "p",
+          "md": "Weaviate supports **horizontal sharding** to distribute a large collection across multiple nodes, and **configurable replication factors** (default 1 for single-node; set to 3 for high-availability clusters). Write consistency is configurable — choose `ONE`, `QUORUM`, or `ALL` depending on whether you prioritise write throughput or durability. Read consistency mirrors the same three levels. For most RAG applications, `QUORUM` writes and `ONE` reads strike the right balance."
+        },
+        {
+          "type": "h3",
+          "text": "The gRPC API and performance"
+        },
+        {
+          "type": "p",
+          "md": "From Weaviate v1.23 onwards the Python client (v4+) uses **gRPC** for data operations instead of the older GraphQL/REST path. The gRPC path reduces per-query overhead significantly — benchmarks show 2-3x higher throughput versus the REST interface for batch imports and search. The v4 Python client (`pip install weaviate-client>=4`) targets gRPC by default; stick to v4+ for any new project."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Use `client.batch.dynamic()` for bulk imports. It auto-tunes batch size and concurrency based on server feedback, giving near-optimal ingest throughput without manual tuning."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Does Weaviate generate embeddings automatically?",
+      "a": "Yes — if you configure a vectorizer module (such as `text2vec-openai` or `text2vec-cohere`) on a collection, Weaviate calls the embedding API automatically on every insert and query. You never write embedding code in your application. If you prefer to bring your own vectors, just omit the vectorizer and pass a `vector` field manually when inserting."
+    },
+    {
+      "q": "What does the alpha parameter do in hybrid search?",
+      "a": "The `alpha` parameter controls the weight between dense vector search and sparse BM25F keyword search. `alpha=0` returns pure BM25 keyword results, `alpha=1` returns pure vector similarity results, and the default `alpha=0.75` blends them with a heavier weight on semantic similarity. Increase `alpha` when meaning matters more than exact wording; decrease it when precise terms like product codes or legal citations must match."
+    },
+    {
+      "q": "Is Weaviate free to use?",
+      "a": "The open-source version of Weaviate is free to self-host under the BSD-3-Clause licence. Weaviate Cloud offers a free sandbox tier suitable for development and small projects. Paid tiers start at around $45/month for the Flex shared-cloud plan and $280/month for the Plus dedicated plan (as of 2025)."
+    },
+    {
+      "q": "How does Weaviate compare to Qdrant for production workloads?",
+      "a": "Qdrant's Rust core delivers roughly 4x higher requests-per-second on pure vector workloads and handles complex payload filters without sacrificing recall. Weaviate is stronger when you want built-in vectorizers, native hybrid search, generative (RAG) modules, and cross-reference graph traversal. For a team optimising for developer velocity on a RAG application, Weaviate saves significant setup time; for infra teams targeting p99 latency under heavy filter conditions, Qdrant is often the better fit."
+    },
+    {
+      "q": "What is multi-tenancy in Weaviate and when do I need it?",
+      "a": "Multi-tenancy lets a single Weaviate collection serve thousands of isolated tenants — each with its own storage shard — without data leaking across customers. You need it when building a SaaS product where every user or organisation must see only their own data. Enable it at collection creation time (`multi_tenancy_config=Configure.multi_tenancy(enabled=True)`); it cannot be added to an existing collection."
+    },
+    {
+      "q": "Can Weaviate run RAG without an external LLM orchestration framework?",
+      "a": "Yes. With a generative module configured (for example `generative-openai`), you can call `collection.generate.near_text()` and Weaviate will retrieve the top-k results, pass them to the LLM inside the query, and return a generated answer alongside the raw objects — all in one round-trip to the database. This replaces the need for a separate LangChain or LlamaIndex retrieval step for simple RAG pipelines."
+    }
+  ],
+  "related": [
+    "what-are-embeddings",
+    "how-text-embeddings-work",
+    "what-is-semantic-search",
+    "how-to-choose-embedding-model"
+  ],
+  "furtherReading": [
+    {
+      "title": "Weaviate Documentation — Concepts Overview",
+      "url": "https://weaviate.io/developers/weaviate"
+    },
+    {
+      "title": "Hybrid Search Explained — Weaviate Blog",
+      "url": "https://weaviate.io/blog/hybrid-search-explained"
+    },
+    {
+      "title": "Weaviate Quickstart Guide",
+      "url": "https://docs.weaviate.io/weaviate/quickstart"
+    }
+  ]
+}

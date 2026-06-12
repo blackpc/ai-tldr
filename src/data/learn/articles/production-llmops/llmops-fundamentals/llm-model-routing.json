@@ -1,0 +1,406 @@
+{
+  "slug": "llm-model-routing",
+  "title": "What Is Model Routing? Sending Easy Queries to Cheap Models",
+  "seoTitle": "Model Routing: Send Easy Queries to Cheap Models",
+  "metaDescription": "Model routing sends each request to the cheapest model that can handle it. How routers classify queries, and when routing saves serious money.",
+  "keywords": [
+    "what is llm model routing",
+    "route queries to cheaper models",
+    "llm router how it works",
+    "model routing cost savings"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn how model routers decide which requests deserve an expensive model and how much routing can actually save.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**Model routing** is the practice of automatically deciding, for each incoming request, which AI model should handle it — and defaulting to the cheapest model that can do the job well enough. Instead of sending every query to one powerful, expensive frontier model, a router sits in front of your model calls and steers easy tasks to small, cheap models while reserving the big, expensive ones for the requests that genuinely need them."
+        },
+        {
+          "type": "p",
+          "md": "Here's a practical analogy. Imagine a law firm that employs both senior partners and junior associates. A senior partner charges ten times the hourly rate of a junior associate. If the partner handled every task — including photocopying, drafting boilerplate letters, and scheduling meetings — the firm would go bankrupt or never take on new clients. Instead, a smart office manager routes each task to the cheapest person qualified to complete it: routine work goes to associates, nuanced strategy goes to partners. Model routing does exactly the same thing for LLM API calls."
+        },
+        {
+          "type": "p",
+          "md": "In practice, a router intercepts each user prompt before it reaches any model, classifies it by difficulty or intent, then forwards it to the model tier that matches. A question like \"What is the capital of France?\" is trivially easy — a small, fast model handles it in milliseconds for a fraction of a cent. A question like \"Compare the tradeoffs of three architectural patterns for a distributed payments system with idempotency requirements\" needs deep reasoning and belongs on a frontier model. Without routing, both queries cost the same: frontier-model prices."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Model routing is sometimes called *LLM routing*, *query routing*, or *model selection*. The core idea is always the same: match query complexity to model capability rather than defaulting to your strongest (and most expensive) model for everything."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The cost problem routing solves is structural. Frontier model pricing — think GPT-4o, Claude 3.5 Sonnet, or Gemini 1.5 Pro tiers — exists because those models are genuinely powerful, but that power is wasted on simple tasks. At the same time, most real-world traffic is not uniformly complex: support bots see thousands of trivial greetings for every deep technical question, coding assistants autocomplete simple boilerplate far more often than they design novel algorithms, and RAG apps answer many factual lookups for each complex synthesis query."
+        },
+        {
+          "type": "p",
+          "md": "Research from LMSYS's RouteLLM project (published at ICLR 2025) quantified this precisely. Their best router maintained 95% of GPT-4's answer quality while routing only 14% of queries to GPT-4 — cutting the frontier-model bill by 86% on conversational benchmarks. Even on structured tasks like MMLU and GSM8K, savings ranged from 35% to 46%. At 100,000 queries per day, that difference can exceed $150,000 per year in saved API spend."
+        },
+        {
+          "type": "h3",
+          "text": "The quality-cost tradeoff is adjustable"
+        },
+        {
+          "type": "p",
+          "md": "Model routing does not force you to pick between quality and cost as a binary. Every router exposes a threshold you tune: a higher threshold routes more requests to cheaper models (lower cost, slightly lower average quality), while a lower threshold routes more to the strong model (higher cost, higher average quality). Most production teams find a sweet spot where the router handles 50–80% of traffic on cheaper models with no perceptible quality drop for their specific use case."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Cost reduction** — 40–85% cheaper API bills on high-volume workloads, depending on traffic mix and threshold.",
+            "**Lower latency for easy requests** — small models respond faster; routing simple queries to them reduces median response time.",
+            "**Multi-provider resilience** — routing across providers adds failover: if one model endpoint degrades, the router can shift traffic.",
+            "**Capability matching** — some models excel at code, others at summarization, others at tool use. Routing can optimize for quality, not just cost."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Routing does not fix a poorly-designed prompt or a weak base model. If your cheap-tier model returns poor-quality answers on the tasks you route to it, the savings are illusory — you're buying customer complaints at a discount. Always evaluate output quality per route tier before relying on cost savings."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A model router is a classification layer that intercepts the prompt before any model sees it. In the simplest form, it runs a lightweight classifier — far cheaper than calling a frontier model — that assigns a difficulty score or intent label to the prompt. That score maps to a model tier in a configuration table. The prompt then goes to the assigned model, and the response comes back through the router to the caller."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Request flow through a model router",
+            "steps": [
+              {
+                "label": "Incoming prompt",
+                "sub": "from your application"
+              },
+              {
+                "label": "Router classifier",
+                "sub": "scores difficulty / intent"
+              },
+              {
+                "label": "Routing decision",
+                "sub": "maps score to model tier"
+              },
+              {
+                "label": "Model tier dispatch",
+                "sub": "small / mid / frontier"
+              },
+              {
+                "label": "Response returned",
+                "sub": "back to caller unchanged"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Router classification methods"
+        },
+        {
+          "type": "p",
+          "md": "There are four main approaches to building the classification step, each with a different tradeoff between accuracy and overhead:"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Method",
+            "How it works",
+            "Latency overhead",
+            "Accuracy"
+          ],
+          "rows": [
+            [
+              "Rule-based",
+              "Keyword matching, prompt length, regex patterns",
+              "10–50 ms",
+              "Low on complex queries"
+            ],
+            [
+              "Embedding similarity",
+              "Encode prompt, measure cosine distance to example clusters",
+              "50–200 ms",
+              "Good for intent routing"
+            ],
+            [
+              "Lightweight classifier",
+              "Fine-tuned BERT or small LM produces a difficulty score",
+              "50–150 ms",
+              "Good across difficulty levels"
+            ],
+            [
+              "LLM-as-judge",
+              "A small LLM evaluates difficulty and returns a routing label",
+              "500–2000 ms",
+              "High, but adds latency + cost"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "RouteLLM, the most-studied open-source framework, ships four router types: a BERT-based classifier, a causal LLM classifier, a matrix factorization model, and a similarity-weighted ranking method. The matrix factorization router consistently outperforms the others once trained on preference data — it learns from human preferences about which queries actually required the stronger model, effectively learning the boundary between easy and hard."
+        },
+        {
+          "type": "h3",
+          "text": "The win-rate threshold mechanism"
+        },
+        {
+          "type": "p",
+          "md": "RouteLLM frames routing as a probability estimate: given prompt *q*, what is the probability that the strong model produces a better answer than the weak model? That probability — called the *win rate* — is compared against a user-set threshold *α*. If P(strong wins | q) < α, the query goes to the weak model. Raising α sends more traffic to the cheap model; lowering it sends more to the strong model. This single knob lets you dial in the exact cost-quality tradeoff your product requires."
+        },
+        {
+          "type": "h3",
+          "text": "Cascade routing as an alternative"
+        },
+        {
+          "type": "p",
+          "md": "Some systems use a *cascade* instead of a single upfront classifier. The cascade sends every query to the cheap model first, then checks whether the response meets a confidence threshold. If confidence is low — the model hedged, expressed uncertainty, or returned an empty tool call — the system automatically re-sends the original query to the stronger model. Cascades avoid classifier training but add latency on re-routed queries, since those queries make two model calls instead of one."
+        }
+      ]
+    },
+    {
+      "id": "routing-in-practice",
+      "title": "Routing in practice: tools and patterns",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Several production-grade tools implement model routing today. The right choice depends on whether you want a managed service, an open-source framework, or a gateway with routing built in."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Tool",
+            "Type",
+            "Routing approach",
+            "Best for"
+          ],
+          "rows": [
+            [
+              "RouteLLM (LMSYS)",
+              "Open-source library",
+              "Trained classifiers (BERT, matrix factorization)",
+              "Teams who want a tunable, research-backed router"
+            ],
+            [
+              "LiteLLM Router",
+              "Open-source gateway",
+              "Cost-based, latency-based, usage-based strategies",
+              "Self-hosted teams managing multiple providers"
+            ],
+            [
+              "OpenRouter Auto Router",
+              "Managed service",
+              "Learned router powered by NotDiamond",
+              "Zero-ops access to 300+ models with smart selection"
+            ],
+            [
+              "Portkey",
+              "Managed gateway",
+              "Conditional routing rules + load balancing",
+              "Production teams needing guardrails + observability"
+            ],
+            [
+              "NVIDIA LLM Router",
+              "Blueprint / reference",
+              "Small-LM difficulty classifier",
+              "On-prem / cloud deployments with NVIDIA infra"
+            ]
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "A minimal routing setup with LiteLLM"
+        },
+        {
+          "type": "p",
+          "md": "LiteLLM's router lets you define a model list and pick a routing strategy in a config file. The `cost-based-routing` strategy automatically forwards each request to the cheapest model that satisfies your latency and RPM constraints:"
+        },
+        {
+          "type": "code",
+          "lang": "yaml",
+          "code": "model_list:\n  - model_name: gpt-4o\n    litellm_params:\n      model: openai/gpt-4o\n      api_key: os.environ/OPENAI_API_KEY\n  - model_name: gpt-4o-mini\n    litellm_params:\n      model: openai/gpt-4o-mini\n      api_key: os.environ/OPENAI_API_KEY\n  - model_name: claude-haiku\n    litellm_params:\n      model: anthropic/claude-haiku-3-5\n      api_key: os.environ/ANTHROPIC_API_KEY\n\nrouter_settings:\n  routing_strategy: cost-based-routing\n  num_retries: 2\n  fallbacks:\n    - gpt-4o-mini:\n        - gpt-4o"
+        },
+        {
+          "type": "p",
+          "md": "With this config, routine queries land on the cheapest eligible model. Only when cheaper options are rate-limited or marked unhealthy does the router escalate. You can layer in budget caps (`max_budget`) and latency constraints (`timeout`) to add more routing criteria without writing a custom classifier."
+        },
+        {
+          "type": "h3",
+          "text": "Intent-based routing for multi-domain apps"
+        },
+        {
+          "type": "p",
+          "md": "If your app handles distinct query types — billing questions, technical support, creative writing, and code review — an *intent-based* router assigns each category a different model, not just a different tier. Billing questions might go to a fine-tuned model with your pricing data in context. Code review might go to a model known to excel at code. This is semantic routing: the router matches the query against example intent clusters using embeddings, then dispatches to the model best suited for that intent."
+        }
+      ]
+    },
+    {
+      "id": "pitfalls-and-tradeoffs",
+      "title": "Pitfalls and tradeoffs",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Model routing is not free, and several common mistakes turn a cost-saving idea into a new source of problems."
+        },
+        {
+          "type": "h3",
+          "text": "The router latency paradox"
+        },
+        {
+          "type": "p",
+          "md": "A component designed to reduce cost and latency must itself be fast and cheap. An LLM-based classifier that takes 1,500 ms to decide routing adds a full second to every request — at that point, you'd be better off routing nothing and just paying for the strong model. Keep the classification step under 200 ms if possible: lightweight BERT classifiers, embedding lookups, and rule-based heuristics stay in that window. LLM-as-judge classifiers don't."
+        },
+        {
+          "type": "h3",
+          "text": "Over-engineering the rules"
+        },
+        {
+          "type": "p",
+          "md": "The temptation is to build a routing system with dozens of conditions — query length, detected entities, session history, previous model tier, time of day. In practice, empirical evidence consistently shows that a few simple rules handle 90–95% of traffic effectively. Start with two tiers and one heuristic (prompt length or keyword presence), measure quality by tier, then add complexity only where you see a measurable gap. Many teams spend weeks building sophisticated classifiers and discover a five-rule heuristic would have done the job."
+        },
+        {
+          "type": "h3",
+          "text": "Threshold calibration"
+        },
+        {
+          "type": "p",
+          "md": "Setting the routing threshold too aggressively (routing everything cheap) degrades quality on borderline queries that genuinely need more capability. Setting it too conservatively negates the cost savings. The right threshold is use-case-specific and should be calibrated by running a sample of your real traffic through both tiers and comparing outputs using an LLM judge or a human eval. Recalibrate whenever your traffic mix or prompt templates change significantly."
+        },
+        {
+          "type": "h3",
+          "text": "Cold-model latency"
+        },
+        {
+          "type": "p",
+          "md": "If you self-host models and a target tier is cold (weights not loaded into VRAM), routing a query there can stall for 3–15 seconds while the model loads. Keep at least one warm instance of each tier you route to in production, or use provider APIs that guarantee hot serving. Cold-start latency turns a routing win into a user-experience regression."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Always instrument routing decisions in your observability stack. Log which model tier handled each request, the latency, token counts, and — if you run evals — the quality score. Without this data, you cannot tell whether your routing thresholds are set correctly or whether a model update has shifted the quality of a tier."
+        },
+        {
+          "type": "h3",
+          "text": "Adversarial prompt manipulation"
+        },
+        {
+          "type": "p",
+          "md": "Research from 2025 (RerouteGuard) showed that keyword-based routers can be deliberately fooled: an attacker adds innocuous-sounding filler text that triggers the \"easy\" classification while embedding a complex or malicious instruction. Classifier-based routers trained on preference data are more robust to this, since they score semantic difficulty rather than surface features. If your routing includes any safety-relevant decisions (routing to a model with fewer guardrails, for example), use a robust classifier and monitor for unexpected routing distributions."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you've shipped a basic router, several advanced directions are worth exploring."
+        },
+        {
+          "type": "h3",
+          "text": "Training your own router on production data"
+        },
+        {
+          "type": "p",
+          "md": "The strongest routing signal is your own traffic. Once you've run both a cheap model and a strong model on a representative sample of your queries, you can label the outcomes — which queries the cheap model handled acceptably, which it fumbled — and train a lightweight classifier on those labels. RouteLLM's documentation walks through this: use a GPT-4-class model as an offline judge to auto-label a preference dataset, then fine-tune a BERT-scale classifier on it. The resulting router is calibrated to your domain rather than to generic benchmark data."
+        },
+        {
+          "type": "h3",
+          "text": "Combining routing with caching"
+        },
+        {
+          "type": "p",
+          "md": "Semantic caching and routing are complementary: the cache layer handles repeated or near-identical queries by returning a stored result (zero model call), and the router handles novel queries by dispatching to the cheapest appropriate model. Together, they form a two-stage cost filter. A production stack might check the cache first, fall through to the cheap model for a cache miss on an easy query, and only reach the frontier model for genuinely novel hard queries — dramatically reducing the frontier-model call rate."
+        },
+        {
+          "type": "h3",
+          "text": "Dynamic routing with feedback loops"
+        },
+        {
+          "type": "p",
+          "md": "Static routing rules degrade as model capabilities evolve. A small model that was marginal six months ago may now handle your borderline queries well, thanks to a provider update. Conversely, a frontier model that was reliably excellent may drift. Closing the loop — running periodic offline evals that re-score each tier against your traffic sample and automatically update the threshold — turns routing from a one-time configuration task into a continuously self-improving system."
+        },
+        {
+          "type": "h3",
+          "text": "Routing for reasoning models"
+        },
+        {
+          "type": "p",
+          "md": "Reasoning models (those that spend tokens on chain-of-thought traces before answering) add a new routing dimension: *thinking budget*. Some tasks need extended reasoning; others don't. A router that classifies queries as requiring deep reasoning versus fast retrieval can dispatch to a reasoning model with a high thinking-token budget for the hard case, and to a small fast model for the easy case, avoiding the substantial latency and cost that reasoning traces add to simple questions."
+        },
+        {
+          "type": "h3",
+          "text": "Multi-objective routing"
+        },
+        {
+          "type": "p",
+          "md": "Production routers often optimize for more than one objective simultaneously. A routing policy might minimize cost subject to a latency SLA (p95 < 2 seconds) and a quality floor (eval score > 0.85). Formulating routing as a constrained optimization problem — rather than a single threshold on a difficulty score — gives you explicit control over each dimension and makes the tradeoffs legible to stakeholders. Tools like LiteLLM support latency budgets and cost caps as first-class router configuration; more sophisticated setups frame it as a bandit problem and learn the policy online."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Does model routing require training a custom classifier?",
+      "a": "No. You can start with simple heuristics — prompt length, keyword presence, or query category detected by a regex — and get meaningful savings without any ML training. Trained classifiers (like RouteLLM's matrix factorization or BERT router) improve accuracy, especially on borderline queries, but they require labeled preference data from your traffic. Most teams start rule-based, measure quality gaps by tier, and add a trained classifier only if the heuristics leave money on the table."
+    },
+    {
+      "q": "How much can model routing actually save?",
+      "a": "It depends heavily on your traffic mix and the price gap between tiers. LMSYS's RouteLLM research showed 35–86% cost reductions while maintaining 95% of frontier-model quality, depending on the benchmark. Real-world production deployments typically report 40–70% reductions. The savings are largest when a high fraction of your traffic is genuinely simple — FAQ answering, structured extraction, single-hop lookups — and smallest when most queries require complex multi-step reasoning."
+    },
+    {
+      "q": "What's the difference between model routing and load balancing?",
+      "a": "Load balancing distributes requests across multiple instances of the *same* model to avoid rate limits or reduce latency. Model routing sends different requests to *different models* based on what each request needs. They are complementary: load balancing operates within a tier; routing operates across tiers. Tools like LiteLLM do both simultaneously — routing to the appropriate model tier, then load-balancing across multiple deployments of that tier."
+    },
+    {
+      "q": "Will users notice lower quality on routed queries?",
+      "a": "On queries that are genuinely easy, a well-chosen small model produces answers that are indistinguishable from a frontier model's output. The risk is on borderline queries where the router mislabels a hard question as easy. Good threshold calibration — running evals on your actual traffic mix — and monitoring quality metrics per tier catch this before users notice. Most production teams find that 60–80% of their traffic is genuinely easy enough for a mid-tier model."
+    },
+    {
+      "q": "Can I route to different providers, not just different models?",
+      "a": "Yes, and that's one of the most useful patterns. Routing to OpenAI for code tasks, Anthropic for reasoning-heavy queries, and a self-hosted Llama model for simple lookups lets you optimize for quality per task type and adds resilience — if one provider has an outage, the router can fall back to another. Gateways like LiteLLM and Portkey are designed specifically for multi-provider routing."
+    },
+    {
+      "q": "How does routing interact with system prompts and context windows?",
+      "a": "Each model tier has its own context-window limit and pricing per token for system and user messages. If your system prompt is large (RAG context, tool definitions, lengthy instructions), the per-token savings from routing to a cheap model are amplified — every token in context is cheaper. But if the cheap model has a smaller context window than the frontier model, you may need to truncate context for cheap-tier calls, which can hurt quality on context-heavy queries. Check context limits per tier before routing."
+    }
+  ],
+  "related": [
+    "what-is-llmops",
+    "llm-prototype-to-production",
+    "llm-provider-failover",
+    "what-is-llm-observability",
+    "production-llm-stack"
+  ],
+  "furtherReading": [
+    {
+      "title": "RouteLLM: An Open-Source Framework for Cost-Effective LLM Routing (LMSYS Blog)",
+      "url": "https://www.lmsys.org/blog/2024-07-01-routellm/"
+    },
+    {
+      "title": "RouteLLM: Learning to Route LLMs with Preference Data (arXiv)",
+      "url": "https://arxiv.org/pdf/2406.18665"
+    },
+    {
+      "title": "LLM Routing: How to Stop Paying Frontier Model Prices for Simple Queries",
+      "url": "https://tianpan.co/blog/2025-10-19-llm-routing-production"
+    }
+  ]
+}

@@ -1,0 +1,429 @@
+{
+  "slug": "what-is-instructor-library",
+  "title": "What Is Instructor? Structured Outputs for Any Model",
+  "seoTitle": "What Is the Instructor Library? Structured Outputs",
+  "metaDescription": "Instructor patches your LLM client so responses come back as validated Pydantic models — with retries on bad output. Learn how it works in minutes.",
+  "keywords": [
+    "what is instructor python library",
+    "instructor structured outputs tutorial",
+    "pydantic validation of llm output",
+    "instructor vs native structured outputs",
+    "extract json from llm reliably"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn how one small library turns any model's messy text into validated Pydantic objects, with automatic retries when the output doesn't fit.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "LLMs are text machines. You send them a prompt and they send back a string. If you need that string to be a customer record, a list of extracted entities, or a structured report with specific fields, you have to parse it yourself — and hope the model followed your instructions perfectly. Most of the time it does. Sometimes it doesn't, and your parser crashes at 2 a.m."
+        },
+        {
+          "type": "p",
+          "md": "**Instructor** is a small Python library (also available in TypeScript, Go, Ruby, and more) that wraps your existing LLM client and adds one superpower: the response comes back as a validated **Pydantic model**, not a raw string. You define the shape of the output once in Python types. Instructor sends that schema to the model, parses what comes back, validates it with Pydantic, and — if validation fails — automatically retries by feeding the error message back to the model so it can self-correct."
+        },
+        {
+          "type": "p",
+          "md": "The analogy is a **strict JSON API contract**. Imagine you hired a data-entry clerk (the LLM) to fill out a form. Without Instructor, the clerk can hand back the form any way they like — maybe some fields are missing, maybe the date is in the wrong format. With Instructor, the form is a typed schema; if the clerk fills it out wrong, you hand it back with a red pen explaining every error and ask them to try again. You get back the form only when every field is valid."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Instructor is maintained under [github.com/567-labs/instructor](https://github.com/567-labs/instructor), originally created by Jason Liu (jxnl). As of early 2026 it receives more than **3 million monthly downloads** and is at version 1.15.x."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Raw LLM output causes a whole category of production bugs that never show up during development: the model adds an extra explanation paragraph before the JSON, uses `null` where you needed an empty list, or invents a field name that does not match your schema. These bugs are non-deterministic and intermittent, which makes them the worst kind to debug."
+        },
+        {
+          "type": "h3",
+          "text": "The four problems Instructor solves"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Inconsistent output format** — even with careful prompting, models occasionally drift from your requested JSON structure. Instructor validates every response before it reaches your application code.",
+            "**Manual retry boilerplate** — if you catch a `ValidationError` and want to retry, you need to rewrite the request with the error context. Instructor does this automatically with a configurable retry limit (default: 3).",
+            "**Provider lock-in** — different providers have different APIs for structured output. Instructor exposes one uniform `response_model` parameter regardless of whether the backend is OpenAI, Anthropic, Google Gemini, Mistral, Ollama, or a local model.",
+            "**Schema-to-prompt overhead** — Instructor generates the JSON schema from your Pydantic model and injects it into the request in whatever format the provider expects (function call, tool call, or native JSON schema mode), so you never write schema boilerplate by hand."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "For data extraction pipelines, document parsing, classification systems, and any workflow where downstream code expects a specific data shape, Instructor turns a probabilistic text generator into something that behaves much more like a typed API endpoint."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Instructor is especially valuable with **smaller or cheaper models** that are less reliable at following format instructions. The retry loop compensates for the model's weaker instruction-following — you get structured output without paying GPT-4o prices for every request."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Instructor uses a **patch pattern**: it wraps your existing LLM client object and intercepts `chat.completions.create()` (or the provider equivalent). The only change to your code is adding `response_model=YourPydanticClass` to the call. Everything else — schema generation, mode selection, parsing, validation, retry — happens inside the library."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Instructor request lifecycle",
+            "steps": [
+              {
+                "label": "You define a Pydantic model",
+                "sub": "fields, types, validators"
+              },
+              {
+                "label": "Instructor generates JSON schema",
+                "sub": "from the model class"
+              },
+              {
+                "label": "Schema injected into LLM request",
+                "sub": "as tool call / JSON schema / prompt"
+              },
+              {
+                "label": "LLM returns structured text",
+                "sub": "JSON or function-call arguments"
+              },
+              {
+                "label": "Pydantic validates the response",
+                "sub": "type checks + custom validators"
+              },
+              {
+                "label": "Validation passes → return model instance",
+                "sub": "or fail → retry with error context"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Patching your client"
+        },
+        {
+          "type": "p",
+          "md": "You patch the client once at startup using `instructor.from_openai()`, `instructor.from_anthropic()`, or the unified `instructor.from_provider()` helper. The patched client has the same interface as the original, so no other code needs to change."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Basic Instructor usage",
+          "code": "import instructor\nfrom openai import OpenAI\nfrom pydantic import BaseModel\n\n# Patch once at startup\nclient = instructor.from_openai(OpenAI())\n\n# Define the shape you want\nclass UserInfo(BaseModel):\n    name: str\n    age: int\n    email: str\n\n# Call the model — response comes back as a UserInfo instance\nuser = client.chat.completions.create(\n    model=\"gpt-4o-mini\",\n    response_model=UserInfo,\n    messages=[\n        {\"role\": \"user\", \"content\": \"Extract: John Doe, 34, john@example.com\"}\n    ],\n)\n\nprint(user.name)   # 'John Doe'\nprint(user.age)    # 34\nprint(user.email)  # 'john@example.com'"
+        },
+        {
+          "type": "h3",
+          "text": "The retry loop"
+        },
+        {
+          "type": "p",
+          "md": "When Pydantic raises a `ValidationError`, Instructor appends both the model's previous (invalid) response and the full validation error message to the conversation history, then calls the LLM again. The model sees exactly what it got wrong and self-corrects. You can control the number of attempts with `max_retries`."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Custom retry count",
+          "code": "from pydantic import BaseModel, field_validator\n\nclass Product(BaseModel):\n    name: str\n    price_usd: float\n\n    @field_validator('price_usd')\n    @classmethod\n    def price_must_be_positive(cls, v: float) -> float:\n        if v <= 0:\n            raise ValueError('price must be a positive number')\n        return v\n\n# Instructor retries up to 5 times if validation fails\nresult = client.chat.completions.create(\n    model=\"gpt-4o-mini\",\n    response_model=Product,\n    max_retries=5,\n    messages=[{\"role\": \"user\", \"content\": \"Parse: Widget X, free\"}],\n)"
+        },
+        {
+          "type": "h3",
+          "text": "Extraction modes"
+        },
+        {
+          "type": "p",
+          "md": "Instructor selects an **extraction mode** automatically based on the provider, or you can set it explicitly. The mode controls how the schema is communicated to the model."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Mode",
+            "How schema is sent",
+            "Best for"
+          ],
+          "rows": [
+            [
+              "`TOOLS`",
+              "OpenAI-style tool/function call arguments",
+              "OpenAI, Groq, Fireworks, most OpenAI-compatible endpoints"
+            ],
+            [
+              "`JSON_SCHEMA`",
+              "Native structured output / response_format",
+              "OpenAI gpt-4o series with 100% schema compliance guarantee"
+            ],
+            [
+              "`MD_JSON`",
+              "Ask for JSON inside a Markdown code block",
+              "Models that don't support tool calls; local models via Ollama"
+            ],
+            [
+              "`TOOLS_STRICT`",
+              "Tool call with additionalProperties:false",
+              "When strict schema adherence is required on OpenAI"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "multi-provider-support",
+      "title": "Multi-provider support",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "One of Instructor's biggest practical wins is that the same `response_model` pattern works across every supported provider. Switching from OpenAI to Anthropic Claude or Google Gemini is a one-line change — just swap the client."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Switching providers",
+          "code": "import instructor\nimport anthropic\nfrom pydantic import BaseModel\n\n# Patch Anthropic's client instead\nclient = instructor.from_anthropic(anthropic.Anthropic())\n\nclass Summary(BaseModel):\n    headline: str\n    key_points: list[str]\n    sentiment: str\n\nsummary = client.messages.create(\n    model=\"claude-3-5-sonnet-20241022\",\n    max_tokens=1024,\n    response_model=Summary,\n    messages=[{\"role\": \"user\", \"content\": \"Summarise this earnings call...\"}],\n)\n\nprint(summary.headline)\nprint(summary.key_points)"
+        },
+        {
+          "type": "p",
+          "md": "The unified `instructor.from_provider()` helper accepts provider strings like `\"openai/gpt-4o-mini\"` or `\"anthropic/claude-3-5-haiku-latest\"`, removing even the need to import the underlying SDK directly in most cases."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**OpenAI** — GPT-4o, GPT-4o-mini, o1, o3 series; TOOLS, JSON_SCHEMA, TOOLS_STRICT modes",
+            "**Anthropic** — Claude 3 and 3.5 family; TOOLS mode (tool use)",
+            "**Google Gemini** — via `instructor.from_gemini()`",
+            "**Mistral, Cohere, Groq, Fireworks** — all OpenAI-compatible",
+            "**Ollama / local models** — via MD_JSON or JSON mode for models without native tool support",
+            "**DeepSeek, Together AI, Azure OpenAI** — full support with OpenAI-compatible adapter"
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Instructor also ships a TypeScript package (`npm install @instructor-ai/instructor`) with the same `response_model` API, powered by Zod schemas instead of Pydantic."
+        }
+      ]
+    },
+    {
+      "id": "instructor-vs-native-structured-outputs",
+      "title": "Instructor vs. native structured outputs",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Since mid-2024, OpenAI and Anthropic both offer native structured output features — so do you still need Instructor? The answer depends on what you need."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Instructor vs. native structured outputs",
+            "columns": [
+              {
+                "title": "Instructor",
+                "items": [
+                  "Works across 15+ providers",
+                  "Automatic retry with error feedback",
+                  "Full Pydantic validator support",
+                  "No schema subset restrictions",
+                  "Custom field validators & computed fields",
+                  "Streaming partial objects",
+                  "One consistent API surface"
+                ]
+              },
+              {
+                "title": "Native (OpenAI JSON_SCHEMA)",
+                "items": [
+                  "OpenAI-only guarantee",
+                  "100% schema compliance (constrained decoding)",
+                  "Limited JSON schema subset (no minLength etc.)",
+                  "No automatic retry logic",
+                  "No cross-provider portability",
+                  "Zero extra dependency",
+                  "Cheapest option for simple schemas"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Native structured outputs win on **simplicity and cost** for projects that use only one provider and have simple schemas. Instructor wins on **portability, complex validation logic, and model-agnostic code**. In practice, Instructor can use the native JSON_SCHEMA mode under the hood when the provider supports it, so the two approaches are not mutually exclusive — you get native compliance plus Instructor's retry and multi-provider layer on top."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "OpenAI's native structured outputs use constrained decoding — the model is physically prevented from generating tokens that would violate the schema. This makes failures impossible on their end, but the schema subset is restricted. Instructor's retry approach is less strict but more flexible and works everywhere."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls and best practices",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Instructor makes structured extraction reliable, but there are a few patterns that trip people up when starting out."
+        },
+        {
+          "type": "h3",
+          "text": "Pitfall 1: Overly complex schemas"
+        },
+        {
+          "type": "p",
+          "md": "The more deeply nested your Pydantic model, the harder the extraction task is for the model. A schema with seven levels of nesting and forty fields will fail more often than a flat one with five fields — and each failure costs extra tokens in the retry. Start with the minimal schema you actually need, then grow it."
+        },
+        {
+          "type": "h3",
+          "text": "Pitfall 2: Infinite retry loops"
+        },
+        {
+          "type": "p",
+          "md": "By default, Instructor retries up to 3 times. If you set `max_retries` very high on a model that consistently misunderstands your schema, you will burn tokens without success. If retries are regularly failing, the fix is usually a clearer schema or a better model — not more retries."
+        },
+        {
+          "type": "h3",
+          "text": "Pitfall 3: Pydantic error URL token waste"
+        },
+        {
+          "type": "p",
+          "md": "Pydantic automatically appends a documentation URL to every error message. When that error is sent back to the LLM as retry context, the URL consumes tokens without helping the model. Call `instructor.disable_pydantic_error_url()` at startup to strip these URLs from retry messages."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Strip Pydantic error URLs from retries",
+          "code": "import instructor\n\n# Call once before you create any clients\ninstructor.disable_pydantic_error_url()\n\nclient = instructor.from_openai(OpenAI())"
+        },
+        {
+          "type": "h3",
+          "text": "Pitfall 4: Using Optional too liberally"
+        },
+        {
+          "type": "p",
+          "md": "Making every field `Optional[str]` to avoid validation failures means your model instance may be full of `None` values. Prefer required fields with sensible constraints, and use `Optional` only where the information is genuinely absent in the source text. This forces the LLM to extract only what is present and makes downstream code cleaner."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Add a `model_config = ConfigDict(strict=True)` to your Pydantic model to prevent coercions like `\"34\"` being silently cast to `34`. This surfaces type mismatches early in the retry loop rather than letting wrong types through silently."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you are comfortable with basic extraction, Instructor has several advanced features that unlock more powerful patterns."
+        },
+        {
+          "type": "h3",
+          "text": "Streaming partial objects"
+        },
+        {
+          "type": "p",
+          "md": "For long extractions, Instructor supports streaming partial Pydantic objects via `create_partial()`. Your UI can start rendering results while the model is still generating, rather than waiting for the entire response."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Streaming partial response",
+          "code": "from instructor import Partial\n\n# Stream a list of products as they are generated\nfor partial_product in client.chat.completions.create_partial(\n    model=\"gpt-4o-mini\",\n    response_model=Iterable[Product],\n    messages=[{\"role\": \"user\", \"content\": \"List 5 popular Python web frameworks\"}],\n):\n    print(partial_product)  # prints as each item completes"
+        },
+        {
+          "type": "h3",
+          "text": "LLM-powered validators"
+        },
+        {
+          "type": "p",
+          "md": "Pydantic validators are just Python functions, which means you can call the LLM *inside* a validator to check semantic correctness — for example, verifying that a generated summary is factually grounded in the source text. Instructor's `llm_validator` helper makes this pattern concise."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "LLM-powered field validation",
+          "code": "from instructor import llm_validator\nfrom pydantic import field_validator, BaseModel\nfrom typing import Annotated\n\nclass QuestionAnswer(BaseModel):\n    question: str\n    answer: Annotated[\n        str,\n        llm_validator(\n            statement=\"The answer must not include any medical advice.\",\n            client=client,\n            model=\"gpt-4o-mini\",\n        ),\n    ]"
+        },
+        {
+          "type": "h3",
+          "text": "Hooks and observability"
+        },
+        {
+          "type": "p",
+          "md": "Instructor exposes `on_parse_error` and completion hooks so you can log every retry, track token usage, or forward traces to an observability platform like Langfuse or Weights & Biases. You can access the full attempt history from the `InstructorRetryException` if all retries fail."
+        },
+        {
+          "type": "h3",
+          "text": "Instructor vs. PydanticAI"
+        },
+        {
+          "type": "p",
+          "md": "Instructor and PydanticAI both give you Pydantic-validated outputs, but they sit at different levels of the stack. Instructor is a **thin extraction layer** — it patches an LLM client and returns a model instance. It has no concept of agents, tool execution, or multi-step reasoning. PydanticAI is a **full agent framework** with tools, dependency injection, and an agent loop. Use Instructor when you need reliable structured extraction from a single LLM call; use PydanticAI when you are building a multi-step agent that calls tools and produces a final typed result."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Instructor and PydanticAI are not mutually exclusive. Some teams use PydanticAI for the agent loop and Instructor for specific sub-tasks inside an agent's tool functions where they need fine-grained retry control."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Does Instructor work with local models like Llama or Mistral running on Ollama?",
+      "a": "Yes. Point Instructor at an OpenAI-compatible endpoint (Ollama exposes one at `http://localhost:11434/v1`) and use `MD_JSON` mode for models that don't support tool calls, or `TOOLS` mode for models that do. The retry logic works identically regardless of the backend."
+    },
+    {
+      "q": "How does Instructor handle a response that fails validation on every retry?",
+      "a": "After exhausting `max_retries` attempts, Instructor raises an `InstructorRetryException`. You can catch it to inspect the full attempt history — including each failed response and the corresponding Pydantic error — and decide whether to fall back to a default value, escalate to a stronger model, or surface the failure upstream."
+    },
+    {
+      "q": "Is Instructor just for Python, or are there other language clients?",
+      "a": "Instructor has official ports for TypeScript/JavaScript (`@instructor-ai/instructor`, using Zod schemas), Go, Ruby, Elixir, and Rust. The Python library is the most mature, but the TypeScript version closely follows the same `response_model` API."
+    },
+    {
+      "q": "Does using Instructor cost extra tokens compared to a plain LLM call?",
+      "a": "A successful single-pass call adds only the JSON schema to the prompt, which is typically a few hundred tokens. The real token cost comes from **retries**: each failed attempt sends the previous bad response plus the validation error back to the model. Keeping schemas simple and using capable models minimises retry rates and token overhead."
+    },
+    {
+      "q": "Can I use Instructor with OpenAI's native structured output mode to get the best of both?",
+      "a": "Yes. Pass `mode=instructor.Mode.JSON_SCHEMA` when patching the client to use OpenAI's constrained-decoding JSON schema mode. You get OpenAI's 100% schema compliance guarantee plus Instructor's retry, streaming, and multi-provider abstraction on top."
+    },
+    {
+      "q": "What is the difference between Instructor and LangChain's output parsers?",
+      "a": "LangChain output parsers are part of a larger framework with chains, retrievers, and agent abstractions baked in. Instructor is a **standalone micro-library** focused exclusively on the extraction layer — it patches any LLM client directly without requiring you to adopt a broader framework. This makes it easier to add to an existing codebase without restructuring anything."
+    }
+  ],
+  "related": [
+    "what-is-pydantic-ai",
+    "what-is-agent-framework",
+    "what-is-claude-agent-sdk",
+    "choose-agent-framework",
+    "agent-framework-mental-models"
+  ],
+  "furtherReading": [
+    {
+      "title": "Instructor official documentation",
+      "url": "https://python.useinstructor.com/"
+    },
+    {
+      "title": "Instructor GitHub repository (567-labs/instructor)",
+      "url": "https://github.com/567-labs/instructor"
+    },
+    {
+      "title": "Mode Comparison Guide — Instructor",
+      "url": "https://python.useinstructor.com/modes-comparison/"
+    }
+  ]
+}

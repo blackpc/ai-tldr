@@ -1,0 +1,394 @@
+{
+  "slug": "chunk-size-and-overlap",
+  "title": "How to Pick Chunk Size and Overlap (with Sane Defaults)",
+  "seoTitle": "Chunk Size and Overlap: How to Pick Sane Defaults",
+  "metaDescription": "Too-small chunks lose context; too-big chunks bury the answer. Get practical defaults for chunk size and overlap, and learn how to tune them for your data.",
+  "keywords": [
+    "best chunk size for rag",
+    "chunk overlap how much",
+    "optimal chunk size for embeddings",
+    "how to choose chunk size rag"
+  ],
+  "difficulty": "beginner",
+  "oneLiner": "You'll know sensible starting values for chunk size and overlap, and a simple process for tuning them on your own documents.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In Plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you build a RAG system, you can't feed a 200-page PDF into an embedding model all at once. You slice it into smaller pieces — **chunks** — and embed each one separately. The two dials you control are **chunk size** (how many tokens per piece) and **chunk overlap** (how many tokens you repeat between neighbouring pieces)."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like indexing a textbook. If every index entry points to an entire chapter, you'll find the chapter but spend ages hunting for the exact sentence. If every entry points to a single line, the index becomes enormous and each entry lacks enough context to be useful. The right granularity is somewhere in between — a paragraph or two — enough context to be self-contained, small enough to be precise."
+        },
+        {
+          "type": "p",
+          "md": "Overlap is the equivalent of letting two consecutive index entries share a sentence or two at the boundary. It prevents an important idea that straddles a split point from falling through the cracks."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Tokens, not characters: embedding models (and LLMs) count tokens, not characters. A rough rule of thumb is **1 token ≈ 4 characters** in English, so a 512-token chunk is about 2,000 characters or 350–400 words."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why It Matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Chunk size is the single most consequential hyperparameter in a RAG pipeline. It shapes retrieval precision, answer quality, embedding cost, and vector-store size — all at once."
+        },
+        {
+          "type": "h3",
+          "text": "When chunks are too small"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Missing context.** A 50-token snippet often lacks the surrounding explanation a reader needs. The retrieved chunk is technically relevant but semantically incomplete.",
+            "**Retrieval slot waste.** Most RAG pipelines retrieve the top-k chunks (often k=3–5). If each chunk is tiny, you burn all your slots on fragments of the same paragraph.",
+            "**Noisy embeddings.** Very short strings produce less stable embeddings because there are fewer semantic signals to average over.",
+            "**Higher cost.** More chunks mean more embedding API calls at ingest time, larger vector indexes, and more tokens spent on retrieved context at query time."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "When chunks are too large"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Diluted embeddings.** A 2,000-token chunk covering multiple topics produces an embedding that represents an average of those topics — exact-fact queries get buried.",
+            "**Context-window pressure.** Large retrieved chunks consume more of the LLM's context window, leaving less room for the model's reasoning.",
+            "**Precision loss.** The answer might be in the chunk, but so is a lot of irrelevant text — the model has to sift through noise."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The sweet spot for most general-purpose RAG workloads is **256–1024 tokens**, with **10–20% overlap**. Start at 512 tokens / 10% overlap and measure before tweaking."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How It Works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The chunking step sits at the very start of the RAG ingestion pipeline, before any embedding or indexing happens. Here is the full flow:"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "RAG Ingestion: Where Chunking Fits",
+            "steps": [
+              {
+                "label": "Raw documents",
+                "sub": "PDFs, HTML, plain text"
+              },
+              {
+                "label": "Text extraction",
+                "sub": "Parse to plain Unicode text"
+              },
+              {
+                "label": "Chunking",
+                "sub": "Split by size + overlap"
+              },
+              {
+                "label": "Embedding",
+                "sub": "One vector per chunk"
+              },
+              {
+                "label": "Vector store",
+                "sub": "Indexed for ANN search"
+              },
+              {
+                "label": "Query time",
+                "sub": "Top-k chunks retrieved"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Fixed-size chunking with overlap"
+        },
+        {
+          "type": "p",
+          "md": "The most common approach is a sliding window. You advance through the text by `chunk_size - overlap` tokens at each step, so consecutive chunks share `overlap` tokens at the seam. LangChain's `RecursiveCharacterTextSplitter` and LlamaIndex's `SentenceSplitter` both implement this pattern."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "from langchain.text_splitter import RecursiveCharacterTextSplitter\n\nsplitter = RecursiveCharacterTextSplitter(\n    chunk_size=512,       # tokens (approx chars/4 for English)\n    chunk_overlap=51,     # ~10 % of chunk_size\n    length_function=len,  # swap for a tokenizer for exact token counts\n)\n\nchunks = splitter.split_text(document_text)\nprint(f\"{len(chunks)} chunks, first: {chunks[0][:120]}...\")"
+        },
+        {
+          "type": "h3",
+          "text": "How overlap prevents context loss"
+        },
+        {
+          "type": "p",
+          "md": "Imagine a document where a key conclusion spans the boundary between chunk 3 and chunk 4. Without overlap, the embedding for chunk 3 ends mid-thought and chunk 4 starts mid-thought — neither captures the full conclusion. With 10% overlap, the last 51 tokens of chunk 3 reappear at the start of chunk 4, so at least one of the two chunks contains the complete thought."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Overlap Off vs. Overlap On",
+            "columns": [
+              {
+                "title": "No overlap",
+                "items": [
+                  "Chunk 3 ends at token 512",
+                  "Chunk 4 starts at token 513",
+                  "Boundary ideas split across chunks",
+                  "One chunk likely missed by retrieval"
+                ]
+              },
+              {
+                "title": "10 % overlap (51 tokens)",
+                "items": [
+                  "Chunk 3 ends at token 512",
+                  "Chunk 4 starts at token 462",
+                  "50-token seam repeated in both",
+                  "Boundary idea captured in at least one chunk"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Overlap increases your total chunk count and therefore embedding cost. At 20% overlap on a 512-token chunk you generate roughly 25% more chunks than with zero overlap. Keep overlap under 25% unless your documents are dense with cross-sentence dependencies."
+        }
+      ]
+    },
+    {
+      "id": "sane-defaults-by-use-case",
+      "title": "Sane Defaults by Use Case",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "There is no single universal best chunk size, but there are well-tested starting points. The table below reflects industry practice and published benchmarks as of 2025–2026:"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Document type",
+            "Suggested chunk size",
+            "Suggested overlap",
+            "Rationale"
+          ],
+          "rows": [
+            [
+              "Short Q&A / FAQs",
+              "128–256 tokens",
+              "0–5 %",
+              "Each answer is already self-contained; overlap adds noise"
+            ],
+            [
+              "General web / blog content",
+              "512 tokens",
+              "10 %",
+              "Good balance; matches ada-002 / text-embedding-3 sweet spot"
+            ],
+            [
+              "Technical docs / code",
+              "512–768 tokens",
+              "10–15 %",
+              "Code blocks and explanations benefit from extra context"
+            ],
+            [
+              "Long-form reports / legal",
+              "768–1024 tokens",
+              "15–20 %",
+              "Arguments span paragraphs; bigger chunks preserve logical flow"
+            ],
+            [
+              "Scientific papers",
+              "512 tokens",
+              "20 %",
+              "Dense cross-sentence dependencies; higher overlap justified"
+            ],
+            [
+              "Conversational transcripts",
+              "256–512 tokens",
+              "15 %",
+              "Speaker turns vary; moderate overlap keeps exchanges intact"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "**LlamaIndex's built-in default** is 1024 tokens with an overlap of 20 tokens (roughly 2%). **LangChain's `RecursiveCharacterTextSplitter` default** is 1000 characters with 200 characters overlap (~20%). Both are conservative starting points; 512 tokens / 10% overlap tends to perform better across a wider range of tasks in practice."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "For OpenAI's `text-embedding-3-small` and `text-embedding-ada-002` (both support up to 8191 tokens), research consistently finds that **512-token chunks** deliver the best retrieval quality — the model has enough capacity for longer chunks, but embeddings become diluted past ~1000 tokens."
+        }
+      ]
+    },
+    {
+      "id": "how-to-tune",
+      "title": "How to Tune Chunk Size on Your Own Data",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Defaults get you started, but the optimal chunk size is workload-specific. Here is a repeatable tuning loop you can run in an afternoon:"
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Build a small evaluation set.** Write 20–50 representative questions and note which passage in your documents contains the correct answer.",
+            "**Pick 3–5 candidate chunk sizes** — for example 256, 512, 768, and 1024 tokens.",
+            "**Ingest your documents at each chunk size** into separate collections in your vector store.",
+            "**Run retrieval-only evaluation.** For each question, retrieve top-5 chunks and check whether the ground-truth passage appears. Compute *hit rate* (did the right chunk appear in top-5?) and *mean reciprocal rank* (how high did it rank?).",
+            "**Pick the chunk size with the best hit rate.** If two sizes tie, prefer the smaller one — it's cheaper and leaves more LLM context for the model to reason.",
+            "**Tune overlap last.** Start at 10%, try 5% and 20%, and re-run your eval set. You will often find overlap makes little difference on retrieval metrics but can noticeably improve answer faithfulness."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "A NAACL 2025 findings paper showed that **fixed 200-word chunks matched or outperformed semantic chunking** across a range of retrieval benchmarks. Semantic chunking is worth trying, but don't assume it always wins — measure first."
+        },
+        {
+          "type": "h3",
+          "text": "Quick sanity checks before you start"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**What is the average length of a natural unit in your documents?** A paragraph? A section? Aim to have each chunk contain roughly one complete unit.",
+            "**What kinds of questions will users ask?** Precise lookup questions (\"What is the filing date?\") favour small chunks. Synthesis questions (\"Summarise the risk factors\") tolerate or even benefit from larger chunks.",
+            "**What is your LLM context window?** With a 128k-token window you can retrieve more, larger chunks — the pressure to keep chunks tiny is lower than it was with 4k-token windows."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "advanced-chunking-patterns",
+      "title": "Advanced Patterns: Beyond Fixed-Size Chunks",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you have a baseline, two advanced patterns often provide measurable gains:"
+        },
+        {
+          "type": "h3",
+          "text": "Parent-document retrieval (hierarchical chunking)"
+        },
+        {
+          "type": "p",
+          "md": "Store **small child chunks** (128–256 tokens) in the vector index for precise retrieval, but when a child chunk is retrieved, return its **parent chunk** (512–2048 tokens) to the LLM as context. This combines the precision of small embeddings with the coherence of large context. LlamaIndex's `ParentDocumentRetriever` and `SentenceWindowRetrieval` implement this pattern out of the box."
+        },
+        {
+          "type": "h3",
+          "text": "Recursive character splitting"
+        },
+        {
+          "type": "p",
+          "md": "Rather than cutting at a fixed token count, `RecursiveCharacterTextSplitter` tries a priority list of separators — `\\n\\n` (paragraph break) first, then `\\n`, then space, then characters — and only falls back to the next separator when the current chunk exceeds the target size. This produces more semantically natural boundaries without requiring an NLP model, and it is LangChain's recommended default for most text types."
+        },
+        {
+          "type": "h3",
+          "text": "Semantic (embedding-based) chunking"
+        },
+        {
+          "type": "p",
+          "md": "Semantic chunkers embed consecutive sentences and split wherever the cosine similarity between adjacent sentence embeddings drops below a threshold. This produces topically coherent chunks regardless of character count. The trade-off: it requires running an embedding model during ingestion (slower and more expensive), and benchmarks show it does not always outperform well-tuned fixed-size chunking."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Start with `RecursiveCharacterTextSplitter` at 512 tokens / 10% overlap. Move to parent-document retrieval once you have evidence that missing context is hurting answer quality. Try semantic chunking only after you have a proper eval set to measure the delta."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going Deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you have nailed chunk size and overlap, the next levers that affect retrieval quality are:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Metadata filtering.** Attach document-level metadata (source, date, section) to each chunk and filter at query time. This can be more effective than tweaking chunk size when your corpus has heterogeneous document types.",
+            "**Hybrid search.** Combine dense vector search with BM25 (keyword) search and merge the ranked lists with Reciprocal Rank Fusion. Keyword search rescues chunks whose exact terminology the embedding model under-represents.",
+            "**Re-ranking.** After retrieving top-k candidates, pass them through a cross-encoder re-ranker (e.g. Cohere Rerank or a local `cross-encoder/ms-marco` model) to re-order by relevance before sending to the LLM. This often adds more value than further chunk-size tuning.",
+            "**Contextual chunk headers.** Prepend each chunk with a one-sentence summary of the document it came from before embedding. This reduces the problem of orphaned chunks that lack context when embedded in isolation — a technique popularised as \"contextual retrieval\" by Anthropic in 2024.",
+            "**Adaptive or multi-scale chunking.** Research from AI21 Labs and others shows that different queries benefit from different granularities. Multi-scale approaches index documents at two or three chunk sizes simultaneously and route queries to the most appropriate granularity based on query type."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The key discipline is to **always measure before and after** any change. A retrieval eval set with 30–50 labelled questions takes an hour to build and will save you from chasing false improvements. Tools like RAGAS, TruLens, and LlamaIndex's `RetrieverEvaluator` make this loop repeatable."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "As LLM context windows grow (128k, 1M tokens), some teams skip chunking entirely and pass whole documents to the model at query time. This works for small corpora but breaks down at scale — embedding-based retrieval over chunks remains the practical approach for corpora beyond a few hundred documents."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is a good starting chunk size for RAG if I have no idea where to begin?",
+      "a": "Start with **512 tokens** and **10% overlap** (about 51 tokens). This is the most consistently recommended default across published benchmarks and works well with popular embedding models like `text-embedding-3-small` and `text-embedding-ada-002`. Measure hit rate on a small eval set before changing anything."
+    },
+    {
+      "q": "Should I use tokens or characters to measure chunk size?",
+      "a": "Tokens are the correct unit because embedding models and LLMs have token limits, not character limits. In practice many splitters default to characters for simplicity — LangChain's `RecursiveCharacterTextSplitter` uses characters by default. For English text, 512 tokens is roughly 2,000 characters. Pass a proper tokenizer (e.g. `tiktoken`) to your splitter for exact token-based splits."
+    },
+    {
+      "q": "How much overlap is too much?",
+      "a": "Anything above 25–30% overlap starts to create significantly more chunks without proportional retrieval gains, and it inflates embedding and storage costs. For most workloads, 10–20% overlap is the practical ceiling. The exception is very dense technical or legal text where cross-sentence dependencies are frequent — up to 30–50% has been reported to help there."
+    },
+    {
+      "q": "Does chunk size affect embedding model performance?",
+      "a": "Yes. Models like `text-embedding-ada-002` and `text-embedding-3-small` support up to 8,191 tokens, but research shows diminishing returns past ~1,000 tokens because the fixed-size embedding vector must compress more information into the same number of dimensions. Chunks of 256–512 tokens tend to produce the most discriminative embeddings for retrieval tasks."
+    },
+    {
+      "q": "Is semantic chunking always better than fixed-size chunking?",
+      "a": "Not necessarily. A NAACL 2025 paper found that fixed 200-word chunks matched or outperformed semantic chunking on real-world retrieval and answer-generation benchmarks. Semantic chunking adds cost (you must embed during ingestion) and complexity. Use it when you have evidence from your eval set that fixed-size boundaries are hurting you."
+    },
+    {
+      "q": "What if my documents have very different lengths — short FAQs mixed with long reports?",
+      "a": "Handle them separately. Ingest short FAQ entries as single chunks (no splitting needed) and apply a larger chunk size to long-form documents. Attaching a `doc_type` metadata field lets you filter retrieval by source type and avoids FAQ fragments diluting results from authoritative long-form content."
+    }
+  ],
+  "related": [
+    "what-is-rag",
+    "what-is-chunking-in-rag",
+    "chunking-strategies-compared"
+  ],
+  "furtherReading": [
+    {
+      "title": "Evaluating Chunking Strategies for Retrieval (Chroma Research)",
+      "url": "https://www.trychroma.com/research/evaluating-chunking"
+    },
+    {
+      "title": "Chunking Strategies for RAG Pipelines (Weaviate Blog)",
+      "url": "https://weaviate.io/blog/chunking-strategies-for-rag"
+    },
+    {
+      "title": "RAG Chunk Size Guide: Find The Best Setting (LlamaIndex Blog)",
+      "url": "https://www.llamaindex.ai/blog/evaluating-the-ideal-chunk-size-for-a-rag-system-using-llamaindex-6207e5d3fec5"
+    }
+  ]
+}

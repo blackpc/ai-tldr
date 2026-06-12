@@ -1,0 +1,444 @@
+{
+  "slug": "pgvector-explained",
+  "title": "What Is pgvector? Vector Search Inside PostgreSQL",
+  "seoTitle": "pgvector Explained: Vector Search in PostgreSQL",
+  "metaDescription": "pgvector adds embedding storage and similarity search to Postgres. Learn how it works, its HNSW index, and when it beats a dedicated vector database.",
+  "keywords": [
+    "what is pgvector",
+    "pgvector tutorial for beginners",
+    "postgres vector search extension",
+    "pgvector vs pinecone",
+    "pgvector hnsw index performance"
+  ],
+  "difficulty": "beginner",
+  "oneLiner": "Learn how a single Postgres extension gives you production vector search right next to the data you already have.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**pgvector** is a free, open-source extension for PostgreSQL that turns your existing Postgres database into a vector search engine. Once installed, you can store embeddings in ordinary table columns and ask questions like \"find me the ten rows most semantically similar to this query\" using a single SQL statement — no new infrastructure required."
+        },
+        {
+          "type": "p",
+          "md": "The analogy that makes this click: imagine your Postgres database is a filing cabinet. Normally the cabinet sorts by date, alphabetically, or by ID — it can only find a folder if you know its exact label. pgvector adds a *smart drawer* that sorts by *meaning*. Slide in a piece of text and the drawer returns the folders whose contents are closest in topic, even if none of them use your exact words. That \"closest in meaning\" lookup is a **nearest-neighbor vector search**, and pgvector wires it directly into the database you already operate."
+        },
+        {
+          "type": "p",
+          "md": "In practice it works like this: an embedding model (say, OpenAI's `text-embedding-3-small` or a local model via Ollama) turns each document into a vector — a long array of numbers like `[0.12, -0.55, 0.03, ...]` with 384 to 3,072 values. pgvector stores those arrays in a `vector` column, builds an index over them, and exposes three distance operators so you can ORDER BY similarity in plain SQL."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "pgvector is maintained on [GitHub](https://github.com/pgvector/pgvector) and is available on every major managed Postgres provider — AWS RDS/Aurora, Google Cloud SQL, Neon, Supabase, and Azure Database for PostgreSQL all ship it out of the box."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Before pgvector, adding semantic search to a Postgres-backed app meant introducing a second data store: something like Pinecone, Weaviate, or Qdrant running alongside your relational database. That creates a split-brain problem: your canonical data lives in Postgres but your search index lives somewhere else, and you have to keep them in sync, manage two connection pools, handle failures in two systems, and write code that joins data across network boundaries."
+        },
+        {
+          "type": "p",
+          "md": "pgvector collapses that complexity. Your embeddings live in the same table as the document text, user ID, and created-at timestamp. A RAG query that retrieves the five most relevant documents for a user, filtered to content they have permission to see, is a single SQL query — no round-trip to an external service, no stale-sync bugs, full ACID guarantees."
+        },
+        {
+          "type": "h3",
+          "text": "Who should reach for it"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**RAG applications** — store document chunks and their embeddings side by side; retrieve context with a `LIMIT 5 ORDER BY embedding <=> $query_vec` query.",
+            "**Semantic search over your own content** — support tickets, knowledge-base articles, product catalog descriptions, job postings.",
+            "**Recommendation features** — \"more like this\" on products, posts, or profiles.",
+            "**Duplicate / near-duplicate detection** — cluster or flag items that embed close together.",
+            "**Teams already operating Postgres** — zero new infrastructure, one fewer on-call rotation."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "For datasets under roughly 5–10 million vectors on appropriately sized hardware, pgvector delivers query latency under 20 ms with recall rates above 95% — performance that is indistinguishable from most dedicated vector databases at a fraction of the operational complexity."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "If your team already pays for a managed Postgres instance with spare headroom, adding pgvector is essentially **free**. Vector search becomes another feature of a database you're already running."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "pgvector adds four new data types, three distance operators, and two index algorithms to Postgres. Understanding these three pieces gives you a complete mental model."
+        },
+        {
+          "type": "h3",
+          "text": "Step 1 — Enable the extension and add a column"
+        },
+        {
+          "type": "code",
+          "lang": "sql",
+          "code": "-- Install once per database\nCREATE EXTENSION IF NOT EXISTS vector;\n\n-- Add an embedding column to an existing table\nALTER TABLE documents ADD COLUMN embedding vector(1536);\n\n-- Or create a new table with embeddings\nCREATE TABLE documents (\n  id        BIGSERIAL PRIMARY KEY,\n  content   TEXT,\n  embedding vector(1536)\n);"
+        },
+        {
+          "type": "p",
+          "md": "The `1536` is the dimension count — the length of the arrays you will store. This must match your embedding model's output dimension (OpenAI's `text-embedding-3-small` = 1,536; `text-embedding-3-large` = 3,072; many open-source models = 384 or 768)."
+        },
+        {
+          "type": "h3",
+          "text": "Step 2 — Insert embeddings"
+        },
+        {
+          "type": "code",
+          "lang": "sql",
+          "code": "-- Insert a document with its embedding (values abbreviated)\nINSERT INTO documents (content, embedding)\nVALUES ('pgvector adds vector search to Postgres', '[0.021, -0.55, 0.13, ...]');\n\n-- Or from Python with the psycopg2 / asyncpg adapter\n-- embedding = openai.embeddings.create(...).data[0].embedding\n-- cursor.execute(\"INSERT INTO documents (content, embedding) VALUES (%s, %s)\", (text, embedding))"
+        },
+        {
+          "type": "h3",
+          "text": "Step 3 — Search with a distance operator"
+        },
+        {
+          "type": "p",
+          "md": "pgvector exposes three operators for similarity queries:"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Operator",
+            "Distance metric",
+            "Best for"
+          ],
+          "rows": [
+            [
+              "`<->`",
+              "L2 (Euclidean) distance",
+              "Geometry, image embeddings where magnitude matters"
+            ],
+            [
+              "`<=>`",
+              "Cosine distance",
+              "Text embeddings from most language models (default recommendation)"
+            ],
+            [
+              "`<#>`",
+              "Negative inner product",
+              "Vectors already normalized to unit length"
+            ]
+          ]
+        },
+        {
+          "type": "code",
+          "lang": "sql",
+          "code": "-- Return the 5 documents most similar to a query vector\nSELECT id, content, 1 - (embedding <=> '[0.021, -0.55, 0.13, ...]') AS similarity\nFROM documents\nORDER BY embedding <=> '[0.021, -0.55, 0.13, ...]'\nLIMIT 5;\n\n-- Combine with a regular filter (SQL query planner handles both)\nSELECT id, content\nFROM documents\nWHERE user_id = 42\nORDER BY embedding <=> $1\nLIMIT 5;"
+        },
+        {
+          "type": "h3",
+          "text": "Step 4 — Add an index for speed"
+        },
+        {
+          "type": "p",
+          "md": "Without an index, pgvector performs an exact sequential scan — it computes the distance to every row. This is fine up to tens of thousands of rows but becomes slow at larger scales. Two index types are available: **HNSW** and **IVFFlat**."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "How a pgvector HNSW query finds nearest neighbors",
+            "steps": [
+              {
+                "label": "Query vector arrives",
+                "sub": "e.g. embedding of user's question"
+              },
+              {
+                "label": "Entry point at top layer",
+                "sub": "HNSW graph has multiple layers; search starts at the top (fewest nodes)"
+              },
+              {
+                "label": "Greedy neighbor walk",
+                "sub": "Move to whichever connected node is closer to the query; repeat layer by layer"
+              },
+              {
+                "label": "Descend to bottom layer",
+                "sub": "More nodes, more edges — fine-grained search in the densest layer"
+              },
+              {
+                "label": "Return top-k candidates",
+                "sub": "Postgres ranks by distance, returns LIMIT rows"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "HNSW (Hierarchical Navigable Small World) builds a multi-layer graph over your vectors. The top layers are sparse long-range connections; the bottom layer is dense. A query enters at the top, greedily walks toward the nearest node at each hop, then descends until it reaches the bottom layer and collects the final nearest neighbors. This approach provides excellent recall (typically 95–99%) with sub-millisecond traversal on millions of vectors."
+        },
+        {
+          "type": "code",
+          "lang": "sql",
+          "code": "-- Build an HNSW index for cosine similarity (recommended default)\nCREATE INDEX ON documents USING hnsw (embedding vector_cosine_ops);\n\n-- Tune build parameters for higher recall (at cost of build time + memory)\nCREATE INDEX ON documents USING hnsw (embedding vector_cosine_ops)\n  WITH (m = 16, ef_construction = 64);\n-- m: number of connections per node (default 16)\n-- ef_construction: candidate list size during build (default 64)"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "HNSW is the recommended index for most workloads. Unlike IVFFlat, it requires **no training step** — you can create it on an empty table and add data incrementally. IVFFlat is faster to build and uses less memory, but requires a `ANALYZE` step and performs worse when data changes frequently."
+        }
+      ]
+    },
+    {
+      "id": "vector-types-and-operators",
+      "title": "Vector types and distance metrics",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "pgvector 0.7.0 (April 2024) added three new data types beyond the original `vector` type, each targeting different memory and dimensionality trade-offs:"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Type",
+            "Precision",
+            "Max indexable dimensions",
+            "Use case"
+          ],
+          "rows": [
+            [
+              "`vector`",
+              "32-bit float (full)",
+              "2,000 (HNSW) / 2,000 (IVFFlat)",
+              "Standard embeddings — the default choice"
+            ],
+            [
+              "`halfvec`",
+              "16-bit float (half)",
+              "4,000",
+              "Cut storage and memory roughly in half with minimal recall loss"
+            ],
+            [
+              "`sparsevec`",
+              "Sparse (nonzero only)",
+              "1,000 nonzero dims",
+              "BM25-style or SPLADE sparse embeddings"
+            ],
+            [
+              "`bit`",
+              "Binary (1 bit/dim)",
+              "64,000",
+              "Binary quantization for extreme speed/storage savings"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "For typical RAG work with models like OpenAI's `text-embedding-3-small` (1,536 dims) or `nomic-embed-text` (768 dims), the standard `vector` type is the right starting point. Switch to `halfvec` when your index is eating too much RAM — the precision drop is usually imperceptible for semantic search."
+        },
+        {
+          "type": "h3",
+          "text": "Choosing the right distance metric"
+        },
+        {
+          "type": "p",
+          "md": "The most important rule: **use the same metric your embedding model was trained with**. Most modern text embedding models (OpenAI, Cohere, Sentence-Transformers, etc.) are trained to be compared via cosine similarity, so use `vector_cosine_ops` for your index and `<=>` for your queries. If your model documentation says \"use dot product\", use `vector_ip_ops` and `<#>`. Mixing metrics silently returns wrong results."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "**Create a separate index for each distance metric you use.** If you query with both `<=>` and `<->` on the same column, you need two indexes. The query planner will only use an index when the operator matches the `_ops` class the index was built with."
+        }
+      ]
+    },
+    {
+      "id": "pgvector-vs-dedicated",
+      "title": "pgvector vs dedicated vector databases",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The question \"should I use pgvector or Pinecone/Qdrant/Weaviate?\" comes down to data volume, query latency requirements, and how much you value operational simplicity. Here is an honest comparison based on 2025 benchmarks and production reports."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Dimension",
+            "pgvector",
+            "Dedicated (e.g. Pinecone, Qdrant)"
+          ],
+          "rows": [
+            [
+              "Setup cost",
+              "Zero if you already run Postgres",
+              "New service, new billing, new ops"
+            ],
+            [
+              "Data consistency",
+              "Full ACID — vectors and metadata in one transaction",
+              "Eventual sync between two systems"
+            ],
+            [
+              "Filtered search",
+              "Postgres query planner handles filters + vector together",
+              "Filters can hurt recall; varies by product"
+            ],
+            [
+              "Scale ceiling",
+              "Practical limit ~5–10M vectors per instance",
+              "Designed for hundreds of millions to billions"
+            ],
+            [
+              "Query latency (<1M vecs)",
+              "Under 20 ms with HNSW, 95%+ recall",
+              "Similar or slightly better"
+            ],
+            [
+              "Cost at scale",
+              "~75% cheaper than Pinecone s1 tier (Timescale benchmark)",
+              "Higher but includes managed horizontal scaling"
+            ],
+            [
+              "Operational burden",
+              "Low — it is just Postgres",
+              "Near-zero for managed tiers; higher for self-hosted"
+            ]
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Decision guide"
+        },
+        {
+          "type": "p",
+          "md": "Start with pgvector if your dataset is under five million vectors and your team already operates Postgres. The unified schema means one fewer service, one fewer failure domain, and zero data-sync headaches. Confident AI publicly documented replacing Pinecone with pgvector and noted that the switch eliminated an entire class of bugs caused by out-of-sync states between their relational and vector stores."
+        },
+        {
+          "type": "p",
+          "md": "Switch to a dedicated vector database when you regularly exceed 10–50 million vectors, when you need horizontal sharding, or when you require multi-region replication with sub-10 ms global latency. At that scale, Pinecone's serverless tier or Qdrant's distributed mode genuinely outperform a single Postgres instance. The crossover point is not one size fits all — run your own benchmark with realistic data volumes and query patterns."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "pgvector's Postgres-native filtering is a genuine advantage over dedicated databases for **permission-filtered RAG** — e.g. \"find the 5 closest docs *this user is allowed to read*.\" Postgres evaluates the filter and the vector scan together using the query planner, whereas Pinecone must post-filter results, which can hurt recall when many rows are excluded."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you have a working pgvector setup, these advanced topics are where most production systems need tuning."
+        },
+        {
+          "type": "h3",
+          "text": "HNSW tuning parameters"
+        },
+        {
+          "type": "p",
+          "md": "Two build-time parameters control the HNSW index's recall-vs-speed tradeoff: `m` (the number of bidirectional links per node, default 16) and `ef_construction` (the candidate list size during index build, default 64). Higher values improve recall but increase build time and index size. At query time, `hnsw.ef_search` (default 40) controls how many candidates are explored — raise it for higher recall at the cost of slower queries."
+        },
+        {
+          "type": "code",
+          "lang": "sql",
+          "code": "-- Raise ef_search for a single session (more recall, slightly slower)\nSET hnsw.ef_search = 100;\n\n-- Check actual recall by comparing approximate vs exact results\nSELECT COUNT(*) FROM (\n  SELECT id FROM documents ORDER BY embedding <=> $1 LIMIT 10\n) approximate\nWHERE id IN (\n  SELECT id FROM documents ORDER BY embedding <-> $1 LIMIT 10  -- exact scan\n);"
+        },
+        {
+          "type": "h3",
+          "text": "Iterative index scans (pgvector 0.8.0+)"
+        },
+        {
+          "type": "p",
+          "md": "pgvector 0.8.0, released October 2024, added **iterative index scans**. The problem it solves: when a query combines vector search with a highly selective `WHERE` clause, the initial approximate scan might not return enough rows that pass the filter. Previously you would miss results. With iterative scanning enabled, pgvector automatically expands the search until it has enough qualifying rows or hits a configurable limit. Enable it with `SET hnsw.iterative_scan = relaxed_order;`."
+        },
+        {
+          "type": "h3",
+          "text": "Hybrid search: combining BM25 + vector"
+        },
+        {
+          "type": "p",
+          "md": "Pure vector search misses exact keyword matches — a query for a product SKU like `\"RTX-4090\"` should surface results lexically, not semantically. The industry solution is **hybrid search**: combine a BM25 (keyword) score with a vector similarity score, then re-rank. In Postgres you can use the `pg_trgm` or `tsvector` full-text search facilities alongside pgvector and merge scores with Reciprocal Rank Fusion (RRF). Frameworks like LangChain and LlamaIndex offer Postgres-native hybrid search built on this pattern."
+        },
+        {
+          "type": "h3",
+          "text": "pgvectorscale and DiskANN"
+        },
+        {
+          "type": "p",
+          "md": "Timescale released **pgvectorscale**, a companion extension that implements StreamingDiskANN — a disk-based index that does not require fitting the entire index in RAM. Benchmarks show 28x lower p95 latency compared to Pinecone's s1 storage-optimized tier at 99% recall, and roughly 75% lower cost. If you need to push past pgvector's memory constraints without migrating to a dedicated database, pgvectorscale is the next step up."
+        },
+        {
+          "type": "h3",
+          "text": "Production checklist"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Build the HNSW index before you query** — without an index, every query is a full sequential scan.",
+            "**Match the operator class to your metric** — `vector_cosine_ops` for cosine, `vector_l2_ops` for L2; mismatch silently degrades results.",
+            "**Normalize vectors before insert** if using inner product (`<#>`) to avoid scale artifacts.",
+            "**Benchmark with your real data** — recall degrades differently depending on embedding distribution; synthetic benchmarks can mislead.",
+            "**Monitor `pg_stat_user_indexes`** to confirm the index is actually being hit in your queries.",
+            "**Consider `halfvec` if RAM is tight** — halving the storage footprint of a 1,536-dim embedding index frees significant memory with negligible recall loss."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "pgvector supports PostgreSQL 13 through 17 (as of v0.8.0). It is pre-installed on AWS RDS PostgreSQL, AWS Aurora PostgreSQL, Google Cloud SQL, Supabase, Neon, and Azure Database for PostgreSQL — check your provider's version to confirm which pgvector release is bundled."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Do I need to install anything special to use pgvector?",
+      "a": "On most managed Postgres providers (AWS RDS, Aurora, Supabase, Neon, Google Cloud SQL) pgvector is already available — just run `CREATE EXTENSION vector;` in your database. For self-hosted Postgres you install the extension from the [pgvector GitHub repository](https://github.com/pgvector/pgvector) or via your distro's package manager, then run the same command."
+    },
+    {
+      "q": "What is the maximum number of dimensions pgvector supports?",
+      "a": "The standard `vector` type supports up to 16,000 dimensions for storage but the HNSW and IVFFlat indexes are limited to 2,000 dimensions. The `halfvec` type indexes up to 4,000 dimensions, and the `bit` binary type indexes up to 64,000 dimensions. For most text embedding models (384–3,072 dims) the standard `vector` type with HNSW indexing works fine."
+    },
+    {
+      "q": "How does pgvector's HNSW index compare to IVFFlat?",
+      "a": "HNSW generally provides better query performance (higher recall at lower latency) and does not require a training step, so you can build it on an empty table. IVFFlat builds faster and uses less memory, but requires data to already be in the table for the training step and performs worse when data distribution changes. HNSW is the recommended default for most workloads."
+    },
+    {
+      "q": "Can pgvector handle hybrid search (keyword + semantic)?",
+      "a": "Yes, because it runs inside Postgres. You can combine pgvector similarity queries with Postgres full-text search (`tsvector`/`tsquery` or `pg_trgm`) in a single SQL query, then merge scores using Reciprocal Rank Fusion. Many AI frameworks including LangChain and LlamaIndex have built-in Postgres hybrid search support that uses exactly this approach."
+    },
+    {
+      "q": "When should I use pgvector instead of Pinecone or Qdrant?",
+      "a": "Use pgvector when your dataset is under 5–10 million vectors and your team already operates Postgres. The big win is a unified schema — no sync between a relational database and a separate vector store. Switch to a dedicated vector database when you need billions of vectors, horizontal sharding, or sub-10 ms multi-region latency at sustained high query-per-second rates."
+    },
+    {
+      "q": "Does pgvector slow down my existing Postgres queries?",
+      "a": "Installing the extension has no effect on non-vector queries. Adding a `vector` column to an existing table is an ordinary schema change. The HNSW index only affects write throughput during bulk inserts slightly — it builds the graph incrementally. Reads on non-vector columns are completely unaffected."
+    }
+  ],
+  "related": [
+    "what-are-embeddings",
+    "what-is-semantic-search"
+  ],
+  "furtherReading": [
+    {
+      "title": "pgvector on GitHub — official README and SQL reference",
+      "url": "https://github.com/pgvector/pgvector"
+    },
+    {
+      "title": "pgvector 0.8.0 Release Notes — PostgreSQL.org",
+      "url": "https://www.postgresql.org/about/news/pgvector-080-released-2952/"
+    },
+    {
+      "title": "HNSW Indexes with Postgres and pgvector — Crunchy Data",
+      "url": "https://www.crunchydata.com/blog/hnsw-indexes-with-postgres-and-pgvector"
+    }
+  ]
+}

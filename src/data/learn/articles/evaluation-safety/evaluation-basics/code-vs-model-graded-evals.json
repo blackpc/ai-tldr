@@ -1,0 +1,417 @@
+{
+  "slug": "code-vs-model-graded-evals",
+  "title": "Code-Graded vs Model-Graded vs Human-Graded Evals",
+  "seoTitle": "Code-Graded vs Model-Graded vs Human-Graded Evals",
+  "metaDescription": "Three ways to grade LLM outputs: exact code checks, model judges, and human review. When to use each, what they cost, and how to combine them.",
+  "keywords": [
+    "code graded vs model graded evals",
+    "how to grade llm outputs",
+    "automated vs human evaluation llm",
+    "when to use human review llm",
+    "eval grading methods compared"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Understand the three grading methods for LLM outputs and be able to pick the right mix for any eval.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you run an LLM eval you need someone — or something — to look at each output and say \"pass\" or \"fail.\" That grader is at the heart of your whole evaluation strategy, and you have exactly three options: a piece of code that checks the output mechanically, another AI model that reads the output and judges it, or a human who reads and scores it the old-fashioned way."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like grading a high-school exam. Some questions are multiple-choice: a Scantron machine grades them in seconds, perfectly, for pennies — that's **code grading**. Some questions are short-answer and a teacher's assistant can mark them quickly with a rubric — that's **model grading** (the model plays the TA). The open-ended essay that requires real judgment, cultural nuance, or a final decision about a policy — that goes to the **human grader**. The right exam uses all three, because each question type fits one grader better than the others."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The grader is separate from the dataset. A *golden dataset* is the set of inputs (and optionally expected outputs) you test against. The grader is the function that turns model output into a score. This article focuses on the grader."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The grading method you choose determines three things: how fast your eval runs, how much it costs, and how accurate the scores are. Get this wrong and you end up with evals that are either too slow to run on every pull request, too expensive to run on realistic dataset sizes, or so noisy that a real regression looks like normal variance and you ship a broken model."
+        },
+        {
+          "type": "p",
+          "md": "A common mistake is starting with human review because \"it's the most accurate\" and then giving up on evals entirely when the cost hits. The opposite mistake is coding up a regex check for a task that requires nuanced judgment, then trusting a green scorecard that means nothing. Matching the grader to the task is a core engineering decision, not an afterthought."
+        },
+        {
+          "type": "h3",
+          "text": "The core tension"
+        },
+        {
+          "type": "p",
+          "md": "Every grading method sits somewhere on two axes: **cost vs. scale** and **accuracy vs. speed**. Code is fast and free but can only check things that have a single objectively correct form. Humans are slow and expensive but catch everything. Model judges fill the middle: they can reason about quality like a human but run automatically like code. The art is knowing which method belongs to which part of your test suite."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Each grading method follows a different mechanical path from raw model output to a score."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Three grading paths",
+            "columns": [
+              {
+                "title": "Code-Graded",
+                "items": [
+                  "Model output arrives",
+                  "Parse / extract fields",
+                  "Run deterministic check",
+                  "Return pass / fail / score"
+                ]
+              },
+              {
+                "title": "Model-Graded",
+                "items": [
+                  "Model output arrives",
+                  "Build judge prompt + rubric",
+                  "Call judge LLM",
+                  "Parse structured score"
+                ]
+              },
+              {
+                "title": "Human-Graded",
+                "items": [
+                  "Model output arrives",
+                  "Queue for review",
+                  "Annotator reads + scores",
+                  "Aggregate labels"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Code-graded evals"
+        },
+        {
+          "type": "p",
+          "md": "A code-graded eval is just a function. It takes the model output as a string (or parsed object) and returns a number or boolean using deterministic logic: exact string match, regex, JSON schema validation, executing the model's code and checking stdout, comparing a numeric result to a tolerance, or asserting that a required field is present. No network calls, no randomness, no cost per evaluation beyond compute."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Example: code-graded checks",
+          "code": "import json, re\n\ndef grade_json_output(output: str) -> float:\n    \"\"\"Check that the model produced valid JSON with required keys.\"\"\"\n    try:\n        data = json.loads(output)\n    except json.JSONDecodeError:\n        return 0.0\n    required = {\"summary\", \"sentiment\", \"topics\"}\n    present = required.intersection(data.keys())\n    return len(present) / len(required)\n\ndef grade_sql_output(output: str) -> bool:\n    \"\"\"Reject obvious SQL injection patterns.\"\"\"\n    danger = re.compile(r\"(DROP|DELETE|INSERT|UPDATE)\\s\", re.I)\n    return not bool(danger.search(output))\n\ndef grade_exact_match(output: str, expected: str) -> bool:\n    return output.strip().lower() == expected.strip().lower()"
+        },
+        {
+          "type": "h3",
+          "text": "Model-graded evals (LLM-as-a-judge)"
+        },
+        {
+          "type": "p",
+          "md": "A model-graded eval sends the model's output to a separate *judge* LLM — usually a larger or more capable model — along with a rubric prompt that describes what makes an answer good. The judge returns a structured score (often a number from 1 to 5, or a pass/fail with a brief reasoning chain). Because the judge is itself a language model, it can read natural language, apply context, spot hallucinations, and evaluate qualities like helpfulness or tone that no regex can capture."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Example: model-graded judge call (Anthropic SDK)",
+          "code": "import anthropic\n\nclient = anthropic.Anthropic()\n\nRUBRIC = \"\"\"\nYou are a strict evaluator. Score the following answer on a scale of 1-5.\n\nQuestion: {question}\nAnswer: {answer}\n\nCriteria:\n- 5: Correct, concise, no hallucinations, cites evidence where appropriate.\n- 3: Mostly correct but vague or missing important detail.\n- 1: Incorrect, misleading, or harmful.\n\nReturn ONLY a JSON object: {{\"score\": <int>, \"reason\": \"<one sentence>\"}}\n\"\"\"\n\ndef model_grade(question: str, answer: str) -> dict:\n    prompt = RUBRIC.format(question=question, answer=answer)\n    msg = client.messages.create(\n        model=\"claude-opus-4-5\",\n        max_tokens=128,\n        messages=[{\"role\": \"user\", \"content\": prompt}]\n    )\n    import json\n    return json.loads(msg.content[0].text)"
+        },
+        {
+          "type": "h3",
+          "text": "Human-graded evals"
+        },
+        {
+          "type": "p",
+          "md": "Human-graded evals route model outputs to a queue where trained annotators apply a rubric and record a label. The tooling varies — Braintrust, Label Studio, Scale AI, or even a shared spreadsheet — but the mechanics are the same: a person reads the output, consults the rubric, and clicks a rating. Because humans understand context, culture, implication, and risk in ways no current model reliably replicates, human grading is the ground truth your entire eval system calibrates against."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The goal of model-graded evals is to *approximate* human scores at scale. The way you validate a model judge is by comparing its scores on a held-out sample to what real humans said. If they agree strongly (Cohen's kappa above ~0.7), the judge is calibrated enough to run alone on the rest of the dataset."
+        }
+      ]
+    },
+    {
+      "id": "when-to-use-each",
+      "title": "When to use each method",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The method follows from the task, not from preference. Below is a practical decision guide."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Task type",
+            "Best grader",
+            "Why"
+          ],
+          "rows": [
+            [
+              "Structured output (JSON, SQL, regex pattern)",
+              "Code",
+              "Only one correct form; instant and free"
+            ],
+            [
+              "Exact answer (capitals, dates, entity names)",
+              "Code",
+              "Correct answer known ahead of time"
+            ],
+            [
+              "Code correctness (does it run, does it produce right output)",
+              "Code",
+              "Execute and check stdout / return value"
+            ],
+            [
+              "Summary quality, tone, helpfulness",
+              "Model judge",
+              "Subjective; no single correct string"
+            ],
+            [
+              "Factual accuracy in long-form text",
+              "Model judge",
+              "Requires reading and reasoning"
+            ],
+            [
+              "RAG faithfulness (answer grounded in context?)",
+              "Model judge",
+              "Needs to compare output to source document"
+            ],
+            [
+              "High-stakes decisions (medical, legal, financial)",
+              "Human",
+              "Risk of model-judge errors too costly"
+            ],
+            [
+              "Novel task with no established rubric yet",
+              "Human",
+              "Need to discover what 'good' looks like first"
+            ],
+            [
+              "Calibrating a new model judge",
+              "Human",
+              "Validate judge before trusting it at scale"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "A useful rule of thumb: if you could write a Python `assert` that perfectly captures \"correct,\" use code. If you could explain what makes an answer good in a paragraph and a TA could reliably apply it, use a model judge. If the stakes are too high to trust an automated scorer or you genuinely don't know what good looks like yet, use humans."
+        },
+        {
+          "type": "h3",
+          "text": "Cost and scale in practice"
+        },
+        {
+          "type": "p",
+          "md": "Code-graded evals are essentially free. You can run thousands of them per second with no per-call cost. Model-graded evals cost API tokens — typically between $0.02 and $0.55 per evaluation depending on the judge model and output length. Human-graded evals cost between $0.10 and $5 per label depending on complexity and whether annotators need domain expertise. For a dataset of 1,000 outputs, human grading can run from $100 to $5,000; a model judge on the same set might cost $5 to $50."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Model judge costs add up fast inside CI. A 500-sample eval using a capable judge at $0.30/eval costs $150 per run. Either cache results for unchanged test cases, use a cheaper judge for frequent runs and a better one for release gating, or limit model-graded evals to a smaller regression suite."
+        }
+      ]
+    },
+    {
+      "id": "pitfalls-and-biases",
+      "title": "Pitfalls and known biases",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Each grading method has failure modes. Knowing them lets you design around them rather than discover them after a bad release."
+        },
+        {
+          "type": "h3",
+          "text": "Code-graded pitfalls"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**False negatives from surface variation** — \"New York\" vs. \"new york\" vs. \"NYC\" are all correct but a naive exact-match fails two of them. Always normalize before comparing.",
+            "**Checking the wrong thing** — a regex that confirms SQL starts with `SELECT` says nothing about whether the query answers the user's actual question.",
+            "**Brittle JSON parsing** — if the model wraps JSON in a markdown code fence, `json.loads()` will throw. Strip fences before parsing."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Model-graded pitfalls"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Position bias** — in pairwise comparisons, some judge models favor whichever response appears first in the prompt. Mitigate by running both orderings and taking the consistent result.",
+            "**Verbosity bias** — judge models often rate longer answers higher regardless of quality. Counter this by explicitly penalizing unnecessary length in your rubric.",
+            "**Self-preference bias** — a model tends to rate outputs that match its own style higher. Use a *different* model family as your judge than the one generating outputs.",
+            "**Rubric sensitivity** — small wording changes in the judge prompt can shift scores by a full point on a 5-point scale. Pin your rubric prompt to a version and treat it like production code.",
+            "**Circular grading** — using the exact same model to both generate and grade creates a closed loop with no external signal. At minimum, use a larger or differently-trained judge."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Human-graded pitfalls"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Inter-annotator disagreement** — two humans reading the same output may score it differently. Measure Cohen's kappa across annotators; below 0.6 means your rubric needs clarification.",
+            "**Annotation fatigue** — quality drops as sessions run long. Keep individual annotation sessions short and rotate annotators.",
+            "**Selection bias in sampling** — humans often review outputs that look interesting or broken rather than a random sample, which skews your aggregate metrics."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "combining-graders",
+      "title": "Combining graders: the layered approach",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Production eval suites rarely use a single grading method. The standard pattern is to layer them: use cheap, fast code checks as the first gate, then model judges for the subset of quality dimensions that need reasoning, and periodic human review to calibrate and audit the model judges. Each layer catches failures the others miss."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Layered grading pipeline",
+            "steps": [
+              {
+                "label": "Model output",
+                "sub": "raw LLM response"
+              },
+              {
+                "label": "Code checks",
+                "sub": "schema, format, exact match — instant, free"
+              },
+              {
+                "label": "Model judge",
+                "sub": "quality, tone, faithfulness — ~$0.05-0.50/call"
+              },
+              {
+                "label": "Human sample review",
+                "sub": "5-10% random sample — calibration + audit"
+              },
+              {
+                "label": "Aggregate score",
+                "sub": "weighted combination of all layers"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "A concrete starting point: write code-graded checks for every structural requirement (valid JSON, required fields present, no forbidden patterns). Add a model judge for quality dimensions you care about most (faithfulness, helpfulness, tone). Route 5-10% of outputs to human review each week and compare those human scores to the model judge scores. If the judge drifts from the humans, update the rubric prompt and re-validate before trusting the judge again."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "**Start simple.** If you have no evals today, add code-graded checks first — they take thirty minutes to write, run in CI, and immediately catch format regressions. Reach for a model judge only once you've identified quality dimensions that code can't capture."
+        },
+        {
+          "type": "p",
+          "md": "Some teams use a two-stage model-grading setup: a fast, cheap judge (like `gpt-4.1-mini` or `claude-haiku-4-5`) runs on every eval in CI, and a slower, more capable judge (like `claude-opus-4-5` or `gpt-4.1`) runs only on the samples that fail or are near the threshold. This keeps costs down while preserving accuracy where it matters most."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you have a working layered eval, the next frontier is *calibration at scale*. The goal is to reduce your dependence on expensive human grading without sacrificing accuracy. The standard approach is to treat calibration as an ongoing process: every week, pull a random sample of outputs, have humans score them, and measure the gap between those scores and your model judge. When the gap exceeds a threshold (say, more than 0.4 points on a 5-point scale), trigger a rubric review."
+        },
+        {
+          "type": "h3",
+          "text": "Fine-tuned judge models"
+        },
+        {
+          "type": "p",
+          "md": "General-purpose LLM judges are fast to set up but imprecise for specialized domains. Teams handling domain-specific outputs (medical notes, legal summaries, financial analyses) often fine-tune a smaller open-source judge model on their own human-labeled dataset. A fine-tuned 8B judge trained on 2,000 labeled examples can outperform a general-purpose 70B judge on the specific rubric it was trained for, at a fraction of the API cost."
+        },
+        {
+          "type": "h3",
+          "text": "Eval harness tooling"
+        },
+        {
+          "type": "p",
+          "md": "Several open-source and commercial frameworks bundle all three grading methods behind a unified API. **Braintrust** supports code scorers, custom LLM judges, and human annotation queues in a single platform. **Langfuse** integrates LLM-as-a-judge into its tracing UI so you can attach a score to any production trace. **Evidently AI** provides a library of pre-built LLM metrics (correctness, faithfulness, toxicity) that are model-graded under the hood. **OpenAI Evals** (for OpenAI users) supports exact-match graders, model-graded graders, and human review workflows through its `grader` spec."
+        },
+        {
+          "type": "h3",
+          "text": "The G-Eval pattern"
+        },
+        {
+          "type": "p",
+          "md": "G-Eval, introduced in a 2023 paper from Microsoft Research, is one of the more reliable model-grading patterns. The judge is prompted to first generate step-by-step evaluation criteria from the rubric (chain-of-thought), then produce a probability distribution over scores rather than a single integer. The final score is the expected value of that distribution. This approach is more robust to rubric phrasing variation than direct scoring and correlates more strongly with human judgments on open-ended tasks."
+        },
+        {
+          "type": "h3",
+          "text": "Pairwise vs. pointwise grading"
+        },
+        {
+          "type": "p",
+          "md": "There are two fundamental grading modes for model judges. **Pointwise** grading scores each output on an absolute scale (1-5). **Pairwise** grading shows the judge two outputs side-by-side and asks which is better. Pairwise grading correlates more strongly with human preference in research settings — humans also find it easier to say \"A is better than B\" than to assign an absolute score — but it is quadratically more expensive: comparing *N* outputs pairwise requires O(N²) judge calls. Pointwise is the default for CI; pairwise is valuable for final release comparisons between two model versions."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Can I use the same model to generate and grade outputs?",
+      "a": "Technically yes, but it creates a circular signal — the model tends to rate its own outputs more favorably than humans would. This is called self-preference bias. For any serious eval, use a different model family as the judge, or at minimum a larger model from the same family that wasn't used to generate the outputs."
+    },
+    {
+      "q": "How do I know if my model judge is trustworthy?",
+      "a": "Validate it against human labels on a held-out sample from your specific domain. Calculate agreement metrics like Cohen's kappa or Spearman correlation. A kappa above 0.7 indicates substantial agreement and is generally considered sufficient for automated use. Revalidate whenever you change the judge model, rubric prompt, or input distribution."
+    },
+    {
+      "q": "What is the cheapest way to start evaluating LLM output quality?",
+      "a": "Start with code-graded checks for all structural requirements — they are free, run in milliseconds, and can be wired into CI in an afternoon. Add a model judge only for the quality dimensions that matter most and that code cannot check. Run human review as a periodic sample, not on every output."
+    },
+    {
+      "q": "How many human-labeled examples do I need to validate a model judge?",
+      "a": "A sample of 100-200 diverse outputs from your actual distribution is usually enough to get a reliable correlation estimate. For high-stakes domains, aim for 500+. The key is that the sample must be representative — don't only label outputs you think are interesting."
+    },
+    {
+      "q": "Is exact match ever good enough for LLM evals?",
+      "a": "Yes, for tasks with a single objectively correct answer: entity extraction where you know the gold entity, yes/no classification, multiple-choice answers, numeric results, and structured outputs like JSON or SQL where correctness is well-defined. For anything involving natural language phrasing, exact match will produce too many false failures and is the wrong tool."
+    },
+    {
+      "q": "What is pairwise grading and when should I use it?",
+      "a": "Pairwise grading shows a model judge two outputs side-by-side and asks which is better. It correlates more strongly with human preference than absolute pointwise scoring, but costs O(N squared) judge calls. Use it for final comparisons between two model versions before a release decision; use pointwise scoring for everyday CI runs."
+    }
+  ],
+  "related": [
+    "what-are-llm-evals",
+    "llm-as-a-judge-explained",
+    "llm-judge-pitfalls",
+    "golden-dataset-llm-testing",
+    "how-to-build-eval-suite"
+  ],
+  "furtherReading": [
+    {
+      "title": "LLM-as-a-Judge vs Human-in-the-Loop Evals: When to Use Each",
+      "url": "https://www.braintrust.dev/articles/llm-as-a-judge-vs-human-in-the-loop-evals"
+    },
+    {
+      "title": "LLM-as-a-Judge: A Complete Guide to Using LLMs for Evaluations",
+      "url": "https://www.evidentlyai.com/llm-guide/llm-as-a-judge"
+    },
+    {
+      "title": "What Is a Code-Based Eval?",
+      "url": "https://amplitude.com/explore/product/what-is-a-code-based-eval"
+    }
+  ]
+}

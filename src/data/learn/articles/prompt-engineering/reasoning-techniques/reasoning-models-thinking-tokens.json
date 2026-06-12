@@ -1,0 +1,357 @@
+{
+  "slug": "reasoning-models-thinking-tokens",
+  "title": "What Are Reasoning Models? How \"Thinking\" Tokens Work",
+  "seoTitle": "Reasoning Models: How Thinking Tokens Work",
+  "metaDescription": "What reasoning models like o-series and Claude extended thinking are, how thinking tokens work under the hood, and when to use them over standard models.",
+  "keywords": [
+    "what are reasoning models",
+    "how do thinking tokens work",
+    "extended thinking explained",
+    "reasoning model vs regular llm",
+    "when to use a reasoning model"
+  ],
+  "difficulty": "beginner",
+  "oneLiner": "Learn what a reasoning model actually does with its hidden thinking tokens, what that costs you, and when a standard model is the smarter pick.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Imagine a talented colleague who always blurts the first thing that comes to mind. Ask them a simple question — \"what's your email?\" — and the instant answer is great. Ask them to audit a 50-page contract for legal gaps, and their instant answer is almost certainly wrong. What you actually want is for them to sit down, read carefully, make notes, and *then* give you a verdict. The reading-and-note-taking phase is invisible to you; you only see the final verdict."
+        },
+        {
+          "type": "p",
+          "md": "**Reasoning models** work exactly like that careful colleague. Before producing the response you see, they generate a private scratchpad — a long internal monologue of scratch work, self-corrections, and intermediate conclusions. In the API this scratchpad is called **thinking tokens** (Anthropic) or **reasoning tokens** (OpenAI). You never see them in the final reply, but they shape it deeply: the model arrives at its answer only after working through the problem on that invisible notepad."
+        },
+        {
+          "type": "p",
+          "md": "The two most prominent families as of 2026 are OpenAI's **o-series** (o1, o3, o4-mini) and Anthropic's **Claude** models with **extended thinking** enabled (Claude Opus 4 and Sonnet 4 series). Both let you control how much thinking the model does — spending more tokens for harder problems and fewer for easy ones."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Reasoning models are *not* a completely separate architecture. They are large language models, but trained with reinforcement learning to reward producing long, correct private reasoning traces. The \"thinking\" is generated text — just text you don't receive."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Standard LLMs generate one token at a time, and each token gets roughly the same, fixed amount of computation from the network's layers. On a simple factual question that works fine. On a problem that genuinely requires ten sequential logical steps — a mathematical proof, a code-debugging session, a multi-constraint planning task — the model must compress all that reasoning into the tokens it outputs. When those tokens are few, many steps get skipped or conflated, and the answer is wrong in a confident-sounding way."
+        },
+        {
+          "type": "p",
+          "md": "Reasoning models solve this by converting **time** into **accuracy**. By generating thousands of thinking tokens before the visible answer, the model effectively runs a much deeper computation on the same input. Benchmarks bear this out: on AIME (a hard math olympiad) and graduate-level science questions (GPQA Diamond), reasoning models dramatically outperform standard models of comparable parameter count."
+        },
+        {
+          "type": "p",
+          "md": "Why should a builder care?"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Multi-step code generation or debugging.** The model can plan the solution, write pseudocode, catch type errors in the thinking phase, and only then produce clean code.",
+            "**Complex document analysis.** Comparing clauses across a contract, identifying policy contradictions, or scoring a rubric with many interdependent criteria.",
+            "**Agentic pipelines.** Planning which tools to call, in what order, with what arguments — without forcing you to chain many API calls together.",
+            "**Math, science, and symbolic reasoning.** Anything where the answer depends on a series of provably correct intermediate steps.",
+            "**When you've hit the accuracy ceiling on a standard model.** If prompt engineering, few-shot examples, and chain-of-thought tricks still produce errors, a reasoning model is the next lever to pull."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Reasoning models are typically slower and more expensive per request than standard models. Reach for them on hard problems where accuracy matters, not on every prompt in your pipeline."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you call a reasoning model, the request goes through two phases. First the model generates a reasoning trace — a long sequence of tokens that is essentially the model \"thinking out loud\" to itself, exploring approaches, checking sub-results, and correcting mistakes. Second, it generates the final visible response, conditioned on everything in that trace. The two phases are sequential: the answer tokens literally see the thinking tokens as context."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "How a reasoning model processes one request",
+            "steps": [
+              {
+                "label": "Your prompt arrives",
+                "sub": "input tokens billed normally"
+              },
+              {
+                "label": "Thinking phase begins",
+                "sub": "model generates hidden reasoning tokens"
+              },
+              {
+                "label": "Self-correction loop",
+                "sub": "model backtracks, revises, verifies"
+              },
+              {
+                "label": "Thinking phase ends",
+                "sub": "reasoning trace complete (invisible to you)"
+              },
+              {
+                "label": "Visible response generated",
+                "sub": "conditioned on the full thinking trace"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The reasoning tokens occupy real space in the context window and are **billed as output tokens** — the most expensive kind. A response showing 600 visible output tokens might have consumed 4,000 thinking tokens underneath, so the actual bill is for 4,600 output tokens. You can see this in the API response's usage object."
+        },
+        {
+          "type": "h3",
+          "text": "Controlling the thinking budget"
+        },
+        {
+          "type": "p",
+          "md": "Both OpenAI and Anthropic expose a budget knob. OpenAI calls it `reasoning.effort` (values: `low`, `medium`, `high`). Anthropic's `budget_tokens` parameter sets a hard cap on how many thinking tokens Claude can use for a request — the minimum is 1,024 and the maximum tracks the model's overall output limit (up to 128k tokens on current Claude 4 models). Raising the budget improves accuracy on hard tasks at higher cost and latency; lowering it saves money and is fine for easier tasks."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "import anthropic\n\nclient = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY\n\n# Extended thinking on Claude — budget_tokens controls how hard it thinks\nresponse = client.messages.create(\n    model=\"claude-opus-4-5\",\n    max_tokens=16000,\n    thinking={\n        \"type\": \"enabled\",\n        \"budget_tokens\": 10000  # up to 10k tokens of private reasoning\n    },\n    messages=[{\n        \"role\": \"user\",\n        \"content\": \"A train leaves Chicago at 08:00 going 90 mph toward NYC. \"\n                   \"Another leaves NYC at 09:30 going 70 mph toward Chicago. \"\n                   \"The cities are 790 miles apart. When and where do they meet?\"\n    }]\n)\n\n# Thinking blocks come back separately from text blocks\nfor block in response.content:\n    if block.type == \"thinking\":\n        print(\"[thinking]\", block.thinking[:200], \"...\")\n    elif block.type == \"text\":\n        print(\"[answer]\", block.text)"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "import openai\n\nclient = openai.OpenAI()  # reads OPENAI_API_KEY\n\n# Reasoning effort on OpenAI o3\nresponse = client.chat.completions.create(\n    model=\"o3\",\n    reasoning_effort=\"high\",  # low | medium | high\n    messages=[{\n        \"role\": \"user\",\n        \"content\": \"Find the bug in this merge sort implementation: ...\"\n    }]\n)\n\nprint(response.choices[0].message.content)\n# Note: reasoning tokens are NOT returned in the response object\n# but are visible in response.usage.completion_tokens_details"
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Thinking tokens count toward your context window. For Claude, `budget_tokens` is a *subset* of `max_tokens` — if you set `budget_tokens=8000` and `max_tokens=8192`, you leave only 192 tokens for the visible answer. Always set `max_tokens` significantly higher than `budget_tokens`."
+        }
+      ]
+    },
+    {
+      "id": "reasoning-model-vs-standard-model",
+      "title": "Reasoning model vs standard model: the tradeoff table",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Choosing between a reasoning model and a standard model is fundamentally a tradeoff between **cost + latency** and **accuracy on hard tasks**. Neither is universally better."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Standard model vs reasoning model",
+            "columns": [
+              {
+                "title": "Standard model (e.g. Claude Sonnet, GPT-4o)",
+                "items": [
+                  "Fast — seconds per response",
+                  "Cheaper per token",
+                  "Output tokens = visible output",
+                  "Great for conversational tasks, summarisation, simple Q&A",
+                  "Chain-of-thought prompting can close some gap"
+                ]
+              },
+              {
+                "title": "Reasoning model (e.g. o3, Claude Opus 4 + extended thinking)",
+                "items": [
+                  "Slower — can take tens of seconds",
+                  "Thinking tokens billed at output rate",
+                  "Hidden tokens multiply real cost 2-5x",
+                  "State-of-the-art on math, code, science, planning",
+                  "Little benefit added by CoT prompting on top"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Task type",
+            "Recommended model"
+          ],
+          "rows": [
+            [
+              "Short factual answer",
+              "Standard"
+            ],
+            [
+              "Summarisation or rewriting",
+              "Standard"
+            ],
+            [
+              "Customer support reply",
+              "Standard"
+            ],
+            [
+              "Multi-step math or science",
+              "Reasoning"
+            ],
+            [
+              "Complex code generation or review",
+              "Reasoning"
+            ],
+            [
+              "Legal/contract analysis with rubric",
+              "Reasoning"
+            ],
+            [
+              "Agentic tool-use planning",
+              "Reasoning"
+            ],
+            [
+              "Creative writing",
+              "Standard (reasoning adds little)"
+            ],
+            [
+              "Simple classification",
+              "Standard"
+            ],
+            [
+              "Debugging a subtle logic error",
+              "Reasoning"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Research has found that reasoning models can generate more than **100 times** the tokens of a standard model on the same prompt, and incur over **20 times** the latency. That's fine for a nightly code-review job; it's crippling for a real-time chat widget. Match the tool to the latency and cost budget."
+        }
+      ]
+    },
+    {
+      "id": "pitfalls-and-gotchas",
+      "title": "Pitfalls and gotchas",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Reasoning models are powerful but they introduce several failure modes that don't exist with standard models."
+        },
+        {
+          "type": "h3",
+          "text": "Over-thinking easy problems"
+        },
+        {
+          "type": "p",
+          "md": "Set `reasoning_effort` to `high` or `budget_tokens` to 32k on a question like \"What is the capital of France?\" and the model may spin through thousands of tokens of unnecessary verification before answering \"Paris.\" You pay for all of it. Effort/budget knobs exist precisely to prevent this — calibrate them per task type, not globally."
+        },
+        {
+          "type": "h3",
+          "text": "Thinking tokens are still billed even when wrong"
+        },
+        {
+          "type": "p",
+          "md": "A high thinking budget does not guarantee a correct answer — it makes correct answers more *likely* on hard tasks. If the model still gets it wrong after 10,000 thinking tokens, you pay for the thinking and the wrong answer. Validate outputs, especially in automated pipelines."
+        },
+        {
+          "type": "h3",
+          "text": "Don't add chain-of-thought instructions on top of reasoning models"
+        },
+        {
+          "type": "p",
+          "md": "Prompting a reasoning model with \"think step by step\" or \"reason before answering\" is redundant — the model already does this internally. In some cases explicit CoT instructions interfere with the model's built-in reasoning strategy, producing worse results. Let the thinking budget do its job; use your prompt tokens for instructions, constraints, and context instead."
+        },
+        {
+          "type": "h3",
+          "text": "Interleaved thinking and streaming"
+        },
+        {
+          "type": "p",
+          "md": "Claude's API supports **interleaved thinking** (beta as of 2025), where thinking blocks alternate with text blocks across a multi-step agentic turn. When `max_tokens` is above about 21,000, the Anthropic SDK requires streaming — a synchronous request that long will time out. For thinking budgets above 32k, batch processing is recommended over live requests."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "The thinking trace is **not** a faithful audit log of the model's computation — it is generated text that usually tracks the real reasoning but can be a post-hoc rationalization. Do not use it as a compliance artifact. It is a debugging aid and an accuracy lever."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**How reasoning models are trained.** The thinking capability is not just switched on at inference time — it is trained in. OpenAI's o1 paper describes reinforcement learning where the model is rewarded for producing reasoning traces that lead to verifiably correct answers on math and code tasks. Over many training steps the model learns to hone its chain of thought, recognize mistakes early, and allocate more thinking to harder sub-problems. The specific content of the internal reasoning is intentionally opaque: OpenAI and Anthropic do not expose the full trace to prevent gaming the reward signal."
+        },
+        {
+          "type": "p",
+          "md": "**Scaling laws for thinking.** Accuracy on math benchmarks improves roughly logarithmically with the number of thinking tokens allocated, which means doubling the budget gives diminishing returns. Practical implication: there is often a sweet spot — a budget that captures most of the accuracy gain at a fraction of the maximum cost. Profile your specific task with a small eval set at budget levels of 1k, 4k, 16k, and 64k before committing to a default."
+        },
+        {
+          "type": "p",
+          "md": "**Adaptive thinking.** Claude Opus 4 introduced effort controls (`low`, `high`, `xhigh`, `max`) and adaptive thinking, where the model decides internally how much reasoning to spend based on perceived task complexity, rather than always consuming the full `budget_tokens`. This further reduces waste on mixed-difficulty workloads."
+        },
+        {
+          "type": "p",
+          "md": "**Test-time compute scaling.** Reasoning models are a concrete example of a broader research direction: scaling *inference-time* compute rather than only *training-time* compute. The original Transformer scaling laws focused on parameters and training tokens. Reasoning models show that you can trade inference FLOPs for quality independently — a smaller model thinking for a long time can match a larger model answering instantly. This opens architectures that are parameter-efficient but inference-expensive, which is a meaningful shift for deployment economics."
+        },
+        {
+          "type": "p",
+          "md": "**Where the field is heading.** Three threads to watch: *latent reasoning* (performing the step-by-step computation in hidden activations rather than token sequences, trading interpretability for speed), *verifier-guided search* (using a separate model or formal checker to score candidate reasoning traces and select the best), and *speculative thinking* (drafting a cheap reasoning pass with a small model, then refining only the uncertain steps with an expensive one). The thinking-token paradigm established in 2024 is still early; the mechanisms for controlling it are actively improving every quarter."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "If you are building a pipeline where reasoning models sit alongside standard models, route by task type: use a classifier or heuristic (input length, presence of numbers, task tag) to send only genuinely hard sub-tasks to the reasoning endpoint and route the rest to a faster, cheaper model. This can cut costs by 60-80% versus using a reasoning model for every call."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Are reasoning models the same as chain-of-thought prompting?",
+      "a": "They share the same root idea — spend tokens reasoning before answering — but they are different mechanisms. Chain-of-thought is something you elicit with words in a prompt; the reasoning appears as visible output text. Reasoning models generate private thinking tokens through a trained behavior, not a prompt instruction. The thinking is hidden, controlled via API parameters, and does not pollute your response."
+    },
+    {
+      "q": "Do I get charged for thinking tokens I never see?",
+      "a": "Yes. Thinking tokens and reasoning tokens are billed at the output token rate even though they are not returned to you. A typical extended-thinking request might use 2-5x more tokens than the visible answer alone. Check the `usage` object in the API response — `completion_tokens_details` on OpenAI and the `usage` field on Anthropic both break out the thinking token count."
+    },
+    {
+      "q": "Can I read the thinking trace to debug my prompts?",
+      "a": "On Anthropic models the thinking trace *is* returned as `thinking` blocks in the response content array, so you can log and inspect it. On OpenAI o-series models the reasoning tokens are *not* returned — you only see the total count in the usage object. In both cases the trace is a useful debugging aid but not a guaranteed faithful record of every step the model took internally."
+    },
+    {
+      "q": "How do I choose between `reasoning_effort` low / medium / high on OpenAI models?",
+      "a": "Start at `medium` (the default in ChatGPT). Use `low` for tasks that are fast and cheap to iterate on, or where latency is critical. Use `high` only for tasks where your eval set shows a meaningful accuracy improvement over medium — the cost and latency jump substantially. On AIME 2024 math problems, for example, moving from low to high raises accuracy by roughly 10-30 percentage points, which is worth it. For a customer-service summarisation task the gap is typically negligible."
+    },
+    {
+      "q": "Do reasoning models make prompt engineering obsolete?",
+      "a": "No. Clear task instructions, well-structured context, relevant examples, and output format constraints all still matter — the model needs to understand what problem it is reasoning about. What reasoning models *do* reduce is the need for explicit \"think step by step\" phrases and elaborate CoT scaffolding; those are superseded by the built-in thinking budget. Good prompting and good thinking budgets are complementary, not competing."
+    },
+    {
+      "q": "When should I use a reasoning model inside an agent vs a standard model?",
+      "a": "Use a reasoning model for the planning and decision steps of an agent — choosing which tools to call, in what order, with what arguments, and how to interpret results. Use a standard model for fast-turnaround sub-tasks like extracting a value from a JSON blob, formatting output, or generating short text. A common pattern is a reasoning model as the \"orchestrator\" and standard models as cheap \"worker\" nodes."
+    }
+  ],
+  "related": [
+    "what-is-prompt-engineering",
+    "what-is-system-prompt",
+    "zero-shot-vs-few-shot",
+    "chain-of-thought-prompting",
+    "self-consistency-prompting"
+  ],
+  "furtherReading": [
+    {
+      "title": "Learning to Reason with LLMs — OpenAI o1 technical blog",
+      "url": "https://openai.com/index/learning-to-reason-with-llms/"
+    },
+    {
+      "title": "Building with Extended Thinking — Anthropic API docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/extended-thinking"
+    },
+    {
+      "title": "Reasoning Models — OpenAI API reference",
+      "url": "https://platform.openai.com/docs/guides/reasoning"
+    }
+  ]
+}

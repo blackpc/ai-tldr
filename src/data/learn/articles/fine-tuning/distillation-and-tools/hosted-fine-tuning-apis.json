@@ -1,0 +1,435 @@
+{
+  "slug": "hosted-fine-tuning-apis",
+  "title": "What Is Hosted Fine-Tuning? Tuning via API Instead of GPUs",
+  "seoTitle": "Hosted Fine-Tuning: Tune a Model via API, No GPUs",
+  "metaDescription": "OpenAI, Google, and platforms like Together let you fine-tune by uploading a JSONL file. What hosted fine-tuning costs, supports, and locks you into.",
+  "keywords": [
+    "openai fine-tuning api how it works",
+    "hosted fine-tuning services",
+    "fine-tune llm without gpu",
+    "fine-tuning api vs self-hosted",
+    "together ai fine-tuning"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn the upload-a-file path to a custom model: what hosted fine-tuning platforms handle for you, what they charge, and the lock-in you accept.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**Hosted fine-tuning** means you customize a language model by uploading a data file to a cloud API — no GPU rental, no CUDA setup, no training loop to write. You hand the provider a JSONL file of examples, set a few hyperparameters, and the platform runs the training job on its own hardware. When training finishes, a custom model endpoint is waiting for you to call."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like a commercial print shop. You bring your design file; they own the printing presses. You don't need to understand how offset lithography works to get a thousand flyers made. Hosted fine-tuning is the same deal for model training: you supply the knowledge (your examples), the platform supplies the compute (their GPUs), and you walk away with a finished product."
+        },
+        {
+          "type": "p",
+          "md": "The alternative is **self-hosted fine-tuning**: you rent or own GPU instances, install training libraries like Hugging Face Transformers or Axolotl, write a training script, manage data loading, handle checkpointing, and debug CUDA out-of-memory errors yourself. That path is powerful and flexible, but it has a steep ramp. Hosted fine-tuning trades some of that flexibility for a dramatically simpler developer experience."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Hosted fine-tuning is usually **supervised fine-tuning (SFT)** — you show the model example inputs and the outputs you want. Some platforms also support preference methods like DPO, or reinforcement fine-tuning, but the basic upload-a-file workflow always refers to SFT."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Fine-tuning a model from scratch on your own infrastructure used to require a machine-learning engineer, a GPU cluster, and weeks of iteration. Hosted fine-tuning compresses that to an afternoon. That shift changes who can fine-tune: a solo developer with a credit card and a few hundred good examples can now build a custom model that outperforms a base model on their specific task."
+        },
+        {
+          "type": "p",
+          "md": "The practical impact breaks into three areas:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Speed.** A training job on OpenAI or Together AI for a modest dataset (a few thousand examples) often completes in under an hour. Self-hosted jobs at the same scale require provisioning, installing dependencies, debugging environments, and monitoring — adding hours or days before the first token of your custom model.",
+            "**No infrastructure tax.** You pay only for training tokens and inference calls. There are no idle GPU costs while your machine waits between jobs, no cluster to resize, and no on-call obligations if a GPU node fails.",
+            "**Accessibility.** Teams without ML infrastructure expertise — product engineers, domain specialists, startups — can now fine-tune production-quality models. The barrier is knowing your task and having good data, not knowing how to configure distributed training."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The tradeoff is real though. You get convenience by giving up control. You can only fine-tune models the platform exposes, you cannot inspect or modify the training loop, and if the provider changes pricing or deprecates your model, your deployment depends on their decision. That lock-in has a cost that escalates the more deeply you integrate."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Hosted fine-tuning is a great first step even if you eventually plan to self-host. Use it to validate that fine-tuning actually helps your task before committing to infrastructure. If the hosted fine-tune does not beat the base model, adding GPUs will not fix the problem — the issue is your data or task definition."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every hosted fine-tuning platform follows the same four-step loop, even if the API calls differ. Understanding the pattern once lets you switch platforms without re-learning the workflow."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Hosted fine-tuning pipeline",
+            "steps": [
+              {
+                "label": "Prepare data",
+                "sub": "JSONL with messages array"
+              },
+              {
+                "label": "Upload file",
+                "sub": "POST /files, purpose=fine-tune"
+              },
+              {
+                "label": "Create job",
+                "sub": "POST /fine-tuning/jobs"
+              },
+              {
+                "label": "Poll status",
+                "sub": "GET job until succeeded"
+              },
+              {
+                "label": "Call model",
+                "sub": "Use ft: model ID in your app",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "The JSONL training file"
+        },
+        {
+          "type": "p",
+          "md": "Every major platform expects training examples as **JSONL** (JSON Lines): one JSON object per line, no trailing commas, no wrapping array. Each line is one training example. For chat-style models, each example is a `messages` array with `role` and `content` fields, exactly like the messages you send during inference:"
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "title": "training.jsonl — one line per example",
+          "code": "{\"messages\": [{\"role\": \"system\", \"content\": \"You are a triage assistant for a software help desk.\"}, {\"role\": \"user\", \"content\": \"My login page shows a 502 error after the latest deploy.\"}, {\"role\": \"assistant\", \"content\": \"Priority: HIGH. Category: Infrastructure. Assign to: Platform team. The 502 suggests the app server is not reachable — check load-balancer health targets first.\"}]}\n{\"messages\": [{\"role\": \"system\", \"content\": \"You are a triage assistant for a software help desk.\"}, {\"role\": \"user\", \"content\": \"The font on the dashboard looks slightly different from last week.\"}, {\"role\": \"assistant\", \"content\": \"Priority: LOW. Category: UI. Assign to: Frontend team. Likely a CSS change in the last release — no user impact, can be addressed in next sprint.\"}]}"
+        },
+        {
+          "type": "h3",
+          "text": "Upload, kick off, and poll"
+        },
+        {
+          "type": "p",
+          "md": "You upload the file first, receive a file ID, then create a fine-tuning job that references that ID. The platform validates your data (checking format, token counts, minimum example counts), queues the job, runs it, and returns a model ID when it completes. The entire exchange is a few short API calls:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Kick off a fine-tuning job with the OpenAI SDK",
+          "code": "from openai import OpenAI\n\nclient = OpenAI()  # OPENAI_API_KEY from env\n\n# 1. Upload the training file\nwith open(\"training.jsonl\", \"rb\") as f:\n    file_obj = client.files.create(file=f, purpose=\"fine-tune\")\n\nprint(\"File ID:\", file_obj.id)  # e.g. file-abc123\n\n# 2. Create the fine-tuning job\njob = client.fine_tuning.jobs.create(\n    training_file=file_obj.id,\n    model=\"gpt-4o-mini-2024-07-18\",\n    hyperparameters={\"n_epochs\": 3},\n)\n\nprint(\"Job ID:\", job.id)  # e.g. ftjob-xyz789\n\n# 3. Poll until done (simplistic — use webhooks in production)\nimport time\nwhile True:\n    status = client.fine_tuning.jobs.retrieve(job.id)\n    print(status.status)\n    if status.status in (\"succeeded\", \"failed\", \"cancelled\"):\n        break\n    time.sleep(30)\n\n# 4. Use the custom model\nif status.status == \"succeeded\":\n    ft_model = status.fine_tuned_model\n    print(\"Custom model:\", ft_model)  # e.g. ft:gpt-4o-mini:org::abc\n    resp = client.chat.completions.create(\n        model=ft_model,\n        messages=[{\"role\": \"user\", \"content\": \"My login page shows a 502.\"}],\n    )\n    print(resp.choices[0].message.content)"
+        },
+        {
+          "type": "h3",
+          "text": "What the platform does in the background"
+        },
+        {
+          "type": "p",
+          "md": "From the moment you submit the job, the provider handles everything you would have to do yourself on bare metal: validating and tokenizing your training examples, splitting a validation set if you did not supply one, loading the base model weights onto GPU memory, running the forward and backward passes for each epoch, checkpointing periodically, running eval metrics, and finally registering the resulting weights under your account as a callable model endpoint. You never see any of this — it either succeeds or surfaces a clear error."
+        }
+      ]
+    },
+    {
+      "id": "platform-comparison",
+      "title": "Platform landscape: who offers what",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The hosted fine-tuning market has consolidated around a handful of platforms with meaningfully different trade-offs. Which one makes sense depends on whether you need a proprietary frontier model, a specific open model, pricing structure, or data-privacy guarantees."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Platform",
+            "Tunable models",
+            "Training cost (approx)",
+            "Notes"
+          ],
+          "rows": [
+            [
+              "**OpenAI**",
+              "GPT-4o, GPT-4o mini, GPT-4.1 nano, GPT-4.1",
+              "$3–25/M training tokens",
+              "Tight API; proprietary models only; inference at standard rates"
+            ],
+            [
+              "**Google Vertex AI**",
+              "Gemini 2.0 Flash, Gemini 1.5 Pro/Flash",
+              "$3/M training tokens (Flash)",
+              "Inference at same price as base model — no markup"
+            ],
+            [
+              "**Together AI**",
+              "Llama 3, Mistral, Qwen, Gemma, and others",
+              "Per-token; scales with model size",
+              "Open models only; dedicated endpoint needed for serving"
+            ],
+            [
+              "**Fireworks AI**",
+              "Llama 3, Mistral, FireFunction, others",
+              "~$16/M tokens for 70B models",
+              "LoRA focus; up to 100 LoRA adapters on one shared deployment"
+            ],
+            [
+              "**AWS Bedrock**",
+              "Amazon Nova, Titan, Cohere Command",
+              "~$8/1K tokens (Nova Pro)",
+              "Requires provisioned throughput for inference; VPC-friendly"
+            ]
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "OpenAI: the default starting point"
+        },
+        {
+          "type": "p",
+          "md": "OpenAI's fine-tuning API is the most documented and most copied. You tune `gpt-4o-mini` for roughly **$3 per million training tokens** and pay the same inference rates as the base model after training. The dashboard shows training and validation loss curves, lets you compare completions side-by-side before and after tuning, and supports vision fine-tuning on image inputs. The hard constraint is that you can only tune OpenAI's own models — there is no path to a Llama or Mistral fine-tune through this platform."
+        },
+        {
+          "type": "h3",
+          "text": "Google Vertex AI: no inference markup"
+        },
+        {
+          "type": "p",
+          "md": "Vertex AI supervised fine-tuning of Gemini 2.0 Flash costs **$3 per million training tokens**, and the resulting tuned model is served at the same per-token price as the base Gemini 2.0 Flash. That means there is no hidden \"you pay extra for the custom model\" tax on every inference call — a meaningful advantage at high request volumes. You interact via the `google-cloud-aiplatform` SDK or the Vertex AI console."
+        },
+        {
+          "type": "h3",
+          "text": "Together AI and Fireworks: open-model fine-tuning"
+        },
+        {
+          "type": "p",
+          "md": "If you want to fine-tune an open-weight model — Llama 3 70B, Mistral 7B, Qwen 2.5 — without setting up your own training infrastructure, Together AI and Fireworks AI both offer hosted fine-tuning via API. Training is priced per token, scaling with model size. The key difference from OpenAI and Vertex is the **serving model**: after training on Together, your fine-tuned weights run on a **dedicated endpoint** priced at GPU-hour rates (roughly $6–12/hr on H100/B200). Fireworks lets you share a LoRA adapter across a base model deployment, which can be cheaper if you have moderate traffic."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "On Together AI and similar open-model platforms, **the fine-tuned model storage and the running endpoint are separate costs**. Many developers are surprised to find that training cost $5 but running the model for a month costs $200+ in dedicated GPU time. Always model your inference traffic before committing to a dedicated endpoint."
+        }
+      ]
+    },
+    {
+      "id": "lock-in-and-tradeoffs",
+      "title": "Lock-in and trade-offs you are accepting",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Hosted fine-tuning is not free. The convenience you gain comes with real trade-offs that are easy to underestimate when you are in a hurry to ship."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Hosted vs. self-hosted fine-tuning",
+            "columns": [
+              {
+                "title": "Hosted (OpenAI, Vertex, Together)",
+                "accent": true,
+                "items": [
+                  "No GPU setup — start in minutes",
+                  "Pay only training tokens + inference",
+                  "Limited to platform's supported models",
+                  "No access to training internals or checkpoints",
+                  "Provider can deprecate your model version",
+                  "Data leaves your environment for training"
+                ]
+              },
+              {
+                "title": "Self-hosted (Axolotl, Transformers, unsloth)",
+                "items": [
+                  "Full model zoo — any open model",
+                  "Full control: LoRA rank, optimizer, scheduler",
+                  "Keep checkpoints, export to any format",
+                  "GPU provisioning and ops burden",
+                  "CUDA, memory, and distributed-training debugging",
+                  "Data stays in your infrastructure"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Model deprecation risk"
+        },
+        {
+          "type": "p",
+          "md": "When OpenAI retires a base model, fine-tuned versions built on that base are retired too — often on the same schedule. If your production system calls a fine-tuned `gpt-4o-2024-07-18` endpoint and that checkpoint gets deprecated, you must retrain against a newer base. Providers typically give 3–6 months of notice, but every cycle costs training time, dollars, and the regression-testing overhead of validating the new model behaves the same as the old one."
+        },
+        {
+          "type": "h3",
+          "text": "Data privacy"
+        },
+        {
+          "type": "p",
+          "md": "Your training data travels to the provider's infrastructure. OpenAI's enterprise tier and Azure OpenAI offer contractual guarantees that training data is not used to improve their base models. Standard-tier accounts do not have those guarantees by default — check the data usage policy before uploading anything that includes PII, proprietary data, or content under NDA. Vertex AI and Bedrock run within your existing Google Cloud or AWS account, which can give your security team a cleaner compliance story."
+        },
+        {
+          "type": "h3",
+          "text": "No access to weights"
+        },
+        {
+          "type": "p",
+          "md": "When you fine-tune on OpenAI, Google, or AWS, you never receive the actual model weights. You get a model ID you can call — but you cannot download the checkpoint, run it locally, switch inference providers, or inspect what the training changed. This is fundamentally different from self-hosted fine-tuning, where the checkpoint is a file you own. For most teams this is irrelevant; for teams with hard data-residency or portability requirements, it is a deal-breaker."
+        }
+      ]
+    },
+    {
+      "id": "data-requirements",
+      "title": "Data requirements and practical tips",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The most common reason a hosted fine-tune fails to improve performance is data quality, not the platform or the model. Training the job itself is easy — preparing data that actually teaches the model something new is the hard part."
+        },
+        {
+          "type": "h3",
+          "text": "Minimum example counts"
+        },
+        {
+          "type": "p",
+          "md": "Most platforms enforce a lower bound: OpenAI requires at least **10 examples** to start a job (in practice, 50–100 gives you something worth evaluating; 500–1000 is a typical production starting point). The right number is not a fixed answer — it depends on how different your task is from the base model's existing behavior. Teaching a model to respond in a new language or format takes fewer examples than teaching it brand-new domain knowledge."
+        },
+        {
+          "type": "h3",
+          "text": "Format your training data like your production prompts"
+        },
+        {
+          "type": "p",
+          "md": "The system prompt in your training examples should match exactly what you will send at inference time. If your production calls include a system prompt, include the same one in every training example. If you fine-tune on examples without a system prompt but then add one in production, the model saw a different context distribution during training — results will be inconsistent."
+        },
+        {
+          "type": "h3",
+          "text": "Hold out a validation split"
+        },
+        {
+          "type": "p",
+          "md": "All major platforms accept an optional `validation_file` alongside your training file. Supply it. Watching validation loss alongside training loss is the only reliable way to catch overfitting early — when training loss falls but validation loss rises, the model is memorizing your examples rather than generalizing from them. Without a validation file, you find out about overfitting much later, after you have already paid for inference calls on a model that degraded."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "A useful heuristic for validation split size: **10–20% of your training set, minimum 50 examples**. For example, if you have 500 training examples, hold out 50–100 for validation. Do not hold out less than 50 — below that the validation loss is too noisy to be meaningful."
+        },
+        {
+          "type": "h3",
+          "text": "Token limits and cost estimation"
+        },
+        {
+          "type": "p",
+          "md": "Training cost is `(total tokens in dataset) x (number of epochs) x (price per million tokens)`. A 500-example dataset where each example averages 400 tokens is 200,000 tokens. At 3 epochs that is 600,000 training tokens. At $3/M tokens (Vertex AI Gemini Flash or OpenAI GPT-4o mini), the job costs **$1.80**. At $25/M tokens (OpenAI GPT-4o), it costs **$15**. Count your tokens before choosing your base model."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you have run a few hosted fine-tunes and understand the workflow, here are the considerations that separate teams that ship reliable fine-tuned models from teams that chase diminishing returns."
+        },
+        {
+          "type": "h3",
+          "text": "Hyperparameter tuning: what you can actually control"
+        },
+        {
+          "type": "p",
+          "md": "Most hosted platforms expose a narrow set of hyperparameters: number of epochs (`n_epochs`), learning rate multiplier, and sometimes batch size. That is intentionally limited. Unlike self-hosted training where you can set optimizer, warmup schedule, gradient accumulation, and weight decay independently, hosted fine-tuning trades control for convenience. For the majority of use cases, the defaults are well-chosen and touching the learning rate multiplier is the only lever worth pulling. Start with the defaults, measure whether the model improved, then experiment with epochs if you see underfitting (loss still falling at the end) or overfitting (validation loss rising)."
+        },
+        {
+          "type": "h3",
+          "text": "When to migrate to self-hosted"
+        },
+        {
+          "type": "p",
+          "md": "Hosted fine-tuning becomes the wrong tool when: (1) you need a model architecture not exposed by any platform — for example, a specific 0.5B parameter model optimized for edge deployment; (2) your data contains information that cannot leave your network boundary; (3) you are running so many inference requests that even the \"no markup\" Vertex pricing is more expensive than owning a dedicated GPU; or (4) you need full checkpoints to run side-by-side A/B experiments or to merge adapters. In each of those cases, the hosted abstraction is working against you."
+        },
+        {
+          "type": "h3",
+          "text": "Reinforcement fine-tuning and beyond SFT"
+        },
+        {
+          "type": "p",
+          "md": "Hosted platforms have steadily expanded beyond basic SFT. OpenAI added **reinforcement fine-tuning** in 2025, which lets you train a model with a reward signal (a grader function that scores outputs) rather than only fixed-label examples — better for tasks where multiple outputs are valid or where you want the model to optimize a measurable outcome like code correctness. AWS Bedrock followed with reinforcement fine-tuning support in late 2025. These methods deliver larger improvements on complex reasoning tasks but require you to write a grader, making them harder to set up than simple JSONL fine-tuning."
+        },
+        {
+          "type": "h3",
+          "text": "Evaluating a hosted fine-tune before you ship"
+        },
+        {
+          "type": "p",
+          "md": "Validation loss going down does not mean your model is better at your task — it means it is learning the statistical patterns in your training examples. The only trustworthy evaluation is a **task-specific eval set**: real (or realistic) inputs your model will face in production, with expected outputs you can score programmatically or with a judge model. Before deploying any fine-tuned model, run it head-to-head against the base model and against your previous best system on that eval set. Hosted platforms give you a training loss curve; it is your job to supply the ground truth on whether the model actually improved."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "**Do not skip the eval step just because training was cheap.** A fine-tuned model that regresses on safety, coherence, or instruction-following can do more harm than the base model it replaced. The small cost of a bad fine-tune is the training job; the real cost is shipping a worse experience to users."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What file format do hosted fine-tuning APIs require?",
+      "a": "All major platforms use **JSONL** (JSON Lines): a plain text file where each line is a valid JSON object representing one training example. For chat-based models, each line contains a `messages` array with `role` and `content` fields, matching the chat completions format. Never use a JSON array or CSV — the format must be one JSON object per newline, no trailing commas."
+    },
+    {
+      "q": "How much does hosted fine-tuning cost compared to running a GPU yourself?",
+      "a": "Training a 500-example dataset on GPT-4o mini or Gemini 2.0 Flash costs roughly $1–5 for the training job itself. A single H100 GPU hour costs $2–4 on spot pricing. For small to medium datasets, hosted fine-tuning is dramatically cheaper because you pay only for active compute, not idle GPU time. The calculus flips at large scale or high inference volume, where dedicated hardware becomes more economical."
+    },
+    {
+      "q": "Can I download the weights of a model I fine-tuned on OpenAI or Google?",
+      "a": "No. When you fine-tune on OpenAI, Vertex AI, or AWS Bedrock, you receive a model ID you can call via API, but the weights remain on the provider's infrastructure. You cannot download, port, or self-host those weights. If you need to own the weights, fine-tune an open model through Together AI or Fireworks AI, or use a self-hosted training framework."
+    },
+    {
+      "q": "How many examples do I need to fine-tune a hosted model?",
+      "a": "Platforms typically require a minimum of 10 examples, but 50–100 is the practical minimum to see meaningful improvement. For production use, 500–2000 high-quality examples is a common starting point. More examples help, but quality matters more than quantity — 100 well-curated examples consistently outperform 1000 noisy ones."
+    },
+    {
+      "q": "What happens to my fine-tuned model when the provider deprecates the base model?",
+      "a": "Your fine-tuned model is typically deprecated on the same timeline as the base model it was built on, often with 3–6 months of notice. You will need to retrain against a supported base model before the cutoff. The new training job is straightforward — reuse your original JSONL file — but you should budget time for regression-testing the new fine-tuned model before switching production traffic."
+    },
+    {
+      "q": "Is my training data kept private when I use a hosted fine-tuning API?",
+      "a": "It depends on the tier and provider. OpenAI's enterprise and Azure OpenAI tiers offer contractual guarantees that training data is not used to train their base models. Standard consumer API tiers have weaker guarantees. Vertex AI and Bedrock run inside your existing cloud account, which gives security teams a cleaner compliance story. Always read the provider's data processing addendum before uploading proprietary or regulated data."
+    }
+  ],
+  "related": [
+    "what-is-fine-tuning",
+    "when-to-fine-tune",
+    "what-fine-tuning-changes",
+    "what-is-lora",
+    "what-is-model-distillation"
+  ],
+  "furtherReading": [
+    {
+      "title": "OpenAI supervised fine-tuning guide",
+      "url": "https://platform.openai.com/docs/guides/supervised-fine-tuning"
+    },
+    {
+      "title": "Together AI fine-tuning documentation",
+      "url": "https://docs.together.ai/docs/fine-tuning-pricing"
+    },
+    {
+      "title": "Google Vertex AI supervised fine-tuning for Gemini",
+      "url": "https://cloud.google.com/vertex-ai/generative-ai/docs/models/gemini-preference-tuning"
+    }
+  ]
+}

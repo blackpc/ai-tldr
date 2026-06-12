@@ -1,0 +1,290 @@
+{
+  "slug": "chat-templates-special-tokens",
+  "title": "What Are Chat Templates and Special Tokens?",
+  "seoTitle": "Chat Templates and Special Tokens Explained",
+  "metaDescription": "Chat templates wrap your messages in the special tokens a model was trained on. How ChatML-style formats work and why a wrong template breaks output.",
+  "keywords": [
+    "what is a chat template",
+    "special tokens llm explained",
+    "chatml format explained",
+    "hugging face chat template jinja",
+    "wrong chat template gibberish output"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "See how role-tagged messages actually become one token stream — and why using the wrong template silently ruins a local model's answers.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you type a message to an AI assistant, you see a tidy chat interface with roles — you're the user, the AI is the assistant. But the model underneath never sees a chat interface. It sees one long stream of tokens, and every token is just a number. A **chat template** is the set of rules that translates your tidy list of messages into that single token stream, using exactly the same formatting the model was trained on."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like a form letter template: you fill in the blanks (`role: user`, `content: Hello!`), and the template wraps everything in the right punctuation — special delimiter strings like `<|im_start|>user` or `[INST]` — so the model immediately knows who said what. These delimiters are the **special tokens**: they are vocabulary entries set aside not to carry meaning, but to signal structure. They are the stage directions in a screenplay, invisible to the audience but essential to the actors."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Every chat model has its own special tokens baked in during fine-tuning. Llama 3 uses `<|begin_of_text|>`, Mistral uses `<s>` as its BOS, and ChatML-style models use `<|im_start|>`. These tokens are not interchangeable — they are part of each model's learned vocabulary."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters for builders",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you run a model through an API like OpenAI or Anthropic, the provider silently applies the correct template before every call, so you never think about it. But the moment you run a local model — via llama.cpp, Ollama, vLLM, or Hugging Face `transformers` — **you** are responsible for applying the right template. Get it wrong and the model still generates tokens; it just generates the wrong ones. The failure is silent: no exception, no warning, just mysteriously bad output."
+        },
+        {
+          "type": "p",
+          "md": "This happens because a mismatch between the training-time format and the inference-time format is a **distribution shift**. The model was trained to respond helpfully after seeing `<|start_header_id|>user<|end_header_id|>`, but at inference you fed it plain `User:` text. From the model's perspective, the conversation never started — it just sees noisy text it doesn't know how to continue. Common symptoms include: the model continues your message instead of answering it, output degrades into repetitive or incoherent text, or the model fails to stop generating at the right place because the EOS signal it learned never appears."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Direct inference** (vLLM, llama.cpp, Ollama): template usually applied by the inference server — double-check that the server loaded the correct template for the model.",
+            "**Fine-tuning**: you must apply the same template during training that you plan to use at inference, or your fine-tuned model will expect a format nothing else sends.",
+            "**RAG pipelines and agents**: every call that builds a message list and sends it to a local model needs the template applied, including tool-call turns and injected context."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works: from message list to token stream",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A chat template is stored as a [Jinja2](https://jinja.palletsprojects.com/) string inside the model's `tokenizer_config.json` file. The tokenizer's `apply_chat_template` method renders this Jinja template against your list of `{role, content}` dicts, producing a single formatted string. That string is then tokenized normally — each special token becomes one or more integer IDs — and the resulting tensor is what you hand to the model."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "From chat messages to model input",
+            "steps": [
+              {
+                "label": "Message list",
+                "sub": "[{role: system, content: ...}, {role: user, content: ...}]"
+              },
+              {
+                "label": "Jinja2 template render",
+                "sub": "tokenizer.apply_chat_template(..., tokenize=False)"
+              },
+              {
+                "label": "Formatted string",
+                "sub": "<|begin_of_text|><|start_header_id|>system<|end_header_id|>..."
+              },
+              {
+                "label": "Tokenizer encodes string",
+                "sub": "tokenize=True or separate encode() call"
+              },
+              {
+                "label": "Integer token IDs",
+                "sub": "[128000, 128006, 9125, 128007, ...]"
+              },
+              {
+                "label": "Model forward pass",
+                "sub": "generate() produces next-token predictions"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The `add_generation_prompt=True` parameter adds the opening header of the *next* assistant turn at the very end of the formatted string. This is crucial: without it, the model doesn't know it's supposed to start writing a reply. It would just see an unfinished context and might continue the user's message rather than answer it. With it, the token stream ends in something like `<|start_header_id|>assistant<|end_header_id|>` and the model knows exactly where it is in the conversation."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "from transformers import AutoTokenizer\n\ntokenizer = AutoTokenizer.from_pretrained(\"meta-llama/Meta-Llama-3-8B-Instruct\")\n\nmessages = [\n    {\"role\": \"system\", \"content\": \"You are a helpful assistant.\"},\n    {\"role\": \"user\",   \"content\": \"What is a chat template?\"},\n]\n\n# Render to a human-readable string (no tokenization yet)\nformatted = tokenizer.apply_chat_template(\n    messages,\n    tokenize=False,\n    add_generation_prompt=True,\n)\nprint(formatted)"
+        },
+        {
+          "type": "p",
+          "md": "The output of that `print` call would look like:"
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "code": "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nYou are a helpful assistant.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nWhat is a chat template?<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+        },
+        {
+          "type": "p",
+          "md": "Every boundary — model start, role header, turn end — is a special token. The model learned during fine-tuning to associate `<|eot_id|>` with \"this turn is over\" and `<|start_header_id|>assistant<|end_header_id|>` with \"now I speak\". Those associations live entirely in the model weights, which is why you can't substitute them with similar-looking characters."
+        }
+      ]
+    },
+    {
+      "id": "format-zoo",
+      "title": "The format zoo: ChatML, Llama 3, Mistral",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "There is no single universal chat format. Each major model family settled on its own convention during fine-tuning. The three most common formats you'll encounter when running open-weight models are ChatML (originating from OpenAI and now used by Qwen, Phi-3, and many fine-tunes), Llama 3's header-based format, and Mistral's bracket format."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Format",
+            "BOS token",
+            "Turn delimiter",
+            "Role marker",
+            "EOS / end-of-turn"
+          ],
+          "rows": [
+            [
+              "ChatML",
+              "(none or model-specific)",
+              "<|im_start|>",
+              "<|im_start|>{role}\\n",
+              "<|im_end|>"
+            ],
+            [
+              "Llama 3",
+              "<|begin_of_text|>",
+              "<|start_header_id|>{role}<|end_header_id|>",
+              "Header token wraps role string",
+              "<|eot_id|>"
+            ],
+            [
+              "Mistral V1",
+              "`<s>`",
+              "[INST]",
+              "[INST] user message [/INST]",
+              "`</s>`"
+            ],
+            [
+              "Mistral V3 / Tekken",
+              "`<s>`",
+              "[INST]",
+              "[INST]user message[/INST]",
+              "`</s>`"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "ChatML was designed with flexibility in mind: the role is embedded as a plain string between `<|im_start|>` and a newline, so new roles can be added without new special tokens. Llama 3 takes the same approach but uses paired header tokens around the role name, which gives the model a cleaner boundary signal. Mistral's `[INST]` brackets are simpler and wrap only the user message, with the system prompt prepended to the first user turn rather than placed in its own block."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Most Hugging Face model pages display the correct chat template in `tokenizer_config.json`. You can also print it directly: `print(tokenizer.chat_template)`. That Jinja string is the ground truth — read it if you're unsure what format a fine-tuned model expects."
+        }
+      ]
+    },
+    {
+      "id": "wrong-template-symptoms",
+      "title": "What breaks when you use the wrong template",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Template mismatches are one of the most common causes of puzzling local LLM behaviour because the error never surfaces as an exception. The model still runs; it just runs on malformed input. Here are the failure modes practitioners actually see in the wild:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Model continues the user's message** — you asked a question and the model appended more question text rather than answering. This is the classic symptom when `add_generation_prompt` is omitted or the assistant-turn opener is wrong.",
+            "**Repetitive or incoherent output** — the model enters a degenerate generation loop. Often caused by wrong or missing EOS tokens, so the model never learns to stop.",
+            "**Correct-sounding but off-topic answers** — the model responds helpfully but to a different question than the one you asked. The instruction-following capability is intact; the model simply mis-parsed the context.",
+            "**Gibberish or raw token-like strings in the output** — can happen when the template for one model is applied to a different model that uses entirely different special token IDs for those string literals.",
+            "**Works fine in one framework, breaks in another** — a common sign that one framework is applying the correct template and the other is not."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Duplicated special tokens are a related pitfall. If you call `apply_chat_template(tokenize=False)` and then pass the string to a tokenizer that automatically adds a BOS token, you get two BOS tokens at the start. Always set `add_special_tokens=False` when manually encoding a string that already came from `apply_chat_template`."
+        },
+        {
+          "type": "p",
+          "md": "The safest debugging workflow is: print `tokenizer.apply_chat_template(messages, tokenize=False)` and visually inspect the rendered string. Compare it against the format shown in the model's Hugging Face model card. Any discrepancy — an extra space, missing newline, different token spelling — is worth investigating."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The Jinja template stored in `tokenizer_config.json` is not just a formatting string — it can contain conditional logic. A model that supports tool calls, for example, might include `{% if message.tool_calls %}` branches that render a JSON-serialised tool-call block instead of plain text. Reasoning models like Qwen-QwQ expose a `reasoning_content` field; the template renders that into its own delimited block before the visible `content`. If you're fine-tuning a model to support new turn types, you edit the Jinja template, not the Python code."
+        },
+        {
+          "type": "p",
+          "md": "When training a new instruct model from a base checkpoint, you choose a template before any fine-tuning begins, because the special tokens you pick need to be in the training data from the very first gradient step. If the tokens are new (not in the base vocabulary), you must also resize the model's embedding matrix and initialise the new token embeddings — typically by averaging nearby token embeddings or using random initialisation. Changing the template after training is not recoverable without retraining."
+        },
+        {
+          "type": "p",
+          "md": "**Multi-template models** are an emerging pattern: some models ship with two or more templates in `tokenizer_config.json` — a default and extras keyed by name. The `apply_chat_template` method accepts a `chat_template` override so you can pass a custom Jinja string if none of the bundled templates fit your use case. This is useful when adapting a model to a pipeline that has its own turn-structure conventions."
+        },
+        {
+          "type": "p",
+          "md": "At the framework level, serving runtimes like vLLM, TGI (Text Generation Inference), and Ollama each load the chat template from the model's tokenizer config and apply it automatically when you use their `/v1/chat/completions` endpoints. When you see `openai_api_compat` mode in these servers, the server is doing exactly that: accepting OpenAI-style `messages` arrays and rendering them through the correct model-specific Jinja template before sending tokens to the engine. If you hit a model endpoint that produces garbage when using the OpenAI client, the first thing to check is whether the server actually loaded the right template — many older GGUF files exported before the template was standardised in `tokenizer_config.json` need the template specified manually."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "# Inspect the raw Jinja template stored in a tokenizer\nfrom transformers import AutoTokenizer\n\ntok = AutoTokenizer.from_pretrained(\"meta-llama/Meta-Llama-3-8B-Instruct\")\nprint(tok.chat_template)\n\n# Override with a custom Jinja string at call time\ncustom_jinja = \"\"\"{% for m in messages %}{{ m['role'] }}: {{ m['content'] }}\\n{% endfor %}assistant:\"\"\"\nprint(tok.apply_chat_template(messages, chat_template=custom_jinja, tokenize=False))"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The open-source repo [chujiezheng/chat_templates](https://github.com/chujiezheng/chat_templates) collects the canonical Jinja templates for dozens of model families in one place — a handy reference when a model's `tokenizer_config.json` is missing or incorrect."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is the difference between a special token and a regular token?",
+      "a": "A regular token represents a piece of natural-language text — a word, sub-word, or punctuation mark. A special token is a vocabulary entry reserved for structural signalling: marking the start or end of a sequence, the beginning of a new role, or the end of a turn. Special tokens are added to the vocabulary during tokenizer training and given IDs that are never assigned to regular text pieces, so the model can distinguish them unambiguously."
+    },
+    {
+      "q": "Does every model need a chat template, or only instruct-tuned ones?",
+      "a": "Only instruction-tuned (\"instruct\" or \"chat\") models need a chat template. A raw base model — one that was only pre-trained, never fine-tuned for conversation — has no concept of roles or turns. You can prompt it with whatever text you like, because it was trained to continue arbitrary text sequences. Chat templates exist specifically to match the structured format that was used during instruction fine-tuning."
+    },
+    {
+      "q": "Can I write my own chat template for a model?",
+      "a": "Yes. `apply_chat_template` accepts a `chat_template` argument where you can pass a custom Jinja2 string, overriding the one stored in the tokenizer. This is useful when fine-tuning a model yourself and you want a different format. Just be aware that the template you use during fine-tuning must be the one you use at inference — any change after training will degrade performance."
+    },
+    {
+      "q": "What does add_generation_prompt actually do?",
+      "a": "It appends the opening tokens of the next assistant turn to the end of the rendered string — for example `<|start_header_id|>assistant<|end_header_id|>` in Llama 3. Without it, the formatted context ends after the last user message and the model has no signal that it is now expected to generate a reply. This often causes the model to continue the user's message or produce confused output. Set it to `True` during inference and `False` during training."
+    },
+    {
+      "q": "Why does the wrong chat template cause silent failures instead of an error?",
+      "a": "From Python's perspective, applying the wrong template is not an error — it still produces a valid token sequence. The problem is purely distributional: the model was trained on data formatted one way and receives data formatted another way. The model's weights encode expectations about token order and context that simply aren't met, leading to degraded output. There is no runtime check that can detect this mismatch automatically."
+    },
+    {
+      "q": "How do I know which chat template a Hugging Face model expects?",
+      "a": "Load the tokenizer and run `print(tokenizer.chat_template)` to see the raw Jinja2 template. Alternatively, call `tokenizer.apply_chat_template(your_messages, tokenize=False)` and inspect the resulting string — you'll see the exact special tokens the model expects. The model's Hugging Face model card usually documents the format too, and many GGUF model pages on Hugging Face display the required template in their README."
+    }
+  ],
+  "related": [
+    "what-is-an-llm",
+    "how-llms-work",
+    "base-vs-instruct-models",
+    "training-vs-inference"
+  ],
+  "furtherReading": [
+    {
+      "title": "Chat Templates — Hugging Face Transformers documentation",
+      "url": "https://huggingface.co/docs/transformers/chat_templating"
+    },
+    {
+      "title": "Chat Templates: An End to the Silent Performance Killer — Hugging Face Blog",
+      "url": "https://huggingface.co/blog/chat-templates"
+    },
+    {
+      "title": "Llama 3 Model Cards and Prompt Formats — Meta",
+      "url": "https://www.llama.com/docs/model-cards-and-prompt-formats/meta-llama-3/"
+    }
+  ]
+}

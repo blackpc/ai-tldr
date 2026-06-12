@@ -1,0 +1,375 @@
+{
+  "slug": "json-mode-vs-structured-outputs",
+  "title": "JSON Mode vs Structured Outputs vs Function Calling: Which One?",
+  "seoTitle": "JSON Mode vs Structured Outputs vs Function Calling",
+  "metaDescription": "Three ways to get JSON out of an LLM, three different guarantees. Compare JSON mode, structured outputs, and function calling — and when to use each.",
+  "keywords": [
+    "json mode vs structured outputs",
+    "structured outputs vs function calling",
+    "difference between json mode and function calling",
+    "which llm json method to use",
+    "guaranteed valid json llm comparison"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Untangle the three JSON-extraction mechanisms, what each one actually guarantees, and a simple rule for picking the right one.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You want an LLM to give you JSON your code can reliably parse. There are three distinct mechanisms for doing that — and they are not interchangeable. Each comes with a different level of guarantee, a different API surface, and a different intended job. Mixing them up is one of the most common sources of subtle production bugs in LLM-powered apps."
+        },
+        {
+          "type": "p",
+          "md": "**JSON mode** is the oldest option. You tell the model \"please respond in JSON\" and it will produce *syntactically valid* JSON — curly braces balanced, strings quoted, no trailing commas. But it says nothing about *which keys* appear or *what types* they have. The schema is entirely up to the model's best guess from the prompt."
+        },
+        {
+          "type": "p",
+          "md": "**Structured outputs** is the modern upgrade. You supply a full JSON Schema and the API guarantees the response matches it — every required field present, every type correct, no extra keys, no invented enum values. Under the hood the inference engine compiles your schema into a grammar and masks out invalid tokens at sampling time, so violations are impossible by construction."
+        },
+        {
+          "type": "p",
+          "md": "**Function calling** (also called tool use) is built for a different job: letting the model trigger actions in your code. You describe a set of functions the model is allowed to call, and when it decides to invoke one, the API returns a structured argument payload — not the final answer. The primary guarantee is about *action selection and argument shape*, not about returning data to the user."
+        },
+        {
+          "type": "p",
+          "md": "A helpful analogy: JSON mode is like asking a waiter to \"write down my order in some kind of list format\" — they'll probably do it, but you can't bet your order-processing system on the exact shape. Structured outputs is like handing them a pre-printed form with labeled boxes — the waiter physically cannot skip a required field. Function calling is like giving the kitchen staff a button panel — when the waiter presses the right button, the kitchen fires a specific action with whatever parameters are on the slip."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Choosing the wrong mechanism causes real production failures. Teams that ship with JSON mode discover in production that the model occasionally adds a `\"notes\"` key they didn't ask for, omits a required field when the context is long, or returns an enum value that isn't in their allowlist. Every one of those cases means a try/catch, a retry, and added latency — or worse, silent data corruption."
+        },
+        {
+          "type": "p",
+          "md": "Choosing function calling when you just want structured data adds complexity without benefit: you have to define a dummy tool, handle the tool-call turn in your message loop, and reassemble the final answer — when `response_format` with a schema would have done the job in one round trip."
+        },
+        {
+          "type": "p",
+          "md": "Going the other way — using `response_format` when you need the model to decide *which* of several actions to take — means you lose the model's ability to route to the right tool and pass typed arguments. You end up parsing an action name out of a JSON blob and then dispatching yourself, which is exactly what function calling already does for you."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "OpenAI's own documentation puts it plainly: use `response_format` with `json_schema` when you want the model to **respond to the user** with structured data; use **function calling** when you want the model to **interface with your system** and trigger actions. They solve adjacent, not identical, problems."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How each mechanism works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "All three mechanisms sit on the same underlying token-generation pipeline. What differs is *how much control you hand back to the inference engine* over what tokens are valid at each position."
+        },
+        {
+          "type": "h3",
+          "text": "JSON mode: syntactic validity only"
+        },
+        {
+          "type": "p",
+          "md": "JSON mode (`response_format: {type: \"json_object\"}` in OpenAI's API) signals to the model via the system prompt and a lightweight decode-time constraint that the output must be parseable JSON. The constraint is shallow: it ensures the overall structure is a JSON value, but does not enforce any particular set of keys, value types, or nesting depth. On older or less capable models, the model may still omit keys or hallucinate fields the prompt didn't request."
+        },
+        {
+          "type": "h3",
+          "text": "Structured outputs: grammar-based schema enforcement"
+        },
+        {
+          "type": "p",
+          "md": "Structured outputs (`response_format: {type: \"json_schema\", json_schema: {...}, strict: true}`) compiles your JSON Schema into a token-level grammar. At every sampling step, the inference engine masks out tokens that would violate the schema — if the current position expects a boolean, only `true` and `false` tokens are allowed. The result is that schema violations are mathematically impossible: the model can never emit a response that doesn't parse or doesn't match. OpenAI measured a perfect 100% schema-adherence rate on `gpt-4o-2024-08-06` with structured outputs enabled, compared to under 40% for the earlier `gpt-4-0613` without it."
+        },
+        {
+          "type": "h3",
+          "text": "Function calling: action routing with typed arguments"
+        },
+        {
+          "type": "p",
+          "md": "Function calling (`tools: [...]`) works differently. You supply one or more function definitions (name, description, parameter schema). The model reads the conversation and decides whether to respond normally or to call one of your functions. If it calls a function, the API returns a special message with `finish_reason: \"tool_calls\"` containing the function name and a JSON argument payload. Your code must handle this turn: call the actual function, add the result to the message history, and send the conversation back to the model to get the final answer. Setting `strict: true` inside the function definition activates the same grammar-based enforcement as structured outputs — so the arguments will exactly match the parameter schema."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Three mechanisms, three guarantees",
+            "columns": [
+              {
+                "title": "JSON Mode",
+                "items": [
+                  "Syntactically valid JSON",
+                  "No schema enforcement",
+                  "Keys can be missing or invented",
+                  "One API round trip",
+                  "Works on all JSON-capable models"
+                ]
+              },
+              {
+                "title": "Structured Outputs",
+                "accent": true,
+                "items": [
+                  "Schema-exact JSON, guaranteed",
+                  "Grammar masks invalid tokens",
+                  "All required fields always present",
+                  "One API round trip",
+                  "Requires modern model versions"
+                ]
+              },
+              {
+                "title": "Function Calling",
+                "items": [
+                  "Typed argument payload",
+                  "Optional strict mode for args",
+                  "Model decides which tool to call",
+                  "Multi-turn: needs a follow-up call",
+                  "Built for action dispatch, not data return"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Function calling round trip (vs one-shot for the others)",
+            "steps": [
+              {
+                "label": "Your request",
+                "sub": "messages + tools array"
+              },
+              {
+                "label": "Model decides",
+                "sub": "respond normally, or call a tool?"
+              },
+              {
+                "label": "Tool call returned",
+                "sub": "finish_reason: tool_calls, with args",
+                "accent": true
+              },
+              {
+                "label": "Your code runs",
+                "sub": "invoke the actual function with those args"
+              },
+              {
+                "label": "Result appended",
+                "sub": "add tool result message to history"
+              },
+              {
+                "label": "Final model response",
+                "sub": "model synthesizes answer using the result"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "api-code-comparison",
+      "title": "Side-by-side in code",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The three mechanisms look similar in code but carry very different semantics. The examples below use the OpenAI Python SDK to show the key differences at the call site."
+        },
+        {
+          "type": "h3",
+          "text": "JSON mode"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "response = client.chat.completions.create(\n    model=\"gpt-4o\",\n    messages=[{\"role\": \"user\", \"content\": \"Return info about Paris as JSON.\"}],\n    response_format={\"type\": \"json_object\"}   # valid JSON guaranteed, schema is not\n)\n# Still need to check that the keys you expect are actually present\nimport json\ndata = json.loads(response.choices[0].message.content)"
+        },
+        {
+          "type": "h3",
+          "text": "Structured outputs"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "from pydantic import BaseModel\n\nclass CityInfo(BaseModel):\n    name: str\n    country: str\n    population: int\n    capital: bool\n\n# .parse() sends the Pydantic schema and returns a typed object — no json.loads needed\nresponse = client.beta.chat.completions.parse(\n    model=\"gpt-4o\",\n    messages=[{\"role\": \"user\", \"content\": \"Return info about Paris.\"}],\n    response_format=CityInfo,\n)\ncity: CityInfo = response.choices[0].message.parsed\nprint(city.population)   # int, guaranteed"
+        },
+        {
+          "type": "h3",
+          "text": "Function calling"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "code": "import json\n\ntools = [{\n    \"type\": \"function\",\n    \"function\": {\n        \"name\": \"get_city_info\",\n        \"description\": \"Look up current data for a city\",\n        \"parameters\": {\n            \"type\": \"object\",\n            \"properties\": {\n                \"city_name\": {\"type\": \"string\"}\n            },\n            \"required\": [\"city_name\"],\n            \"additionalProperties\": False\n        },\n        \"strict\": True   # arguments will exactly match the schema\n    }\n}]\n\n# First turn: model decides to call the tool\nresponse = client.chat.completions.create(\n    model=\"gpt-4o\",\n    messages=[{\"role\": \"user\", \"content\": \"What's the population of Paris?\"}],\n    tools=tools,\n    tool_choice=\"auto\"\n)\n\ntool_call = response.choices[0].message.tool_calls[0]\nargs = json.loads(tool_call.function.arguments)   # {\"city_name\": \"Paris\"}\n\n# Your code runs the actual lookup here:\nresult = fetch_city_from_database(args[\"city_name\"])\n\n# Second turn: send the result back so the model can answer\nmessages = [\n    {\"role\": \"user\", \"content\": \"What's the population of Paris?\"},\n    response.choices[0].message,   # the tool_call message\n    {\"role\": \"tool\", \"tool_call_id\": tool_call.id, \"content\": json.dumps(result)}\n]\nfinal = client.chat.completions.create(model=\"gpt-4o\", messages=messages)\nprint(final.choices[0].message.content)"
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Structured outputs and function calling are not mutually exclusive. You can set `strict: true` inside a function definition to get grammar-level argument enforcement on the tool-call payload. This is the recommended practice — always enable `strict: true` for function definitions on supported models."
+        }
+      ]
+    },
+    {
+      "id": "decision-guide",
+      "title": "Which one should you use?",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The simplest rule: **if you are extracting or generating data for your own code to consume, use structured outputs. If you need the model to decide which action to take and pass typed arguments to that action, use function calling. Only fall back to JSON mode when you are on an older model that does not support structured outputs.**"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Scenario",
+            "Best mechanism"
+          ],
+          "rows": [
+            [
+              "Extract fields from a document (name, date, amount)",
+              "Structured outputs"
+            ],
+            [
+              "Classify a support ticket into predefined categories",
+              "Structured outputs"
+            ],
+            [
+              "Generate a form value set from a user description",
+              "Structured outputs"
+            ],
+            [
+              "Let the model fetch current weather from your API",
+              "Function calling"
+            ],
+            [
+              "Build an agent that can search, read, and write files",
+              "Function calling"
+            ],
+            [
+              "Route user intent to one of several backend actions",
+              "Function calling"
+            ],
+            [
+              "Quick prototype on gpt-3.5-turbo or an older endpoint",
+              "JSON mode"
+            ],
+            [
+              "Extract data AND the model might also need to call a tool",
+              "Structured outputs + tools with strict: true"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "**JSON mode is legacy.** OpenAI's own documentation now describes it as the older approach and recommends structured outputs in all cases where the model supports it. If you are starting a new project on a current model (`gpt-4o`, `gpt-4.1`, etc.), there is no good reason to use plain `json_object` mode."
+        },
+        {
+          "type": "p",
+          "md": "**Anthropic and Google have converged on the same pattern.** Claude launched structured outputs in November 2025 (`output_config.format` for response JSON and `strict: true` for tool parameters) on Claude Sonnet 4.5 and Opus 4.1, using the same grammar-compilation approach. The Gemini API uses `response_schema` with a JSON Schema object for controlled generation and supports Pydantic/Zod schemas via the Google GenAI SDK. In all three ecosystems the underlying guarantee is the same: schema compiled to grammar, invalid tokens masked at decode time."
+        },
+        {
+          "type": "p",
+          "md": "**Parallel tool calls require extra care.** When `parallel_tool_calls` is enabled (the default on most OpenAI models), the model may call multiple tools in one turn and may not respect strict mode correctly across all of them. OpenAI recommends setting `parallel_tool_calls: false` if strict argument schemas are critical and you are using a model that exhibits this behavior."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you are comfortable with the three mechanisms, the next layer of nuance is about **schema design**, **provider differences**, and **streaming**."
+        },
+        {
+          "type": "h3",
+          "text": "Schema design constraints for structured outputs"
+        },
+        {
+          "type": "p",
+          "md": "Not all JSON Schema features are supported in strict mode. OpenAI's grammar-based enforcement requires that `additionalProperties` is set to `false` for every object and that all fields are in `required`. Unsupported keywords (like `if/then`, `not`, `contains`) are silently ignored or cause a validation error at request time — not at generation time. Always test your schema against the provider's supported keyword list before shipping to production."
+        },
+        {
+          "type": "h3",
+          "text": "Streaming with structured outputs"
+        },
+        {
+          "type": "p",
+          "md": "Structured outputs can be streamed token-by-token just like plain completions — the schema enforcement happens on the server at sampling time, so each streamed chunk is already schema-legal. However, because JSON must be complete to parse, you cannot meaningfully `JSON.parse` intermediate chunks. The common patterns are: buffer the full stream and parse once at the end, or use a streaming JSON parser (like `jsonstream` in Node.js) that can emit partial objects as fields complete. The Pydantic/Zod `.stream()` helpers in the official SDKs handle this automatically."
+        },
+        {
+          "type": "h3",
+          "text": "Function calling with structured output arguments"
+        },
+        {
+          "type": "p",
+          "md": "When you add `strict: true` to a function definition, structured-output enforcement applies to the `arguments` payload of tool calls — the same grammar-based masking runs over the argument JSON at generation time. This means you get both benefits: the model routes to the right tool (function calling's job) *and* the arguments are schema-exact (structured outputs' guarantee). For any production agent, you should always set `strict: true` on function definitions for supported models."
+        },
+        {
+          "type": "h3",
+          "text": "When constrained decoding can hurt quality"
+        },
+        {
+          "type": "p",
+          "md": "Grammar-based masking is nearly free in compute terms, but very tight schemas can occasionally cause the model to produce valid-but-wrong values. If a field is constrained to an enum and none of the enum values naturally fit the context, the model is forced to pick one — it cannot say \"I don't know\". Mitigations: add an `\"unknown\"` or `\"other\"` member to enums where applicable, use `nullable` fields for optional data, and keep schemas as permissive as needed while still being as strict as useful."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The [Instructor](https://python.useinstructor.com/) library is a popular open-source wrapper around structured outputs for Python. It handles schema generation from Pydantic models, automatic retry on parse failure for providers without native schema enforcement, and multi-provider support (OpenAI, Anthropic, Gemini, Cohere) via a single API surface."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Does JSON mode guarantee the model returns the keys I asked for in the prompt?",
+      "a": "No. JSON mode only guarantees syntactically valid JSON — balanced braces, quoted strings, no trailing commas. If you ask for `name`, `date`, and `amount` in the prompt, the model will usually include them, but it can omit them, rename them, or add extras. Only structured outputs (with `type: \"json_schema\"` and `strict: true`) enforces that every required key is present and every type is correct."
+    },
+    {
+      "q": "Can I use structured outputs and function calling at the same time?",
+      "a": "Yes. You can pass both `tools` and `response_format` in the same request if you want the model to be able to call tools *and* its final response to be schema-constrained. More commonly, you add `strict: true` to function definitions so the tool-call arguments are schema-exact. These two features are complementary, not mutually exclusive."
+    },
+    {
+      "q": "Does function calling with strict: true give the same guarantee as structured outputs?",
+      "a": "For the *argument payload* of a tool call, yes — `strict: true` activates the same grammar-based constrained decoding on the argument JSON. The difference is semantic: function calling is about action routing, and the schema applies to the arguments passed to the chosen function. Structured outputs via `response_format` applies to the model's final text response."
+    },
+    {
+      "q": "Why would I ever still use JSON mode in 2025 or 2026?",
+      "a": "JSON mode remains useful on older model versions that predate structured outputs (for example `gpt-4-turbo`, `gpt-3.5-turbo`, or provider-hosted open-source models). It is also simpler when you only need *any* valid JSON and don't care about the exact shape — for example, as a quick guard against the model returning a plain string response. For new projects on current models, prefer structured outputs."
+    },
+    {
+      "q": "Do Anthropic and Google support structured outputs the same way OpenAI does?",
+      "a": "The concept is the same — supply a JSON Schema, get schema-exact output via grammar-based decoding — but the API surface differs. OpenAI uses `response_format: {type: \"json_schema\", json_schema: {...}, strict: true}`. Anthropic (as of November 2025) uses `output_config.format` with a beta header. Google Gemini uses the `response_schema` field in `generation_config`. All three compile the schema to a grammar and mask invalid tokens at decode time."
+    },
+    {
+      "q": "What happens if my JSON Schema uses features that the provider doesn't support in strict mode?",
+      "a": "Behavior varies by provider. OpenAI's strict mode requires `additionalProperties: false` on every object and all properties in `required`; submitting a schema that violates these rules returns a request-time validation error (not a generation-time error, which is a helpful fail-fast). Other unsupported keywords may be silently ignored, meaning the guarantee degrades to best-effort. Always consult the provider's structured-outputs documentation for the exact list of supported JSON Schema keywords."
+    }
+  ],
+  "related": [
+    "what-is-llm-api",
+    "how-to-choose-llm-model",
+    "llm-streaming-explained",
+    "structured-outputs-explained",
+    "what-is-function-calling"
+  ],
+  "furtherReading": [
+    {
+      "title": "Introducing Structured Outputs in the API — OpenAI",
+      "url": "https://openai.com/index/introducing-structured-outputs-in-the-api/"
+    },
+    {
+      "title": "Structured Outputs guide — OpenAI Platform docs",
+      "url": "https://platform.openai.com/docs/guides/structured-outputs"
+    },
+    {
+      "title": "Structured Outputs — Anthropic docs",
+      "url": "https://docs.anthropic.com/en/docs/build-with-claude/structured-outputs"
+    }
+  ]
+}
