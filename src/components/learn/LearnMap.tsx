@@ -17,6 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as RPointerEvent } from "react";
 
 import { learnTaxonomy } from "../../data/learn/nav";
+import { learnHubPath } from "../../data/learn/schema";
 import { categoryVisual } from "./categoryVisuals";
 import {
   buildLearnGraph,
@@ -255,7 +256,7 @@ export default function LearnMap() {
 
         {/* title — floats over the canvas, top-left */}
         <div className="lrn-map-ui lrn-map-ui-tl">
-          <a className="lrn-map-back" href="/learn" data-internal="true">
+          <a className="lrn-map-back" href={learnHubPath} data-internal="true">
             ← LEARN
           </a>
           <div className="lrn-map-word">

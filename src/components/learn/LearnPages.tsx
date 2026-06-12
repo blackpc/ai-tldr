@@ -15,7 +15,13 @@ import type {
   LearnCategory,
   LearnSubcategory,
 } from "../../data/learn/schema";
-import { learnArticlePath } from "../../data/learn/schema";
+import {
+  learnArticlePath,
+  learnCategoryPath,
+  learnHubPath,
+  learnMapPath,
+  learnSubcategoryPath,
+} from "../../data/learn/schema";
 import { learnTaxonomy } from "../../data/learn/nav";
 import { Breadcrumbs, DifficultyBadge } from "./ArticleBody";
 import { categoryVisual } from "./categoryVisuals";
@@ -73,7 +79,7 @@ export function LearnHubPage() {
           vector databases, agents, fine-tuning and the tools around them.
           Pick a track. Every page starts from zero and ends deep.
         </p>
-        <a className="lrn-hub-maplink" href="/learn/map" data-internal="true">
+        <a className="lrn-hub-maplink" href={learnMapPath} data-internal="true">
           <span className="lrn-hub-maplink-ic" aria-hidden="true">
             <MapGlyph />
           </span>
@@ -95,7 +101,7 @@ export function LearnHubPage() {
           return (
             <a
               className="lrn-cat-card"
-              href={`/learn/${cat.slug}`}
+              href={learnCategoryPath(cat.slug)}
               data-internal="true"
               key={cat.slug}
               style={accentVar(accent)}
@@ -173,7 +179,7 @@ function CategorySection({
       <div className="lrn-catsec-head">
         <h2 className="lrn-catsec-title">
           <a
-            href={`/learn/${category.slug}/${subcategory.slug}`}
+            href={learnSubcategoryPath(category.slug, subcategory.slug)}
             data-internal="true"
           >
             {subcategory.title}
@@ -201,7 +207,7 @@ export function LearnCategoryPage({ category }: { category: LearnCategory }) {
     <div className="lrn-page" style={accentVar(accent)}>
       <header className="lrn-cat-hero">
         <Breadcrumbs
-          trail={[{ label: "LEARN", href: "/learn" }, { label: category.title }]}
+          trail={[{ label: "LEARN", href: learnHubPath }, { label: category.title }]}
         />
         <div className="lrn-cat-hero-row">
           <span className="lrn-cat-hero-icon" aria-hidden="true">
@@ -277,8 +283,8 @@ export function LearnSubcategoryPage({
       <header className="lrn-cat-hero">
         <Breadcrumbs
           trail={[
-            { label: "LEARN", href: "/learn" },
-            { label: category.title, href: `/learn/${category.slug}` },
+            { label: "LEARN", href: learnHubPath },
+            { label: category.title, href: learnCategoryPath(category.slug) },
             { label: subcategory.title },
           ]}
         />
@@ -319,7 +325,7 @@ export function LearnSubcategoryPage({
         {prev ? (
           <a
             className="lrn-pn-link lrn-pn-prev"
-            href={`/learn/${category.slug}/${prev.slug}`}
+            href={learnSubcategoryPath(category.slug, prev.slug)}
             data-internal="true"
           >
             <span className="lrn-pn-dir">← PREV</span>
@@ -331,7 +337,7 @@ export function LearnSubcategoryPage({
         {next ? (
           <a
             className="lrn-pn-link lrn-pn-next"
-            href={`/learn/${category.slug}/${next.slug}`}
+            href={learnSubcategoryPath(category.slug, next.slug)}
             data-internal="true"
           >
             <span className="lrn-pn-dir">NEXT →</span>

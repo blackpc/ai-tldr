@@ -223,11 +223,32 @@ export function learnReadingMinutes(article: LearnArticle): number {
   return Math.max(2, Math.round(words / 220));
 }
 
+// Pages are served with a trailing slash (Cloudflare Pages turns
+// `foo/index.html` into `/foo/` and 307-redirects the slash-less form),
+// so every internal path we emit ends in `/` to match the served URL —
+// no redirect on click, refresh, share, or crawl.
+
+/** Canonical site path for the Learn hub. */
+export const learnHubPath = "/learn/";
+
+/** Canonical site path for the Learn mind map. */
+export const learnMapPath = "/learn/map/";
+
+/** Canonical site path for a category listing page. */
+export function learnCategoryPath(cat: string): string {
+  return `/learn/${cat}/`;
+}
+
+/** Canonical site path for a subcategory listing page. */
+export function learnSubcategoryPath(cat: string, sub: string): string {
+  return `/learn/${cat}/${sub}/`;
+}
+
 /** Canonical site path for an article, given its category + subcategory. */
 export function learnArticlePath(
   cat: string,
   sub: string,
   slug: string,
 ): string {
-  return `/learn/${cat}/${sub}/${slug}`;
+  return `/learn/${cat}/${sub}/${slug}/`;
 }

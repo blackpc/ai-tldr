@@ -12,7 +12,10 @@ import type { LearnArticle } from "../../data/learn/schema";
 import {
   LEARN_DIFFICULTY_META,
   learnArticlePath,
+  learnCategoryPath,
+  learnHubPath,
   learnReadingMinutes,
+  learnSubcategoryPath,
 } from "../../data/learn/schema";
 import {
   findLearnArticle,
@@ -92,11 +95,14 @@ export function ArticleBody({ article }: { article: LearnArticle }) {
         {loc && (
           <Breadcrumbs
             trail={[
-              { label: "LEARN", href: "/learn" },
-              { label: loc.category.title, href: `/learn/${loc.category.slug}` },
+              { label: "LEARN", href: learnHubPath },
+              {
+                label: loc.category.title,
+                href: learnCategoryPath(loc.category.slug),
+              },
               {
                 label: loc.subcategory.title,
-                href: `/learn/${loc.category.slug}/${loc.subcategory.slug}`,
+                href: learnSubcategoryPath(loc.category.slug, loc.subcategory.slug),
               },
               { label: article.title },
             ]}

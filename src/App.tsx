@@ -251,14 +251,14 @@ function App() {
   // Nav: go to influencers
   const goInfluencers = useCallback(() => {
     track("nav", { to: "influencers", from: pageRef.current });
-    window.history.pushState(null, "", "/influencers");
+    window.history.pushState(null, "", "/influencers/");
     setRoute({ kind: "influencers" });
   }, []);
 
   // Nav: go to sweep log
   const goLog = useCallback(() => {
     track("nav", { to: "log", from: pageRef.current });
-    window.history.pushState(null, "", "/log");
+    window.history.pushState(null, "", "/log/");
     setRoute({ kind: "log" });
   }, []);
 
@@ -281,7 +281,7 @@ function App() {
       importance: item.importance,
       source: "card",
     });
-    window.history.pushState(null, "", `/releases/${item.id}`);
+    window.history.pushState(null, "", `/releases/${item.id}/`);
     setRoute({ kind: "release", id: item.id });
   }, []);
 
@@ -295,7 +295,7 @@ function App() {
         importance: item?.importance,
         source: "log",
       });
-      window.history.pushState(null, "", `/releases/${id}`);
+      window.history.pushState(null, "", `/releases/${id}/`);
       setRoute({ kind: "release", id });
     },
     [sorted],
@@ -309,9 +309,9 @@ function App() {
   const closeModal = useCallback(() => {
     const isFeed = page !== "influencers" && page !== "log";
     const target = page === "influencers"
-      ? "/influencers"
+      ? "/influencers/"
       : page === "log"
-        ? "/log"
+        ? "/log/"
         : buildFeedUrl(active);
     const next: Route = page === "influencers"
       ? { kind: "influencers" }
@@ -588,7 +588,7 @@ function App() {
               className={`nav-link ${page === "learn" ? "nav-active" : ""}`}
               onClick={() => {
                 setMenuOpen(false);
-                goLearnPath("/learn");
+                goLearnPath("/learn/");
               }}
             >
               <span className="nav-link-lbl">LEARN</span>

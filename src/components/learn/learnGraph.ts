@@ -14,6 +14,11 @@
  */
 
 import { learnTaxonomy } from "../../data/learn/nav";
+import {
+  learnArticlePath,
+  learnCategoryPath,
+  learnSubcategoryPath,
+} from "../../data/learn/schema";
 import { categoryVisual } from "./categoryVisuals";
 
 export type GraphKind = "root" | "category" | "subcategory" | "article";
@@ -124,7 +129,7 @@ export function buildLearnGraph(): LearnGraph {
           id,
           kind: "article",
           label: art.title,
-          href: `/learn/${cat.slug}/${sub.slug}/${art.slug}`,
+          href: learnArticlePath(cat.slug, sub.slug, art.slug),
           depth: 3,
           angle: a,
           radius: RING[3],
@@ -147,7 +152,7 @@ export function buildLearnGraph(): LearnGraph {
         id: subId,
         kind: "subcategory",
         label: sub.title,
-        href: `/learn/${cat.slug}/${sub.slug}`,
+        href: learnSubcategoryPath(cat.slug, sub.slug),
         depth: 2,
         angle: sa,
         radius: RING[2],
@@ -170,7 +175,7 @@ export function buildLearnGraph(): LearnGraph {
       id: catId,
       kind: "category",
       label: cat.title,
-      href: `/learn/${cat.slug}`,
+      href: learnCategoryPath(cat.slug),
       depth: 1,
       angle: ca,
       radius: RING[1],

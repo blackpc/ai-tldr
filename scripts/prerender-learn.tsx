@@ -23,7 +23,13 @@ import { fileURLToPath } from "node:url";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { LearnArticle } from "../src/data/learn/schema";
-import { learnArticlePath } from "../src/data/learn/schema";
+import {
+  learnArticlePath,
+  learnCategoryPath,
+  learnHubPath,
+  learnMapPath,
+  learnSubcategoryPath,
+} from "../src/data/learn/schema";
 import { learnTaxonomy, learnArticleCount } from "../src/data/learn/nav";
 import { ArticleBody } from "../src/components/learn/ArticleBody";
 import LearnMap from "../src/components/learn/LearnMap";
@@ -113,8 +119,8 @@ function staticShell(inner: string): string {
     `</header>` +
     `<main class="lrn-main">${inner}</main>` +
     `<footer class="page-footer">` +
-    `<a href="/">Releases</a> · <a href="/learn">Learn AI</a> · ` +
-    `<a href="/influencers">Influencers</a></footer>` +
+    `<a href="/">Releases</a> · <a href="${learnHubPath}">Learn AI</a> · ` +
+    `<a href="/influencers/">Influencers</a></footer>` +
     `</div>`
   );
 }
@@ -205,7 +211,7 @@ export async function prerenderLearn(opts: {
     title: "Learn AI — LLMs, RAG, Agents & More, Explained | AI/TLDR",
     description:
       "A plain-English encyclopedia of AI engineering: LLMs, RAG, vector databases, agents, fine-tuning and the tools around them. Free and beginner-friendly.",
-    canonical: `${siteUrl}/learn`,
+    canonical: `${siteUrl}${learnHubPath}`,
     ogType: "website",
     ogImage: defaultOgImage,
   };
@@ -213,8 +219,8 @@ export async function prerenderLearn(opts: {
     wrapJsonLd({
       "@context": "https://schema.org",
       "@type": "CollectionPage",
-      "@id": `${siteUrl}/learn#webpage`,
-      url: `${siteUrl}/learn`,
+      "@id": `${siteUrl}${learnHubPath}#webpage`,
+      url: `${siteUrl}${learnHubPath}`,
       name: "Learn AI",
       description: hubMeta.description,
       inLanguage: "en-US",
@@ -227,13 +233,13 @@ export async function prerenderLearn(opts: {
           "@type": "ListItem",
           position: i + 1,
           name: c.title,
-          url: `${siteUrl}/learn/${c.slug}`,
+          url: `${siteUrl}${learnCategoryPath(c.slug)}`,
         })),
       },
     }),
     breadcrumbLd(wrapJsonLd, siteUrl, [
       { name: "AI/TLDR", path: "/" },
-      { name: "Learn AI", path: "/learn" },
+      { name: "Learn AI", path: learnHubPath },
     ]),
   ].join("\n    ");
   await writeHtml(
@@ -244,10 +250,10 @@ export async function prerenderLearn(opts: {
     ),
   );
   pages++;
-  urls.push({ loc: `${siteUrl}/learn`, lastmod: today, changefreq: "weekly", priority: 0.9 });
+  urls.push({ loc: `${siteUrl}${learnHubPath}`, lastmod: today, changefreq: "weekly", priority: 0.9 });
 
   // ---- map (/learn/map) ----
-  const mapPath = "/learn/map";
+  const mapPath = learnMapPath;
   const mapMeta: LearnPageMeta = {
     title: "AI Knowledge Map — Every Topic, Visualized | AI/TLDR",
     description:
@@ -274,13 +280,13 @@ export async function prerenderLearn(opts: {
           "@type": "ListItem",
           position: i + 1,
           name: c.title,
-          url: `${siteUrl}/learn/${c.slug}`,
+          url: `${siteUrl}${learnCategoryPath(c.slug)}`,
         })),
       },
     }),
     breadcrumbLd(wrapJsonLd, siteUrl, [
       { name: "AI/TLDR", path: "/" },
-      { name: "Learn AI", path: "/learn" },
+      { name: "Learn AI", path: learnHubPath },
       { name: "Map", path: mapPath },
     ]),
   ].join("\n    ");
@@ -296,7 +302,7 @@ export async function prerenderLearn(opts: {
 
   for (const cat of learnTaxonomy.categories) {
     // ---- category page ----
-    const catPath = `/learn/${cat.slug}`;
+    const catPath = learnCategoryPath(cat.slug);
     const catLd = [
       wrapJsonLd({
         "@context": "https://schema.org",
@@ -322,7 +328,7 @@ export async function prerenderLearn(opts: {
       }),
       breadcrumbLd(wrapJsonLd, siteUrl, [
         { name: "AI/TLDR", path: "/" },
-        { name: "Learn AI", path: "/learn" },
+        { name: "Learn AI", path: learnHubPath },
         { name: cat.title, path: catPath },
       ]),
     ].join("\n    ");
@@ -348,7 +354,7 @@ export async function prerenderLearn(opts: {
 
     for (const sub of cat.subcategories) {
       // ---- subcategory page ----
-      const subPath = `/learn/${cat.slug}/${sub.slug}`;
+      const subPath = learnSubcategoryPath(cat.slug, sub.slug);
       const subLd = [
         wrapJsonLd({
           "@context": "https://schema.org",
@@ -373,7 +379,7 @@ export async function prerenderLearn(opts: {
         }),
         breadcrumbLd(wrapJsonLd, siteUrl, [
           { name: "AI/TLDR", path: "/" },
-          { name: "Learn AI", path: "/learn" },
+          { name: "Learn AI", path: learnHubPath },
           { name: cat.title, path: catPath },
           { name: sub.title, path: subPath },
         ]),
@@ -443,7 +449,7 @@ export async function prerenderLearn(opts: {
           }),
           breadcrumbLd(wrapJsonLd, siteUrl, [
             { name: "AI/TLDR", path: "/" },
-            { name: "Learn AI", path: "/learn" },
+            { name: "Learn AI", path: learnHubPath },
             { name: cat.title, path: catPath },
             { name: sub.title, path: subPath },
             { name: article.title, path: artPath },
@@ -494,13 +500,13 @@ export function injectLearnLinksIntoHome(html: string): string {
   const links = learnTaxonomy.categories
     .map(
       (c) =>
-        `<a href="/learn/${c.slug}" style="color:#f7ff00;text-decoration:none;border:1px solid #2a2a28;padding:4px 10px;display:inline-block;margin:0 6px 6px 0;font:600 11px 'JetBrains Mono',monospace;text-transform:uppercase">${c.title}</a>`,
+        `<a href="${learnCategoryPath(c.slug)}" style="color:#f7ff00;text-decoration:none;border:1px solid #2a2a28;padding:4px 10px;display:inline-block;margin:0 6px 6px 0;font:600 11px 'JetBrains Mono',monospace;text-transform:uppercase">${c.title}</a>`,
     )
     .join("");
   const section =
     `<section class="static-learn" aria-label="Learn AI" style="max-width:760px;margin:0 auto 48px;padding:0 24px;font-family:Inter,system-ui,sans-serif">` +
     `<h2 style="font-size:24px;font-weight:700;color:#fff;margin:0 0 8px">Learn AI from zero</h2>` +
-    `<p style="color:#bbb;line-height:1.6;margin:0 0 16px">New to LLMs, RAG or agents? Our <a href="/learn" style="color:#f7ff00">free Learn AI encyclopedia</a> explains every concept, tool and framework in plain English — ${learnArticleCount()} articles and counting.</p>` +
+    `<p style="color:#bbb;line-height:1.6;margin:0 0 16px">New to LLMs, RAG or agents? Our <a href="${learnHubPath}" style="color:#f7ff00">free Learn AI encyclopedia</a> explains every concept, tool and framework in plain English — ${learnArticleCount()} articles and counting.</p>` +
     `<div>${links}</div></section>`;
   return html.replace("</body>", () => `${section}\n  </body>`);
 }

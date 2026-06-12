@@ -48,6 +48,16 @@ const SITE_URL =
   "https://ai-tldr.dev";
 const DEFAULT_OG_IMAGE = `${SITE_URL}/og-image.png`;
 
+// Cloudflare Pages serves directory pages with a trailing slash
+// (`foo/index.html` → `/foo/`) and 307-redirects the slash-less form, so
+// every page URL we emit (canonical, og:url, sitemap loc, JSON-LD) ends in
+// `/` to match the served URL — Google never sees a redirect in the
+// sitemap or a canonical that points at one. Asset files (*.png, *.xml)
+// and the root keep their exact paths.
+const releaseUrl = (id: string) => `${SITE_URL}/releases/${id}/`;
+const INFLUENCERS_URL = `${SITE_URL}/influencers/`;
+const LOG_URL = `${SITE_URL}/log/`;
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // `@cloudflare/vite-plugin` splits the build into:
 //   dist/client/   ← static assets (the SPA) — what we post-process
@@ -254,7 +264,7 @@ function renderJsonLdCollectionPage(opts: {
 }
 
 function renderJsonLdArticle(item: ReleaseItem): string {
-  const url = `${SITE_URL}/releases/${item.id}`;
+  const url = releaseUrl(item.id);
   const description = item.explainer?.tagline ?? item.summary;
   const data = {
     "@context": "https://schema.org",
@@ -305,7 +315,7 @@ function renderJsonLdArticle(item: ReleaseItem): string {
  */
 function renderJsonLdVideo(item: ReleaseItem): string | null {
   if (!item.categories.includes("video")) return null;
-  const url = `${SITE_URL}/releases/${item.id}`;
+  const url = releaseUrl(item.id);
   return wrapJsonLd({
     "@context": "https://schema.org",
     "@type": "VideoObject",
@@ -338,7 +348,7 @@ function renderJsonLdSoftware(item: ReleaseItem): string | null {
   const isModel = primary === "model";
   if (!isRepo && !isTool && !isModel) return null;
 
-  const url = `${SITE_URL}/releases/${item.id}`;
+  const url = releaseUrl(item.id);
   if (isRepo) {
     return wrapJsonLd({
       "@context": "https://schema.org",
@@ -388,7 +398,7 @@ function renderJsonLdDataset(item: ReleaseItem): string | null {
     "@type": "Dataset",
     name: item.title,
     description: item.explainer?.tagline ?? item.summary,
-    url: `${SITE_URL}/releases/${item.id}`,
+    url: releaseUrl(item.id),
     creator: { "@type": "Organization", name: item.org },
     datePublished: item.date,
     keywords: item.tags.join(", "),
@@ -408,7 +418,7 @@ function renderJsonLdDataset(item: ReleaseItem): string | null {
 function renderJsonLdTechArticle(item: ReleaseItem): string | null {
   const techCats: string[] = ["paper", "algorithm", "benchmark", "tutorial"];
   if (!item.categories.some((c) => techCats.includes(c))) return null;
-  const url = `${SITE_URL}/releases/${item.id}`;
+  const url = releaseUrl(item.id);
   return wrapJsonLd({
     "@context": "https://schema.org",
     "@type": "TechArticle",
@@ -429,7 +439,7 @@ function renderJsonLdTechArticle(item: ReleaseItem): string | null {
  */
 function renderJsonLdCourse(item: ReleaseItem): string | null {
   if (!item.categories.includes("tutorial")) return null;
-  const url = `${SITE_URL}/releases/${item.id}`;
+  const url = releaseUrl(item.id);
   return wrapJsonLd({
     "@context": "https://schema.org",
     "@type": ["Course", "LearningResource"],
@@ -552,7 +562,7 @@ function renderJsonLdHomeItemList(items: ReleaseItem[]): string {
     itemListElement: items.slice(0, 30).map((item, i) => ({
       "@type": "ListItem",
       position: i + 1,
-      url: `${SITE_URL}/releases/${item.id}`,
+      url: releaseUrl(item.id),
       name: item.title,
     })),
   });
@@ -569,8 +579,8 @@ function renderJsonLdInfluencers(
   return wrapJsonLd({
     "@context": "https://schema.org",
     "@type": "ProfilePage",
-    "@id": `${SITE_URL}/influencers#webpage`,
-    url: `${SITE_URL}/influencers`,
+    "@id": `${INFLUENCERS_URL}#webpage`,
+    url: INFLUENCERS_URL,
     name: "Top AI Influencers to Follow",
     isPartOf: { "@id": `${SITE_URL}/#website` },
     publisher: { "@id": `${SITE_URL}/#org` },
@@ -623,7 +633,7 @@ function renderJsonLdBreadcrumb(item: ReleaseItem): string {
         "@type": "ListItem",
         position: 2,
         name: item.title,
-        item: `${SITE_URL}/releases/${item.id}`,
+        item: releaseUrl(item.id),
       },
     ],
   });
@@ -753,7 +763,7 @@ function releaseMeta(item: ReleaseItem): PageMeta {
   return {
     title: buildReleaseTitle(item),
     description,
-    canonical: `${SITE_URL}/releases/${item.id}`,
+    canonical: releaseUrl(item.id),
     ogType: "article",
     ogImage: item.image?.url ?? DEFAULT_OG_IMAGE,
     ogImageAlt: item.image?.alt,
@@ -779,7 +789,7 @@ const INFLUENCERS_META: PageMeta = {
   title: "Top AI Influencers to Follow — 110 Creators Ranked | AI/TLDR",
   description:
     "The AI creators, researchers and newsletter authors worth following — ranked by reach across YouTube, X/Twitter, GitHub, podcasts, blogs and Substack.",
-  canonical: `${SITE_URL}/influencers`,
+  canonical: INFLUENCERS_URL,
   ogType: "website",
   ogImage: DEFAULT_OG_IMAGE,
   ogImageAlt: "Top AI influencers to follow — ranked by reach",
@@ -789,7 +799,7 @@ const LOG_META: PageMeta = {
   title: "AI Release Changelog — What Shipped & When | AI/TLDR",
   description:
     "The full changelog of AI/TLDR sweeps — every AI model, repo, tool, paper and dataset added, with a one-line note on why each was picked.",
-  canonical: `${SITE_URL}/log`,
+  canonical: LOG_URL,
   ogType: "website",
   ogImage: DEFAULT_OG_IMAGE,
   ogImageAlt: "AI/TLDR sweep log — changelog of AI releases",
@@ -882,7 +892,7 @@ function buildNewsSitemap(items: ReleaseItem[]): string {
     .slice(0, 1000);
   const body = recent
     .map((it) => {
-      const url = `${SITE_URL}/releases/${it.id}`;
+      const url = releaseUrl(it.id);
       const pubDate = it.publishDate ?? new Date(it.date).toISOString();
       return `  <url>
     <loc>${escapeText(url)}</loc>
@@ -976,7 +986,7 @@ async function main() {
       template,
       LOG_META,
       renderJsonLdCollectionPage({
-        url: `${SITE_URL}/log`,
+        url: LOG_URL,
         name: "AI Release Changelog",
         description: LOG_META.description,
       }),
@@ -1030,19 +1040,19 @@ async function main() {
       images: [{ loc: DEFAULT_OG_IMAGE, title: "AI/TLDR — daily AI release tracker" }],
     },
     {
-      loc: `${SITE_URL}/influencers`,
+      loc: INFLUENCERS_URL,
       lastmod: today,
       changefreq: "weekly",
       priority: 0.8,
     },
     {
-      loc: `${SITE_URL}/log`,
+      loc: LOG_URL,
       lastmod: today,
       changefreq: "daily",
       priority: 0.7,
     },
     ...items.map((i): SitemapUrl => {
-      const loc = `${SITE_URL}/releases/${i.id}`;
+      const loc = releaseUrl(i.id);
       const url: SitemapUrl = {
         loc,
         lastmod: i.date,

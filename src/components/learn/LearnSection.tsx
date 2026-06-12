@@ -13,6 +13,13 @@ import "./learn.css";
 
 import type { LearnArticle } from "../../data/learn/schema";
 import {
+  learnArticlePath,
+  learnCategoryPath,
+  learnHubPath,
+  learnMapPath,
+  learnSubcategoryPath,
+} from "../../data/learn/schema";
+import {
   findLearnArticle,
   findLearnCategory,
   findLearnSubcategory,
@@ -77,7 +84,7 @@ function NotFound({ what }: { what: string }) {
         <h1 className="lrn-title">404 // NOT FOUND</h1>
         <p className="lrn-dek">
           No {what} here.{" "}
-          <a href="/learn" data-internal="true">
+          <a href={learnHubPath} data-internal="true">
             Back to Learn AI →
           </a>
         </p>
@@ -129,13 +136,13 @@ export default function LearnSection({
       setPageMeta(
         "Learn AI — LLMs, RAG, Agents & More, Explained | AI/TLDR",
         "A plain-English encyclopedia of AI engineering: LLMs, RAG, vector databases, agents, fine-tuning and the tools around them. Free, beginner-friendly, no signup.",
-        "/learn",
+        learnHubPath,
       );
     } else if (route.kind === "learn-map") {
       setPageMeta(
         "AI Knowledge Map — Every Topic, Visualized | AI/TLDR",
         "An interactive mind map of the whole Learn AI encyclopedia: every category, subcategory and article as one explorable radial graph. Free and beginner-friendly.",
-        "/learn/map",
+        learnMapPath,
       );
     } else if (route.kind === "learn-cat") {
       const cat = findLearnCategory(route.cat);
@@ -143,7 +150,7 @@ export default function LearnSection({
         setPageMeta(
           `${cat.title} — Learn AI | AI/TLDR`,
           cat.tagline,
-          `/learn/${cat.slug}`,
+          learnCategoryPath(cat.slug),
         );
     } else if (route.kind === "learn-sub") {
       const found = findLearnSubcategory(route.cat, route.sub);
@@ -151,7 +158,7 @@ export default function LearnSection({
         setPageMeta(
           `${found.subcategory.title} — Learn AI | AI/TLDR`,
           found.subcategory.tagline,
-          `/learn/${found.category.slug}/${found.subcategory.slug}`,
+          learnSubcategoryPath(found.category.slug, found.subcategory.slug),
         );
     } else {
       const loc = findLearnArticle(route.slug);
@@ -159,7 +166,7 @@ export default function LearnSection({
         setPageMeta(
           `${loc.article.seoTitle} | AI/TLDR`,
           loc.article.metaDescription,
-          `/learn/${loc.category.slug}/${loc.subcategory.slug}/${loc.article.slug}`,
+          learnArticlePath(loc.category.slug, loc.subcategory.slug, loc.article.slug),
         );
     }
     track("learn:view", { kind: route.kind });

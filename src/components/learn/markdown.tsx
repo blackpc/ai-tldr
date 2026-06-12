@@ -19,6 +19,23 @@ const TOKEN =
 
 const LINK = /^\[([^\]]+)\]\(([^)\s]+)\)$/;
 
+/**
+ * Normalize an internal page link to the trailing-slash form the host
+ * serves (`foo/index.html` → `/foo/`), so author-written cross-links in
+ * article prose never trigger a 307 on click or crawl. The root, already
+ * slashed paths, and file assets (a dot in the last segment) are left as
+ * is; any #fragment / ?query is preserved after the inserted slash.
+ */
+function internalHref(url: string): string {
+  const m = url.match(/^([^?#]*)([?#].*)?$/);
+  const path = m?.[1] ?? url;
+  const suffix = m?.[2] ?? "";
+  if (path === "/" || path === "" || path.endsWith("/")) return url;
+  const lastSeg = path.slice(path.lastIndexOf("/") + 1);
+  if (lastSeg.includes(".")) return url;
+  return `${path}/${suffix}`;
+}
+
 function renderToken(token: string, key: number): ReactNode {
   if (token.startsWith("`")) {
     return <code key={key}>{token.slice(1, -1)}</code>;
@@ -34,7 +51,7 @@ function renderToken(token: string, key: number): ReactNode {
     const [, text, url] = link;
     if (url.startsWith("/")) {
       return (
-        <a key={key} href={url} data-internal="true">
+        <a key={key} href={internalHref(url)} data-internal="true">
           {renderInlineMd(text)}
         </a>
       );
