@@ -103,6 +103,11 @@ export interface ReleaseItem {
    * category and is used for the prominent badge on the card.
    */
   categories: Category[];
+  /**
+   * Headline, not the whole story. ≤ 80 chars (hard cap 90). Format:
+   * "<Name or short claim> — <one short descriptor>". Detail (metrics,
+   * names, quotes) belongs in `summary`/`explainer`, never the title.
+   */
   title: string;
   org: string;
   /**

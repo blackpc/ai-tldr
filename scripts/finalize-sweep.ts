@@ -281,6 +281,33 @@ if ((draft.coverage ?? []).length < 15) {
   );
 }
 
+// Title length: titles are headlines, not summaries. Hard cap 90 chars
+// (see prompts/update-releases.md → `title`). Long titles are the agent
+// stuffing metrics/names/quotes into the headline — flag, don't block.
+const longTitles = newItems.filter((i) => (i.title ?? "").length > 90);
+if (longTitles.length > 0) {
+  warnings.push(
+    `title length: ${longTitles.length} new item(s) over 90 chars ` +
+      `(headlines, not summaries — detail goes in summary/explainer): ` +
+      longTitles
+        .map((i) => `${i.id} (${i.title.length})`)
+        .join(", "),
+  );
+}
+
+// Summary length: prompt documents a ≤240-char cap on `summary`. Same
+// gap as titles — documented but never enforced. Soft warning, not a
+// hard-fail (cosmetic, not a fabrication).
+const longSummaries = newItems.filter((i) => (i.summary ?? "").length > 240);
+if (longSummaries.length > 0) {
+  warnings.push(
+    `summary length: ${longSummaries.length} new item(s) over 240 chars: ` +
+      longSummaries
+        .map((i) => `${i.id} (${i.summary.length})`)
+        .join(", "),
+  );
+}
+
 const result = {
   sweepId,
   generatedAt,

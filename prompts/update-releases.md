@@ -204,6 +204,67 @@ Every item conforms to `ReleaseItem` in `src/data/schema.ts`. Required:
 - `publishDate` (ISO timestamp) — when we ingested the item. Drives
   sort order. **DO NOT set this — `finalize-sweep.ts` stamps it.**
 
+### Plain, readable English (applies to `title`, `summary`, `explainer`)
+
+Write so a smart non-native English reader understands on the FIRST
+pass. Target roughly CEFR B2 / U.S. grade 8–10 — clear and adult, NOT
+dumbed down to a child's level, but NOT academic or newsroom-fancy
+either. Tech terms (transformer, MoE, RAG, context window) are fine and
+expected; everyday-word *showing off* is not.
+
+Rules:
+- Prefer the common word over the fancy synonym.
+- One idea per sentence. Short sentences beat long ones.
+- Avoid newspaper-headline verbs and idioms — they read as drama and
+  confuse non-native speakers. Swap them for plain ones:
+
+  | Don't write | Write |
+  |---|---|
+  | rebuffs, spurns | rejects |
+  | rips, slams, blasts, lambasts | criticizes |
+  | touts | promotes, claims |
+  | unveils, debuts | announces, launches, releases |
+  | doubles down on | reaffirms, repeats |
+  | decries, excoriates | criticizes |
+  | carve-out | exemption |
+  | overbroad | too broad |
+  | upends | disrupts, changes |
+  | bolsters | strengthens |
+  | eschews | avoids |
+  | nascent | early, new |
+  | myriad, plethora of | many |
+  | leverages | uses |
+  | albeit | although, even though |
+
+  This table is illustrative, not exhaustive — the test is always "would
+  a B2 reader stumble on this word?" If yes, use a simpler one.
+
+This is about word choice and sentence length, NOT about removing real
+facts. Keep every number, name, and claim — just say it plainly.
+
+### `title`
+
+**≤ 80 chars. A headline, not the whole story.** Format:
+`<Name or short claim> — <one short descriptor>`. The em-dash clause
+is a brief qualifier, NOT a second sentence packed with metrics,
+names, dates, quotes, or sub-clauses. Hard cap 90 chars; aim for 60–80.
+
+The detail (numbers, people, benchmarks, quotes, context) belongs in
+`summary` and `explainer` — NEVER cram it into the title. If you find
+yourself adding a comma-spliced list or a second "—", you are writing
+a summary, not a title. Cut it.
+
+Good (short, scannable):
+- `Claude Opus 4.7 — Anthropic's new flagship for agentic coding`
+- `OpenAI Shuts Down Sora — $1M/day video AI discontinued after 17 months`
+- `Kimi K2.6 — 1T multimodal MoE hits 80.2% on SWE-bench`
+
+Bad (this is a summary stuffed into the title — DO NOT do this):
+- `Google Ships DiffusionGemma — Apache-2.0 26B/3.8B-Active Mixture-of-Experts That Denoises 256 Tokens in Parallel via Discrete Block Diffusion, Hits 1,000+ Tokens/Sec on H100 and 700+ on RTX 5090 While Posting 77.6% MMLU Pro...`
+
+Same banned words as `summary`, same plain-English rule above. No
+emoji, no exclamation marks.
+
 ### `id`
 
 `<org-kebab>-<short-slug>`. Lowercase, hyphens. Examples:
@@ -221,7 +282,8 @@ and code.
 
 ### `summary`
 
-≤ 240 chars, plain English. Banned words: "revolutionary",
+≤ 240 chars, plain English (see the plain-English rule above — common
+words, short sentences, no headline-ese). Banned words: "revolutionary",
 "groundbreaking", "game-changing", "unprecedented", "next-generation",
 "cutting-edge". No emoji, no exclamation marks.
 

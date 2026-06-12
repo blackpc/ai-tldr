@@ -31,6 +31,58 @@ Short. Caveman words. No prose.
 
 ## Change log
 
+### 2026-06-12-A — titles became super long
+
+Break. User: "titles for all articles became SUPER LONG." Confirmed:
+pre-`f549ca4` (the 6.1.0 rewrite, 2026-04-28) titles averaged 68 chars
+(max 114). After, they ballooned to 150–322 chars — whole story crammed
+into the headline (metrics, names, quotes, dates, two em-dashes). 365 of
+712 live items over 90 chars.
+
+Cause. The 912→380 line 6.1.0 rewrite dropped ALL title guidance.
+Neither prompt nor schema ever constrained `title` length/style — old
+prompt just happened to model short titles via examples elsewhere; the
+rewrite removed those, so the agent drifted to summary-as-title. (The
+6.1.0 entry above claimed "no padding" — it watched dedup/staleness, not
+title length, so this slid through.)
+
+Fix.
+- `prompts/update-releases.md`: added a dedicated `### title` rule —
+  ≤80 chars (hard cap 90), "headline not the whole story", format
+  `<Name/claim> — <short descriptor>`, with good/bad examples. Detail
+  goes in `summary`/`explainer`, never the title.
+- `src/data/schema.ts`: doc comment on `title` mirroring the cap.
+- `scripts/finalize-sweep.ts`: SOFT warning (not hard-fail) when any new
+  item title > 90 chars. Soft on purpose — a long title is cosmetic, not
+  a fabrication; hard-failing an unattended cron would drop real news.
+
+Status. applied — prompt/schema/guard fixed for future sweeps. Existing
+365 long titles NOT yet backfilled (pending user decision; content-
+sensitive, zero-hallucination so meaning must be preserved). Watch next
+cron run for the title-length warning count trending to 0 on new items.
+
+### 2026-06-12-B — titles too hard to read (headline-journalese)
+
+Break. User (non-native English speaker): titles use complex/fancy words
+that are hard to read. Confirmed in feed: "rebuffs", "carve-out",
+"overbroad", "rips", "slams", "touts", "unveils", "doubles down",
+"cohort" — newsroom headline-ese.
+
+Cause. No readability guidance in the prompt; agent defaulted to a
+journalistic register.
+
+Fix. Added "Plain, readable English" section to
+`prompts/update-releases.md` (applies to title/summary/explainer):
+target CEFR B2 / grade 8–10, common words over fancy synonyms, one idea
+per sentence, plus a swap table (rebuffs→rejects, rips/slams→criticizes,
+touts→promotes, unveils→announces/launches, etc.). Word choice only —
+all facts/numbers/names kept. Cross-referenced from title + summary
+sections. NOT a finalize-sweep guard (can't reliably detect "fancy" in
+code without false positives). Soft-warned summary>240 chars while here.
+
+Status. applied. Watch next cron's new titles for plainer wording.
+Existing items not backfilled.
+
 ### 2026-04-28-A — same item three times
 
 Break. Feed had `anthropic-claude-opus-4-7` ×3, `openai-gpt-5-5` ×2,
