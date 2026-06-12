@@ -256,9 +256,11 @@ export default function LearnMap({
                 ? hover.read
                   ? "TOWER · LIT ✓"
                   : "TOWER · DARK"
-                : hover.kind === "district"
-                  ? "DISTRICT"
-                  : "MONUMENT"}
+                : hover.kind === "block"
+                  ? "BLOCK"
+                  : hover.kind === "district"
+                    ? "DISTRICT"
+                    : "MONUMENT"}
             </span>
             <span className="lrn-map-tip-title">{hover.label}</span>
             {hover.sub && <span className="lrn-map-tip-meta">{hover.sub}</span>}

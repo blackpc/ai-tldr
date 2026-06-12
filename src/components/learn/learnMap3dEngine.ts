@@ -2,26 +2,34 @@
  * /learn/map — KNOWLEDGE CITY: the Learn encyclopedia as a procedural
  * neon city at night, rendered in WebGL (three.js).
  *
- * Not a graph. A game world:
- *   - 14 DISTRICTS (categories) on a city grid, each in its accent color
- *   - city BLOCKS inside each district (subcategories)
- *   - every article is a TOWER. Reading it powers the building — its
- *     windows light up in the district color. Unread towers stand dark.
- *   - the AI CORE spire burns in the central plaza
- *   - completed districts fire a light beacon into the sky
- *   - headlight/taillight traffic flows through the streets
+ * World model:
+ *   - 14 DISTRICTS (categories) on a 5x3 city grid, accent-edged plates
+ *   - named BLOCKS inside each district (subcategories): raised platforms
+ *     with accent curbs and distance-faded street-level signs
+ *   - every article is a TOWER (height = difficulty); reading it powers
+ *     the building — its windows light up in the district color. Tall
+ *     towers get setback tiers, antennas, and blinking aviation lights.
+ *   - fully-powered districts fire a rotating sky beacon
+ *   - the AI core spire burns in the central plaza; street lamps and
+ *     headlight/taillight traffic line the avenues
  *
- * RTS controls (MapControls): drag to roam, right-drag to orbit, wheel
- * to zoom, arrow keys to pan. Click a tower to inspect it, click a
- * district sign to fly there. Deterministic procedural geometry — no
- * assets, no randomness across reloads.
+ * Render pipeline: ACES filmic tone mapping + UnrealBloom — emissive
+ * windows, neon signs, lamps and beacons actually glow; dark concrete
+ * doesn't. Gradient sky dome + gridded ground instead of a void.
  *
- * This module is dynamic-imported by LearnMap.tsx in a client-only
- * effect, so three.js ships as its own lazy chunk and never touches SSR.
+ * Deterministic procedural geometry (zero assets, zero Math.random) and
+ * few draw calls: all 342 towers are 3 InstancedMeshes (base/tier/mast).
+ *
+ * Dynamic-imported by LearnMap.tsx in a client-only effect, so three.js
+ * ships as its own lazy chunk and never touches SSR.
  */
 
 import * as THREE from "three";
 import { MapControls } from "three/examples/jsm/controls/MapControls.js";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 
 // ---------------------------------------------------------------------------
 // Public data model
@@ -60,7 +68,7 @@ export interface CityTowerInfo {
 }
 
 export interface CityHover {
-  kind: "tower" | "district" | "core";
+  kind: "tower" | "block" | "district" | "core";
   label: string;
   sub?: string;
   color: string;
@@ -93,7 +101,7 @@ export interface CityHandle {
 // Deterministic helpers
 // ---------------------------------------------------------------------------
 
-const BG = 0x050505;
+const BG = 0x030308;
 
 function hash(s: string): number {
   let h = 5381;
@@ -113,70 +121,146 @@ function easeInOutCubic(t: number): number {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
-/** Shared window-grid texture: dark walls, faint window cells. Instance
- *  color multiplies it — dark gray for unread concrete, bright accent for
- *  powered buildings whose windows then glow. */
-function windowsTexture(): THREE.CanvasTexture {
+// ---------------------------------------------------------------------------
+// Procedural textures
+// ---------------------------------------------------------------------------
+
+/** Facade texture: window grid with lived-in variety — bright rooms, dim
+ *  rooms, dark floors, a dead roof band. Multiplied by instance color:
+ *  dark gray = unlit concrete; bright accent = powered building. */
+function facadeTexture(): THREE.CanvasTexture {
   const c = document.createElement("canvas");
-  c.width = 64;
-  c.height = 128;
+  c.width = 128;
+  c.height = 256;
   const g = c.getContext("2d")!;
-  g.fillStyle = "#3a3a3a";
-  g.fillRect(0, 0, 64, 128);
-  const rnd = lcg(424242);
-  for (let y = 6; y < 122; y += 10) {
-    for (let x = 5; x < 58; x += 9) {
-      const on = rnd();
-      g.fillStyle =
-        on > 0.45 ? `rgba(255,255,255,${0.55 + on * 0.45})` : "rgba(255,255,255,0.10)";
-      g.fillRect(x, y, 5, 6);
+  g.fillStyle = "#1b1d22";
+  g.fillRect(0, 0, 128, 256);
+  const rnd = lcg(20260612);
+  for (let row = 0; row < 23; row++) {
+    const floorDead = rnd() < 0.12; // whole floor dark
+    for (let col = 0; col < 9; col++) {
+      const x = 7 + col * 13.4;
+      const y = 16 + row * 10.2;
+      const r = rnd();
+      let a: number;
+      if (floorDead || r < 0.38) a = 0.05; // dark room
+      else if (r < 0.72) a = 0.32 + rnd() * 0.25; // dim glow
+      else a = 0.78 + rnd() * 0.22; // bright room
+      g.fillStyle = `rgba(255,244,214,${a})`;
+      g.fillRect(x, y, 7.2, 5.4);
     }
   }
+  // dead band at the roof line
+  g.fillStyle = "#15161a";
+  g.fillRect(0, 0, 128, 12);
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
 }
 
-/** Neon district sign rendered to a sprite texture. */
-function signTexture(text: string, color: string): THREE.CanvasTexture {
+/** Ground texture: city grid + radial vignette, baked once. */
+function groundTexture(): THREE.CanvasTexture {
+  const S = 1024;
+  const c = document.createElement("canvas");
+  c.width = c.height = S;
+  const g = c.getContext("2d")!;
+  g.fillStyle = "#07070b";
+  g.fillRect(0, 0, S, S);
+  g.strokeStyle = "rgba(150,160,190,0.07)";
+  g.lineWidth = 1;
+  for (let i = 0; i <= S; i += 16) {
+    g.beginPath();
+    g.moveTo(i, 0);
+    g.lineTo(i, S);
+    g.stroke();
+    g.beginPath();
+    g.moveTo(0, i);
+    g.lineTo(S, i);
+    g.stroke();
+  }
+  const grad = g.createRadialGradient(S / 2, S / 2, S * 0.22, S / 2, S / 2, S * 0.62);
+  grad.addColorStop(0, "rgba(3,3,8,0)");
+  grad.addColorStop(1, "rgba(3,3,8,1)");
+  g.fillStyle = grad;
+  g.fillRect(0, 0, S, S);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+/** Night-sky dome gradient: near-black zenith → cold haze at the horizon. */
+function skyTexture(): THREE.CanvasTexture {
+  const c = document.createElement("canvas");
+  c.width = 4;
+  c.height = 512;
+  const g = c.getContext("2d")!;
+  const grad = g.createLinearGradient(0, 0, 0, 512);
+  grad.addColorStop(0, "#020207");
+  grad.addColorStop(0.62, "#04040c");
+  grad.addColorStop(0.88, "#0a0d1c");
+  grad.addColorStop(1, "#11152a");
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 4, 512);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+/** Neon sign sprite texture (district + block names). */
+function signTexture(text: string, color: string, px = 64): THREE.CanvasTexture {
   const c = document.createElement("canvas");
   c.width = 1024;
-  c.height = 128;
+  c.height = px * 2;
   const g = c.getContext("2d")!;
-  g.font = "700 64px 'JetBrains Mono', 'Cascadia Code', Consolas, monospace";
+  g.font = `700 ${px}px 'JetBrains Mono', 'Cascadia Code', Consolas, monospace`;
   g.textAlign = "center";
   g.textBaseline = "middle";
   g.shadowColor = color;
-  g.shadowBlur = 26;
+  g.shadowBlur = px * 0.22;
   g.fillStyle = color;
-  g.fillText(text.toUpperCase(), 512, 64, 990);
+  g.fillText(text.toUpperCase(), 512, px, 1000);
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
 }
 
+/** Soft radial glow (selection marker, lamps). */
+function glowTexture(): THREE.CanvasTexture {
+  const c = document.createElement("canvas");
+  c.width = c.height = 64;
+  const g = c.getContext("2d")!;
+  const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grad.addColorStop(0, "rgba(255,255,255,1)");
+  grad.addColorStop(0.3, "rgba(255,255,255,0.7)");
+  grad.addColorStop(1, "rgba(255,255,255,0)");
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(c);
+}
+
 // ---------------------------------------------------------------------------
-// City layout constants
+// Layout constants
 // ---------------------------------------------------------------------------
 
-const CELL = 175; // district grid pitch (plate + street)
-const PLATE = 140; // district plate size
+const CELL = 175;
+const PLATE = 142;
 const COLS = 5;
 const ROWS = 3;
-const CORE_CELL = { col: 2, row: 1 }; // central plaza
-const HOME_POS = new THREE.Vector3(0, 270, 400);
+const CORE_CELL = { col: 2, row: 1 };
+const BLOCK_SIZE = 38;
+const HOME_POS = new THREE.Vector3(0, 320, 330);
 const HOME_TARGET = new THREE.Vector3(0, 0, 0);
 
 const BLOCK_OFFSETS: [number, number][] = [
   [0, 0],
-  [-44, -44],
-  [44, -44],
-  [-44, 44],
-  [44, 44],
-  [0, -44],
-  [0, 44],
-  [-44, 0],
-  [44, 0],
+  [-46, -46],
+  [46, -46],
+  [-46, 46],
+  [46, 46],
+  [0, -46],
+  [0, 46],
+  [-46, 0],
+  [46, 0],
 ];
 
 interface Tower {
@@ -184,6 +268,14 @@ interface Tower {
   pos: THREE.Vector3;
   w: number;
   h: number;
+}
+
+interface BlockSite {
+  district: CityDistrict;
+  block: CityBlock;
+  center: THREE.Vector3;
+  towers: Tower[];
+  label: THREE.Sprite;
 }
 
 // ---------------------------------------------------------------------------
@@ -194,7 +286,7 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
   const { canvas, districts, onHover, onSelectTower, onFocusDistrict } = opts;
   let readSet = new Set(opts.readSet);
 
-  // --- district cell positions (skip the core plaza cell) -------------------
+  // --- district cells --------------------------------------------------------
   const cells: { col: number; row: number }[] = [];
   for (let row = 0; row < ROWS; row++)
     for (let col = 0; col < COLS; col++)
@@ -209,28 +301,149 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
     );
   });
 
-  // --- towers ----------------------------------------------------------------
+  // --- renderer / pipeline ----------------------------------------------------
+  const renderer = new THREE.WebGLRenderer({
+    canvas,
+    antialias: true,
+    powerPreference: "high-performance",
+  });
+  renderer.setClearColor(BG, 1);
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.12;
+
+  const scene = new THREE.Scene();
+  scene.fog = new THREE.FogExp2(BG, 0.00115);
+
+  const camera = new THREE.PerspectiveCamera(50, 1, 1, 6000);
+  camera.position.set(0, 520, 740); // intro flyover start
+
+  const composer = new EffectComposer(renderer);
+  composer.addPass(new RenderPass(scene, camera));
+  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.85, 0.55, 0.5);
+  composer.addPass(bloom);
+  composer.addPass(new OutputPass());
+
+  const controls = new MapControls(camera, canvas);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.minDistance = 26;
+  controls.maxDistance = 900;
+  controls.maxPolarAngle = 1.42;
+  controls.listenToKeyEvents(window);
+  controls.keyPanSpeed = 24;
+
+  const disposables: { dispose(): void }[] = [];
+  function track<T extends { dispose(): void }>(x: T): T {
+    disposables.push(x);
+    return x;
+  }
+
+  // --- sky + ground -------------------------------------------------------------
+  const skyTex = track(skyTexture());
+  const sky = new THREE.Mesh(
+    track(new THREE.SphereGeometry(2600, 24, 16)),
+    track(
+      new THREE.MeshBasicMaterial({ map: skyTex, side: THREE.BackSide, fog: false }),
+    ),
+  );
+  scene.add(sky);
+
+  const groundTex = track(groundTexture());
+  const ground = new THREE.Mesh(
+    track(new THREE.PlaneGeometry(2600, 1800)),
+    track(new THREE.MeshBasicMaterial({ map: groundTex })),
+  );
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = -0.25;
+  scene.add(ground);
+
+  // --- district plates + edges ------------------------------------------------------
+  const plateGeo = track(new THREE.BoxGeometry(PLATE, 1.4, PLATE));
+  const plateEdgeGeo = track(new THREE.EdgesGeometry(plateGeo));
+  const plateMat = track(new THREE.MeshBasicMaterial({ color: 0x0d0d11 }));
+  for (const d of districts) {
+    const p = districtCenter.get(d.slug)!;
+    const plate = new THREE.Mesh(plateGeo, plateMat);
+    plate.position.set(p.x, 0, p.z);
+    scene.add(plate);
+    const edge = new THREE.LineSegments(
+      plateEdgeGeo,
+      track(
+        new THREE.LineBasicMaterial({
+          color: new THREE.Color(d.color).multiplyScalar(0.7),
+          transparent: true,
+          opacity: 0.95,
+        }),
+      ),
+    );
+    edge.position.copy(plate.position);
+    scene.add(edge);
+  }
+
+  // --- blocks (SUBCATEGORIES): platforms + curbs + street signs ----------------------
   const towers: Tower[] = [];
   const towersByDistrict = new Map<string, Tower[]>();
+  const blockSites: BlockSite[] = [];
+  const blockOf = new Map<THREE.Object3D, BlockSite>();
+
+  const blockGeo = track(new THREE.BoxGeometry(BLOCK_SIZE, 1.1, BLOCK_SIZE));
+  const blockEdgeGeo = track(new THREE.EdgesGeometry(blockGeo));
+  const blockMat = track(new THREE.MeshBasicMaterial({ color: 0x131318 }));
+  const signTextures: THREE.Texture[] = [];
 
   for (const d of districts) {
     const center = districtCenter.get(d.slug)!;
-    const list: Tower[] = [];
+    const districtTowers: Tower[] = [];
+
     d.blocks.forEach((b, j) => {
       const [ox, oz] = BLOCK_OFFSETS[j % BLOCK_OFFSETS.length];
+      const bc = new THREE.Vector3(center.x + ox, 0, center.z + oz);
+
+      // platform + accent curb
+      const plat = new THREE.Mesh(blockGeo, blockMat);
+      plat.position.set(bc.x, 0.7, bc.z);
+      scene.add(plat);
+      const curb = new THREE.LineSegments(
+        blockEdgeGeo,
+        track(
+          new THREE.LineBasicMaterial({
+            color: new THREE.Color(d.color).multiplyScalar(0.32),
+            transparent: true,
+            opacity: 0.9,
+          }),
+        ),
+      );
+      curb.position.copy(plat.position);
+      scene.add(curb);
+
+      // street-level sign (distance-faded in the loop)
+      const tex = track(signTexture(b.title, "#e8ecf2", 46));
+      signTextures.push(tex);
+      const label = new THREE.Sprite(
+        track(
+          new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }),
+        ),
+      );
+      label.position.set(bc.x, 4.4, bc.z + BLOCK_SIZE / 2 + 3.4);
+      label.scale.set(30, 3.75, 1);
+      label.raycast = () => undefined; // labels are display-only
+      scene.add(label);
+
+      // towers on the platform
       const arts = b.articles;
       const cols = Math.ceil(Math.sqrt(Math.max(1, arts.length)));
       const rows = Math.ceil(arts.length / cols);
+      const blockTowers: Tower[] = [];
       arts.forEach((a, k) => {
         const rnd = lcg(hash(a.slug));
         const col = k % cols;
         const row = Math.floor(k / cols);
-        const x = center.x + ox + (col - (cols - 1) / 2) * 12 + (rnd() - 0.5) * 3;
-        const z = center.z + oz + (row - (rows - 1) / 2) * 12 + (rnd() - 0.5) * 3;
+        const x = bc.x + (col - (cols - 1) / 2) * 11.4 + (rnd() - 0.5) * 2.4;
+        const z = bc.z + (row - (rows - 1) / 2) * 11.4 + (rnd() - 0.5) * 2.4;
         const base =
-          a.difficulty === "advanced" ? 26 : a.difficulty === "intermediate" ? 17 : 10;
+          a.difficulty === "advanced" ? 27 : a.difficulty === "intermediate" ? 17 : 10;
         const h = base + rnd() * 9;
-        const w = 7 + rnd() * 2.4;
+        const w = 6.4 + rnd() * 2.2;
         const tower: Tower = {
           info: {
             slug: a.slug,
@@ -243,152 +456,152 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
             color: d.color,
             read: readSet.has(a.slug),
           },
-          pos: new THREE.Vector3(x, h / 2 + 0.8, z),
+          pos: new THREE.Vector3(x, h / 2 + 1.25, z),
           w,
           h,
         };
         towers.push(tower);
-        list.push(tower);
+        blockTowers.push(tower);
+        districtTowers.push(tower);
       });
+
+      const site: BlockSite = { district: d, block: b, center: bc, towers: blockTowers, label };
+      blockSites.push(site);
+      blockOf.set(plat, site);
     });
-    towersByDistrict.set(d.slug, list);
+
+    towersByDistrict.set(d.slug, districtTowers);
   }
 
-  // --- renderer / scene / camera ----------------------------------------------
-  const renderer = new THREE.WebGLRenderer({
-    canvas,
-    antialias: true,
-    powerPreference: "high-performance",
+  // --- instanced towers: base + setback tier + antenna mast ---------------------------
+  const facadeTex = track(facadeTexture());
+  const boxGeo = track(new THREE.BoxGeometry(1, 1, 1));
+  const towerMat = track(new THREE.MeshBasicMaterial({ map: facadeTex }));
+
+  const baseMesh = new THREE.InstancedMesh(boxGeo, towerMat, towers.length);
+  const tierIdx: number[] = [];
+  const mastIdx: number[] = [];
+  towers.forEach((t, i) => {
+    if (t.h > 20) tierIdx.push(i);
+    if (t.h > 27) mastIdx.push(i);
   });
-  renderer.setClearColor(BG, 1);
+  const tierMesh = new THREE.InstancedMesh(boxGeo, towerMat, tierIdx.length);
+  const mastMat = track(new THREE.MeshBasicMaterial());
+  const mastMesh = new THREE.InstancedMesh(boxGeo, mastMat, mastIdx.length);
 
-  const scene = new THREE.Scene();
-  scene.fog = new THREE.FogExp2(BG, 0.0011);
-
-  const camera = new THREE.PerspectiveCamera(50, 1, 1, 5000);
-  camera.position.set(0, 540, 720); // intro flyover start
-
-  const controls = new MapControls(camera, canvas);
-  controls.enableDamping = true;
-  controls.dampingFactor = 0.08;
-  controls.minDistance = 30;
-  controls.maxDistance = 900;
-  controls.maxPolarAngle = 1.42; // never dive below the streets
-  controls.listenToKeyEvents(window);
-  controls.keyPanSpeed = 24;
-
-  // --- ground + streets ----------------------------------------------------------
-  const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(2400, 1600),
-    new THREE.MeshBasicMaterial({ color: 0x070708 }),
-  );
-  ground.rotation.x = -Math.PI / 2;
-  ground.position.y = -0.2;
-  scene.add(ground);
-
-  // street center-lines (additive, faint) + district plates with accent edges
-  const streetVerts: number[] = [];
-  for (let c = 0; c <= COLS - 1; c++) {
-    const x = (c - 2) * CELL + CELL / 2;
-    if (c < COLS - 1) streetVerts.push(x, 0.25, -CELL * 1.6, x, 0.25, CELL * 1.6);
-  }
-  for (let r = 0; r < ROWS - 1; r++) {
-    const z = (r - 1) * CELL + CELL / 2;
-    streetVerts.push(-CELL * 2.6, 0.25, z, CELL * 2.6, 0.25, z);
-  }
-  const streetGeo = new THREE.BufferGeometry();
-  streetGeo.setAttribute("position", new THREE.Float32BufferAttribute(streetVerts, 3));
-  scene.add(
-    new THREE.LineSegments(
-      streetGeo,
-      new THREE.LineBasicMaterial({
-        color: 0x2a2a20,
-        transparent: true,
-        opacity: 0.8,
-      }),
-    ),
-  );
-
-  const plateGeo = new THREE.BoxGeometry(PLATE, 1.2, PLATE);
-  const plateMat = new THREE.MeshBasicMaterial({ color: 0x0c0c0e });
-  const plates: THREE.Mesh[] = [];
-  const plateDistrict = new Map<THREE.Object3D, CityDistrict>();
-  const edgeGeo = new THREE.EdgesGeometry(plateGeo);
-  for (const d of districts) {
-    const p = districtCenter.get(d.slug)!;
-    const plate = new THREE.Mesh(plateGeo, plateMat);
-    plate.position.set(p.x, 0, p.z);
-    scene.add(plate);
-    plates.push(plate);
-    plateDistrict.set(plate, d);
-    const edge = new THREE.LineSegments(
-      edgeGeo,
-      new THREE.LineBasicMaterial({
-        color: new THREE.Color(d.color).multiplyScalar(0.55),
-        transparent: true,
-        opacity: 0.9,
-      }),
-    );
-    edge.position.copy(plate.position);
-    scene.add(edge);
-  }
-
-  // --- instanced towers -------------------------------------------------------------
-  const winTex = windowsTexture();
-  const towerGeo = new THREE.BoxGeometry(1, 1, 1);
-  const towerMat = new THREE.MeshBasicMaterial({ map: winTex });
-  const towerMesh = new THREE.InstancedMesh(towerGeo, towerMat, towers.length);
   const m4 = new THREE.Matrix4();
   towers.forEach((t, i) => {
     m4.makeScale(t.w, t.h, t.w);
     m4.setPosition(t.pos);
-    towerMesh.setMatrixAt(i, m4);
+    baseMesh.setMatrixAt(i, m4);
   });
+  tierIdx.forEach((ti, i) => {
+    const t = towers[ti];
+    const th = t.h * 0.34;
+    m4.makeScale(t.w * 0.62, th, t.w * 0.62);
+    m4.setPosition(t.pos.x, t.pos.y + t.h / 2 + th / 2, t.pos.z);
+    tierMesh.setMatrixAt(i, m4);
+  });
+  mastIdx.forEach((ti, i) => {
+    const t = towers[ti];
+    const rnd = lcg(hash(t.info.slug) ^ 0xbeef);
+    const len = 5 + rnd() * 5;
+    const topY = t.pos.y + t.h / 2 + t.h * 0.34;
+    m4.makeScale(0.6, len, 0.6);
+    m4.setPosition(t.pos.x, topY + len / 2, t.pos.z);
+    mastMesh.setMatrixAt(i, m4);
+  });
+  scene.add(baseMesh, tierMesh, mastMesh);
 
-  const DARK = new THREE.Color(0x53565e); // unread concrete (windows stay faint)
+  const DARK = new THREE.Color(0x707788); // dark concrete, windows still read
   const towerColor = (t: Tower): THREE.Color =>
     readSet.has(t.info.slug)
-      ? new THREE.Color(t.info.color).lerp(new THREE.Color(1, 1, 1), 0.18).multiplyScalar(1.5)
+      ? new THREE.Color(t.info.color).lerp(new THREE.Color(1, 1, 1), 0.16).multiplyScalar(2.1)
       : DARK.clone();
 
   const baseColors = new Float32Array(towers.length * 3);
-  towers.forEach((t, i) => {
-    const c = towerColor(t);
-    baseColors.set([c.r, c.g, c.b], i * 3);
-    towerMesh.setColorAt(i, c);
-  });
-  towerMesh.instanceColor!.needsUpdate = true;
-  scene.add(towerMesh);
-
-  function repaintTowers(mod?: (t: Tower, c: THREE.Color) => void): void {
+  function paint(mod?: (t: Tower, c: THREE.Color) => void): void {
     const c = new THREE.Color();
     towers.forEach((t, i) => {
       c.setRGB(baseColors[i * 3], baseColors[i * 3 + 1], baseColors[i * 3 + 2]);
       mod?.(t, c);
-      towerMesh.setColorAt(i, c);
+      baseMesh.setColorAt(i, c);
     });
-    towerMesh.instanceColor!.needsUpdate = true;
+    tierIdx.forEach((ti, i) => {
+      c.setRGB(baseColors[ti * 3], baseColors[ti * 3 + 1], baseColors[ti * 3 + 2]);
+      mod?.(towers[ti], c);
+      tierMesh.setColorAt(i, c);
+    });
+    mastIdx.forEach((ti, i) => {
+      c.setRGB(baseColors[ti * 3], baseColors[ti * 3 + 1], baseColors[ti * 3 + 2]);
+      mod?.(towers[ti], c);
+      mastMesh.setColorAt(i, c.clone().multiplyScalar(0.6));
+    });
+    baseMesh.instanceColor!.needsUpdate = true;
+    if (tierIdx.length) tierMesh.instanceColor!.needsUpdate = true;
+    if (mastIdx.length) mastMesh.instanceColor!.needsUpdate = true;
   }
+  function rebase(): void {
+    towers.forEach((t, i) => {
+      const c = towerColor(t);
+      baseColors.set([c.r, c.g, c.b], i * 3);
+    });
+  }
+  rebase();
+  paint();
 
-  // --- district signs + completion beacons ----------------------------------------------
-  const signSprites: THREE.Sprite[] = [];
+  // --- aviation lights on the tallest towers ---------------------------------------------
+  const aviGeo = track(new THREE.BufferGeometry());
+  {
+    const arr = new Float32Array(mastIdx.length * 3);
+    mastIdx.forEach((ti, i) => {
+      const t = towers[ti];
+      const rnd = lcg(hash(t.info.slug) ^ 0xbeef);
+      const len = 5 + rnd() * 5;
+      arr.set([t.pos.x, t.pos.y + t.h / 2 + t.h * 0.34 + len + 0.8, t.pos.z], i * 3);
+    });
+    aviGeo.setAttribute("position", new THREE.BufferAttribute(arr, 3));
+  }
+  const aviMat = track(
+    new THREE.PointsMaterial({
+      size: 2.2,
+      color: 0xff2d20,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      sizeAttenuation: true,
+      map: track(glowTexture()),
+    }),
+  );
+  const aviLights = new THREE.Points(aviGeo, aviMat);
+  aviLights.frustumCulled = false;
+  scene.add(aviLights);
+
+  // --- district neon signs ------------------------------------------------------------------
   const signDistrict = new Map<THREE.Object3D, CityDistrict>();
-  const signTextures: THREE.Texture[] = [];
   for (const d of districts) {
-    const tex = signTexture(d.title, d.color);
+    const tex = track(signTexture(d.title, d.color));
     signTextures.push(tex);
     const sprite = new THREE.Sprite(
-      new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }),
+      track(
+        new THREE.SpriteMaterial({
+          map: tex,
+          transparent: true,
+          depthWrite: false,
+          color: 0xc4c4c4, // keep neon signs under the bloom blow-out point
+        }),
+      ),
     );
     const p = districtCenter.get(d.slug)!;
-    sprite.position.set(p.x, 47, p.z);
-    sprite.scale.set(64, 8, 1);
+    sprite.position.set(p.x, 50, p.z);
+    sprite.scale.set(58, 7.25, 1);
     scene.add(sprite);
-    signSprites.push(sprite);
     signDistrict.set(sprite, d);
   }
 
-  const beaconGeo = new THREE.CylinderGeometry(1.6, 2.6, 340, 8, 1, true);
+  // --- completion beacons ----------------------------------------------------------------------
+  const beaconGeo = track(new THREE.CylinderGeometry(1.1, 2.1, 340, 8, 1, true));
   const beacons = new Map<string, THREE.Mesh>();
   function syncBeacons(): void {
     for (const d of districts) {
@@ -399,9 +612,9 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
         const beam = new THREE.Mesh(
           beaconGeo,
           new THREE.MeshBasicMaterial({
-            color: d.color,
+            color: new THREE.Color(d.color).multiplyScalar(1.4),
             transparent: true,
-            opacity: 0.28,
+            opacity: 0.3,
             blending: THREE.AdditiveBlending,
             depthWrite: false,
             side: THREE.DoubleSide,
@@ -420,47 +633,78 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
   }
   syncBeacons();
 
-  // --- the AI core spire -----------------------------------------------------------------
-  const core = new THREE.Group();
+  // --- the AI core --------------------------------------------------------------------------------
   const coreBase = new THREE.Mesh(
-    new THREE.BoxGeometry(18, 26, 18),
-    new THREE.MeshBasicMaterial({ map: winTex, color: 0xbbb36a }),
+    track(new THREE.BoxGeometry(17, 24, 17)),
+    track(new THREE.MeshBasicMaterial({ map: facadeTex, color: 0x8a8650 })),
   );
-  coreBase.position.y = 13;
-  core.add(coreBase);
+  coreBase.position.y = 12;
+  scene.add(coreBase);
   const coreSpire = new THREE.Mesh(
-    new THREE.BoxGeometry(7, 58, 7),
-    new THREE.MeshBasicMaterial({ map: winTex, color: 0xf7ff00 }),
+    track(new THREE.BoxGeometry(6.4, 56, 6.4)),
+    track(new THREE.MeshBasicMaterial({ color: new THREE.Color(0xf7ff00).multiplyScalar(1.9) })),
   );
-  coreSpire.position.y = 26 + 29;
-  core.add(coreSpire);
+  coreSpire.position.y = 24 + 28;
+  scene.add(coreSpire);
   const coreBeam = new THREE.Mesh(
     beaconGeo,
-    new THREE.MeshBasicMaterial({
-      color: 0xf7ff00,
-      transparent: true,
-      opacity: 0.22,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    }),
+    track(
+      new THREE.MeshBasicMaterial({
+        color: new THREE.Color(0xf7ff00).multiplyScalar(1.3),
+        transparent: true,
+        opacity: 0.24,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      }),
+    ),
   );
   coreBeam.position.y = 230;
-  core.add(coreBeam);
-  const glowTex = signTexture("◆", "#f7ff00");
+  scene.add(coreBeam);
   const coreSign = new THREE.Sprite(
-    new THREE.SpriteMaterial({
-      map: signTexture("A I", "#f7ff00"),
-      transparent: true,
-      depthWrite: false,
-    }),
+    track(
+      new THREE.SpriteMaterial({
+        map: track(signTexture("A I", "#f7ff00")),
+        transparent: true,
+        depthWrite: false,
+      }),
+    ),
   );
-  coreSign.position.y = 98;
-  coreSign.scale.set(40, 5, 1);
-  core.add(coreSign);
-  scene.add(core);
+  coreSign.position.y = 94;
+  coreSign.scale.set(34, 4.25, 1);
+  scene.add(coreSign);
 
-  // --- street traffic (headlights white, taillights red) -----------------------------------
+  // --- street lamps ----------------------------------------------------------------------------------
+  {
+    const pts: number[] = [];
+    const hStreets = [-CELL / 2, CELL / 2];
+    const vStreets = [-CELL * 1.5, -CELL / 2, CELL / 2, CELL * 1.5];
+    for (const z of hStreets)
+      for (let x = -CELL * 2.4; x <= CELL * 2.4; x += 34) pts.push(x, 5, z - 8, x, 5, z + 8);
+    for (const x of vStreets)
+      for (let z = -CELL * 1.4; z <= CELL * 1.4; z += 34) pts.push(x - 8, 5, z, x + 8, 5, z);
+    const geo = track(new THREE.BufferGeometry());
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
+    const lamps = new THREE.Points(
+      geo,
+      track(
+        new THREE.PointsMaterial({
+          size: 2.6,
+          color: new THREE.Color(0xffc97a).multiplyScalar(1.25),
+          transparent: true,
+          opacity: 0.85,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          sizeAttenuation: true,
+          map: track(glowTexture()),
+        }),
+      ),
+    );
+    lamps.frustumCulled = false;
+    scene.add(lamps);
+  }
+
+  // --- traffic ------------------------------------------------------------------------------------------
   interface Car {
     horizontal: boolean;
     fixed: number;
@@ -468,43 +712,51 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
     speed: number;
     dir: 1 | -1;
   }
-  const CARS = 90;
+  const CARS = 110;
   const cars: Car[] = [];
   const carRnd = lcg(777);
-  const hStreets = [-CELL / 2, CELL / 2];
-  const vStreets = [-CELL * 1.5, -CELL / 2, CELL / 2, CELL * 1.5];
-  for (let i = 0; i < CARS; i++) {
-    const horizontal = carRnd() > 0.45;
-    cars.push({
-      horizontal,
-      fixed: horizontal
-        ? hStreets[Math.floor(carRnd() * hStreets.length)]
-        : vStreets[Math.floor(carRnd() * vStreets.length)],
-      t: carRnd(),
-      speed: 0.02 + carRnd() * 0.05,
-      dir: carRnd() > 0.5 ? 1 : -1,
-    });
+  {
+    const hStreets = [-CELL / 2, CELL / 2];
+    const vStreets = [-CELL * 1.5, -CELL / 2, CELL / 2, CELL * 1.5];
+    for (let i = 0; i < CARS; i++) {
+      const horizontal = carRnd() > 0.45;
+      cars.push({
+        horizontal,
+        fixed: horizontal
+          ? hStreets[Math.floor(carRnd() * hStreets.length)]
+          : vStreets[Math.floor(carRnd() * vStreets.length)],
+        t: carRnd(),
+        speed: 0.02 + carRnd() * 0.05,
+        dir: carRnd() > 0.5 ? 1 : -1,
+      });
+    }
   }
-  const carGeo = new THREE.BufferGeometry();
+  const carGeo = track(new THREE.BufferGeometry());
   const carPos = new Float32Array(CARS * 3);
   const carCol = new Float32Array(CARS * 3);
   cars.forEach((car, i) => {
-    const c = car.dir > 0 ? new THREE.Color(0xfff6d8) : new THREE.Color(0xff3b30);
+    const c =
+      car.dir > 0
+        ? new THREE.Color(0xfff3cf).multiplyScalar(1.5)
+        : new THREE.Color(0xff2d20).multiplyScalar(1.2);
     carCol.set([c.r, c.g, c.b], i * 3);
   });
   carGeo.setAttribute("position", new THREE.BufferAttribute(carPos, 3));
   carGeo.setAttribute("color", new THREE.BufferAttribute(carCol, 3));
   const carPoints = new THREE.Points(
     carGeo,
-    new THREE.PointsMaterial({
-      size: 2.6,
-      vertexColors: true,
-      transparent: true,
-      opacity: 0.95,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      sizeAttenuation: true,
-    }),
+    track(
+      new THREE.PointsMaterial({
+        size: 2.1,
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.95,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        sizeAttenuation: true,
+        map: track(glowTexture()),
+      }),
+    ),
   );
   carPoints.frustumCulled = false;
   scene.add(carPoints);
@@ -516,82 +768,87 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
       car.t += car.speed * dt * car.dir;
       if (car.t > 1) car.t -= 1;
       if (car.t < 0) car.t += 1;
-      const along = car.horizontal
-        ? (car.t * 2 - 1) * SPAN_H
-        : (car.t * 2 - 1) * SPAN_V;
+      const along = car.horizontal ? (car.t * 2 - 1) * SPAN_H : (car.t * 2 - 1) * SPAN_V;
       carPos[i * 3] = car.horizontal ? along : car.fixed + (car.dir > 0 ? 2.4 : -2.4);
-      carPos[i * 3 + 1] = 0.7;
+      carPos[i * 3 + 1] = 0.9;
       carPos[i * 3 + 2] = car.horizontal ? car.fixed + (car.dir > 0 ? 2.4 : -2.4) : along;
     });
     (carGeo.getAttribute("position") as THREE.BufferAttribute).needsUpdate = true;
   }
 
-  // --- night sky ------------------------------------------------------------------------------
+  // --- stars ---------------------------------------------------------------------------------------------
   {
-    const N = 700;
+    const N = 600;
     const arr = new Float32Array(N * 3);
     const rnd = lcg(9001);
     for (let i = 0; i < N; i++) {
-      const v = new THREE.Vector3(rnd() * 2 - 1, rnd() * 0.9 + 0.18, rnd() * 2 - 1)
+      const v = new THREE.Vector3(rnd() * 2 - 1, rnd() * 0.85 + 0.2, rnd() * 2 - 1)
         .normalize()
-        .multiplyScalar(1400 + rnd() * 400);
+        .multiplyScalar(2200);
       arr.set([v.x, v.y, v.z], i * 3);
     }
-    const geo = new THREE.BufferGeometry();
+    const geo = track(new THREE.BufferGeometry());
     geo.setAttribute("position", new THREE.BufferAttribute(arr, 3));
     const stars = new THREE.Points(
       geo,
-      new THREE.PointsMaterial({
-        size: 1.6,
-        color: 0x6b7480,
-        transparent: true,
-        opacity: 0.7,
-        sizeAttenuation: false,
-        depthWrite: false,
-      }),
+      track(
+        new THREE.PointsMaterial({
+          size: 1.4,
+          color: 0x97a3b8,
+          transparent: true,
+          opacity: 0.55,
+          sizeAttenuation: false,
+          depthWrite: false,
+          fog: false,
+        }),
+      ),
     );
     stars.frustumCulled = false;
     scene.add(stars);
   }
 
-  // --- hover highlight + selection marker ---------------------------------------------------
-  const hlGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
-  const hlMat = new THREE.LineBasicMaterial({
-    color: 0xffffff,
-    transparent: true,
-    opacity: 0.95,
-  });
-  const hl = new THREE.LineSegments(hlGeo, hlMat);
+  // --- hover highlight + selection marker -------------------------------------------------------------------
+  const hlMat = track(
+    new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.95 }),
+  );
+  const hl = new THREE.LineSegments(track(new THREE.EdgesGeometry(boxGeo)), hlMat);
   hl.visible = false;
   scene.add(hl);
 
   const selMarker = new THREE.Sprite(
-    new THREE.SpriteMaterial({
-      map: glowTex,
-      color: 0xffffff,
-      transparent: true,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-    }),
+    track(
+      new THREE.SpriteMaterial({
+        map: track(glowTexture()),
+        color: 0xffffff,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    ),
   );
   selMarker.visible = false;
-  selMarker.scale.set(10, 10, 1);
+  selMarker.scale.set(11, 11, 1);
   scene.add(selMarker);
 
-  function placeBox(target: THREE.LineSegments, t: Tower, grow: number): void {
-    target.position.copy(t.pos);
-    target.scale.set(t.w + grow, t.h + grow, t.w + grow);
-  }
-
-  // --- picking --------------------------------------------------------------------------------
+  // --- picking -----------------------------------------------------------------------------------------------
   const raycaster = new THREE.Raycaster();
   const ndc = new THREE.Vector2();
 
   type Pick =
     | { kind: "tower"; tower: Tower }
+    | { kind: "block"; site: BlockSite }
     | { kind: "district"; district: CityDistrict }
     | { kind: "core" }
     | null;
+
+  const pickables: THREE.Object3D[] = [
+    baseMesh,
+    tierMesh,
+    coreBase,
+    coreSpire,
+    ...signDistrict.keys(),
+    ...blockOf.keys(),
+  ];
 
   function pick(clientX: number, clientY: number): Pick {
     const rect = canvas.getBoundingClientRect();
@@ -600,21 +857,22 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
       -((clientY - rect.top) / rect.height) * 2 + 1,
     );
     raycaster.setFromCamera(ndc, camera);
-    const hits = raycaster.intersectObjects(
-      [towerMesh, coreBase, coreSpire, ...signSprites],
-      false,
-    );
+    const hits = raycaster.intersectObjects(pickables, false);
     const h = hits[0];
     if (!h) return null;
-    if (h.object === towerMesh && h.instanceId !== undefined)
-      return { kind: "tower", tower: towers[h.instanceId] };
+    if ((h.object === baseMesh || h.object === tierMesh) && h.instanceId !== undefined) {
+      const idx = h.object === baseMesh ? h.instanceId : tierIdx[h.instanceId];
+      return { kind: "tower", tower: towers[idx] };
+    }
     if (h.object === coreBase || h.object === coreSpire) return { kind: "core" };
     const d = signDistrict.get(h.object);
     if (d) return { kind: "district", district: d };
+    const site = blockOf.get(h.object);
+    if (site) return { kind: "block", site };
     return null;
   }
 
-  // --- camera tween -----------------------------------------------------------------------------
+  // --- camera tween --------------------------------------------------------------------------------------------
   interface Tween {
     t0: number;
     dur: number;
@@ -637,10 +895,9 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
     controls.enabled = false;
   }
 
-  // intro flyover
-  flyTo(HOME_TARGET, HOME_POS.clone().sub(HOME_TARGET), 2000);
+  flyTo(HOME_TARGET, HOME_POS.clone().sub(HOME_TARGET), 2100); // intro
 
-  // --- input -------------------------------------------------------------------------------------
+  // --- input -------------------------------------------------------------------------------------------------------
   let downX = 0;
   let downY = 0;
   let downT = 0;
@@ -648,7 +905,8 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
   const onPointerMove = (e: PointerEvent): void => {
     const p = pick(e.clientX, e.clientY);
     if (p?.kind === "tower") {
-      placeBox(hl, p.tower, 1.2);
+      hl.position.copy(p.tower.pos);
+      hl.scale.set(p.tower.w + 1.2, p.tower.h + 1.2, p.tower.w + 1.2);
       hlMat.color.set(p.tower.info.color);
       hl.visible = true;
     } else {
@@ -671,6 +929,16 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
         x,
         y,
         read: readSet.has(p.tower.info.slug),
+      });
+    } else if (p.kind === "block") {
+      const lit = p.site.towers.filter((t) => readSet.has(t.info.slug)).length;
+      onHover({
+        kind: "block",
+        label: p.site.block.title,
+        sub: `${p.site.district.title} · ${lit}/${p.site.towers.length} LIT · CLICK TO FLY`,
+        color: p.site.district.color,
+        x,
+        y,
       });
     } else if (p.kind === "district") {
       const list = towersByDistrict.get(p.district.slug) ?? [];
@@ -719,6 +987,8 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
       return;
     }
     if (p.kind === "tower") selectTower(p.tower);
+    else if (p.kind === "block")
+      flyTo(p.site.center.clone(), new THREE.Vector3(30, 52, 56), 850);
     else if (p.kind === "district") focusDistrict(p.district.slug);
     else resetView();
   };
@@ -730,17 +1000,17 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
 
   function selectTower(t: Tower): void {
     selMarker.visible = true;
-    selMarker.position.set(t.pos.x, t.pos.y + t.h / 2 + 7, t.pos.z);
+    selMarker.position.set(t.pos.x, t.pos.y + t.h / 2 + 8, t.pos.z);
     selMarker.material.color.set(t.info.color);
     flyTo(
       new THREE.Vector3(t.pos.x, t.h * 0.5, t.pos.z),
-      new THREE.Vector3(34, 26 + t.h * 0.4, 34),
+      new THREE.Vector3(32, 24 + t.h * 0.4, 32),
       850,
     );
     onSelectTower({ ...t.info, read: readSet.has(t.info.slug) });
   }
 
-  // --- public ops -----------------------------------------------------------------------------------
+  // --- public ops ----------------------------------------------------------------------------------------------------
   function resetView(): void {
     onFocusDistrict(null);
     onSelectTower(null);
@@ -753,7 +1023,7 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
     if (!slug) return;
     const center = districtCenter.get(slug);
     if (!center) return;
-    flyTo(center, new THREE.Vector3(70, 120, 110), 950);
+    flyTo(center, new THREE.Vector3(45, 150, 95), 950);
   }
 
   let matchSlugs: string[] = [];
@@ -761,22 +1031,21 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
     const q = qRaw.trim().toLowerCase();
     if (!q) {
       matchSlugs = [];
-      repaintTowers();
+      paint();
       return 0;
     }
     const matches = new Set(
       towers.filter((t) => t.info.title.toLowerCase().includes(q)).map((t) => t.info.slug),
     );
     matchSlugs = towers.filter((t) => matches.has(t.info.slug)).map((t) => t.info.slug);
-    repaintTowers((t, c) => {
-      if (matches.has(t.info.slug)) c.set(0xffe93d).multiplyScalar(1.7);
-      else c.multiplyScalar(0.16);
+    paint((t, c) => {
+      if (matches.has(t.info.slug)) c.set(0xffe93d).multiplyScalar(2.4);
+      else c.multiplyScalar(0.14);
     });
     return matchSlugs.length;
   }
 
   function nextTarget(): CityTowerInfo | null {
-    // least-powered district first, then taxonomy order
     const ranked = [...districts].sort((a, b) => {
       const la = towersByDistrict.get(a.slug) ?? [];
       const lb = towersByDistrict.get(b.slug) ?? [];
@@ -785,9 +1054,7 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
       return ra - rb;
     });
     for (const d of ranked) {
-      const t = (towersByDistrict.get(d.slug) ?? []).find(
-        (x) => !readSet.has(x.info.slug),
-      );
+      const t = (towersByDistrict.get(d.slug) ?? []).find((x) => !readSet.has(x.info.slug));
       if (t) {
         selectTower(t);
         return { ...t.info, read: false };
@@ -798,11 +1065,8 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
 
   function setReadSet(read: Set<string>): void {
     readSet = new Set(read);
-    towers.forEach((t, i) => {
-      const c = towerColor(t);
-      baseColors.set([c.r, c.g, c.b], i * 3);
-    });
-    if (matchSlugs.length === 0) repaintTowers();
+    rebase();
+    if (matchSlugs.length === 0) paint();
     syncBeacons();
   }
 
@@ -816,13 +1080,16 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
     camera.position.copy(controls.target).addScaledVector(v.normalize(), len);
   }
 
-  // --- resize -------------------------------------------------------------------------------------------
+  // --- resize ----------------------------------------------------------------------------------------------------------
   const stage = canvas.parentElement!;
   function applySize(): void {
     const w = Math.max(1, stage.clientWidth);
     const h = Math.max(1, stage.clientHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    const dpr = Math.min(window.devicePixelRatio, 2);
+    renderer.setPixelRatio(dpr);
     renderer.setSize(w, h, false);
+    composer.setPixelRatio(dpr);
+    composer.setSize(w, h);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
   }
@@ -830,9 +1097,10 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
   const ro = new ResizeObserver(applySize);
   ro.observe(stage);
 
-  // --- main loop -------------------------------------------------------------------------------------------
+  // --- main loop ----------------------------------------------------------------------------------------------------------
   let raf = 0;
   let prev = performance.now();
+  const camV = new THREE.Vector3();
 
   function frame(now: number): void {
     raf = requestAnimationFrame(frame);
@@ -852,20 +1120,34 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
 
     updateCars(dt);
 
-    // core spire breathes; beams shimmer; selection marker bobs
-    const pulse = 1 + 0.1 * Math.sin(now / 420);
-    (coreSpire.material as THREE.MeshBasicMaterial).color.setScalar(0).set(0xf7ff00);
+    // block signs fade in as you approach their district
+    camV.copy(camera.position);
+    for (const site of blockSites) {
+      const d = camV.distanceTo(site.center);
+      const o = THREE.MathUtils.clamp(1 - (d - 150) / 130, 0, 1);
+      const mat = site.label.material;
+      if (o <= 0.02) {
+        if (site.label.visible) site.label.visible = false;
+      } else {
+        site.label.visible = true;
+        mat.opacity = o * 0.95;
+      }
+    }
+
+    // pulses
+    const pulse = 1 + 0.09 * Math.sin(now / 430);
     coreSpire.scale.set(pulse, 1, pulse);
     coreBeam.rotation.y += dt * 0.4;
     for (const beam of beacons.values()) beam.rotation.y += dt * 0.35;
+    aviMat.opacity = 0.55 + 0.45 * Math.sin(now / 520);
     if (selMarker.visible) selMarker.position.y += Math.sin(now / 240) * 0.05;
 
     controls.update();
-    renderer.render(scene, camera);
+    composer.render();
   }
   raf = requestAnimationFrame(frame);
 
-  // --- teardown ----------------------------------------------------------------------------------------------
+  // --- teardown -----------------------------------------------------------------------------------------------------------
   function dispose(): void {
     cancelAnimationFrame(raf);
     ro.disconnect();
@@ -875,16 +1157,12 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
     canvas.removeEventListener("pointerleave", onPointerLeave);
     canvas.removeEventListener("pointerdown", onPointerDown);
     canvas.removeEventListener("pointerup", onPointerUp);
-    scene.traverse((o) => {
-      const obj = o as THREE.Mesh;
-      if (obj.geometry) obj.geometry.dispose();
-      const m = (obj as { material?: THREE.Material | THREE.Material[] }).material;
-      if (Array.isArray(m)) m.forEach((x) => x.dispose());
-      else m?.dispose();
-    });
-    for (const t of signTextures) t.dispose();
-    winTex.dispose();
-    glowTex.dispose();
+    for (const beam of beacons.values()) (beam.material as THREE.Material).dispose();
+    for (const x of disposables) x.dispose();
+    baseMesh.dispose();
+    tierMesh.dispose();
+    mastMesh.dispose();
+    composer.dispose();
     renderer.dispose();
   }
 
