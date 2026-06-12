@@ -270,6 +270,8 @@ const REF_FIELDS = [
   "oneLiner",
 ] as const;
 
+const imageBySlug = new Map<string, string>();
+
 for (const [slug, loc] of bySlug) {
   const file = fileBySlug.get(slug);
   if (!file) continue;
@@ -280,6 +282,12 @@ for (const [slug, loc] of bySlug) {
     err(slug, `invalid JSON: ${(e as Error).message}`);
     continue;
   }
+
+  // first image block = the article's listing thumbnail (article-images.json)
+  const heroImg = (article.sections ?? [])
+    .flatMap((s) => s.blocks ?? [])
+    .find((b) => b.type === "image") as { url?: string } | undefined;
+  if (heroImg?.url) imageBySlug.set(slug, heroImg.url);
 
   // 3. ref equality with taxonomy (listing pages must agree with the page)
   if (article.slug !== slug) err(slug, `slug field mismatch: ${article.slug}`);
@@ -368,6 +376,25 @@ const currentCount = JSON.parse(readFileSync(countPath, "utf8")) as {
 if (currentCount.articles !== total) {
   writeFileSync(countPath, JSON.stringify({ articles: total }, null, 2) + "\n", "utf8");
   console.log(`[check-learn] count.json updated → ${total}`);
+}
+
+// article-images.json — slug → listing thumbnail (each article's first image
+// block), consumed by the subcategory syllabus pages. Regenerated on drift,
+// same contract as count.json.
+const imagesPath = join(LEARN_DIR, "article-images.json");
+const nextImages =
+  JSON.stringify(Object.fromEntries(imageBySlug), null, 2) + "\n";
+let currentImages = "";
+try {
+  currentImages = readFileSync(imagesPath, "utf8");
+} catch {
+  /* first run — file doesn't exist yet */
+}
+if (currentImages !== nextImages) {
+  writeFileSync(imagesPath, nextImages, "utf8");
+  console.log(
+    `[check-learn] article-images.json updated → ${imageBySlug.size} entries`,
+  );
 }
 
 // -----------------------------------------------------------------------

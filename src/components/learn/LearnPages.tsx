@@ -23,8 +23,14 @@ import {
   learnSubcategoryPath,
 } from "../../data/learn/schema";
 import { learnTaxonomy } from "../../data/learn/nav";
+import articleImages from "../../data/learn/article-images.json";
 import { Breadcrumbs, DifficultyBadge } from "./ArticleBody";
 import { categoryVisual } from "./categoryVisuals";
+
+/** Listing thumbnail for an article (its first image block), if any. */
+function articleImage(slug: string): string | undefined {
+  return (articleImages as Record<string, string>)[slug];
+}
 
 function pad(n: number): string {
   return String(n + 1).padStart(2, "0");
@@ -106,6 +112,13 @@ export function LearnHubPage() {
               key={cat.slug}
               style={accentVar(accent)}
             >
+              <span
+                className="lrn-cat-bg"
+                aria-hidden="true"
+                style={{
+                  backgroundImage: `url(/learn-media/cat-${cat.slug}.jpg)`,
+                }}
+              />
               <span className="lrn-cat-rail" aria-hidden="true" />
               <span className="lrn-cat-idx" aria-hidden="true">
                 {pad(i)}
@@ -235,8 +248,10 @@ export function LearnCategoryPage({ category }: { category: LearnCategory }) {
 // Subcategory — /learn/<cat>/<sub>
 // ---------------------------------------------------------------------
 
-/** The single foundational article shown as a prominent feature card. */
-function FeatureArticle({
+const DIFF_ORDER = ["beginner", "intermediate", "advanced"] as const;
+
+/** The foundational article as a split lead card: text + its own figure. */
+function LeadArticle({
   category,
   subcategory,
   article,
@@ -245,21 +260,67 @@ function FeatureArticle({
   subcategory: LearnSubcategory;
   article: LearnArticleRef;
 }) {
+  const img = articleImage(article.slug);
   return (
     <a
-      className="lrn-feature"
+      className="lrn-lead"
       href={learnArticlePath(category.slug, subcategory.slug, article.slug)}
       data-internal="true"
     >
-      <span className="lrn-feature-rail" aria-hidden="true" />
-      <span className="lrn-feature-eyebrow">START HERE</span>
-      <span className="lrn-feature-title">{article.title}</span>
-      <span className="lrn-feature-line">{article.oneLiner}</span>
-      <span className="lrn-feature-foot">
-        <DifficultyBadge level={article.difficulty} />
-        <span className="lrn-feature-go" aria-hidden="true">
-          READ ARTICLE →
+      <span className="lrn-lead-body">
+        <span className="lrn-lead-eyebrow">01 · START HERE</span>
+        <span className="lrn-lead-title">{article.title}</span>
+        <span className="lrn-lead-line">{article.oneLiner}</span>
+        <span className="lrn-lead-foot">
+          <DifficultyBadge level={article.difficulty} />
+          <span className="lrn-lead-go" aria-hidden="true">
+            READ ARTICLE →
+          </span>
         </span>
+      </span>
+      <span
+        className="lrn-lead-media"
+        aria-hidden="true"
+        style={img ? { backgroundImage: `url(${img})` } : undefined}
+      />
+    </a>
+  );
+}
+
+/** One article as a numbered syllabus row with its figure as thumbnail. */
+function SyllabusRow({
+  category,
+  subcategory,
+  article,
+  number,
+}: {
+  category: LearnCategory;
+  subcategory: LearnSubcategory;
+  article: LearnArticleRef;
+  number: string;
+}) {
+  const img = articleImage(article.slug);
+  return (
+    <a
+      className="lrn-srow"
+      href={learnArticlePath(category.slug, subcategory.slug, article.slug)}
+      data-internal="true"
+    >
+      <span className="lrn-srow-num" aria-hidden="true">
+        {number}
+      </span>
+      <span
+        className="lrn-srow-thumb"
+        aria-hidden="true"
+        style={img ? { backgroundImage: `url(${img})` } : undefined}
+      />
+      <span className="lrn-srow-main">
+        <span className="lrn-srow-title">{article.title}</span>
+        <span className="lrn-srow-line">{article.oneLiner}</span>
+      </span>
+      <DifficultyBadge level={article.difficulty} />
+      <span className="lrn-srow-arr" aria-hidden="true">
+        →
       </span>
     </a>
   );
@@ -277,49 +338,87 @@ export function LearnSubcategoryPage({
   const idx = subs.findIndex((s) => s.slug === subcategory.slug);
   const prev = subs[idx - 1] ?? null;
   const next = subs[idx + 1] ?? null;
+  const arts = subcategory.articles;
+
+  // difficulty span across the track, e.g. "beginner → advanced"
+  const present = DIFF_ORDER.filter((d) =>
+    arts.some((a) => a.difficulty === d),
+  );
+  const diffSpan =
+    present.length > 1
+      ? `${present[0]} → ${present[present.length - 1]}`
+      : (present[0] ?? "");
 
   return (
     <div className="lrn-page" style={accentVar(accent)}>
-      <header className="lrn-cat-hero">
-        <Breadcrumbs
-          trail={[
-            { label: "LEARN", href: learnHubPath },
-            { label: category.title, href: learnCategoryPath(category.slug) },
-            { label: subcategory.title },
-          ]}
+      <header className="lrn-sub-hero">
+        <span
+          className="lrn-sub-hero-bg"
+          aria-hidden="true"
+          style={{
+            backgroundImage: `url(/learn-media/cat-${category.slug}.jpg)`,
+          }}
         />
-        <div className="lrn-cat-hero-row">
-          <span className="lrn-cat-hero-icon" aria-hidden="true">
-            <Icon />
-          </span>
-          <div className="lrn-cat-hero-text">
-            <h1 className="lrn-cat-hero-title">{subcategory.title}</h1>
-            <p className="lrn-dek">{subcategory.tagline}</p>
+        <span className="lrn-sub-hero-idx" aria-hidden="true">
+          {pad(idx)}
+        </span>
+        <div className="lrn-sub-hero-inner">
+          <Breadcrumbs
+            trail={[
+              { label: "LEARN", href: learnHubPath },
+              { label: category.title, href: learnCategoryPath(category.slug) },
+              { label: subcategory.title },
+            ]}
+          />
+          <div className="lrn-sub-hero-row">
+            <span className="lrn-sub-hero-icon" aria-hidden="true">
+              <Icon />
+            </span>
+            <div className="lrn-sub-hero-text">
+              <span className="lrn-sub-hero-eyebrow">
+                {category.title} · TRACK {pad(idx)}/{pad(subs.length - 1)}
+              </span>
+              <h1 className="lrn-sub-hero-title">{subcategory.title}</h1>
+              <p className="lrn-sub-hero-dek">{subcategory.tagline}</p>
+            </div>
+          </div>
+          <div className="lrn-sub-hero-meta">
+            <span className="lrn-sub-hero-stat">{arts.length} ARTICLES</span>
+            {diffSpan && (
+              <span className="lrn-sub-hero-stat">{diffSpan}</span>
+            )}
           </div>
         </div>
       </header>
 
-      <div className="lrn-feature-wrap">
-        {subcategory.articles[0] && (
-          <FeatureArticle
+      <section className="lrn-syll">
+        <div className="lrn-syll-head">
+          <span className="lrn-syll-eyebrow">// THE TRACK</span>
+          <span className="lrn-syll-rule" aria-hidden="true" />
+        </div>
+
+        {arts[0] && (
+          <LeadArticle
             category={category}
             subcategory={subcategory}
-            article={subcategory.articles[0]}
+            article={arts[0]}
           />
         )}
-        {subcategory.articles.length > 1 && (
-          <div className="lrn-sub-list">
-            {subcategory.articles.slice(1).map((a) => (
-              <ArticleListItem
+
+        {arts.length > 1 && (
+          <div className="lrn-syll-list">
+            {arts.slice(1).map((a, i) => (
+              <SyllabusRow
                 key={a.slug}
                 category={category}
                 subcategory={subcategory}
                 article={a}
+                number={pad(i + 1)}
               />
             ))}
           </div>
         )}
-      </div>
+      </section>
 
       <nav className="lrn-pn" aria-label="Previous and next section">
         {prev ? (
