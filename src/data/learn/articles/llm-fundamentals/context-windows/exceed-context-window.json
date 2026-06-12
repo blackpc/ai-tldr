@@ -1,0 +1,310 @@
+{
+  "slug": "exceed-context-window",
+  "title": "What Happens When You Exceed the Context Window?",
+  "seoTitle": "What Happens When You Exceed the Context Window?",
+  "metaDescription": "Truncation, sliding windows, errors, or silent forgetting? What actually happens when a conversation outgrows the model's context limit.",
+  "keywords": [
+    "what happens when context window is full",
+    "exceed context window error",
+    "llm truncation explained",
+    "why does chatgpt forget earlier conversation",
+    "context window overflow handling"
+  ],
+  "difficulty": "beginner",
+  "oneLiner": "Know exactly what your app does when a conversation outgrows the window — and how to handle it before users notice.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every language model has a **context window** — the total amount of text it can hold in its head at once, measured in [tokens](/learn/llm-fundamentals/tokens-and-tokenization/what-is-a-token). That window has to fit *everything*: your system prompt, every earlier message in the conversation, any documents you pasted, **and** the reply the model is about to write. When the sum of all that crosses the limit, you've exceeded the context window."
+        },
+        {
+          "type": "p",
+          "md": "Picture a whiteboard with a fixed amount of space. You can keep writing notes on it for a while, but the moment it's full you have two choices: stop writing, or erase the oldest notes to make room. A model facing a full context window does roughly one of those two things — and *which* one depends entirely on the tool or API you're using. There is no single universal behavior, which is exactly why this trips people up."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Exceeding the context window is **not** the same as running out of training knowledge. The window is short-term working memory for *this* conversation; it has nothing to do with what the model learned during training. For that distinction, see [what a context window is](/learn/llm-fundamentals/context-windows/what-is-a-context-window)."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "If you've ever had a long chat with an assistant and watched it suddenly *forget* an instruction you gave it ten minutes ago, you've already met this problem. The model didn't get lazy — the earliest part of the conversation got pushed out of the window to make room for newer text. This is the single most common cause of \"why does it keep forgetting what I told it?\""
+        },
+        {
+          "type": "p",
+          "md": "For anyone building on top of an API, the stakes are higher than a confused chat. Depending on the provider, overflowing the window can throw a hard `400` error that crashes your request, *silently* drop the beginning of your prompt (including the instructions you most cared about), or cut off the reply halfway through a sentence. If you don't know which of these your stack does, you'll find out from an angry user instead of from your own logs."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Chat users** hit it as creeping amnesia in long sessions.",
+            "**App developers** hit it as runtime errors or truncated outputs that pass tests but fail in production with real, long inputs.",
+            "**RAG and agent builders** hit it constantly, because [retrieval](/learn/rag/rag-fundamentals/what-is-rag) and tool results pump large chunks of text into the window on every turn."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Bigger windows don't make this go away. Even with a 1M-token window, accuracy and recall **degrade** as you fill it — a phenomenon the field calls *context rot*. Fitting more text in is not the same as the model using it well."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The model itself has no clock or counter ticking down. The limit is a hard architectural ceiling: the model was trained to process sequences only up to a certain length. So the *handling* of an overflow happens in the layer **around** the model — the API server or the chat product — and that layer picks one of four strategies."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "Four ways an overflow gets handled",
+            "root": { "label": "Window full", "sub": "input + reply > limit" },
+            "children": [
+              { "label": "Hard error", "sub": "request rejected (400)", "accent": true },
+              { "label": "Truncate input", "sub": "drop oldest text" },
+              { "label": "Sliding window", "sub": "FIFO eviction" },
+              { "label": "Stop generating", "sub": "reply cut off" }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "1. Hard error (most raw APIs)"
+        },
+        {
+          "type": "p",
+          "md": "The strictest behavior. If your input alone — plus the room you reserved for the reply — exceeds the limit, the API refuses the whole request before generating anything. OpenAI's API does this: you get an HTTP `400` with code `context_length_exceeded` and a message that literally tells you how many tokens you sent versus the cap. Nothing is silently dropped; your code has to catch the error and shrink the request."
+        },
+        {
+          "type": "h3",
+          "text": "2. Truncate the input (some wrappers and chat UIs)"
+        },
+        {
+          "type": "p",
+          "md": "Instead of erroring, the layer quietly chops text off the *start* of the conversation until it fits, then sends it. This is convenient — the request always succeeds — but dangerous, because the dropped text is usually your system prompt or earliest instructions, and the model never tells you they're gone. The reply looks confident and complete while missing half the context."
+        },
+        {
+          "type": "h3",
+          "text": "3. Sliding window / FIFO (most chat products)"
+        },
+        {
+          "type": "p",
+          "md": "A continuous version of truncation. As new turns arrive, the oldest turns are evicted first-in-first-out, so the window is always *full of recent text*. This is why a long chat \"forgets\" the beginning: those tokens were rolled off the back. Anthropic's docs describe chat interfaces as optionally using exactly this rolling FIFO behavior."
+        },
+        {
+          "type": "h3",
+          "text": "4. Stop generating mid-reply (modern Claude behavior)"
+        },
+        {
+          "type": "p",
+          "md": "Here the request is accepted even if `input + max_tokens` could overrun the window. The model writes a normal reply, and if generation actually reaches the ceiling it stops and reports why. On Claude 4.5 models and newer, this surfaces as `stop_reason: \"model_context_window_exceeded\"` instead of a crash — a *successful* HTTP 200 response that happens to be cut short. Your code checks the stop reason rather than a `try/except`."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The takeaway: \"what happens\" is a property of your **plumbing**, not the model. Read your provider's docs for the exact behavior, then test it deliberately by sending an oversized request."
+        }
+      ]
+    },
+    {
+      "id": "errors-vs-stop-reasons",
+      "title": "Errors vs. stop reasons: a critical distinction",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Two very different things can happen, and conflating them is the number-one source of brittle code. An **error** means the request *failed*: you get a 4xx/5xx HTTP status and no useful content. A **stop reason** means the request *succeeded* but generation ended early — you get a 200, valid (if partial) content, and a field explaining why it stopped."
+        },
+        {
+          "type": "table",
+          "headers": ["Situation", "What you get", "How to detect it"],
+          "rows": [
+            ["Input too big up front (OpenAI-style)", "HTTP 400, no content", "Catch the API exception; read error `code`"],
+            ["Reply hit the window ceiling (Claude 4.5+)", "HTTP 200, partial text", "Check `stop_reason == \"model_context_window_exceeded\"`"],
+            ["Reply hit your own `max_tokens` cap", "HTTP 200, partial text", "Check `stop_reason == \"max_tokens\"`"],
+            ["Input silently truncated by a wrapper", "HTTP 200, full-looking text", "Hard to detect — count tokens yourself"]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "That last row is the scary one. A silent truncation produces a response that looks totally fine, so your tests pass and your monitoring stays green while users get answers that ignored their instructions. The defense is to **count tokens before you send** rather than trusting the layer to behave."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Error vs. early-stop, side by side",
+            "columns": [
+              {
+                "title": "Error (failed)",
+                "items": [
+                  "HTTP 4xx / 5xx",
+                  "No usable content",
+                  "Handle with try / except",
+                  "e.g. OpenAI context_length_exceeded"
+                ]
+              },
+              {
+                "title": "Stop reason (succeeded)",
+                "accent": true,
+                "items": [
+                  "HTTP 200",
+                  "Valid but partial content",
+                  "Handle by reading stop_reason",
+                  "e.g. model_context_window_exceeded"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "handle-it-in-code",
+      "title": "Handling it in code",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The robust pattern has two layers of defense. **First**, estimate your token count *before* sending so you never blindly overrun the window. **Second**, still check the response, because estimates and reserved output room are never perfectly exact. Anthropic exposes a free token-counting endpoint for the pre-flight check, and the SDK returns a `stop_reason` for the post-flight one."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "guard.py",
+          "code": "from anthropic import Anthropic\n\nclient = Anthropic()\nMODEL = \"claude-opus-4-8\"          # 1M-token window as of mid-2026\nWINDOW = 1_000_000\nMAX_OUTPUT = 8_000                 # room we reserve for the reply\n\ndef ask(messages):\n    # 1) Pre-flight: count input tokens (this call is free, no compute)\n    counted = client.messages.count_tokens(model=MODEL, messages=messages)\n    if counted.input_tokens + MAX_OUTPUT > WINDOW:\n        messages = trim_oldest(messages)   # your shrink strategy\n\n    # 2) Send, then post-flight: check WHY it stopped\n    resp = client.messages.create(\n        model=MODEL, max_tokens=MAX_OUTPUT, messages=messages,\n    )\n    if resp.stop_reason == \"model_context_window_exceeded\":\n        # 200 OK, but the reply was cut short by the window\n        warn_user(\"Reply truncated — conversation is near its limit.\")\n    return resp"
+        },
+        {
+          "type": "p",
+          "md": "`trim_oldest` is where you decide your overflow policy instead of letting the plumbing decide for you. The two workhorse strategies are a **sliding window** (keep the system prompt plus the last N turns, drop the rest) and **summarization** (compress old turns into a short recap and prepend it). Most production chat apps use a hybrid: keep the last ~10-15 turns verbatim, and a running summary for everything older."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "Hybrid overflow loop",
+            "steps": [
+              { "label": "Count tokens" },
+              { "label": "Over budget?", "sub": "input + reply room" },
+              { "label": "Summarize old turns", "accent": true },
+              { "label": "Keep recent verbatim" },
+              { "label": "Send request" }
+            ]
+          }
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Don't summarize on *every* turn — it's wasteful and you end up summarizing summaries, which drifts. Trigger it only when you cross a threshold (say, 80% of the window), and keep the most recent turns raw so fine detail survives."
+        }
+      ]
+    },
+    {
+      "id": "current-landscape",
+      "title": "Current landscape (mid-2026)",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Windows have grown enormously, which changes *when* you hit the wall but not *whether* you do. As of mid-2026, the headline numbers among the major families look roughly like this — though specifics churn, so confirm against the provider's own model page before you rely on a number."
+        },
+        {
+          "type": "table",
+          "headers": ["Family (mid-2026)", "Typical context window", "Overflow behavior"],
+          "rows": [
+            ["Claude Opus 4.8 / Sonnet 4.6", "1M tokens", "`model_context_window_exceeded` stop reason (4.5+)"],
+            ["Gemini (2.5 / 3.x Pro)", "1M+ tokens", "Hard request error when exceeded"],
+            ["GPT-5 family", "Large (hundreds of K)", "`context_length_exceeded` 400 error"],
+            ["Most chat UIs", "Same as the API model", "Sliding FIFO eviction of old turns"]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Two newer wrinkles are worth knowing. First, providers now ship **server-side compaction** — the API summarizes earlier turns *for you* automatically, so long sessions can run past the raw limit with little integration work. Anthropic offers this in beta across its current models. Second, some Claude models added **context awareness**: the model receives a running token budget (for example, a `<budget:token_budget>1000000</budget:token_budget>` tag) so it can pace a long task instead of blindly running out of room. These features reduce, but don't eliminate, the need to handle overflow yourself."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "A subtle gotcha: the *usable* window is always a bit smaller than the advertised number. Chat products reserve hundreds of tokens for hidden system overhead, and on the API your own `max_tokens` for the reply eats into the same budget. Plan for the effective window, not the marketing one."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Why is the limit hard at all? Because position is baked into the model. A transformer's [attention mechanism](/learn/llm-fundamentals/transformers-and-attention/how-attention-works) uses **positional encodings** to know where each token sits in the sequence, and the model was only trained on positions up to its window size. Feed it a position it never saw during training and behavior degrades sharply — which is why providers enforce the ceiling rather than letting you quietly overrun it."
+        },
+        {
+          "type": "p",
+          "md": "This also explains why simply truncating the *middle* of a long input is risky. Models attend most strongly to the beginning and the end of their context and weakest to the middle — the well-documented [\"lost in the middle\"](/learn/llm-fundamentals/context-windows/lost-in-the-middle) effect. So even a request that technically *fits* can behave as if it overflowed, with crucial buried details effectively ignored. Overflow handling and retrieval quality are two sides of the same coin."
+        },
+        {
+          "type": "h3",
+          "text": "Smarter eviction than plain FIFO"
+        },
+        {
+          "type": "p",
+          "md": "Plain first-in-first-out eviction is crude — it can drop a pinned instruction just because it's old. Better systems treat context as a managed resource: **pin** the system prompt and any must-keep facts so they're never evicted, **score** the rest by relevance to the current turn, and evict low-value chunks first. This is the heart of [context engineering](/learn/prompt-engineering/context-engineering/what-is-context-engineering) and overlaps heavily with how [agents manage long-running memory](/learn/ai-agents/planning-and-memory/what-is-agent-planning) across many tool calls."
+        },
+        {
+          "type": "p",
+          "md": "For genuinely unbounded history — say, an assistant that should recall something you said last week — no window is big enough. The standard escape hatch is to push old context *out* of the window into an external store (a [vector database](/learn/embeddings-vector-databases/vector-database-guides/what-is-a-vector-database)) and retrieve only the relevant slivers back in per turn. That converts an impossible \"remember everything\" problem into a tractable \"retrieve the right thing\" problem — and it's why overflow handling, summarization, and RAG keep showing up together in production stacks."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What actually happens when a context window is full?",
+      "a": "One of four things, depending on your tool. A raw API may reject the request with a hard error (OpenAI's `context_length_exceeded` 400). A wrapper or chat UI may silently truncate the oldest text to make it fit. A chat product typically uses a sliding window that evicts the oldest turns first. Or a modern model (Claude 4.5+) accepts the request and stops mid-reply with `stop_reason: \"model_context_window_exceeded\"`. It is a property of your plumbing, not the model itself."
+    },
+    {
+      "q": "Why does ChatGPT forget what I said earlier in a long conversation?",
+      "a": "Because chat products use a sliding window. As you add new messages, the oldest ones are pushed out first-in-first-out to keep the window full of recent text. Once your earliest instructions roll off the back, the model literally cannot see them anymore, so it behaves as if it forgot. It is not a memory bug — it is the window doing exactly what it is designed to do."
+    },
+    {
+      "q": "Will I get an error or just a truncated response if I exceed the limit?",
+      "a": "It depends on the provider. OpenAI throws a hard 400 error and generates nothing, so you must catch the exception. Claude 4.5 and newer models instead accept the request and return a normal HTTP 200 with a partial reply and `stop_reason: \"model_context_window_exceeded\"`, so you check the stop reason rather than catching an error. Some wrappers do neither and silently drop input — the most dangerous case, because the response looks complete."
+    },
+    {
+      "q": "How do I prevent context window overflow before it happens?",
+      "a": "Count your tokens before sending. Anthropic offers a free token-counting endpoint, and OpenAI-compatible stacks use libraries like tiktoken. If input plus your reserved output room exceeds the window, shrink the request first — keep the system prompt and the last N turns, summarize older turns, or retrieve only relevant chunks instead of dumping everything in. Then still check the response's stop reason as a backstop."
+    },
+    {
+      "q": "Does a bigger context window fix the forgetting problem?",
+      "a": "It pushes the wall further out but does not remove it, and it introduces a new one. As you fill even a million-token window, accuracy and recall degrade — an effect called context rot — and models pay less attention to the middle of long inputs. A long conversation will still eventually overflow, and a stuffed-but-not-overflowing window can already behave as if details are missing. Curating what goes in matters more than raw size."
+    }
+  ],
+  "related": [
+    "what-is-a-context-window",
+    "lost-in-the-middle",
+    "million-token-context-windows",
+    "what-is-a-token",
+    "tokens-vs-words"
+  ],
+  "furtherReading": [
+    {
+      "title": "Anthropic — Context windows (official docs)",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/context-windows"
+    },
+    {
+      "title": "Anthropic — Stop reasons and fallback",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons"
+    }
+  ]
+}

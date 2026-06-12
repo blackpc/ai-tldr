@@ -1,0 +1,313 @@
+{
+  "slug": "million-token-context-windows",
+  "title": "How Do Million-Token Context Windows Actually Work?",
+  "seoTitle": "How Million-Token Context Windows Work",
+  "metaDescription": "Attention scales quadratically, so how do million-token contexts exist? Sparse attention, RoPE scaling, and the tricks that make it work.",
+  "keywords": [
+    "how do million token context windows work",
+    "long context llm techniques",
+    "sparse attention explained",
+    "context window scaling rope",
+    "attention quadratic scaling problem"
+  ],
+  "difficulty": "advanced",
+  "oneLiner": "Peek under the hood of million-token models and the engineering tricks that beat attention's quadratic cost.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A **context window** is everything a model can \"see\" at once: your prompt, the documents you paste in, the whole back-and-forth of a chat. As of mid-2026, the headline number on a lot of models is **one million tokens** — roughly 750,000 words, or about eight novels stacked end to end. You can drop an entire codebase or a year of email into a single request and ask one question about it."
+        },
+        {
+          "type": "p",
+          "md": "Here's the catch that makes this hard. The core operation inside a transformer — **attention** — compares every token to every other token. Double the input and you don't double the work; you *quadruple* it. That's the quadratic scaling problem, and on paper it should make a million-token window absurdly expensive. So how do these models exist?"
+        },
+        {
+          "type": "p",
+          "md": "Think of attention like a meeting where everyone insists on shaking hands with everyone else. Ten people is 45 handshakes. A hundred people is nearly 5,000. A million people would be half a *trillion* handshakes — clearly nobody's doing that. Million-token models work because they quietly stop requiring all-to-all handshakes. They let each token shake hands with a smart subset: its neighbors, a few summary delegates, and a handful of important strangers it's allowed to seek out. The trick is choosing *which* handshakes to skip without the model noticing the difference."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This is an advanced page. If terms like *attention*, *token*, or *context window* are new, start with [How attention works](/learn/llm-fundamentals/transformers-and-attention/how-attention-works) and [What is a context window?](/learn/llm-fundamentals/context-windows/what-is-a-context-window) first — then come back here for the engineering."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "For years the context window was the hard ceiling on what you could ask. Too-big inputs got truncated, and the model would silently forget the start of your document (see [what happens when you exceed the context window](/learn/llm-fundamentals/context-windows/exceed-context-window)). Long context blows that ceiling up. You can now:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "Paste an entire repository and ask \"where is this bug?\" without manually picking files.",
+            "Feed a 500-page contract and ask cross-references that span chapter 2 and chapter 40.",
+            "Run an agent for hundreds of tool-call turns without it losing the thread of the task.",
+            "Skip building a retrieval pipeline for small-to-medium corpora — sometimes you can just stuff it all in."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "But the window is not free, and it is not magic. Two costs follow you everywhere. **Money and latency**: processing a full million-token input is the most expensive single request you can send, and time-to-first-token climbs with input size. **Accuracy**: a big window is not the same as perfect recall across that window. Models reliably lose information buried in the middle — the [lost-in-the-middle problem](/learn/llm-fundamentals/context-windows/lost-in-the-middle) — even when the advertised window technically holds it."
+        },
+        {
+          "type": "p",
+          "md": "Understanding the tricks below tells you *when* a giant window actually helps and when you should reach for [retrieval-augmented generation](/learn/rag/rag-fundamentals/what-is-rag) instead. That decision is worth real money: as of mid-2026, a single 1M-token request can cost wildly different amounts depending on the model, and getting it wrong at scale adds up fast."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Start with the problem, precisely. In standard (\"full\" or \"dense\") attention, building the score matrix for a sequence of length *n* costs on the order of **n² compute and n² memory** — every token attends to every other token. At n = 1,000 that's a million comparisons; at n = 1,000,000 it's a *trillion*. Worse, during generation the model also stores a **KV cache** (the keys and values for every past token) so it doesn't recompute them each step. That cache grows *linearly* with context, and at a million tokens it can swallow over 100 GB of GPU memory for a single sequence — far past what one commodity GPU holds."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Why naive long context breaks",
+            "columns": [
+              { "title": "Compute (attention scores)", "accent": true, "items": ["Scales with n² — quadratic", "1K tokens → ~1M comparisons", "1M tokens → ~1 trillion", "Most of the latency lives here"] },
+              { "title": "Memory (KV cache)", "items": ["Scales with n — linear", "Stores keys + values per token", "1M tokens → 100+ GB on big models", "Past one GPU's capacity"] }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "No single trick solves both. A million-token model is a *stack* of techniques, each chipping at one cost. They fall into four buckets."
+        },
+        {
+          "type": "h3",
+          "text": "1. Teach the model where tokens are: position scaling"
+        },
+        {
+          "type": "p",
+          "md": "Transformers don't inherently know token order; they're told via **positional encodings**. Most modern models use **RoPE** (rotary position embeddings), which rotates each token's vector by an angle proportional to its position. The problem: a model trained on 8K positions has literally never seen the rotation angles for position 900,000, so it flails when you feed it more. **Context extension** methods fix this by rescaling those angles so old positions stretch to cover new lengths."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Position Interpolation (PI)** — linearly squeeze new positions back into the trained range. Simple, but uniformly blurs fine-grained position info.",
+            "**NTK-aware / NTK-by-parts** — scale RoPE's base frequency *non-uniformly*, preserving high-frequency (local, neighbor-level) detail while stretching the low-frequency (global) signal.",
+            "**YaRN** — combines NTK-by-parts with a softmax temperature tweak; reaches strong long-context quality after fine-tuning on a tiny fraction (~0.1%) of the original training data. As of mid-2026 it and its successors (e.g. LongRoPE-style mixed-window training) are the workhorse recipes for stretching open-weight models."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "2. Skip handshakes: sparse attention"
+        },
+        {
+          "type": "p",
+          "md": "This is the big one for the n² cost. Instead of every token attending to all others, **sparse attention** restricts each token to a chosen subset. A leading 2026-era design, **Native Sparse Attention (NSA)**, splits attention into three parallel branches and merges their outputs:"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "Native Sparse Attention: three branches per query",
+            "root": { "label": "Query token", "sub": "what should I attend to?" },
+            "children": [
+              { "label": "Compression", "sub": "coarse summaries of far-away blocks" },
+              { "label": "Selection", "sub": "a few important full-detail blocks" },
+              { "label": "Sliding window", "sub": "the nearby local tokens" }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The **compression** branch turns distant chunks into a handful of summary tokens (cheap global awareness). The **selection** branch dynamically picks the few blocks that actually matter for this query and reads them at full detail. The **sliding window** branch always keeps the immediate neighbors. Together they give global reach at a fraction of dense cost — and crucially NSA is *natively trainable*, so the model learns the sparsity pattern instead of having it bolted on after training. It maintains or beats full attention on benchmarks while delivering large speedups on long sequences."
+        },
+        {
+          "type": "h3",
+          "text": "3. Same math, less memory: exact-attention kernels"
+        },
+        {
+          "type": "p",
+          "md": "Not every trick changes the answer. **FlashAttention** computes the *exact* same attention output as the naive version but never builds the giant n² score matrix in slow memory — it streams the computation in tiles through fast on-chip memory. It's a pure systems win: identical results, dramatically less memory traffic and latency. (Full story in [what is FlashAttention](/learn/llm-fundamentals/transformers-and-attention/flash-attention-explained).) Paged-attention KV caching plays a similar role, packing the cache into memory pages so the GPU isn't fragmented to death at long lengths."
+        },
+        {
+          "type": "h3",
+          "text": "4. Shrink the cache: KV compression and sharing"
+        },
+        {
+          "type": "p",
+          "md": "Even with sparse attention, the KV cache is the memory bottleneck. So models share and squeeze it. **Grouped-query attention (GQA)** lets many attention heads share one set of keys/values, cutting cache size several-fold with little quality loss — it's standard in modern open models. A whole 2025–2026 research line (PyramidKV, expected-attention pruning, residual KV compression) further drops or quantizes the least-useful cached tokens. And [Mixture-of-Experts](/learn/llm-fundamentals/transformers-and-attention/mixture-of-experts-explained) helps indirectly: by activating only a slice of the network per token, MoE keeps long-context inference affordable enough to be worth running at all."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "stack",
+            "title": "The long-context stack (bottom = foundation)",
+            "layers": [
+              { "label": "FlashAttention + paged KV cache", "sub": "exact math, far less memory traffic" },
+              { "label": "Sparse attention (e.g. NSA)", "sub": "skip the handshakes that don't matter" },
+              { "label": "KV sharing / compression (GQA)", "sub": "shrink the linear memory cost" },
+              { "label": "RoPE scaling (YaRN, etc.)", "sub": "teach positions the model never trained on" }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "estimating-the-cost",
+      "title": "Estimating the cost yourself",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You don't need a GPU to feel why naive attention is brutal. This little script shows the gap between dense n² scaling and the roughly linear cost a sparse window pays. The numbers are illustrative, not a hardware benchmark — but the *shape* is the whole point."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "attention_cost.py",
+          "code": "def dense_ops(n):\n    # full attention: every token attends to every token\n    return n * n\n\ndef sparse_ops(n, window=4096, summaries=512):\n    # each token attends to a local window + a few global summaries\n    return n * (window + summaries)\n\nfor n in [1_000, 32_000, 128_000, 1_000_000]:\n    d = dense_ops(n)\n    s = sparse_ops(n)\n    print(f\"{n:>9,} tokens | dense {d:>18,} | sparse {s:>14,} | {d/s:>8.0f}x\")\n\n# 1,000,000 tokens | dense  1,000,000,000,000 | sparse  4,608,000,000 | ~217x cheaper"
+        },
+        {
+          "type": "p",
+          "md": "At a thousand tokens dense attention is fine — sparsity barely helps and just adds complexity. At a million tokens the dense path is hundreds of times more expensive. That's exactly why models keep full attention for short prompts and lean on sparse paths only when the context gets huge. It's also why your *real* bill is dominated by input length: pricing is per input token, so a 1M-token request is the priciest call you can make. Learn more in [LLM API pricing](/learn/llm-apis/cost-caching-rate-limits/llm-api-pricing)."
+        }
+      ]
+    },
+    {
+      "id": "the-mid-2026-landscape",
+      "title": "The mid-2026 landscape",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "As of mid-2026, million-token windows are no longer exotic. More than a dozen model families ship 1M+ context, and the open frontier is pushing higher still. A few verified reference points:"
+        },
+        {
+          "type": "table",
+          "headers": ["Model family (mid-2026)", "Advertised context", "Notes"],
+          "rows": [
+            ["Gemini 3.x Pro (Google)", "1M+ tokens", "Long-context flagship; strong single-needle retrieval, degrades on multi-needle"],
+            ["Claude Opus 4.x / Sonnet 4.x", "1M tokens", "1M GA since early 2026; later versions report better long-context retrieval and lower latency"],
+            ["GPT-5.x (OpenAI)", "up to ~512K default, large windows available", "Improved long-context reasoning generation over generation"],
+            ["Llama 4 Scout (open weights)", "up to 10M advertised", "Self-hostable; real-world usable length is well below the headline"],
+            ["DeepSeek / Qwen / MiniMax (open)", "1M+ tokens", "Open-weight families; pioneered much of the sparse-attention research"]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Advertised context is not *usable* context. A model can technically accept 10M tokens and still answer badly about anything past a few hundred K. Benchmarks like **needle-in-a-haystack** plant a fact deep in a long document and test retrieval; most models score near-perfect on a single needle but show measurable accuracy drops (often 10–25%) for *multiple* needles or facts in the middle. Treat the headline number as a ceiling, not a promise."
+        },
+        {
+          "type": "p",
+          "md": "Specific version numbers, prices, and headline lengths churn monthly — always check the model card before you commit. The *techniques* below are far more durable than any one model name."
+        }
+      ]
+    },
+    {
+      "id": "pitfalls",
+      "title": "Pitfalls and when not to use it",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A million-token window is a tool, not a default. The common mistakes:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Stuffing when you should retrieve.** If your real answer lives in 3 paragraphs out of 900 pages, paying to process all 900 every call is wasteful and *less* accurate than fetching the right 3 with [RAG](/learn/rag/rag-fundamentals/what-is-rag). Big context complements retrieval; it rarely replaces it for large or frequently-queried corpora.",
+            "**Assuming uniform recall.** Put the most important instructions at the very start or very end of the prompt. The middle is where models forget — that's the [lost-in-the-middle](/learn/llm-fundamentals/context-windows/lost-in-the-middle) effect, and it persists even on long-context champions.",
+            "**Ignoring latency.** Time-to-first-token grows with input size. A 1M-token prompt can take many seconds before the first word appears — bad UX for anything interactive.",
+            "**Forgetting prompt caching.** If you reuse the same big document across many questions, cache it. Providers let you cache a long prefix so you don't re-pay to process it every turn — a large cost win for agents and chat over fixed corpora.",
+            "**Counting words instead of tokens.** Budgeting is in tokens, not characters. Brush up with [tokens vs words](/learn/llm-fundamentals/tokens-and-tokenization/tokens-vs-words)."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A few subtleties that separate \"I read a blog post\" from \"I understand the trade-offs.\""
+        },
+        {
+          "type": "h3",
+          "text": "Sparse attention is oddly friendly to RoPE scaling"
+        },
+        {
+          "type": "p",
+          "md": "When you stretch RoPE far past its trained range, position signals get distorted — and that distortion is worst for *long-range* pairs. Sparse attention sidesteps part of this: because it attends to fewer tokens and skews toward local ones, it touches fewer of the badly-distorted long-range positions. Empirically, perplexity degradation under aggressive RoPE scaling is *smaller* for sparse attention than for full attention. So the two tricks compound — sparsity makes the position-scaling problem milder, not just the compute problem."
+        },
+        {
+          "type": "h3",
+          "text": "Training-time vs inference-time sparsity"
+        },
+        {
+          "type": "p",
+          "md": "Early sparse methods were applied only at inference: train dense, then prune at serve time. The catch is a train/test mismatch — the model never learned to rely on a sparse pattern, so quality suffers and you can't recoup the *training* compute. The 2025–2026 shift is **natively trainable** sparsity (NSA and kin): the sparse pattern is part of the architecture from pretraining, with hardware-aligned kernels so the speedup is real on actual GPUs, not just in big-O notation. That's why these designs *match or beat* dense attention instead of merely approximating it."
+        },
+        {
+          "type": "h3",
+          "text": "Why the KV cache, not compute, is often the real wall"
+        },
+        {
+          "type": "p",
+          "md": "It's tempting to fixate on the n² compute term, but at serving time the linear-but-enormous KV cache frequently bites first: it's pure memory, and memory is the scarce, expensive resource (one reason [LLMs need so much GPU](/learn/llm-fundamentals/llm-basics/why-llms-need-gpus)). That's why so much current research targets the cache specifically — GQA to shrink it, paged attention to pack it, learned pruning and quantization to drop low-value entries. A model's *practical* maximum context is often set by how much KV cache fits in memory at your batch size, not by the architecture's theoretical limit."
+        },
+        {
+          "type": "h3",
+          "text": "Long context vs scaling laws"
+        },
+        {
+          "type": "p",
+          "md": "Bigger windows aren't a free capability upgrade. Whether a model actually *uses* a long context well depends on training data and recipe, and emerging context-aware [scaling laws](/learn/llm-fundamentals/llm-basics/what-are-scaling-laws) suggest performance at length *L* is its own thing to predict — not automatically implied by a model's overall size. A 10M-token label means the plumbing accepts 10M tokens. Whether the model reasons over them is a separate, measurable question."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "How can a model have a million-token context if attention is quadratic?",
+      "a": "It doesn't use plain quadratic attention at that length. Million-token models layer several tricks: **sparse attention** (each token attends to a smart subset instead of all others), **RoPE position scaling** (so the model handles positions it never trained on), exact-but-cheaper kernels like **FlashAttention**, and **KV-cache compression/sharing** (e.g. grouped-query attention). Together these turn the ~n² cost into something closer to linear at long lengths."
+    },
+    {
+      "q": "What is sparse attention, in one sentence?",
+      "a": "Sparse attention lets each token attend only to a chosen subset of other tokens — typically its local neighbors, a few coarse summaries of far-away text, and a handful of dynamically selected important blocks — instead of every token, which is what makes long contexts affordable."
+    },
+    {
+      "q": "Does a bigger context window mean the model remembers everything perfectly?",
+      "a": "No. Advertised context is a ceiling, not a guarantee. Models reliably retrieve a single fact ('needle in a haystack') but lose accuracy — often 10–25% — when key information sits in the *middle* of a long prompt or when multiple facts must be combined. Put critical instructions at the start or end, and use retrieval when precision matters."
+    },
+    {
+      "q": "What is RoPE scaling and why is it needed for long context?",
+      "a": "RoPE (rotary position embeddings) encodes token order by rotating vectors by a position-dependent angle. A model trained on, say, 8K positions has never seen the angles for position 900,000, so it fails on longer inputs. RoPE scaling methods (Position Interpolation, NTK-aware, YaRN) rescale those angles so trained positions stretch to cover much longer sequences, usually with a little extra fine-tuning."
+    },
+    {
+      "q": "Should I use a giant context window or RAG?",
+      "a": "Use a big window when you need to reason across a whole document or run a long agent session, and the input is small-to-medium and used once. Use retrieval ([RAG](/learn/rag/rag-fundamentals/what-is-rag)) when the answer lives in a small slice of a large or frequently-queried corpus — it's cheaper, faster, and often more accurate than processing everything every time."
+    },
+    {
+      "q": "What's the most expensive part of a long-context request?",
+      "a": "Input tokens. Pricing is per token of input, so a full million-token prompt is the priciest single call you can send, and it's also the slowest to first token. At serve time, the model's other big cost is the KV cache, which grows linearly with context and can exceed 100 GB of GPU memory at a million tokens. Prompt caching reuse is the main way to soften the bill."
+    }
+  ],
+  "related": [
+    "what-is-a-context-window",
+    "lost-in-the-middle",
+    "how-attention-works",
+    "flash-attention-explained",
+    "mixture-of-experts-explained"
+  ],
+  "furtherReading": [
+    { "title": "Native Sparse Attention (arXiv 2502.11089)", "url": "https://arxiv.org/abs/2502.11089" },
+    { "title": "YaRN: Efficient Context Window Extension (arXiv 2309.00071)", "url": "https://arxiv.org/pdf/2309.00071" },
+    { "title": "Gemini API: Long context overview", "url": "https://ai.google.dev/gemini-api/docs/long-context" }
+  ]
+}

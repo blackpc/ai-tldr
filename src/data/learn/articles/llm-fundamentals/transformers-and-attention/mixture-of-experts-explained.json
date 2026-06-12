@@ -1,0 +1,308 @@
+{
+  "slug": "mixture-of-experts-explained",
+  "title": "What Is a Mixture-of-Experts (MoE) Model?",
+  "seoTitle": "What Is a Mixture-of-Experts (MoE) Model?",
+  "metaDescription": "MoE models activate only a slice of their parameters per token. How expert routing works and why frontier labs use it to cut compute costs.",
+  "keywords": [
+    "what is mixture of experts",
+    "moe model explained",
+    "how does expert routing work",
+    "mixture of experts vs dense model",
+    "why use moe in llms"
+  ],
+  "difficulty": "advanced",
+  "oneLiner": "See how MoE models get huge capacity at a fraction of the compute by routing each token to a handful of specialist experts.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A **Mixture-of-Experts (MoE)** model is a neural network that contains many small sub-networks called *experts*, but only switches a few of them on for each piece of text it reads. The model is enormous on paper, yet most of it sits idle on any given step. That is the whole trick: huge total capacity, small active cost."
+        },
+        {
+          "type": "p",
+          "md": "Picture a hospital. It employs hundreds of specialists, but you don't see all of them when you walk in. A triage nurse glances at your problem and routes you to maybe two of them — a cardiologist and a radiologist, say. The hospital has the *knowledge* of every specialist on staff, but your visit only *pays for* the two who actually treat you. An MoE model works the same way. It holds the knowledge of a vast network, but every token (every chunk of text — see [what a token is](/learn/llm-fundamentals/tokens-and-tokenization/what-is-a-token)) only activates a tiny slice."
+        },
+        {
+          "type": "p",
+          "md": "Contrast this with a normal **dense** model, where every single parameter fires for every token. A dense model is like a hospital that drags all 300 specialists into the room for every patient. Thorough, but absurdly expensive. MoE keeps the staff and ditches the crowd."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Two numbers describe every MoE model: **total parameters** (everything it knows) and **active parameters** (what fires per token). DeepSeek-V3, for example, has ~671B total but activates only ~37B per token — roughly 5%."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "[Scaling laws](/learn/llm-fundamentals/llm-basics/what-are-scaling-laws) showed that bigger models with more parameters tend to be smarter. But for a dense model, *bigger* means *more expensive on every single token* — both to train and to run. Doubling the parameters roughly doubles the compute (and the GPU bill — see [why LLMs need GPUs](/learn/llm-fundamentals/llm-basics/why-llms-need-gpus)) for every word generated. That ceiling is brutal."
+        },
+        {
+          "type": "p",
+          "md": "MoE breaks the link between *how much a model knows* and *how much it costs to use*. You can grow total parameters to add knowledge while keeping active parameters — and therefore inference cost — roughly flat. A model with 400B total parameters can run at the speed and price of a 17B dense model if only 17B are active per token."
+        },
+        {
+          "type": "h3",
+          "text": "Who cares about this"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Frontier labs** — it lets them ship models with trillions of total parameters without trillion-parameter inference bills.",
+            "**Anyone reading a model card** — when you see \"235B-A22B\" or \"109B / 17B active\", that's MoE notation. It tells you the model punches above its compute weight.",
+            "**People running models locally** — MoE shifts the bottleneck from *compute* to *memory*. You still need RAM/VRAM to hold all the experts, even though only a few run at once. This shapes [quantization](/learn/local-open-models/quantization-and-formats/what-is-quantization) and hardware choices.",
+            "**Cost-conscious builders** — cheaper active compute is a big reason API prices keep falling for a given quality tier."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "MoE does **not** make a model smaller to *store*. All experts live in memory. It makes the model cheaper to *run*, not cheaper to *hold*. That tradeoff — lots of memory, little compute — is the defining feature."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "To see where the experts live, you need a quick picture of a [transformer](/learn/llm-fundamentals/transformers-and-attention/what-is-a-transformer) layer. Each layer has two main parts: an **attention** block (which lets tokens look at each other — see [how attention works](/learn/llm-fundamentals/transformers-and-attention/how-attention-works)) and a **feed-forward network (FFN)**, which does most of the heavy per-token computation."
+        },
+        {
+          "type": "p",
+          "md": "MoE replaces that single FFN with *many* FFNs — the experts — plus a tiny **router** that decides which experts each token should visit. Attention usually stays dense and shared; only the FFN goes sparse."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "One MoE layer, for one token",
+            "steps": [
+              { "label": "Token arrives", "sub": "hidden vector from attention" },
+              { "label": "Router scores experts", "sub": "small linear layer + softmax", "accent": true },
+              { "label": "Pick top-k", "sub": "e.g. top-2 of 8 experts" },
+              { "label": "Run only those experts", "sub": "the rest stay off" },
+              { "label": "Weighted sum", "sub": "blend outputs by router weight", "accent": true }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Walk through it. A token's hidden vector reaches the MoE layer. The **router** — usually a single small linear layer followed by a softmax — produces a score for every expert. The model keeps only the **top-k** highest-scoring experts (commonly top-2, sometimes top-4 or top-8), runs *just those*, and combines their outputs weighted by the router's scores. Every other expert is skipped entirely, so its parameters cost nothing on this token."
+        },
+        {
+          "type": "h3",
+          "text": "The load-balancing problem"
+        },
+        {
+          "type": "p",
+          "md": "Left alone, the router cheats. Early in training it discovers a few experts are slightly better and sends everything to them. Those experts get all the practice and improve; the rest starve and stay useless. This is **expert collapse** — most experts go dead while a handful do all the work."
+        },
+        {
+          "type": "p",
+          "md": "Labs fix this with **load balancing**. The classic approach adds an *auxiliary loss* that penalizes the router for piling tokens onto a few experts, nudging it toward even usage. A newer approach, popularized by DeepSeek, is **auxiliary-loss-free balancing**: instead of a loss term that fights the main training objective, it adds a small learned *bias* to each expert's router score and nudges those biases up or down based on how busy each expert has been recently. Both aim for the same thing — every expert pulling its weight."
+        },
+        {
+          "type": "h3",
+          "text": "Shared experts"
+        },
+        {
+          "type": "p",
+          "md": "Many current designs (DeepSeek-V3, Llama 4) add one or two **shared experts** that run for *every* token, alongside the routed top-k. The shared expert soaks up general, always-useful computation, freeing the routed experts to specialize. It's a hybrid: a small dense core plus a big sparse pool."
+        }
+      ]
+    },
+    {
+      "id": "moe-vs-dense",
+      "title": "MoE vs dense, side by side",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The cleanest way to feel the difference is to compare the same FFN slot in both styles."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Dense FFN vs MoE FFN",
+            "columns": [
+              {
+                "title": "Dense model",
+                "items": [
+                  "One big FFN per layer",
+                  "Every parameter fires per token",
+                  "Compute scales with total size",
+                  "Simpler to train and serve",
+                  "Quality ceiling tied to compute budget"
+                ]
+              },
+              {
+                "title": "MoE model",
+                "accent": true,
+                "items": [
+                  "Many expert FFNs + a router",
+                  "Only top-k experts fire per token",
+                  "Compute scales with active size",
+                  "Needs load balancing to train well",
+                  "Higher quality per FLOP at the same speed"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The headline result, repeated across labs: **for a fixed training-compute budget, a sparse MoE model reaches higher quality than a dense model**. You spend your FLOPs on more total knowledge instead of forcing every token through every parameter. The catch is engineering complexity — routing, balancing, and the memory to hold all those experts."
+        },
+        {
+          "type": "table",
+          "headers": ["Property", "Dense", "MoE"],
+          "rows": [
+            ["Parameters that fire per token", "All of them", "Only the active slice"],
+            ["Inference cost", "Scales with total size", "Scales with active size"],
+            ["Memory to hold the model", "= total size", "= total size (no savings)"],
+            ["Training difficulty", "Lower", "Higher (routing + balancing)"],
+            ["Quality per FLOP", "Baseline", "Higher"]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "current-landscape",
+      "title": "The current landscape (mid-2026)",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "MoE went from a research curiosity to the default for large open and frontier models. The pattern you'll see on model cards is `total / active` — for example **Qwen3-235B-A22B** means 235B total parameters, 22B active per token. Here are verified examples as of mid-2026."
+        },
+        {
+          "type": "table",
+          "headers": ["Model", "Total params", "Active per token", "Experts / routing"],
+          "rows": [
+            ["Mixtral 8x7B (Mistral)", "~47B", "~13B", "8 experts, top-2"],
+            ["DeepSeek-V3", "~671B", "~37B", "256 routed + shared, top-8"],
+            ["Llama 4 Scout", "~109B", "~17B", "16 experts + shared"],
+            ["Llama 4 Maverick", "~400B", "~17B", "128 experts + shared"],
+            ["Qwen3-235B-A22B", "~235B", "~22B", "128 experts"],
+            ["gpt-oss-120b (OpenAI)", "~117B", "~5.1B", "128 experts, top-4"]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "A few things stand out. **Mixtral 8x7B** (early 2024) was the open model that made MoE mainstream — 8 experts, top-2, ~13B active, matching much larger dense models. **DeepSeek-V3** pushed the count to 256 fine-grained routed experts and popularized auxiliary-loss-free balancing. **Llama 4** keeps active parameters tiny (17B) while scaling total parameters up across the Scout/Maverick/Behemoth herd. And **gpt-oss** showed an open-weight frontier lab releasing MoE with a strikingly low active count (~5B). These specifics move fast — but the *shape* of the trend has been stable: more total experts, modest active compute."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "When comparing models, read the **active** parameter count to gauge cost/speed, and the **total** count to gauge raw capacity. A 400B/17B model is fast like a 17B model but knows far more. Don't compare a dense 70B against an MoE by total params alone — it's apples to oranges."
+        }
+      ]
+    },
+    {
+      "id": "see-the-routing",
+      "title": "See the routing in code",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Here's a stripped-down MoE layer in PyTorch. It's not production code, but it shows the exact mechanic: score experts, keep the top-k, run only those, blend by router weight."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "moe_layer.py",
+          "code": "import torch\nimport torch.nn as nn\nimport torch.nn.functional as F\n\nclass MoELayer(nn.Module):\n    def __init__(self, dim, num_experts=8, top_k=2):\n        super().__init__()\n        self.top_k = top_k\n        self.router = nn.Linear(dim, num_experts)\n        # each expert is just a small feed-forward network\n        self.experts = nn.ModuleList(\n            nn.Sequential(nn.Linear(dim, 4 * dim), nn.GELU(),\n                          nn.Linear(4 * dim, dim))\n            for _ in range(num_experts)\n        )\n\n    def forward(self, x):                       # x: (tokens, dim)\n        scores = self.router(x)                 # (tokens, num_experts)\n        weights, idx = scores.topk(self.top_k, dim=-1)\n        weights = F.softmax(weights, dim=-1)    # normalize the chosen few\n\n        out = torch.zeros_like(x)\n        for slot in range(self.top_k):\n            for e, expert in enumerate(self.experts):\n                mask = idx[:, slot] == e        # tokens routed to expert e\n                if mask.any():\n                    out[mask] += weights[mask, slot:slot+1] * expert(x[mask])\n        return out                              # most experts never ran"
+        },
+        {
+          "type": "p",
+          "md": "The key line is `scores.topk(self.top_k)`. Out of every expert, only `top_k` of them ever see a given token, and `mask.any()` skips the rest entirely. In a real system this dispatch is heavily optimized — tokens are grouped per expert and run in big batched matrix multiplies — but the logic is exactly this: score, select, run the few, blend."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "Fine-grained experts and the granularity dial"
+        },
+        {
+          "type": "p",
+          "md": "Early MoE used a few fat experts (Mixtral: 8). Newer designs use *many thin* experts (DeepSeek-V3: 256 routed) and pick more of them per token. This **fine-grained** approach gives the router more combinations to express — picking 8 of 256 yields far more distinct routings than 2 of 8 — which empirically improves quality at the same active parameter count. Granularity is now a deliberate design knob, not an accident."
+        },
+        {
+          "type": "h3",
+          "text": "Token-choice vs expert-choice routing"
+        },
+        {
+          "type": "p",
+          "md": "The default is **token-choice**: each token picks its top-k experts. The risk is imbalance — popular experts overflow their capacity and excess tokens get *dropped* (skipped) or spilled. **Expert-choice** flips it: each expert picks its top-k *tokens*, which guarantees perfectly even load but means some tokens may get more experts than others. Production systems also set an **expert capacity** limit and use techniques like loss-free bias updates to keep utilization smooth without dropping tokens."
+        },
+        {
+          "type": "h3",
+          "text": "The real bottleneck is communication, not math"
+        },
+        {
+          "type": "p",
+          "md": "On a single GPU, MoE is straightforward. At scale, experts are spread across many GPUs (**expert parallelism**), so routing a token to its experts means shipping its activations across the network and gathering the results back — an *all-to-all* communication step. For big MoE models this network shuffle, not the matrix math, often dominates inference latency. It's why MoE serving stacks obsess over interconnect bandwidth and clever expert placement, and why a model with low active FLOPs can still be tricky to serve fast."
+        },
+        {
+          "type": "h3",
+          "text": "What experts do (and don't) specialize in"
+        },
+        {
+          "type": "p",
+          "md": "It's tempting to imagine a \"Python expert\" and a \"French expert.\" Reality is messier. Analysis of trained MoE models shows experts specialize along subtle, often uninterpretable lines — sometimes by token type or syntax, rarely by clean human-readable topic. The router isn't trained to be interpretable; it's trained to lower loss. So treat \"expert\" as a useful name for *a learned subnetwork the router favors for certain inputs*, not a labeled domain specialist."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "MoE interacts with everything else in the stack: the same memory pressure shapes [serving and inference](/learn/local-open-models/inference-and-serving/what-is-inference-server), and the active/total split is central to how labs hit ambitious quality-per-dollar targets. If you understand the dense [transformer FFN](/learn/llm-fundamentals/transformers-and-attention/what-is-a-transformer) first, MoE is just \"swap one FFN for many, plus a router.\""
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is the difference between total and active parameters in an MoE model?",
+      "a": "**Total parameters** is everything the model contains across all experts — it sets raw knowledge and capacity, and it determines how much memory you need to load the model. **Active parameters** is the subset that actually runs for each token (the router's chosen top-k experts plus any shared experts), and it sets the compute cost and speed. An MoE labeled `235B-A22B` has 235B total but only ~22B active per token, so it runs roughly as fast as a 22B dense model while knowing far more."
+    },
+    {
+      "q": "Is a mixture-of-experts model actually smaller or cheaper?",
+      "a": "It's cheaper to *run*, not to *store*. All experts must sit in memory, so an MoE needs as much RAM/VRAM as a dense model of the same total size. What you save is compute: only the active slice fires per token, so inference is much faster and cheaper than a dense model with the same total parameter count. MoE trades plentiful memory for scarce compute."
+    },
+    {
+      "q": "How does the router decide which experts to use?",
+      "a": "The router is a tiny linear layer that produces a score for every expert from the token's hidden vector, normalized with a softmax. The model keeps the top-k highest-scoring experts (often top-2, sometimes top-4 or top-8), runs only those, and blends their outputs weighted by the router scores. The router is trained jointly with the rest of the model, with a load-balancing mechanism to stop it from overusing a few favorite experts."
+    },
+    {
+      "q": "Which LLMs use mixture-of-experts as of 2026?",
+      "a": "Many of the largest open and frontier models do. Verified examples include Mixtral 8x7B (the model that made open MoE mainstream), DeepSeek-V3 (~671B total / ~37B active, 256 routed experts), Meta's Llama 4 herd (Scout, Maverick, Behemoth), Qwen3-235B-A22B, and OpenAI's open-weight gpt-oss models. These specifics change fast, but MoE is now the default architecture for very large models."
+    },
+    {
+      "q": "What is expert collapse and how do labs prevent it?",
+      "a": "Expert collapse is when the router learns to send almost all tokens to a few experts, so those few improve while the rest never train and go dead — wasting the model's capacity. Labs prevent it with load balancing: either an auxiliary loss that penalizes uneven expert usage, or an auxiliary-loss-free scheme (popularized by DeepSeek) that adjusts a per-expert bias based on recent load. Both push the router toward using every expert."
+    }
+  ],
+  "related": [
+    "what-is-a-transformer",
+    "how-attention-works",
+    "what-are-scaling-laws",
+    "why-llms-need-gpus",
+    "flash-attention-explained"
+  ],
+  "furtherReading": [
+    { "title": "Mixtral of Experts (Mistral AI paper)", "url": "https://arxiv.org/abs/2401.04088" },
+    { "title": "Mixtral of experts — Mistral AI announcement", "url": "https://mistral.ai/news/mixtral-of-experts/" },
+    { "title": "Qwen3 Technical Report (dense + MoE)", "url": "https://arxiv.org/abs/2505.09388" }
+  ]
+}

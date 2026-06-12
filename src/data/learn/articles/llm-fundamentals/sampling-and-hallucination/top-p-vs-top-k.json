@@ -1,0 +1,352 @@
+{
+  "slug": "top-p-vs-top-k",
+  "title": "Top-p vs Top-k Sampling: How LLMs Pick the Next Token",
+  "seoTitle": "Top-p vs Top-k Sampling in LLMs, Explained",
+  "metaDescription": "How nucleus (top-p) and top-k sampling shape which token an LLM picks next, how they interact with temperature, and sane default values.",
+  "keywords": [
+    "top p vs top k sampling",
+    "what is nucleus sampling",
+    "top p explained llm",
+    "top k sampling explained",
+    "temperature vs top p which to change"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Go beyond temperature: see how top-p and top-k trim the token lottery and which knob to turn for your task.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every time a language model writes a word, it doesn't *know* the next word — it produces a ranked list of guesses, each with a probability. \"The capital of France is...\" might be 97% `Paris`, 1% `a`, 0.5% `home`, and a long tail of thousands of other tokens splitting the rest. The model then has to **pick one**. That picking step is called *sampling*, and **top-p** and **top-k** are two ways to decide which candidates are even allowed in the draw."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like a raffle. The model has tickets in a bowl, but the unlikely words have so few tickets you'd never realistically draw them — except sometimes you do, and the model says something weird. Top-k and top-p are two house rules for trimming the bowl *before* you reach in."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Top-k** is the \"only the K most popular candidates\" rule. Set `k=40` and the model throws away everything except its 40 best guesses, then draws from those.",
+            "**Top-p** (also called **nucleus sampling**) is the \"smallest crowd that covers p% of the confidence\" rule. Set `p=0.9` and the model keeps adding candidates — biggest first — until their probabilities sum to 90%, then draws from exactly that group."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The crucial difference: top-k always keeps a *fixed number* of candidates; top-p keeps a *variable number* that flexes with how confident the model is. When the model is sure, top-p's pool shrinks to one or two words. When it's unsure, the pool grows. That adaptiveness is why top-p won — but you need both ideas to reason about model behavior. This article assumes you've met [temperature](/learn/llm-fundamentals/sampling-and-hallucination/llm-temperature-explained) already; top-p and top-k are the *next* two knobs."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "If a model could only ever pick its single highest-probability token (called *greedy decoding*), output would be deterministic — and, it turns out, bad. It collapses into bland, repetitive loops: \"I think that I think that I think that...\". The 2019 paper that introduced nucleus sampling, *The Curious Case of Neural Text Degeneration*, showed that always picking the safe word produces unnaturally dull text, while picking from the *whole* probability distribution lets rare, nonsensical tokens sneak in. You need a middle path: randomness, but only among plausible options."
+        },
+        {
+          "type": "p",
+          "md": "That middle path is exactly what top-k and top-p give you. They define the **plausible options**, and then temperature decides how evenly you spread your bets across them. Get this wrong in production and you feel it directly:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Too loose** (high p, high k, high temperature) → hallucinated facts, broken JSON, off-topic tangents. The model drew a long-tail token it never should have.",
+            "**Too tight** (very low p or k, temperature 0) → robotic, repetitive answers; a chatbot that gives the *identical* sentence every time; a brainstorm that produces one idea five ways.",
+            "**Just right** → coherent text that still has variety, with the garbage tokens fenced off."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Anyone shipping an LLM feature cares: prompt engineers tuning a [chatbot's](/learn/llm-fundamentals/sampling-and-hallucination/why-llms-hallucinate) voice, RAG builders who need verbatim quotes, agent developers who need parseable tool calls. The token a model emits is only as trustworthy as the rules you set on the draw — and these are those rules."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Both methods operate on the same starting point: the model's raw scores (logits) over the whole vocabulary, turned into probabilities by *softmax*. The token you finally see depends on the order these filters run. The standard pipeline is: **logits → temperature → top-k → top-p → sample**."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "From scores to a chosen token",
+            "steps": [
+              { "label": "Model logits", "sub": "raw score per token in vocab" },
+              { "label": "Softmax", "sub": "scores → probabilities" },
+              { "label": "Temperature", "sub": "flatten or sharpen the distribution" },
+              { "label": "Top-k cut", "sub": "keep K best, drop the rest", "accent": true },
+              { "label": "Top-p cut", "sub": "keep nucleus summing to p", "accent": true },
+              { "label": "Renormalize + draw", "sub": "sample one token" }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Top-k, step by step"
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "Sort all tokens by probability, highest first.",
+            "Keep the top **K** (say 40). Discard everything else.",
+            "**Renormalize** the survivors so their probabilities sum back to 1.",
+            "Draw one token at random, weighted by those probabilities."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The catch: K is fixed regardless of context. If the model is 99% sure the next token is `Paris`, top-k=40 still drags in 39 irrelevant alternatives. If the model is genuinely torn between 200 reasonable words, top-k=40 ruthlessly cuts 160 of them. The shortlist size never matches the situation."
+        },
+        {
+          "type": "h3",
+          "text": "Top-p (nucleus), step by step"
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "Sort all tokens by probability, highest first.",
+            "Walk down the list adding probabilities until the running total reaches **p** (say 0.9).",
+            "Keep exactly those tokens — the *nucleus* — and drop the rest.",
+            "Renormalize the nucleus and draw one token."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Now the pool *breathes*. For \"The capital of France is...\", `Paris` alone might cover 95%, so with p=0.9 the nucleus is **one token** — effectively deterministic. For \"My favorite food is...\", no single word dominates, so it might take 150 tokens to reach 90%, and all 150 stay eligible. Same setting, wildly different pool sizes, automatically matched to the model's confidence."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Same distribution, two filters",
+            "columns": [
+              {
+                "title": "Top-k = 3 (fixed)",
+                "items": [
+                  "Always exactly 3 survivors",
+                  "Confident step: keeps 2 junk tokens",
+                  "Uncertain step: cuts good options",
+                  "Pool size never adapts"
+                ]
+              },
+              {
+                "title": "Top-p = 0.9 (adaptive)",
+                "accent": true,
+                "items": [
+                  "Survivor count flexes with context",
+                  "Confident step: nucleus shrinks to 1",
+                  "Uncertain step: nucleus grows wide",
+                  "Pool tracks the model's confidence"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Top-p and top-k are not rivals you must choose between — they can stack. Many serving stacks apply top-k *first* as a hard ceiling, then top-p inside that. A common belt-and-suspenders combo is `top_k=40, top_p=0.9`: top-k caps the absolute worst tokens, top-p does the smart trimming. This works on a [transformer's](/learn/llm-fundamentals/transformers-and-attention/what-is-a-transformer) per-token output exactly the same way regardless of model size."
+        }
+      ]
+    },
+    {
+      "id": "temperature-vs-top-p",
+      "title": "Temperature vs top-p: which knob to turn",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "This is the question everyone actually has. Temperature and top-p both control \"creativity,\" so people crank both — and get chaos. They do **different jobs**:"
+        },
+        {
+          "type": "table",
+          "headers": ["Knob", "What it changes", "Mental model"],
+          "rows": [
+            ["**Temperature**", "How *evenly* probability spreads across candidates", "Reshapes the odds inside the bowl"],
+            ["**Top-k / Top-p**", "*Which* candidates are in the bowl at all", "Removes tickets from the bowl"]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Temperature near 0 sharpens the distribution so the top token dominates (near-deterministic). High temperature flattens it, giving rare tokens a real shot. Top-p/top-k instead *truncate* the tail outright — a token outside the nucleus has **zero** chance no matter the temperature."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "OpenAI, Anthropic, and Google all give the same advice: **change temperature OR top_p, not both.** Tuning both at once means two interacting randomness controls and unpredictable output — you can't tell which knob caused a change. Pick one as your creativity dial and leave the other at its default."
+        },
+        {
+          "type": "p",
+          "md": "Practical rule of thumb: if you want a single intuitive \"how wild should it be\" slider, use **temperature** and leave top_p at 1.0. If you specifically want to *cap the long tail* of weird tokens while keeping natural variety, use **top_p** (e.g. 0.9) and leave temperature at 1.0. Reach for top-k only when a provider recommends it for an edge case."
+        }
+      ]
+    },
+    {
+      "id": "code-and-defaults",
+      "title": "Setting it in code: defaults that work",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Here's the same generation with explicit sampling settings using the OpenAI Python SDK. Note we only move *one* creativity knob."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "sampling.py",
+          "code": "from openai import OpenAI\n\nclient = OpenAI()\n\nresp = client.chat.completions.create(\n    model=\"gpt-4.1\",\n    messages=[{\"role\": \"user\", \"content\": \"Name three uses for a paperclip.\"}],\n    temperature=1.0,   # leave at default...\n    top_p=0.9,         # ...and steer with top_p instead\n)\nprint(resp.choices[0].message.content)"
+        },
+        {
+          "type": "p",
+          "md": "If you self-host open models with vLLM, you get top_k *and* min_p too. As of mid-2026 the vLLM defaults are `temperature=1.0`, `top_p=1.0` (keep all), and `top_k=-1` (the sentinel meaning *no top-k cut*). You opt in explicitly:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "vllm_sampling.py",
+          "code": "from vllm import LLM, SamplingParams\n\nparams = SamplingParams(\n    temperature=0.7,\n    top_k=40,      # hard cap: at most 40 candidates\n    top_p=0.9,     # then keep the 0.9 nucleus inside that\n    # top_k=-1 would disable the top-k cut entirely\n)\n\nllm = LLM(model=\"Qwen/Qwen3-8B\")\nout = llm.generate([\"Write a haiku about GPUs.\"], params)\nprint(out[0].outputs[0].text)"
+        },
+        {
+          "type": "table",
+          "headers": ["Task", "Suggested top_p", "Temperature", "Why"],
+          "rows": [
+            ["Factual Q&A, extraction, classification", "0.1 – 0.5", "low (0 – 0.3)", "Tight nucleus kills tangents and hallucinated facts"],
+            ["General chat / assistant", "0.9 – 1.0", "~0.7 – 1.0", "Natural variety without going off the rails"],
+            ["Creative writing, brainstorming", "0.95 – 1.0", "0.9 – 1.2", "Wide nucleus invites surprising word choices"],
+            ["Structured output (JSON, tool calls)", "low or 1.0", "0", "Determinism matters more than flavor"]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Treat these as starting points, not gospel — and tune them with real [evals](/learn/evaluation-safety/evaluation-basics/what-are-llm-evals), not vibes. The \"right\" top_p depends on your model and prompt. Change one knob, run your test set, compare."
+        }
+      ]
+    },
+    {
+      "id": "current-landscape",
+      "title": "The mid-2026 landscape",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Three shifts are worth knowing as of mid-2026."
+        },
+        {
+          "type": "h3",
+          "text": "1. Top-p is the commercial default; top-k is fading from APIs"
+        },
+        {
+          "type": "p",
+          "md": "OpenAI's and Google's hosted APIs expose `top_p` as the primary truncation knob; OpenAI doesn't expose `top_k` at all. Anthropic exposes `top_k` but explicitly labels it as for advanced use only, recommending you \"usually only need to use temperature.\" Top-k's fixed-size pool just doesn't adapt as well as top-p's nucleus, so for cloud models you'll mostly touch top_p (or nothing)."
+        },
+        {
+          "type": "h3",
+          "text": "2. The newest reasoning models lock sampling down"
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Heads-up that trips people up: some frontier models **reject** these parameters. As of mid-2026, Anthropic's Claude Opus 4.7 and later (including Opus 4.8) do **not** support `temperature`, `top_p`, or `top_k` — sending a non-default value returns a `400` error. Several reasoning models similarly pin sampling internally. Always check the model card before assuming a knob exists."
+        },
+        {
+          "type": "h3",
+          "text": "3. Min-p is the rising open-model alternative"
+        },
+        {
+          "type": "p",
+          "md": "On the open-weights side ([Qwen](/learn/local-open-models/open-model-ecosystem/what-is-hugging-face), Llama, Mistral, DeepSeek, etc., run via vLLM, llama.cpp, or [Ollama](/learn/local-open-models/running-models-locally/what-is-local-llm)), a newer method called **min-p** has gained ground. Instead of a fixed count (top-k) or a cumulative threshold (top-p), min-p sets a *floor relative to the top token*: with `min_p=0.1`, any token less than 10% as likely as the best token is cut. Its appeal is robustness — it stays coherent even at high temperature, where top-p can get loose. Many local-model power users now run just **temperature + min_p** (often 0.05–0.1) and skip top-p/top-k entirely. Min-p isn't a magic upgrade — independent 2026 analyses find it roughly ties top-p once both are tuned — but it's a real third option to know."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A few subtleties that bite once you're past the basics."
+        },
+        {
+          "type": "h3",
+          "text": "Order of operations changes the result"
+        },
+        {
+          "type": "p",
+          "md": "Whether temperature is applied *before* or *after* the top-k/top-p cut matters, and libraries differ. If temperature flattens the distribution *before* the nucleus is computed, top-p will admit more tokens (a flatter curve takes longer to reach p). If truncation happens first, temperature only reshapes the survivors. This is one reason the *same* `top_p=0.9, temperature=1.2` can produce noticeably different output across OpenAI, vLLM, and llama.cpp. When reproducibility matters, pin the library and version, not just the numbers."
+        },
+        {
+          "type": "h3",
+          "text": "Why top-p alone doesn't make output deterministic"
+        },
+        {
+          "type": "p",
+          "md": "A tight `top_p=0.1` shrinks the pool but still *samples* from it. To force the single best token every time you want greedy decoding — `temperature=0` (or `top_k=1`). Even then, true bit-for-bit determinism isn't guaranteed: floating-point non-determinism in GPU kernels and dynamic batching on shared servers can flip a tie. This is a known gotcha when teams expect identical outputs across runs and don't get them."
+        },
+        {
+          "type": "h3",
+          "text": "Truncation interacts with repetition"
+        },
+        {
+          "type": "p",
+          "md": "Very small nucleus or k values are a fast path to repetition loops — the same degeneration nucleus sampling was invented to fix. That's why production stacks pair truncation with *repetition* or *frequency penalties*, which down-weight tokens already emitted. Top-p/top-k decide *who's eligible*; penalties nudge the odds *among* the eligible. They're complementary, and tuning one without the other is a common cause of either dull loops (truncation too tight) or incoherence (penalties too aggressive)."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Debugging weird output? Log the **per-token logprobs** your API returns. If a hallucinated word had a tiny probability, your nucleus is too wide (lower top_p). If good answers keep getting cut and output feels stuck, it's too narrow (raise top_p or temperature). The numbers tell you which knob moved the wrong way."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Should I change temperature or top_p — and can I change both?",
+      "a": "Change one, not both. Every major provider (OpenAI, Anthropic, Google) recommends tuning **either** temperature **or** top_p and leaving the other at its default. They both affect randomness, so adjusting both at once gives you two interacting controls and unpredictable output you can't reason about. Pick temperature if you want a simple creativity slider; pick top_p if you specifically want to cap the long tail of unlikely tokens."
+    },
+    {
+      "q": "What's a good default value for top_p?",
+      "a": "`top_p=1.0` (keep everything) is the API default and is fine when you steer with temperature instead. If you want to *use* top_p as your knob, **0.9** is a solid general-purpose value: it trims the worst long-tail tokens while keeping natural variety. Drop to 0.3–0.5 for factual or extraction tasks, raise to 0.95+ for creative writing."
+    },
+    {
+      "q": "What is the difference between top-k and top-p (nucleus) sampling?",
+      "a": "Top-k keeps a **fixed number** of the most likely tokens (e.g. the top 40) every time, regardless of context. Top-p keeps a **variable number** — the smallest set whose probabilities add up to p (e.g. 0.9). Top-p adapts: the pool shrinks when the model is confident and grows when it's unsure, which is why it generally produces better text and became the industry default."
+    },
+    {
+      "q": "Does setting top_p make the model deterministic?",
+      "a": "No. Even a very tight `top_p=0.1` still randomly samples from the surviving tokens. To make output (near-)deterministic, set `temperature=0` or `top_k=1` for greedy decoding. Note that even greedy decoding isn't perfectly reproducible on GPUs due to floating-point and batching effects on shared servers."
+    },
+    {
+      "q": "Why does the Claude API reject top_p or temperature with a 400 error?",
+      "a": "As of mid-2026, Anthropic's newest models — Claude Opus 4.7 and later, including Opus 4.8 — don't support `temperature`, `top_p`, or `top_k`, and sending a non-default value returns a 400 error. These models manage sampling internally. Remove the parameters (or only send them to older models that accept them) and the error goes away."
+    },
+    {
+      "q": "What is min-p and is it better than top-p?",
+      "a": "Min-p keeps every token that's at least a certain fraction as likely as the *most* likely token (e.g. `min_p=0.1` cuts anything under 10% of the top token's probability). It's popular for local/open models because it stays coherent at high temperature. It's a genuine alternative, but independent 2026 analyses find it roughly ties top-p once both are tuned — so it's an option, not a strict upgrade. Hosted APIs mostly still expose top_p, not min-p."
+    }
+  ],
+  "related": [
+    "llm-temperature-explained",
+    "why-llms-hallucinate",
+    "how-llms-work",
+    "what-is-a-token",
+    "knowledge-cutoff-explained"
+  ],
+  "furtherReading": [
+    {
+      "title": "The Curious Case of Neural Text Degeneration (Holtzman et al., 2019 — the nucleus sampling paper)",
+      "url": "https://arxiv.org/abs/1904.09751"
+    },
+    {
+      "title": "vLLM SamplingParams reference (temperature, top_p, top_k, min_p)",
+      "url": "https://docs.vllm.ai/en/v0.6.4/dev/sampling_params.html"
+    }
+  ]
+}

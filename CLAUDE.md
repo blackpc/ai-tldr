@@ -20,10 +20,52 @@ Path-based, not hash-based:
 - `/` → feed home
 - `/influencers` → influencers page
 - `/releases/<id>` → feed with the modal open for that release
+- `/learn` → Learn AI hub; `/learn/<cat>`, `/learn/<cat>/<sub>`,
+  `/learn/<cat>/<sub>/<slug>` → category / subcategory / article pages
 
 `src/App.tsx` parses `window.location.pathname`. Modal open/close uses
 `pushState` / `replaceState` — no page reloads. Legacy hash URLs
 (`#<id>`, `#influencers`) still work as a fallback for old bookmarks.
+
+## Learn section (/learn)
+
+A beginner-friendly AI encyclopedia. Three-level tree:
+category → subcategory → article. Currently one foundational
+("What is X") article per subcategory — 14 categories, 63
+subcategories, 63 articles — deliberately expandable: add more article
+files under a subcategory and append their refs to `taxonomy.json`.
+Extra drafts from the initial run are parked in
+`.claude/tmp/learn-archive/` for future expansion.
+
+- **Taxonomy**: `src/data/learn/taxonomy.json` — the canonical tree.
+  Every article's SEO metadata (`seoTitle`, `metaDescription`,
+  `keywords`, `difficulty`, `oneLiner`) lives here AND in the article
+  file; `scripts/check-learn.ts` fails the build if they differ.
+- **Articles**: one JSON file per article at
+  `src/data/learn/articles/<cat>/<sub>/<slug>.json`. Articles are
+  STRUCTURED (typed sections/blocks, see `src/data/learn/schema.ts`),
+  not freeform markdown — the fixed block vocabulary (p / h3 / list /
+  table / code / callout / diagram / image) is what keeps every page
+  consistent. Canonical section flow: `in-plain-english` →
+  `why-it-matters` → `how-it-works` (≥1 diagram) → free sections →
+  `going-deeper` (last), plus FAQ (3–7), related (2–6), furtherReading.
+- **Validation**: `bun scripts/check-learn.ts` (wired into typecheck +
+  build) enforces every structural rule, slug uniqueness, internal-link
+  liveness, SEO length limits, and regenerates
+  `src/data/learn/count.json` (the nav badge — keeps the taxonomy out
+  of the main bundle).
+- **Code splitting**: the SPA imports the whole section lazily
+  (`LearnSection` chunk); each article JSON is its own vite chunk.
+  Never import taxonomy/articles from main-bundle modules.
+- **SEO**: `scripts/prerender-learn.tsx` (called by prerender.ts)
+  renders every learn page to static HTML with the real React
+  components — full content in `#root`, inlined learn.css, embedded
+  `__LEARN_DATA__` payload, TechArticle/FAQPage/BreadcrumbList JSON-LD,
+  and `sitemap-learn.xml`.
+- **Content rules**: evergreen topics only, zero-hallucination policy
+  applies (no invented features/URLs/benchmarks; external links
+  verified). Diagrams use the fixed DSL in `schema.ts` — never raw
+  SVG/HTML.
 
 ## Build pipeline
 

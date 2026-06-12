@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -20,12 +22,21 @@ import { influencers } from "./data/influencers";
 import { Subscribe } from "./components/Subscribe";
 import { BuyMeCoffee } from "./components/BuyMeCoffee";
 import { track, useHeartbeat, useScrollDepth } from "./lib/analytics";
+import type { LearnRoute } from "./components/learn/LearnSection";
+import learnCount from "./data/learn/count.json";
+
+// The whole Learn section (components + taxonomy + CSS) is one lazy
+// chunk — feed readers never download it. The article count shown in
+// the nav comes from the tiny generated count.json instead, so the
+// main bundle stays taxonomy-free (check-learn.ts keeps it in sync).
+const LearnSection = lazy(() => import("./components/learn/LearnSection"));
 
 /** Parse current URL into a route. Supported paths:
  *   /                     → feed home
  *   /influencers          → influencers page
  *   /log                  → sweep log page
  *   /releases/<id>        → feed with modal open for that item
+ *   /learn[/cat[/sub[/slug]]] → Learn section (lazy chunk)
  * Legacy hash formats (#id, #influencers) still work so old bookmarks
  * and shared links keep functioning.
  */
@@ -33,7 +44,8 @@ type Route =
   | { kind: "feed" }
   | { kind: "influencers" }
   | { kind: "log" }
-  | { kind: "release"; id: string };
+  | { kind: "release"; id: string }
+  | LearnRoute;
 
 function parseRoute(): Route {
   const hash = window.location.hash.slice(1);
@@ -49,6 +61,15 @@ function parseRoute(): Route {
   }
   const m = path.match(/^\/releases\/([^/]+)\/?$/);
   if (m) return { kind: "release", id: m[1] };
+
+  const learn = path.match(/^\/learn(?:\/([^/]+))?(?:\/([^/]+))?(?:\/([^/]+))?\/?$/);
+  if (learn) {
+    const [, cat, sub, slug] = learn;
+    if (cat && sub && slug) return { kind: "learn-article", cat, sub, slug };
+    if (cat && sub) return { kind: "learn-sub", cat, sub };
+    if (cat) return { kind: "learn-cat", cat };
+    return { kind: "learn" };
+  }
 
   if (hash) return { kind: "release", id: hash };
   return { kind: "feed" };
@@ -130,11 +151,12 @@ function itemFromRoute(
   return items.find((i) => i.id === route.id) ?? null;
 }
 
-type Page = "feed" | "influencers" | "log";
+type Page = "feed" | "influencers" | "log" | "learn";
 
 function pageFromRoute(route: Route): Page {
   if (route.kind === "influencers") return "influencers";
   if (route.kind === "log") return "log";
+  if (route.kind.startsWith("learn")) return "learn";
   return "feed";
 }
 
@@ -236,6 +258,17 @@ function App() {
     setRoute({ kind: "log" });
   }, []);
 
+  // Nav within the Learn section (and into it). Learn components render
+  // plain <a href data-internal> links; LearnSection delegates clicks
+  // here so navigation stays client-side. Every learn page starts at
+  // the top — learn pages don't participate in feed scroll restore.
+  const goLearnPath = useCallback((path: string) => {
+    track("nav", { to: path, from: pageRef.current });
+    window.history.pushState(null, "", path);
+    setRoute(parseRoute());
+    window.scrollTo(0, 0);
+  }, []);
+
   // Open modal = navigate to /releases/<id>
   const openModal = useCallback((item: ReleaseItem) => {
     track("release:open", {
@@ -304,6 +337,9 @@ function App() {
   // crawler sees the right thing. Static HTML pages already have the
   // correct tags baked in by scripts/prerender.ts.
   useEffect(() => {
+    // Learn pages own their <title>/<meta> (set inside LearnSection,
+    // which has the taxonomy data) — don't fight them here.
+    if (route.kind.startsWith("learn")) return;
     if (route.kind === "release") {
       const item = sorted.find((i) => i.id === route.id);
       if (item) {
@@ -528,6 +564,17 @@ function App() {
             </button>
             <button
               type="button"
+              className={`nav-link ${page === "learn" ? "nav-active" : ""}`}
+              onClick={() => {
+                setMenuOpen(false);
+                goLearnPath("/learn");
+              }}
+            >
+              <span className="nav-link-lbl">LEARN</span>
+              <span className="nav-link-num">{learnCount.articles}</span>
+            </button>
+            <button
+              type="button"
               className={`nav-link ${page === "influencers" ? "nav-active" : ""}`}
               onClick={() => {
                 setMenuOpen(false);
@@ -596,6 +643,12 @@ function App() {
         </>
       ) : page === "influencers" ? (
         <InfluencersPage />
+      ) : page === "learn" ? (
+        <Suspense
+          fallback={<div className="lrn-loading-fallback">// loading…</div>}
+        >
+          <LearnSection route={route as LearnRoute} onNavigate={goLearnPath} />
+        </Suspense>
       ) : (
         <SweepLogPage onOpenRelease={openReleaseById} />
       )}

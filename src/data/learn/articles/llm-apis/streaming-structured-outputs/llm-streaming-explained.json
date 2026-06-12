@@ -1,0 +1,304 @@
+{
+  "slug": "llm-streaming-explained",
+  "title": "What Is Streaming in LLM APIs? Server-Sent Events Explained",
+  "seoTitle": "What Is LLM Streaming? Server-Sent Events Explained",
+  "metaDescription": "Streaming shows the model's answer token by token. Learn how server-sent events work, how to consume a stream in code, and when not to bother.",
+  "keywords": [
+    "what is streaming in llm api",
+    "server sent events llm",
+    "how to stream chatgpt response",
+    "stream tokens to frontend",
+    "when to use llm streaming"
+  ],
+  "difficulty": "beginner",
+  "oneLiner": "Understand how token-by-token streaming works over server-sent events and how to consume a stream without mangling the output.",
+  "updated": "2026-06-11",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you ask an LLM a question, the model doesn't think up the whole answer and then hand it to you all at once. It writes one piece at a time, left to right. **Streaming** just means the API sends you each piece the moment it's ready, instead of waiting until the entire answer is finished."
+        },
+        {
+          "type": "p",
+          "md": "Picture a friend reading you a recipe over the phone. The *non-streaming* friend reads the whole recipe silently to themselves first, then calls you back five minutes later and dictates it. The *streaming* friend just starts talking the second they see the first line, and keeps going as they read. Same recipe, same words — but you start hearing it immediately and you can tell they're still working."
+        },
+        {
+          "type": "p",
+          "md": "That word-at-a-time flow is what produces the now-familiar \"typewriter\" effect in ChatGPT, Claude, and almost every AI chat box you've used. The text crawls onto the screen because it is literally arriving in tiny pieces, one [token](/learn/llm-fundamentals/tokens-and-tokenization/what-is-a-token) at a time. A token is roughly a word-fragment — about four characters of English — so a single sentence is a handful of streamed chunks."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Streaming changes *when* you receive the text, not *what* the text is. The model generates the exact same answer either way. Streaming is a delivery option, not a different model setting like [temperature](/learn/llm-fundamentals/sampling-and-hallucination/llm-temperature-explained)."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "LLMs are slow by web standards. A long answer can take 10–30 seconds to finish generating. If you wait for the whole thing before showing anything, the user stares at a spinner for half a minute — and many of them assume your app is broken and leave."
+        },
+        {
+          "type": "p",
+          "md": "The single number that matters here is **time to first token (TTFT)** — how long until the very first chunk shows up. With streaming, TTFT is usually well under a second, even if the full answer takes 20 seconds. The user sees motion almost instantly, reads along as it generates, and the *perceived* speed is dramatically better even though the *total* time is identical."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Wait-for-everything vs. stream-as-you-go",
+            "columns": [
+              {
+                "title": "No streaming",
+                "items": [
+                  "Send request",
+                  "Blank screen + spinner",
+                  "...wait 20 seconds...",
+                  "Entire answer pops in at once",
+                  "User wondered if it crashed"
+                ]
+              },
+              {
+                "title": "Streaming",
+                "accent": true,
+                "items": [
+                  "Send request",
+                  "First words appear in ~0.5s",
+                  "Text flows in as it's written",
+                  "User reads along",
+                  "Feels fast and alive"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Who should care? Anyone building a user-facing AI feature — a chatbot, a writing assistant, a coding tool, a support agent. Streaming is the default UX expectation now; an app that doesn't stream feels broken next to one that does. It's a core part of good [AI UX patterns](/learn/building-ai-apps/ai-ux-patterns/what-makes-good-ai-ux)."
+        },
+        {
+          "type": "p",
+          "md": "Streaming also gives you an early **cancel** button. If the user sees the answer going the wrong way three seconds in, they can stop it — and you stop paying for the tokens you didn't generate. Before streaming, you had no way to interrupt; you paid for the full response no matter what."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Under the hood, streaming rides on a web standard called **Server-Sent Events (SSE)**. SSE is a simple, one-directional channel: the server holds the HTTP connection open and keeps pushing little text messages down it until it's done. It's been part of the HTML standard for years — LLM APIs just adopted it as the transport for token streams."
+        },
+        {
+          "type": "p",
+          "md": "You opt in by setting `\"stream\": true` in your request. The server then responds with the content type `text/event-stream` and, instead of one big JSON blob, sends a sequence of small **events**. Each event is plain text shaped like this:"
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "title": "what the raw SSE wire looks like",
+          "code": "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"Hello\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"!\"}}\n"
+        },
+        {
+          "type": "p",
+          "md": "Notice the shape: a line starting with `event:` names the kind of event, a line starting with `data:` carries a JSON payload, and a **blank line** separates one event from the next. That blank-line boundary is the whole protocol. Your job is to read the connection line by line, group lines into events, parse the JSON, and pull out the new text fragment (the `delta`)."
+        },
+        {
+          "type": "p",
+          "md": "A full response isn't *just* text deltas. The stream is a small life-cycle of named events. On the Anthropic [Claude API](/learn/llm-apis/provider-guides/claude-api-beginners-guide), for example, you get a `message_start`, then a `content_block_start`, then a burst of `content_block_delta` events (the actual words), then `message_delta` and `message_stop` to close it out. There are also occasional `ping` events that carry no content — they just keep the connection from timing out. The diagram below shows the order."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "The event life-cycle of one streamed response",
+            "steps": [
+              { "label": "message_start", "sub": "empty shell of the reply" },
+              { "label": "content_block_start", "sub": "a block opens (index 0)" },
+              { "label": "content_block_delta ×N", "sub": "the actual text, chunk by chunk", "accent": true },
+              { "label": "message_delta", "sub": "stop reason + token usage" },
+              { "label": "message_stop", "sub": "stream is done" }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The other big providers follow the same SSE pattern with their own event names — OpenAI sends `data:` chunks ending in a literal `data: [DONE]` marker, and Google's Gemini API streams JSON objects the same way. The names differ; the idea is identical. And here's the good news: you almost never parse this by hand."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Don't reinvent the SSE parser. Every official SDK gives you a clean stream object you can loop over, and it handles the line-buffering, JSON parsing, and reconnection edge cases for you. Hand-rolling a parser is the classic way to get garbled output."
+        }
+      ]
+    },
+    {
+      "id": "consuming-a-stream",
+      "title": "Consuming a stream in code",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "In practice you let the SDK do the heavy lifting and just iterate. Here's the backend pattern in Python — open a stream and print each text fragment as it arrives:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "stream.py — print tokens as they arrive",
+          "code": "import anthropic\n\nclient = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from the env\n\nwith client.messages.stream(\n    model=\"claude-opus-4-8\",\n    max_tokens=1024,\n    messages=[{\"role\": \"user\", \"content\": \"Write a haiku about streaming.\"}],\n) as stream:\n    for text in stream.text_stream:   # already-decoded text chunks\n        print(text, end=\"\", flush=True)  # flush => no buffering, true live output\n\n# The SDK accumulated everything; grab the final assembled message if you need it.\nfinal = stream.get_final_message()\nprint(\"\\n\\nstop reason:\", final.stop_reason)"
+        },
+        {
+          "type": "p",
+          "md": "Two details matter. First, `text_stream` hands you ready-to-use strings — the SDK already unwrapped the `text_delta` for you, so there's no JSON to parse. Second, `flush=True` forces each chunk to the terminal immediately; without it your runtime might buffer and you'd lose the live feel entirely."
+        },
+        {
+          "type": "p",
+          "md": "But the terminal is rarely the goal. Usually your server is the middleman: it streams from the model and **re-streams** to a browser. The clean way is to forward the SSE through your own endpoint. Here's a minimal relay using the TypeScript SDK and the standard `ReadableStream`:"
+        },
+        {
+          "type": "code",
+          "lang": "typescript",
+          "title": "route.ts — relay the model stream to the browser",
+          "code": "import Anthropic from \"@anthropic-ai/sdk\";\n\nconst client = new Anthropic(); // ANTHROPIC_API_KEY in the env\n\nexport async function POST(req: Request) {\n  const { prompt } = await req.json();\n\n  const stream = client.messages.stream({\n    model: \"claude-opus-4-8\",\n    max_tokens: 1024,\n    messages: [{ role: \"user\", content: prompt }],\n  });\n\n  // Turn the model's text events into our own SSE feed for the browser.\n  const body = new ReadableStream({\n    async start(controller) {\n      const enc = new TextEncoder();\n      stream.on(\"text\", (chunk) => {\n        controller.enqueue(enc.encode(`data: ${JSON.stringify(chunk)}\\n\\n`));\n      });\n      await stream.finalMessage();   // wait until the model is done\n      controller.enqueue(enc.encode(\"data: [DONE]\\n\\n\"));\n      controller.close();\n    },\n  });\n\n  return new Response(body, {\n    headers: { \"Content-Type\": \"text/event-stream\" },\n  });\n}"
+        },
+        {
+          "type": "p",
+          "md": "On the browser side you read that feed. The native `EventSource` API only does GET requests, so for a POST chat endpoint most apps read the response body with `fetch` and a reader, or use a small helper library. The principle stays the same: read chunks, append text to the screen, watch for the `[DONE]` marker."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Never send your API key to the browser. The model stream must originate on **your server** — the relay above keeps the key server-side. A frontend calling the provider directly leaks your key to anyone who opens DevTools. This is one of the first lessons in [calling an LLM API](/learn/llm-apis/api-basics/what-is-llm-api)."
+        }
+      ]
+    },
+    {
+      "id": "when-to-use-it",
+      "title": "When to stream — and when not to",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Streaming is great for humans reading text in real time. It's the wrong tool when a machine needs the *complete, validated* answer before doing anything. Here's the quick decision table:"
+        },
+        {
+          "type": "table",
+          "headers": ["Situation", "Stream?", "Why"],
+          "rows": [
+            ["Chatbot / writing assistant", "Yes", "User reads as it types; perceived speed is everything"],
+            ["Coding agent showing its work", "Yes", "Long outputs feel responsive; user can cancel early"],
+            ["Background job / batch summarizer", "No", "No human watching — just take the whole result"],
+            ["Need valid JSON before you act", "Usually no", "A half-streamed object isn't parseable yet"],
+            ["Using the answer as a tool input", "No", "[Function calling](/learn/llm-apis/function-calling/what-is-function-calling) needs the complete arguments first"]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The JSON case is the big gotcha. If you ask the model for structured output and stream it, the partial text you've received mid-stream is *invalid* JSON — half a brace, a dangling quote. You can't parse it until the stream finishes. So for pure machine-to-machine calls where you only care about the final parsed object, streaming adds complexity for no benefit. Take the whole response in one shot."
+        },
+        {
+          "type": "p",
+          "md": "There's a middle ground worth knowing: some apps stream *and* still want structure — for example, showing a partial UI as fields fill in. That's an advanced pattern (partial-JSON or incremental parsing), and it's the bridge into the rest of this [streaming and structured outputs](/learn/llm-apis/streaming-structured-outputs) topic."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "h3",
+          "text": "Buffering: the silent killer of streaming"
+        },
+        {
+          "type": "p",
+          "md": "The most common reason \"my streaming doesn't stream\" is that something in the middle is **buffering** — holding the chunks back and releasing them in a clump. Reverse proxies (Nginx with `proxy_buffering on`), serverless gateways, gzip compression layers, and CDNs can all collect your beautiful token stream and deliver it as one blob, killing the whole point. When debugging, test against the model directly first to confirm the stream works, then bisect each hop in your stack."
+        },
+        {
+          "type": "h3",
+          "text": "Streaming tool calls and reasoning"
+        },
+        {
+          "type": "p",
+          "md": "Streaming isn't only for plain text. When a model decides to call a tool, the arguments stream too — as `input_json_delta` fragments that build up the JSON arguments piece by piece. Reasoning models stream their thinking as `thinking_delta` events before the visible answer. The point: a single stream can carry multiple kinds of content blocks (text, tool input, thinking), each with its own delta type and `index`. If you're routing these somewhere, switch on the delta type, don't assume every chunk is display text. This matters for [tool use](/learn/ai-agents/tool-use/what-is-tool-use) and agent UIs that show actions live."
+        },
+        {
+          "type": "h3",
+          "text": "Token usage and cost"
+        },
+        {
+          "type": "p",
+          "md": "Streaming doesn't change the bill — you pay for the same input and output tokens either way, since [pricing is per token](/learn/llm-apis/cost-caching-rate-limits/llm-api-pricing) regardless of delivery. The usage numbers arrive at the *end* of the stream (in the `message_delta` / final event), so if you log cost per request, capture it from the closing event, not the deltas. The one real saving is cancellation: stop a runaway generation early and you stop paying for the un-generated tokens."
+        },
+        {
+          "type": "h3",
+          "text": "Reliability: drops, retries, and idempotency"
+        },
+        {
+          "type": "p",
+          "md": "An open connection can drop mid-stream — flaky mobile networks, proxy timeouts, a server restart. The SSE spec includes an event `id` and a `Last-Event-ID` header for resuming, but LLM streams generally can't be resumed token-perfect, so the practical strategy is: buffer what you've received, and on failure either retry the whole call or show the user a clean \"connection lost, retry?\" rather than a frozen half-answer. Always set a timeout, and always handle the error event — a stream that silently stalls is worse than one that fails loudly."
+        },
+        {
+          "type": "h3",
+          "text": "Backpressure and slow consumers"
+        },
+        {
+          "type": "p",
+          "md": "If your downstream (the browser, a database write, a slow client) can't keep up with how fast tokens arrive, chunks pile up in memory. Production-grade relays respect **backpressure** — they pause reading from the model when the consumer's buffer is full. The web `ReadableStream` and most SDK stream objects support this; the danger is in naive code that just pushes every chunk into an unbounded array. For high-traffic services this becomes a real [LLMOps](/learn/production-llmops/llmops-fundamentals/what-is-llmops) concern."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is streaming in an LLM API?",
+      "a": "It's an option where the API sends the model's answer in small pieces (tokens) as they're generated, instead of waiting for the full reply. You enable it with `\"stream\": true`, and the text arrives over server-sent events so your app can display it live with that typewriter effect."
+    },
+    {
+      "q": "How do I stream a ChatGPT or Claude response?",
+      "a": "Set the stream flag in your request and loop over the events the API returns. The easiest path is the official SDK: in Python you iterate `stream.text_stream`, in TypeScript you listen for the `text` event. The SDK parses the server-sent events for you, so you just print or forward each chunk."
+    },
+    {
+      "q": "What are server-sent events (SSE)?",
+      "a": "SSE is a web standard for a server to push a stream of text messages to a client over one open HTTP connection. Each message is a block of `event:` and `data:` lines separated by a blank line. LLM APIs use SSE as the transport for token-by-token streaming."
+    },
+    {
+      "q": "Does streaming make the LLM faster or cheaper?",
+      "a": "Neither, really. Total generation time and token cost are the same as a non-streamed call — pricing is per token regardless. Streaming improves *perceived* speed by showing the first words in well under a second, and it lets users cancel early, which is the only way it saves money."
+    },
+    {
+      "q": "When should I not use streaming?",
+      "a": "Skip it when no human is watching the output as it generates — background jobs, batch processing — or when you need a complete, valid result before acting. Mid-stream JSON is unparseable, so if you only want the final structured object or tool arguments, just take the whole response at once."
+    },
+    {
+      "q": "Why is my streaming response arriving all at once instead of gradually?",
+      "a": "Something in your stack is buffering. Common culprits are a reverse proxy (e.g. Nginx `proxy_buffering`), gzip compression, a serverless gateway, or a CDN holding chunks back. Confirm the stream works against the model directly, then check each hop, and make sure you flush output instead of letting your runtime buffer it."
+    }
+  ],
+  "related": [
+    "what-is-llm-api",
+    "claude-api-beginners-guide",
+    "what-is-function-calling",
+    "llm-api-pricing"
+  ],
+  "furtherReading": [
+    {
+      "title": "Anthropic — Streaming Messages (Claude API docs)",
+      "url": "https://docs.anthropic.com/en/api/messages-streaming"
+    },
+    {
+      "title": "MDN — Using server-sent events",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events"
+    },
+    {
+      "title": "WHATWG HTML Standard — Server-sent events",
+      "url": "https://html.spec.whatwg.org/multipage/server-sent-events.html"
+    }
+  ]
+}

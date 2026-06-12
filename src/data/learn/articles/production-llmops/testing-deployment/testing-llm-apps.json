@@ -1,0 +1,318 @@
+{
+  "slug": "testing-llm-apps",
+  "title": "How Do You Test LLM Apps? Strategies for Nondeterministic Code",
+  "seoTitle": "How to Test LLM Apps: Nondeterministic Software",
+  "metaDescription": "Unit tests assume the same input gives the same output — LLMs don't. Testing strategies for nondeterministic apps: assertions, evals, snapshots.",
+  "keywords": [
+    "how to test llm apps",
+    "testing nondeterministic software",
+    "unit tests for llm",
+    "llm app testing strategies",
+    "snapshot testing llm output"
+  ],
+  "difficulty": "beginner",
+  "oneLiner": "Learn testing strategies that work when the same input can produce different output — assertions, evals, and snapshots.",
+  "updated": "2026-06-11",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Normal software is a vending machine. Press B4, you get the same chocolate bar every single time. That predictability is the whole foundation of testing: you write `assert add(2, 2) == 4`, and if that line ever fails, you know something broke."
+        },
+        {
+          "type": "p",
+          "md": "An **LLM app is not a vending machine — it's a thoughtful coworker.** Ask the same question twice and you get two answers that mean the same thing but use different words. Both are correct. Now your old testing trick is useless: `assert answer == \"Paris\"` fails the moment the model says *\"The capital of France is Paris.\"* The output is right; the exact-string check is wrong."
+        },
+        {
+          "type": "p",
+          "md": "**Testing LLM apps** is the set of techniques for checking that nondeterministic output is *good enough*, without demanding it be *byte-for-byte identical*. Instead of asking \"did I get exactly this string?\" you ask softer, smarter questions: Does the answer contain the key fact? Is it valid JSON? Did the model call the right tool? Is it close enough to a known-good answer? Is a second model willing to grade it as correct?"
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The word people use for this graded, fuzzy testing is **evals** (short for *evaluations*). A unit test gives a hard pass/fail; an eval gives a *score* over a *dataset* — \"92 of 100 answers were correct.\" If you only learn one new word from this page, learn that one. See [What Are LLM Evals?](/learn/evaluation-safety/evaluation-basics/what-are-llm-evals)."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Here is the trap every LLM builder falls into. You tweak a prompt, eyeball three answers, they look great, you ship. You never notice that your tweak quietly broke a *fourth* kind of question you didn't think to check. Real users find it instead. Without tests, **every prompt edit is a coin flip you can't see the result of.**"
+        },
+        {
+          "type": "p",
+          "md": "This matters more for LLMs than for normal code, not less, for three reasons that stack on top of each other:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**The model changes under you.** A vendor updates their hosted model and your app's behavior shifts overnight with zero code changes on your side. Normal software never does this. Only a test suite tells you it happened.",
+            "**Failures look like success.** A wrong answer arrives fluent, confident, and perfectly formatted — there's no stack trace, no red error, nothing screaming. A [hallucination](/learn/llm-fundamentals/sampling-and-hallucination/llm-temperature-explained) is invisible until someone reads it carefully.",
+            "**Tiny prompt edits have huge blast radius.** Adding one sentence to a [prompt](/learn/prompt-engineering/prompting-basics/what-is-prompt-engineering) can fix one category of answers and silently wreck another. You cannot reason your way to which; you have to measure."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who should care? **Anyone shipping an LLM feature to real users** — a support bot, a [RAG](/learn/rag/rag-fundamentals/what-is-rag) search box, an [agent](/learn/ai-agents/agent-fundamentals/what-is-an-ai-agent). And especially anyone iterating on prompts, because without tests you have no way to know whether iteration is making things better or worse."
+        },
+        {
+          "type": "p",
+          "md": "What did this replace? For most teams, **nothing — it replaced winging it.** The old loop was \"change the prompt, click around for a minute, ship if it feels right.\" That's fine for a weekend hack and a slow-motion disaster at scale. Testing turns that gut-feel loop into a number you can trust, watch, and roll back. It's a core part of [LLMOps](/learn/production-llmops/llmops-fundamentals/what-is-llmops)."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "The most expensive bug is the one a *customer* finds first — a wrong refund policy, a leaked secret, a 30-second timeout. Tests exist to catch those in your CI run, before they reach anyone who can churn, complain, or screenshot it."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The core trick is to stop checking for *equality* and start checking for *properties*. You don't ask \"is the output this exact string?\" You ask \"does the output have the qualities a good answer needs?\" Those property checks come in a ladder, from cheapest and most reliable at the bottom to most powerful and most expensive at the top. You use as many rungs as the answer needs."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "stack",
+            "title": "The assertion ladder (cheap & strict at top)",
+            "layers": [
+              { "label": "Deterministic checks", "sub": "valid JSON? contains \"Paris\"? right tool called?" },
+              { "label": "Similarity checks", "sub": "embedding or fuzzy match to a reference answer", "accent": true },
+              { "label": "LLM-as-a-judge", "sub": "a second model grades \"is this correct & helpful?\"" }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "**Deterministic checks** are the bottom rung and you should reach for them first — they're free, instant, and never flaky. Many LLM outputs are more structured than they look: if you force the model to return JSON via [structured outputs](/learn/llm-apis/streaming-structured-outputs/llm-streaming-explained), you can assert the schema parses, a field equals a value, or the text contains a required keyword. A surprising amount of testing is just this."
+        },
+        {
+          "type": "p",
+          "md": "**Similarity checks** handle free-form prose where exact words vary but *meaning* shouldn't. You keep a reference \"golden\" answer and measure how close the model's answer is to it — using [embeddings](/learn/embeddings-vector-databases/embeddings-explained/what-are-embeddings) to score semantic similarity, so \"Paris is the capital\" and \"The capital is Paris\" both pass. **LLM-as-a-judge** is the top rung: when correctness is genuinely subjective (\"is this summary faithful and well-written?\"), you ask a second, often stronger model to grade the answer against a rubric. It's powerful but slower, costs money, and can be biased — so you save it for what the cheaper rungs can't cover. See [LLM-as-a-Judge](/learn/evaluation-safety/llm-as-judge/llm-as-a-judge-explained)."
+        },
+        {
+          "type": "p",
+          "md": "Wrap that ladder around a **dataset** and you have an eval. Instead of one input, you run dozens or hundreds of `(input, expected)` pairs, score each one, and report a pass rate. That's the whole shape of testing nondeterministic software:"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "An eval run",
+            "steps": [
+              { "label": "Test dataset", "sub": "inputs + expectations" },
+              { "label": "Run through app", "sub": "call the LLM for each" },
+              { "label": "Score each output", "sub": "assertion ladder", "accent": true },
+              { "label": "Pass rate", "sub": "e.g. 92/100 — compare to last run" }
+            ]
+          }
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Pin sampling [temperature](/learn/llm-fundamentals/sampling-and-hallucination/llm-temperature-explained) to `0` in tests. It doesn't make the model deterministic (it rarely is, fully), but it cuts the random variation way down so your scores are stable enough to compare run to run."
+        }
+      ]
+    },
+    {
+      "id": "the-three-strategies",
+      "title": "Assertions, snapshots, and evals",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Three named strategies cover almost everything. They're not rivals — most real test suites use all three for different parts of the output."
+        },
+        {
+          "type": "table",
+          "headers": ["Strategy", "What it checks", "Best for", "Watch out for"],
+          "rows": [
+            ["**Assertions**", "A specific property holds (parses, contains, equals a field)", "Structured output, tool calls, format rules", "Misses meaning — \"valid JSON\" can still be wrong"],
+            ["**Snapshot**", "Output matches a saved reference from last time", "Catching unexpected *drift* between runs", "Breaks on harmless rewording; needs human review to re-bless"],
+            ["**Evals (scored)**", "A score over a whole dataset (similarity or judge)", "Open-ended quality, regression tracking, comparing prompts/models", "Slower, judge costs money and can be biased"]
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Snapshot testing, adapted for LLMs"
+        },
+        {
+          "type": "p",
+          "md": "**Snapshot testing** is borrowed from frontend testing (think Jest's `toMatchSnapshot`). The first run saves the output to a file; later runs compare against that saved file and flag any difference for a human to approve or reject. For LLMs it's a blunt but useful tripwire: it won't tell you an answer is *good*, but it loudly tells you when an answer *changed* — which is exactly what you want after a model upgrade or a prompt edit. The catch is that raw text snapshots break on every harmless rewording, so for prose people snapshot the *structured fields* (the JSON, the tool name, the chosen category) rather than the full free-text blob."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Rule of thumb: assertions for *correctness* (does it have the right facts/shape?), snapshots for *change detection* (did anything move?), scored evals for *quality* (how good is it, on average, across many cases?). Reach for the cheapest one that answers your question."
+        }
+      ]
+    },
+    {
+      "id": "a-runnable-example",
+      "title": "A runnable example",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You don't need a special framework to start — plain `pytest` and a few helper assertions get you a real test suite. Here's a tiny eval that checks a classifier-style LLM call three ways: it must call the model, return valid JSON, and pick the right category for each labeled example. It runs the dataset and prints a pass rate, just like a grown-up eval."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "test_classifier.py",
+          "code": "import json\nfrom anthropic import Anthropic\n\nclient = Anthropic(api_key=\"sk-...\")  # placeholder\n\nCATEGORIES = [\"billing\", \"bug\", \"feature_request\", \"other\"]\n\n# A small labeled dataset: (user message, the correct label).\nDATASET = [\n    (\"You charged my card twice this month\", \"billing\"),\n    (\"The export button does nothing when I click it\", \"bug\"),\n    (\"Could you add a dark mode please?\", \"feature_request\"),\n    (\"Just wanted to say thanks, love the product\", \"other\"),\n]\n\ndef classify(message: str) -> dict:\n    \"\"\"Ask the model to classify, forcing a JSON shape we can assert on.\"\"\"\n    prompt = (\n        f\"Classify this support message into one of {CATEGORIES}.\\n\"\n        f'Reply ONLY with JSON: {{\"category\": \"...\"}}.\\n\\n'\n        f\"Message: {message}\"\n    )\n    msg = client.messages.create(\n        model=\"claude-sonnet-4-5\",\n        max_tokens=64,\n        temperature=0,  # pin sampling so scores are stable run to run\n        messages=[{\"role\": \"user\", \"content\": prompt}],\n    )\n    return json.loads(msg.content[0].text)  # deterministic check #1: must parse\n\ndef test_classifier_accuracy():\n    correct = 0\n    for message, expected in DATASET:\n        result = classify(message)\n        # deterministic check #2: field must be a valid category\n        assert result[\"category\"] in CATEGORIES\n        # deterministic check #3: must match the gold label\n        if result[\"category\"] == expected:\n            correct += 1\n\n    accuracy = correct / len(DATASET)\n    print(f\"accuracy: {accuracy:.0%} ({correct}/{len(DATASET)})\")\n    # Set a floor, not perfection — LLM evals track a threshold, not 100%.\n    assert accuracy >= 0.75"
+        },
+        {
+          "type": "p",
+          "md": "Notice three habits worth stealing. First, the test asserts a **threshold** (`>= 0.75`), not perfection — LLM evals almost never demand 100%, because that bar would fail on a single acceptable judgment call. Second, structured output turns a fuzzy text problem into three hard, deterministic assertions. Third, `temperature=0` keeps runs comparable. Wire this into CI and every prompt edit now gets graded automatically before it merges."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "When prose quality matters and you can't reduce it to fields, swap the third check for a [similarity score](/learn/embeddings-vector-databases/similarity-search-indexing/what-is-semantic-search) against a golden answer, or an [LLM-as-a-judge](/learn/evaluation-safety/llm-as-judge/llm-as-a-judge-explained) call that returns a 1–5 rating. Same loop, fancier scorer."
+        }
+      ]
+    },
+    {
+      "id": "the-tool-landscape",
+      "title": "The tool landscape",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You can hand-roll everything in `pytest`, and many teams start there. But dedicated tools save you from reinventing datasets, scorers, and reporting. The big three you'll see named:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**promptfoo** — a config-driven CLI: you describe test cases and assertions in a YAML file, point it at one or more providers, and it runs the matrix and prints a comparison table. Great for comparing prompts and models side by side, and it's part of [OpenAI](https://www.promptfoo.dev/docs/intro/) as of 2026.",
+            "**DeepEval** — feels like `pytest` for LLMs, with ready-made metrics (answer relevancy, faithfulness, hallucination detection) you drop into normal test files. Natural fit if you already test in Python.",
+            "**Provider eval tooling and tracing platforms** — Langfuse, LangSmith, and Arize Phoenix let you build datasets from real production traffic and run evals against your live [observability](/learn/production-llmops/observability-monitoring/what-is-llm-observability) logs, so your test set grows from real incidents."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Don't over-shop early. A folder of `pytest` files with a labeled dataset is a perfectly real test suite, and it's the right place to start. Reach for a framework when you want provider comparison, built-in judge metrics, or a dataset that's fed by [production logs](/learn/production-llmops/observability-monitoring/what-is-llm-observability) rather than hand-written cases."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Tools are a force multiplier, not a substitute for a good dataset. A fancy eval framework run on five lazy test cases tells you almost nothing. The dataset is the hard, valuable part — guard it like source code."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "**Exact-string assertions on prose.** `assert out == \"...\"` fails on harmless rewording and trains you to ignore red tests. Assert *properties* or *similarity*, never the full string.",
+            "**A dataset of three examples.** Three cases that all pass tell you nothing about the hundred you didn't write. Aim for breadth — easy cases, edge cases, and the weird real ones that already burned you.",
+            "**Demanding 100%.** A perfectionist threshold flickers red on acceptable judgment calls and you'll start ignoring it. Set a realistic floor and *track the trend* across runs.",
+            "**Forgetting to pin temperature.** Leave sampling random and your pass rate jitters run to run, so you can't tell a real regression from noise.",
+            "**Trusting the judge blindly.** [LLM-as-a-judge](/learn/evaluation-safety/llm-as-judge/llm-as-a-judge-explained) can be biased — it tends to favor longer or more confident answers. Spot-check its grades against human judgment now and then.",
+            "**No timeouts in the test path.** Model APIs are slow sometimes and down occasionally. A test with no timeout hangs your whole CI run on one bad provider minute."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The single highest-leverage habit: **every time a user reports a bad answer, add that exact case to your dataset before you fix it.** Your test set then grows from real failures instead of imagined ones, and the same bug can never silently come back."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once a basic eval suite is running in CI, a harder set of production-grade concerns shows up. These are what separate \"we have some tests\" from \"we ship LLM features with confidence.\""
+        },
+        {
+          "type": "h3",
+          "text": "Offline vs online evaluation"
+        },
+        {
+          "type": "p",
+          "md": "**Offline evals** run against a fixed dataset *before* you ship — your regression gate, the suite above. **Online evals** score real production traffic *after* you ship, where there's usually no gold answer to compare against, so you lean on model-graded checks and user signals (thumbs-up, retries, escalations to a human). The two feed each other: a failure caught online becomes a new offline test case, so the dataset grows from real incidents instead of imagined ones. A mature setup runs both continuously."
+        },
+        {
+          "type": "h3",
+          "text": "Testing agents and multi-step systems"
+        },
+        {
+          "type": "p",
+          "md": "A single chat call is easy to grade. An [agent](/learn/ai-agents/agent-fundamentals/what-is-an-ai-agent) that planned, called five tools, and looped three times is not — and \"the final answer was wrong\" doesn't tell you *which step* failed. The frontier here is **trajectory evaluation**: scoring not just the final output but the path. Did it call the right [tools](/learn/ai-agents/tool-use/what-is-tool-use) in a sensible order? Did it retrieve the right documents? Did it recover from a tool error? This needs [tracing](/learn/production-llmops/observability-monitoring/what-is-llm-observability) so the whole call tree is captured as one connected run you can replay and assert against."
+        },
+        {
+          "type": "h3",
+          "text": "The non-stationary target problem"
+        },
+        {
+          "type": "p",
+          "md": "The deepest issue in testing LLM apps is that **the thing you're testing keeps moving.** Hosted models get silently updated; your prompt evolves; user behavior drifts. A snapshot you blessed last month may be obsolete this month. The mature answer is to treat the *dataset and thresholds* as living assets with their own version history and review process, run the full suite on every model and prompt change, and watch the trend line — not any single pass rate — as the real signal."
+        },
+        {
+          "type": "h3",
+          "text": "Flaky tests and statistical thinking"
+        },
+        {
+          "type": "p",
+          "md": "Even at `temperature=0`, an LLM can occasionally return a different answer, so a single test that *just barely* passes will eventually flicker. Production teams handle this statistically rather than pretending it away: run each case a few times and require it to pass a majority, report confidence intervals on pass rates instead of one number, and gate merges on the *aggregate* score over a large dataset rather than on any individual case. You're not testing a function anymore — you're estimating a distribution."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The mature mental model: **a test suite for an LLM app is a measurement instrument, not a pass/fail gate.** Its job is to turn \"it feels worse\" into a number you can trust and trend over time. Build it that way and you can iterate on prompts and models with the same confidence you ship ordinary software — the whole point of the [Production & LLMOps](/learn/production-llmops) discipline."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "How do you test LLM apps when the output changes every time?",
+      "a": "Stop checking for an exact string and check for properties instead: does the output parse as valid JSON, contain a required keyword, call the right tool, or score close enough to a known-good reference? For open-ended prose, run a scored eval over a dataset and require a pass-rate threshold rather than perfection."
+    },
+    {
+      "q": "Can you write unit tests for an LLM?",
+      "a": "Yes, but they look different. You can write hard `pytest` assertions for any *structured* part of the output — JSON shape, a specific field, the chosen tool. For free-form text you switch from equality to similarity or to an LLM-as-a-judge score over a dataset, and you assert a threshold (like 90% correct) instead of a single exact match."
+    },
+    {
+      "q": "What is the difference between assertions, snapshots, and evals?",
+      "a": "Assertions check a specific property holds (parses, contains, equals a field) — best for structured output. Snapshots compare today's output to a saved reference to catch unexpected change — best as a drift tripwire. Evals score a whole dataset with similarity or a judge — best for open-ended quality and tracking regressions across prompt or model changes."
+    },
+    {
+      "q": "Does snapshot testing work for LLM output?",
+      "a": "Partly. Raw text snapshots break on every harmless rewording, so they're noisy for prose. The fix is to snapshot the *structured* parts — the JSON fields, the tool name, the chosen category — instead of the full free-text blob. Used that way, a snapshot is a useful tripwire that loudly flags when behavior changed after a model upgrade or prompt edit."
+    },
+    {
+      "q": "What tools do people use to test LLM apps?",
+      "a": "Common ones are promptfoo (a config-driven CLI for comparing prompts and models), DeepEval (pytest-style metrics for Python), and tracing platforms like Langfuse, LangSmith, and Arize Phoenix that build eval datasets from real production traffic. Many teams start with plain pytest and a labeled dataset before adopting any framework."
+    },
+    {
+      "q": "Should I set temperature to 0 when testing?",
+      "a": "Yes, in tests. Pinning temperature to 0 doesn't make the model fully deterministic, but it sharply cuts random variation so your pass rate is stable enough to compare run to run. Without it, a flickering score makes it impossible to tell a real regression from noise."
+    }
+  ],
+  "related": [
+    "what-is-llmops",
+    "what-is-llm-observability",
+    "what-are-llm-guardrails",
+    "semantic-caching-llm"
+  ],
+  "furtherReading": [
+    { "title": "promptfoo — official docs (intro)", "url": "https://www.promptfoo.dev/docs/intro/" },
+    { "title": "promptfoo — LLM eval & red-teaming (GitHub)", "url": "https://github.com/promptfoo/promptfoo" },
+    { "title": "DeepEval — LLM evaluation framework (GitHub)", "url": "https://github.com/confident-ai/deepeval" }
+  ]
+}

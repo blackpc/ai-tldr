@@ -1,0 +1,313 @@
+{
+  "slug": "what-is-inference-server",
+  "title": "What Is an Inference Server? Serving LLMs to Many Users",
+  "seoTitle": "What Is an Inference Server? LLM Serving Explained",
+  "metaDescription": "What an inference server does, how it differs from running Ollama on a laptop, and the core problems — batching, memory, throughput — it solves.",
+  "keywords": [
+    "what is an inference server",
+    "llm serving explained",
+    "inference server vs ollama",
+    "how llm inference works in production",
+    "self hosted llm serving basics"
+  ],
+  "difficulty": "beginner",
+  "oneLiner": "You will understand what separates a laptop chatbot from production LLM serving and what an inference server actually does.",
+  "updated": "2026-06-11",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "An **inference server** is a program that loads a [large language model](/learn/llm-fundamentals/llm-basics/what-is-an-llm) onto a GPU once and then answers a constant stream of requests from many users at the same time — fast, and without falling over. *Inference* is just the technical word for \"running a trained model to get an answer\" (as opposed to *training*, which is teaching it in the first place). The *server* part means it sits there waiting, listening on a network port, ready to handle whoever shows up."
+        },
+        {
+          "type": "p",
+          "md": "Here's the everyday analogy. Running a model on your laptop with a tool like Ollama is like cooking dinner for yourself: one person, one order, you take your time, and if it's a little slow nobody minds. An inference server is the kitchen of a busy restaurant. Hundreds of orders arrive at once, the line cook has to keep every burner going simultaneously, plates must come out in a steady stream, and the whole thing has to keep running through the dinner rush without the kitchen catching fire. Same act — cooking — but a completely different machine built around it."
+        },
+        {
+          "type": "p",
+          "md": "The model itself is identical in both cases. What changes is everything *around* the model: how requests are queued, how the GPU's precious memory is packed, how dozens of users share one set of weights, and how partial answers stream back. An inference server is that whole machine. The best-known one is **vLLM**; others include NVIDIA's **TGI**-style stacks, **SGLang**, **TensorRT-LLM**, and **llama.cpp**'s built-in server. They all do the same job: turn a pile of model weights into a reliable, high-throughput answer factory."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "\"Inference server\" and \"inference engine\" are often used interchangeably. Strictly, the *engine* is the core that does the math fast (batching, the [KV cache](/learn/llm-fundamentals/context-windows/what-is-a-context-window), GPU kernels); the *server* wraps that engine in an HTTP API. In practice a tool like vLLM is both, and people say either word."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you call an [LLM API](/learn/llm-apis/api-basics/what-is-llm-api) from a provider, you never think about any of this — they run the inference servers for you. The moment you decide to host an [open model](/learn/local-open-models/running-models-locally/what-is-local-llm) yourself, the job lands squarely on your plate. And the reason this is its own discipline is brutal economics: a serving GPU costs real money every hour it's powered on, whether it's answering one request or a thousand."
+        },
+        {
+          "type": "p",
+          "md": "That single fact drives everything. If your GPU sits 90% idle between requests, you're paying for a sports car to sit in traffic. The entire purpose of an inference server is to keep that expensive hardware as busy as possible — squeezing the maximum number of answers out of every GPU-second. Get this right and one GPU serves hundreds of users. Get it wrong and you need ten GPUs for the same load."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Throughput** — total tokens (or requests) served per second across *everyone*. This is the number that decides your cost-per-answer. An inference server's whole reason to exist is to push throughput up.",
+            "**Latency** — how long *one* user waits. Two flavors matter: **time to first token** (how long until words start appearing) and **inter-token latency** (how fast they keep coming after that). Streaming makes a slow answer *feel* fast.",
+            "**Concurrency** — how many simultaneous users one server handles before quality of service degrades. A laptop chatbot serves one. A production server serves hundreds on the same weights.",
+            "**Memory efficiency** — GPU memory (VRAM) is the hard ceiling on everything. The model weights eat a fixed chunk; whatever's left has to be shared among every active request. Wasting it means serving fewer users."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who should care? Anyone running a [local or open-weights model](/learn/local-open-models/open-model-ecosystem/what-is-hugging-face) for more than one person — a startup serving a chatbot, a company keeping data in-house for privacy, a team fine-tuning a model and needing to deploy it. If you're just one developer experimenting, a single-user tool is genuinely fine. The inference server earns its keep the instant you have a *crowd*."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "A useful gut check: if your traffic is occasional and single-user, reach for a simple local runner. If you're serving sustained, concurrent traffic and watching a cost-per-request number, you need a real inference server. The crossover is the whole point of this topic."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "To see what an inference server actually does, you have to know two facts about how an LLM generates text. First, it writes **one [token](/learn/llm-fundamentals/tokens-and-tokenization/what-is-a-token) at a time** — to produce a 200-word answer, the model runs roughly 250 times in a row, each pass feeding into the next. Second, every pass must look back at the entire conversation so far, so the model caches the intermediate results for every previous token in something called the **KV cache**. That cache lives in GPU memory and grows with every token. These two facts create the two problems an inference server is built to solve."
+        },
+        {
+          "type": "p",
+          "md": "**Problem one: the GPU is wasted on a single request.** A GPU is a massively parallel chip — it can do thousands of multiplications at once. But generating the next token for *one* user uses a tiny fraction of that power. The fix is **batching**: run many users' requests through the GPU *together* in one pass. The GPU was going to fire anyway; you might as well stuff it full. This is where almost all the throughput comes from."
+        },
+        {
+          "type": "p",
+          "md": "Naive batching has an ugly flaw, though: if you wait to collect a fixed batch of, say, 16 requests before starting, early arrivals sit idle waiting for the batch to fill, and the whole batch is stuck until its *slowest* member finishes. The breakthrough that defines modern inference servers is **continuous batching** (sometimes called *in-flight* batching): the server adds and removes requests from the running batch on every single token step. A request that finishes drops out immediately and a waiting one slots in — the GPU never stalls."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Static batching vs. continuous batching",
+            "columns": [
+              {
+                "title": "Static batch",
+                "items": [
+                  "Wait until N requests collected",
+                  "Run all N together, lockstep",
+                  "Whole batch waits for the slowest",
+                  "Finished requests sit idle",
+                  "GPU stalls between batches"
+                ]
+              },
+              {
+                "title": "Continuous batch",
+                "accent": true,
+                "items": [
+                  "New requests join every token step",
+                  "Finished requests leave immediately",
+                  "Freed slots filled instantly",
+                  "No waiting on the slowest member",
+                  "GPU stays saturated"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "**Problem two: the KV cache wastes memory.** Each request's KV cache grows as its answer gets longer, and you don't know in advance how long an answer will be. Old systems reserved a big contiguous block of memory per request *just in case* it ran long — so most of that reserved memory sat empty, and you could fit far fewer concurrent users than the GPU should allow. **vLLM**'s headline innovation, **PagedAttention**, fixes this by borrowing an idea from operating systems: chop the KV cache into small fixed-size *pages* and hand them out only as needed, like virtual memory. Near-zero waste, so many more requests fit at once."
+        },
+        {
+          "type": "p",
+          "md": "Put the pieces together and a single request's journey through the server looks like this — and crucially, *many* requests are at different points in this pipeline simultaneously:"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "One request through an inference server",
+            "steps": [
+              { "label": "HTTP request", "sub": "prompt arrives at the API" },
+              { "label": "Queue + schedule", "sub": "joins the running batch" },
+              { "label": "Prefill", "sub": "process the prompt, build KV cache" },
+              { "label": "Decode loop", "sub": "one token at a time", "accent": true },
+              { "label": "Stream out", "sub": "tokens sent as they're made" }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The two phases in that diagram have different personalities. **Prefill** reads your whole prompt in one big parallel pass and is compute-heavy. **Decode** generates tokens one by one and is memory-bound — it spends most of its time shuffling that KV cache. Inference servers schedule the two phases cleverly (some interleave them with *chunked prefill*) precisely because they stress different parts of the GPU."
+        }
+      ]
+    },
+    {
+      "id": "vs-ollama",
+      "title": "Inference server vs. Ollama (single-user runners)",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The most common beginner question is \"isn't Ollama already serving the model?\" Sort of — and the distinction is worth nailing down, because both expose a network API and both run open models. The difference is what they're *optimized* for. Tools like **Ollama** and **llama.cpp** are built to make running a model on your own machine effortless: one command, automatic [quantization](/learn/local-open-models/quantization-and-formats/what-is-quantization), runs on a laptop GPU or even CPU. They're tuned for *one user getting a good experience*. They do handle a couple of simultaneous requests, but throughput under real concurrency is not their design goal."
+        },
+        {
+          "type": "p",
+          "md": "A production inference server like **vLLM** makes the opposite trade. It assumes you have a real GPU (or several), it's harder to set up, and it's overkill for a single user — but under a crowd it serves *many* times more total tokens per second from the same hardware, thanks to continuous batching and PagedAttention. The honest summary: Ollama optimizes the *one*; vLLM optimizes the *many*."
+        },
+        {
+          "type": "table",
+          "headers": ["Dimension", "Single-user runner (Ollama, llama.cpp)", "Inference server (vLLM, SGLang, TGI)"],
+          "rows": [
+            ["Optimized for", "One person, easy setup", "Many concurrent users, throughput"],
+            ["Batching", "Minimal / basic", "Continuous (in-flight) batching"],
+            ["Memory management", "Simple allocation", "Paged KV cache (PagedAttention)"],
+            ["Typical hardware", "Laptop, CPU, or one consumer GPU", "Server GPUs, often several"],
+            ["Setup effort", "One command", "More config, but production-grade"],
+            ["Best for", "Local dev, hobby, privacy on your own box", "Serving an app to real traffic"]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This isn't \"good vs. bad\" — it's the right tool for the job. Plenty of teams prototype against Ollama on a laptop, then switch to vLLM behind the same OpenAI-style API for production. The model is the same; only the serving layer changes."
+        }
+      ]
+    },
+    {
+      "id": "hands-on",
+      "title": "Spinning one up",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The thing that makes inference servers easy to adopt is that most of them speak the **OpenAI-compatible API**. Your application talks to your self-hosted model with the exact same code it would use for a hosted provider — you just change the base URL. Start vLLM with one command and it serves an open model on a local port:"
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "title": "start the server",
+          "code": "# Install and serve an open model on http://localhost:8000\npip install vllm\n\nvllm serve Qwen/Qwen3-8B \\\n  --max-model-len 8192        # context length to support per request"
+        },
+        {
+          "type": "p",
+          "md": "That's it — vLLM downloads the weights from [Hugging Face](/learn/local-open-models/open-model-ecosystem/what-is-hugging-face), loads them onto the GPU, and exposes an OpenAI-compatible endpoint. Now any standard client works against it. Notice the `base_url` pointing at your own machine and the fact that no real API key is needed — you're the provider now:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "client.py",
+          "code": "from openai import OpenAI\n\n# Point the standard client at YOUR server instead of a hosted provider.\nclient = OpenAI(\n    base_url=\"http://localhost:8000/v1\",\n    api_key=\"not-needed\",          # local server ignores it; placeholder only\n)\n\nstream = client.chat.completions.create(\n    model=\"Qwen/Qwen3-8B\",\n    messages=[{\"role\": \"user\", \"content\": \"Explain batching in one sentence.\"}],\n    stream=True,                    # tokens arrive as they're generated\n)\n\nfor chunk in stream:\n    delta = chunk.choices[0].delta.content\n    if delta:\n        print(delta, end=\"\", flush=True)"
+        },
+        {
+          "type": "p",
+          "md": "The magic is invisible: if ten copies of this script run at once, vLLM batches all ten through the GPU together and pages their KV caches efficiently — without you writing a single line of batching code. You get continuous batching, paging, and [streaming](/learn/llm-apis/streaming-structured-outputs/llm-streaming-explained) for free. That \"swap the base URL, keep your code\" property is exactly why teams can move between a hosted API and self-hosting with minimal churn."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common mistakes and gotchas",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Self-hosting an inference server is mostly a memory-and-load balancing act. Almost every early failure is one of these."
+        },
+        {
+          "type": "table",
+          "headers": ["Mistake", "What happens", "The fix"],
+          "rows": [
+            ["Ignoring VRAM math", "Server fails to load: \"out of memory\"", "Weights + KV cache must fit; quantize or use a smaller model / bigger GPU"],
+            ["Measuring latency single-user", "Looks fast in testing, melts under real traffic", "Load-test with concurrent requests; watch throughput, not one timer"],
+            ["Setting context length too high", "Each request reserves huge KV cache, few users fit", "Set `--max-model-len` to what you actually need"],
+            ["Treating it like Ollama", "Wondering why one request isn't faster", "Inference servers win on *many* requests, not one"],
+            ["No request limits", "A flood of traffic OOMs the whole server", "Cap max concurrent sequences; queue or shed excess load"]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The VRAM ceiling is the one that bites hardest, so internalize the formula: **GPU memory must hold the model weights *plus* the KV cache for every active request, at the same time.** A bigger model leaves less room for users; longer contexts leave less room for users. [Quantization](/learn/local-open-models/quantization-and-formats/what-is-quantization) — storing weights in 4-bit or 8-bit instead of 16-bit — is the standard lever to free up space, trading a small quality dip for fitting a bigger model or more concurrent users on the same card."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Don't benchmark an inference server with a single request and declare victory. Its entire advantage shows up *only under concurrency*. A test that sends one prompt at a time will make a powerful server look no better than Ollama — and lead you to the wrong conclusion entirely."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics click, the serving world opens into a deep stack of optimizations. A map of where to look next."
+        },
+        {
+          "type": "p",
+          "md": "**When the model doesn't fit on one GPU.** Frontier open models can be too big for any single card. The answer is **tensor parallelism** — splitting each layer's matrices across several GPUs so they share the work of every token — and **pipeline parallelism**, which puts different layers on different GPUs. Inference servers expose these as flags (vLLM's `--tensor-parallel-size`), but the networking between GPUs becomes a real bottleneck, which is why fast interconnects matter at this scale."
+        },
+        {
+          "type": "p",
+          "md": "**Prefix caching.** If many requests share the same long prefix — a big system prompt, a shared document — the server can compute that prefix's KV cache *once* and reuse it across all of them. This is the self-hosted cousin of provider prompt caching, and it slashes cost for [RAG](/learn/rag/rag-fundamentals/what-is-rag) and agent workloads that resend a large fixed context every call. It pairs naturally with good [context engineering](/learn/prompt-engineering/context-engineering/what-is-context-engineering)."
+        },
+        {
+          "type": "p",
+          "md": "**Speculative decoding.** A clever trick to cut latency: a tiny, fast \"draft\" model guesses several tokens ahead, and the big model verifies them all in a single pass. When the guesses are right (they often are for easy tokens), you generate multiple tokens for the price of one forward pass — same output, noticeably faster, no quality loss."
+        },
+        {
+          "type": "p",
+          "md": "**Production realities.** A serving *engine* is not a serving *system*. Real deployments add autoscaling (spinning GPUs up and down with traffic), routing across replicas, observability, and graceful handling of traffic spikes — the operational discipline covered under [LLMOps](/learn/production-llmops/llmops-fundamentals/what-is-llmops) and [cost and latency optimization](/learn/production-llmops/cost-latency-optimization/semantic-caching-llm). The cost model is unforgiving: an idle GPU still bills, so batching efficiency and autoscaling are the difference between a sustainable service and a money pit."
+        },
+        {
+          "type": "p",
+          "md": "**Open tensions worth knowing.** There's a permanent tug-of-war between **throughput and latency** — bigger batches serve more total users but make each individual one wait a hair longer, so you tune for your use case. There's the **memory wall**: as context windows balloon, the KV cache, not the weights, becomes the thing that runs you out of memory, driving research into KV-cache compression and smarter attention. And there's healthy competition between engines — vLLM, SGLang, and TensorRT-LLM each win on different workloads — so \"which inference server is fastest\" genuinely depends on your model, your hardware, and your traffic shape."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is an inference server in simple terms?",
+      "a": "It's a program that loads an LLM onto a GPU once and then serves answers to many users at the same time, as fast and cheaply as possible. It handles the queuing, batching, and memory management needed to keep an expensive GPU fully busy, so one server can serve hundreds of concurrent requests from a single copy of the model."
+    },
+    {
+      "q": "What is the difference between an inference server and Ollama?",
+      "a": "Ollama is optimized for one person running a model easily on their own machine, including laptops and CPUs. A production inference server like vLLM is optimized for serving many concurrent users, using continuous batching and a paged KV cache to push far higher total throughput on real GPUs. Ollama optimizes the one; an inference server optimizes the many."
+    },
+    {
+      "q": "Why do you need an inference server instead of just calling the model?",
+      "a": "Calling a model directly for one request leaves the GPU mostly idle, which is wasteful because the GPU bills by the hour whether busy or not. An inference server batches many requests together and packs GPU memory efficiently, so the same hardware serves far more users. That turns serving from prohibitively expensive into economical at scale."
+    },
+    {
+      "q": "What is continuous batching in LLM serving?",
+      "a": "Continuous (or in-flight) batching means the server adds and removes requests from the running batch on every single token step, instead of waiting to fill a fixed batch and finishing it all together. Finished requests drop out instantly and waiting ones slot in, so the GPU never stalls. It's the main reason modern inference servers achieve high throughput."
+    },
+    {
+      "q": "What is the KV cache and why does it matter for serving?",
+      "a": "The KV cache stores the model's intermediate results for every token generated so far, so it doesn't have to recompute the whole conversation on each new token. It lives in GPU memory and grows with answer length, so it competes with the model weights for limited VRAM. Managing it efficiently — for example vLLM's PagedAttention — is what lets many requests run concurrently."
+    },
+    {
+      "q": "Do I need an inference server for a personal project?",
+      "a": "Usually no. If you're a single developer experimenting or serving occasional, low-concurrency traffic, a simple runner like Ollama or llama.cpp is easier and perfectly fine. You need a real inference server once you're serving sustained, concurrent traffic to many users and watching a cost-per-request number — that's the crossover point where batching and paging pay off."
+    }
+  ],
+  "related": [
+    "what-is-local-llm",
+    "what-is-quantization",
+    "what-is-hugging-face"
+  ],
+  "furtherReading": [
+    {
+      "title": "vLLM documentation — official docs home",
+      "url": "https://docs.vllm.ai/en/latest/"
+    },
+    {
+      "title": "vLLM — official GitHub repository",
+      "url": "https://github.com/vllm-project/vllm"
+    },
+    {
+      "title": "Efficient Memory Management for LLM Serving with PagedAttention (arXiv)",
+      "url": "https://arxiv.org/abs/2309.06180"
+    }
+  ]
+}

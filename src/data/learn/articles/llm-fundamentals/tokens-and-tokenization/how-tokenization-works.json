@@ -1,0 +1,332 @@
+{
+  "slug": "how-tokenization-works",
+  "title": "How Does Tokenization Work? Byte-Pair Encoding in Plain English",
+  "seoTitle": "How Tokenization Works: Byte-Pair Encoding Guide",
+  "metaDescription": "Step through byte-pair encoding by hand: how a tokenizer learns its vocabulary and splits 'unbelievable' into pieces a model can use.",
+  "keywords": [
+    "how does tokenization work",
+    "byte pair encoding explained",
+    "what is bpe tokenization",
+    "subword tokenization explained",
+    "how do llm tokenizers split words"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Walk through byte-pair encoding step by step and see exactly how raw text becomes the token IDs a model consumes.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A language model can't read letters. Before any text reaches the neural network, a small piece of software called a **tokenizer** chops it into pieces called **tokens** and swaps each piece for a number — a **token ID**. The model only ever sees those numbers. Tokenization is the translation layer that turns `\"unbelievable\"` into something like `[\"un\", \"bel\", \"iev\", \"able\"]`, then into IDs like `[437, 2870, 6816, 481]`."
+        },
+        {
+          "type": "p",
+          "md": "The technique that decides where those splits happen is **byte-pair encoding (BPE)**. Here's the everyday analogy. Imagine you're inventing shorthand for a busy office. You start by being able to write single letters only — slow, but you can spell anything. Then you notice you keep writing `t` then `h` together, so you invent one squiggle for `th`. Then `th` keeps being followed by `e`, so you make a squiggle for `the`. You repeat: find the pair of symbols you write most often, glue it into one new symbol, repeat thousands of times. After a while your shorthand has dedicated squiggles for `the`, `ing`, `tion`, and whole common words — but you can *still* fall back to letters for anything weird. That gluing-the-most-frequent-pair loop **is** byte-pair encoding."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This article is the *how-the-machine-does-it* companion to [What Is a Token in an LLM?](/learn/llm-fundamentals/tokens-and-tokenization/what-is-a-token). If you just want to know what a token is and why text gets priced in tokens, start there. Here we open the hood on the algorithm."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Tokenization is invisible until it bites you, and then it explains a surprising number of LLM mysteries at once."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Cost and limits are counted in tokens, not words.** Your bill, your rate limits, and your [context window](/learn/llm-fundamentals/context-windows/what-is-a-context-window) are all measured in tokens. A tokenizer that packs more text into fewer tokens is literally cheaper to run — which is why vendors keep upgrading them.",
+            "**It explains famous model failures.** The reason a model struggles to count the letters in a word is that it never *sees* the letters — it sees a chunk like `straw` + `berry`. That's the whole story behind the [strawberry problem](/learn/llm-fundamentals/tokens-and-tokenization/llm-strawberry-problem).",
+            "**It shapes which languages are cheap.** English text compresses into very few tokens; many other scripts cost two to three times more tokens for the same meaning, because the tokenizer's vocabulary was trained on mostly-English data.",
+            "**It affects accuracy on numbers and code.** How digits and indentation get split changes how well a model does arithmetic and reads source code — both are downstream of tokenizer design."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Understanding BPE turns these from spooky behaviour into predictable consequences. Once you can picture the merge loop, you can look at any tokenizer output and explain *why* the splits landed where they did."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "BPE has two completely separate phases that people often blur together. **Training** happens once, when the model is built: the algorithm learns a fixed list of merge rules and a vocabulary. **Encoding** happens every time you send a prompt: the tokenizer applies those frozen rules to your text. Let's take them in order."
+        },
+        {
+          "type": "h3",
+          "text": "Phase 1 — training the vocabulary (done once)"
+        },
+        {
+          "type": "p",
+          "md": "Start with a giant pile of text. The tokenizer's vocabulary begins as the smallest possible building blocks. Modern tokenizers use **byte-level** BPE, so the starting alphabet is just the 256 possible byte values — meaning *any* text in *any* language can always be represented, with no \"unknown\" token ever needed. Then you loop:"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "The BPE training loop (repeat until vocab is full)",
+            "steps": [
+              { "label": "Count pairs", "sub": "Tally every adjacent symbol pair in the corpus" },
+              { "label": "Pick the winner", "sub": "Find the single most frequent pair", "accent": true },
+              { "label": "Merge it", "sub": "Add that pair as one new token in the vocabulary" },
+              { "label": "Rewrite text", "sub": "Replace every occurrence, then loop again" }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Each loop adds exactly one new token. You stop when the vocabulary hits a target size — commonly 50,000 to 256,000 tokens for today's models. The ordered list of merges you collected *is* the trained tokenizer. Watch it happen on a tiny corpus of the words `low`, `lower`, `lowest`, and `slow`:"
+        },
+        {
+          "type": "table",
+          "headers": ["Step", "Most frequent pair", "New token", "Why"],
+          "rows": [
+            ["Start", "—", "l, o, w, e, r, s, t", "Initial alphabet — single characters"],
+            ["1", "`l` + `o`", "`lo`", "Appears in low, lower, lowest, slow"],
+            ["2", "`lo` + `w`", "`low`", "That same group keeps recurring"],
+            ["3", "`e` + `r`", "`er`", "Appears in lower (and many real words)"],
+            ["4", "`low` + `er`", "`lower`", "Now a whole common word is one token"]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Notice what emerged for free: frequent whole words (`low`, `lower`) became single tokens, while the machinery to spell rarer words out of pieces (`lo` + `w` + `est`) is still there. Nobody hand-picked these splits — frequency did all the work."
+        },
+        {
+          "type": "h3",
+          "text": "Phase 2 — encoding your prompt (done every request)"
+        },
+        {
+          "type": "p",
+          "md": "At inference time the vocabulary is frozen. To encode new text, the tokenizer first does **pre-tokenization** — it splits on whitespace and punctuation using a regex so merges never cross word boundaries (that's why a leading space is usually glued onto the next token). Then, within each chunk, it greedily applies the learned merge rules **in the order they were learned**, gluing pairs back together until no more rules apply. The leftover pieces are your tokens, and a lookup table swaps each for its integer ID."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Encoding the word \"unbelievable\"",
+            "steps": [
+              { "label": "Raw text", "sub": "\"unbelievable\"" },
+              { "label": "Split to bytes", "sub": "u n b e l i e v a b l e" },
+              { "label": "Apply merges", "sub": "un + believ + able", "accent": true },
+              { "label": "Look up IDs", "sub": "[437, 2870, 481]" }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The exact IDs and split points depend entirely on which tokenizer the model uses — the same word can become a different number of tokens in GPT-5, Claude, and Gemma, because each learned a different merge list."
+        }
+      ]
+    },
+    {
+      "id": "see-it-in-code",
+      "title": "See it in code",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You don't have to imagine the splits — every major tokenizer ships as a library you can run in a few lines. Here's OpenAI's `tiktoken`, the fast Rust-backed BPE tokenizer used by their models. As of mid-2026, GPT-4o and the GPT-5 family use the `o200k_base` encoding (roughly a 200,000-token vocabulary); the older GPT-4 generation used `cl100k_base` (about 100,000)."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "tokenize.py",
+          "code": "import tiktoken\n\n# Grab the encoding the GPT-5 family uses (~200k vocab)\nenc = tiktoken.get_encoding(\"o200k_base\")\n\ntext = \"Tokenization is unbelievable.\"\nids = enc.encode(text)\n\nprint(ids)              # -> [12, 4421, 382, ...]  list of token IDs\nprint(len(ids))         # how many tokens you'll be billed for\n\n# Decode each ID on its own to SEE the split points\nfor tid in ids:\n    print(repr(enc.decode([tid])))\n# 'Token'\n# 'ization'\n# ' is'\n# ' un'\n# 'bel'\n# 'iev'\n# 'able'\n# '.'"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Decoding one ID at a time is the single best way to *feel* tokenization. Run it on your own prompts. You'll quickly notice the leading-space trick (` is` is one token, space included), that common words are whole tokens, and that long or rare words shatter into pieces."
+        },
+        {
+          "type": "p",
+          "md": "For open models, the **Hugging Face `tokenizers`** library (also Rust under the hood) loads the exact tokenizer bundled with a model. It exposes the same BPE machinery plus the normalization and pre-tokenization steps, so you get byte-identical splits to what the model was trained on."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "hf_tokenize.py",
+          "code": "from transformers import AutoTokenizer\n\n# Loads the tokenizer shipped with the model checkpoint\ntok = AutoTokenizer.from_pretrained(\"meta-llama/Llama-3.1-8B\")\n\nenc = tok(\"Tokenization is unbelievable.\")\nprint(enc[\"input_ids\"])              # the token IDs\nprint(tok.convert_ids_to_tokens(enc[\"input_ids\"]))  # the string pieces"
+        }
+      ]
+    },
+    {
+      "id": "bpe-vs-other-methods",
+      "title": "BPE vs the other tokenizers you'll hear about",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "BPE is dominant but not the only game in town. Three families show up constantly, and the differences are smaller than the jargon suggests — they mostly disagree on *which* pair to merge."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "The three tokenizer families",
+            "columns": [
+              {
+                "title": "BPE / byte-level BPE",
+                "accent": true,
+                "items": [
+                  "Merge the MOST FREQUENT pair",
+                  "Used by GPT, Llama, Qwen, Gemma",
+                  "Byte-level start = no unknown tokens"
+                ]
+              },
+              {
+                "title": "WordPiece",
+                "items": [
+                  "Merge the pair that best fits the data (likelihood)",
+                  "Used by BERT-family models",
+                  "Rare in modern chat LLMs"
+                ]
+              },
+              {
+                "title": "Unigram (via SentencePiece)",
+                "items": [
+                  "Start big, PRUNE unlikely tokens",
+                  "Used by some Gemma / T5-style models",
+                  "Treats space as a real character (the ▁ marker)"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "table",
+          "headers": ["What you'll see", "What it actually is", "Notes"],
+          "rows": [
+            ["`tiktoken`", "Byte-level BPE", "OpenAI's tokenizer; `cl100k_base`, `o200k_base`"],
+            ["SentencePiece", "A toolkit, not an algorithm", "Can run BPE or Unigram; adds the `▁` space marker"],
+            ["WordPiece", "BPE's likelihood-based cousin", "BERT-era; uncommon in 2026 generative models"],
+            ["HF `tokenizers`", "A library that runs any of these", "Loads the real tokenizer for open models"]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "\"SentencePiece\" is the name people most often confuse. It's a *framework* (it can run BPE or Unigram), not a fourth algorithm. Its signature is the `▁` character it puts in front of word-initial tokens so the original spacing can be perfectly rebuilt."
+        }
+      ]
+    },
+    {
+      "id": "the-mid-2026-landscape",
+      "title": "The mid-2026 landscape",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Tokenizers are quietly one of the most-tuned parts of a model. A better tokenizer means the same text becomes fewer tokens — cheaper to serve and faster to generate — without touching the network's weights. Here's the picture as of mid-2026 (details churn, so verify against vendor docs)."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**OpenAI** — GPT-4o and the GPT-5 family use `o200k_base`, a roughly 200k-token byte-level BPE vocabulary. Its main win over the earlier ~100k `cl100k_base` is far better handling of non-English scripts and word boundaries, so multilingual text costs fewer tokens.",
+            "**Meta Llama** — Llama 3.x uses a byte-level BPE tokenizer (built on SentencePiece) with byte fallback, so it can encode anything without an unknown token.",
+            "**Google Gemma** — recent Gemma generations ship very large vocabularies (256k+ tokens) built with SentencePiece, which helps a lot with multilingual coverage.",
+            "**Anthropic Claude** — uses its own proprietary tokenizer, so third-party token counts for Claude are estimates (typically within ~5–10% for English prose). Use the API's own usage numbers when the exact count matters."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The practical takeaway: bigger vocabularies generally mean fewer tokens per page, which feeds directly into cheaper bills and the ever-growing [context windows](/learn/llm-fundamentals/context-windows/what-is-a-context-window) on frontier models — many of which now reach a million tokens or more. Tokenizer efficiency is one of the unsung levers behind that."
+        }
+      ]
+    },
+    {
+      "id": "pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "**Counting with the wrong tokenizer.** A `tiktoken` count is only correct for OpenAI models. Counting a Llama or Claude prompt with `o200k_base` gives a number that can be off by 10–30%. Always use the tokenizer that matches your target model.",
+            "**Assuming 1 word = 1 token.** For English a rough rule is ~4 characters per token, but code, numbers, emoji, and other languages blow that up fast. See [tokens vs words](/learn/llm-fundamentals/tokens-and-tokenization/tokens-vs-words) for safe estimates.",
+            "**Forgetting the chat overhead.** Chat APIs wrap your messages in special formatting tokens (role markers, separators). Your visible text is not the whole bill.",
+            "**Expecting letter-level reasoning.** Because the model sees `straw` + `berry`, not individual letters, tasks like spelling and counting characters are genuinely hard for it — that's the [strawberry problem](/learn/llm-fundamentals/tokens-and-tokenization/llm-strawberry-problem), not a bug you can prompt away."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Two subtleties separate a working mental model from a precise one."
+        },
+        {
+          "type": "h3",
+          "text": "Merge order is the secret state"
+        },
+        {
+          "type": "p",
+          "md": "A trained BPE tokenizer is *not* just a list of valid tokens — it's an **ordered** list of merge rules. At encoding time the rules must be applied in the exact order they were learned, because an early merge (say `e`+`r` → `er`) changes which pairs are even available for later merges. Two tokenizers with the identical final vocabulary but different merge order would split the same word differently. This is why you can't just hand a model a word list; you need its merge ranks. (Byte-level `tiktoken` stores these as ranks and resolves ties by rank, which makes encoding deterministic and fast.)"
+        },
+        {
+          "type": "h3",
+          "text": "Why byte-level, and where research is heading"
+        },
+        {
+          "type": "p",
+          "md": "Pre-byte-level tokenizers had an `<unk>` token for anything outside their vocabulary — a disaster for emoji, rare scripts, and noisy web text. Byte-level BPE fixes this by starting from the 256 raw bytes, so every possible input maps to *something*. The cost is that one odd character can fragment into several byte tokens. Researchers in 2025–2026 are actively pushing past classic word-boundary BPE: work like *BoundlessBPE* lets merges cross the pre-tokenization boundaries that normally cap compression, and *dynamic tokenization* methods adjust token granularity at inference to trade speed for fidelity. There's also growing interest in **tokenizer-free** byte- and patch-level models that skip the discrete vocabulary entirely. For now, though, byte-level BPE remains the workhorse, and understanding the merge loop is enough to reason about almost any production model. If you want to follow the data downstream, the tokens you produce here are exactly what the [transformer](/learn/llm-fundamentals/transformers-and-attention/what-is-a-transformer) turns into vectors and feeds through [attention](/learn/llm-fundamentals/transformers-and-attention/how-attention-works)."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is byte-pair encoding in simple terms?",
+      "a": "It's an algorithm that builds a tokenizer's vocabulary by repeatedly finding the most frequent pair of adjacent symbols in a big text corpus and gluing them into a single new token. Start from individual bytes, merge the top pair, repeat tens of thousands of times. The result is a vocabulary where common words and word-pieces (like `ing` or `the`) are single tokens, but rare words can still be spelled out from smaller pieces."
+    },
+    {
+      "q": "How does a tokenizer split a word like \"unbelievable\"?",
+      "a": "It first splits the text on whitespace and punctuation (pre-tokenization), then applies its learned merge rules in order within each chunk. A common word like `is` survives as one token, while a long word like `unbelievable` gets glued back together only as far as the learned merges allow — often something like `un` + `believ` + `able`. The exact pieces depend on which tokenizer the model uses, since each learned a different merge list."
+    },
+    {
+      "q": "What is the difference between BPE, WordPiece, and SentencePiece?",
+      "a": "BPE merges the most *frequent* pair. WordPiece merges the pair that most increases the training data's likelihood (used by BERT-family models). SentencePiece isn't a competing algorithm at all — it's a toolkit that can run either BPE or a Unigram model and treats spaces as real characters using a `▁` marker. Most modern generative LLMs (GPT, Llama, Qwen) use byte-level BPE."
+    },
+    {
+      "q": "Why do byte-level BPE tokenizers never produce an unknown token?",
+      "a": "Because they start their vocabulary from the 256 possible byte values rather than from characters. Any text in any language ultimately reduces to bytes, so there's always *some* representation available — even for emoji or scripts the model rarely saw. The trade-off is that unusual characters may fragment into several byte tokens, which costs more tokens."
+    },
+    {
+      "q": "How can I count tokens for a specific model?",
+      "a": "Use the tokenizer that matches the model. For OpenAI models, run OpenAI's `tiktoken` with the right encoding (`o200k_base` for GPT-4o and the GPT-5 family as of mid-2026). For open models, load the model's tokenizer with Hugging Face's `transformers` / `tokenizers`. For Claude, third-party counts are estimates, so rely on the API's own reported usage when precision matters."
+    }
+  ],
+  "related": [
+    "what-is-a-token",
+    "tokens-vs-words",
+    "llm-strawberry-problem",
+    "what-is-a-transformer",
+    "what-is-a-context-window"
+  ],
+  "furtherReading": [
+    {
+      "title": "openai/tiktoken (BPE tokenizer source + examples)",
+      "url": "https://github.com/openai/tiktoken"
+    },
+    {
+      "title": "Hugging Face: Tokenization algorithms summary",
+      "url": "https://huggingface.co/docs/transformers/en/tokenizer_summary"
+    },
+    {
+      "title": "Implementing a Byte Pair Encoding (BPE) Tokenizer From Scratch",
+      "url": "https://sebastianraschka.com/blog/2025/bpe-from-scratch.html"
+    }
+  ]
+}

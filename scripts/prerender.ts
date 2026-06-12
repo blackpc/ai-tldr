@@ -34,6 +34,10 @@ import { fileURLToPath } from "node:url";
 import feed from "../src/data/releases.json" with { type: "json" };
 import type { ReleaseItem } from "../src/data/schema";
 import { influencers } from "../src/data/influencers";
+import {
+  injectLearnLinksIntoHome,
+  prerenderLearn,
+} from "./prerender-learn.tsx";
 
 // -----------------------------------------------------------------------
 // Config
@@ -950,6 +954,9 @@ async function main() {
   ].join("\n    ");
   let homeHtml = injectMeta(template, HOME_META, homeJsonLd);
   homeHtml = injectVisibleFaq(homeHtml);
+  // Static, crawler-visible link strip into the Learn section — internal
+  // links from the homepage are the strongest discovery signal we have.
+  homeHtml = injectLearnLinksIntoHome(homeHtml);
   await writeHtml("index.html", homeHtml);
 
   // 2. Influencers page — ProfilePage + ItemList of Person entries
@@ -997,6 +1004,19 @@ async function main() {
     await writeHtml(`releases/${item.id}/index.html`, html);
     count++;
   }
+
+  // 4b. Learn section — hub + category + subcategory + one page per
+  // article, each with full prerendered content, meta and JSON-LD.
+  // Returns the URL set for its own sitemap (kept separate so the
+  // 8h-cron release churn doesn't re-date 300+ evergreen pages).
+  const learnUrls = await prerenderLearn({
+    template,
+    siteUrl: SITE_URL,
+    defaultOgImage: DEFAULT_OG_IMAGE,
+    injectMeta,
+    wrapJsonLd,
+    writeHtml,
+  });
 
   // 5. Main sitemap — every URL, with image + video extensions on
   // release pages so Google Images / Video also picks them up.
@@ -1059,10 +1079,17 @@ async function main() {
   const newsSitemap = buildNewsSitemap(items);
   await writeFile(join(DIST, "sitemap-news-static.xml"), newsSitemap, "utf8");
 
+  // 6b. Learn sitemap — all /learn URLs, lastmod from each article's
+  // `updated` date so crawlers only re-fetch what actually changed.
+  const learnSitemap = buildSitemap(learnUrls);
+  await writeFile(join(DIST, "sitemap-learn.xml"), learnSitemap, "utf8");
+
   // 7. Sitemap index — what robots.txt points at. Splits the load across
-  // a static main sitemap and the live CF-function-served news sitemap.
+  // a static main sitemap, the learn sitemap, and the live
+  // CF-function-served news sitemap.
   const sitemapIndex = buildSitemapIndex([
     { loc: `${SITE_URL}/sitemap-main.xml`, lastmod: today },
+    { loc: `${SITE_URL}/sitemap-learn.xml`, lastmod: today },
     { loc: `${SITE_URL}/sitemap-news.xml`, lastmod: today },
   ]);
   await writeFile(join(DIST, "sitemap.xml"), sitemapIndex, "utf8");

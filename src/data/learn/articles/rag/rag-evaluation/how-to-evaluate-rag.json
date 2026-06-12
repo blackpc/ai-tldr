@@ -1,0 +1,325 @@
+{
+  "slug": "how-to-evaluate-rag",
+  "title": "How Do You Evaluate a RAG System? The Metrics That Matter",
+  "seoTitle": "How to Evaluate a RAG System: Metrics That Matter",
+  "metaDescription": "You can't improve what you don't measure. Learn the core RAG evaluation metrics — retrieval quality, faithfulness, answer relevance — and how to start.",
+  "keywords": [
+    "how to evaluate rag system",
+    "rag evaluation metrics explained",
+    "how to measure rag quality",
+    "rag evaluation for beginners"
+  ],
+  "difficulty": "beginner",
+  "oneLiner": "You'll know which metrics actually describe RAG quality and how to set up your first evaluation loop.",
+  "updated": "2026-06-11",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**Evaluating a RAG system** means measuring how good its answers are — not by reading a few and nodding, but with repeatable numbers you can compare run to run. A [RAG system](/learn/rag/rag-fundamentals/what-is-rag) (retrieval-augmented generation) works in two steps: it *retrieves* relevant chunks of your documents, then a language model *generates* an answer from those chunks. Evaluation asks two separate questions: did it find the right material, and did it write a faithful answer from it?"
+        },
+        {
+          "type": "p",
+          "md": "Think of it like grading a student's open-book essay. There are two ways to fail. They could grab the wrong page of the textbook — *bad retrieval*. Or they could have the right page open and still write something the page never says — *bad generation*. A single grade of \"7 out of 10\" hides which mistake happened. RAG evaluation splits the grade so you know whether to fix the search or fix the prompt."
+        },
+        {
+          "type": "p",
+          "md": "That split is the whole reason RAG needs its own evaluation playbook. A plain chatbot has one thing to score: the answer. A RAG pipeline has a retriever *and* a generator, wired in sequence, and a great generator can't rescue garbage retrieval. If you only look at the final answer, every failure looks the same and you're left guessing what to change."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "RAG evaluation is a specialised flavour of general [LLM evals](/learn/evaluation-safety/evaluation-basics/what-are-llm-evals). The loop is identical — dataset, run, score, aggregate — but the scorers are tuned to the two-stage retrieve-then-generate shape. Read the general evals piece first if the word \"eval\" is brand new."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "RAG has a lot of knobs, and they all interact. You can change your [chunking](/learn/rag/chunking-and-ingestion/what-is-chunking-in-rag) strategy, your embedding model, how many chunks you retrieve, whether you rerank, and the generation prompt. Tweak any one and the others shift. Without measurement you're flying blind: you \"improve\" the chunk size, ship it, and quietly tank answer quality for a whole class of questions you never tested."
+        },
+        {
+          "type": "p",
+          "md": "The deeper problem is that RAG fails *silently and confidently*. When [retrieval](/learn/rag/retrieval-and-reranking/what-is-a-retriever) misses, the model doesn't say \"I couldn't find anything.\" It fills the gap with a fluent, authoritative-sounding answer built on nothing — a hallucination dressed as a citation. To a casual reader the bad answer looks exactly like the good one. Evaluation is the only thing that reliably tells them apart at scale."
+        },
+        {
+          "type": "h3",
+          "text": "Who should care"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Anyone shipping a RAG feature** — internal Q&A, a docs assistant, customer support search. You cannot tune what you cannot measure.",
+            "**Teams choosing components** — is a reranker worth the latency? Is the cheaper embedding model good enough? A metric answers; a vibe doesn't.",
+            "**People debugging \"it gives wrong answers\"** — evaluation localises the bug to retrieval *or* generation, which is half the fix.",
+            "**Production owners** — your documents change, the model behind your API updates, and answer quality drifts. Evals are the alarm."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "What did RAG evaluation replace? The same thing all evals replace: hope. The old loop was \"ask it three questions, the answers look smart, ship.\" That survives a demo and collapses the first time a user asks the question you never tried. Evaluation turns gut feel into a number you can defend."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "A fluent wrong answer is worse than an obvious error, because nobody double-checks it. In RAG, the most dangerous output is the confident hallucination — and it is invisible without faithfulness scoring."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every RAG evaluation scores the two stages separately, then optionally the end-to-end result. You feed in a question, watch which chunks the retriever pulls and what the model writes, and grade each stage against what *should* have happened. The data flows like this:"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Where the two scores come from",
+            "steps": [
+              { "label": "Question", "sub": "from your eval set" },
+              { "label": "Retrieve", "sub": "→ retrieval metrics", "accent": true },
+              { "label": "Generate", "sub": "answer from chunks" },
+              { "label": "Score answer", "sub": "→ generation metrics", "accent": true }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The **retrieval metrics** ask: out of all the chunks we pulled, how many were actually relevant, and did we get the ones we needed? These are classic information-retrieval measures, computed against a set of chunks you've labelled as the \"right\" ones for each question."
+        },
+        {
+          "type": "table",
+          "headers": ["Retrieval metric", "Asks", "Plain meaning"],
+          "rows": [
+            ["**Context precision**", "Of the retrieved chunks, how many are relevant?", "Low precision = lots of noise/junk in the context"],
+            ["**Context recall**", "Of the relevant chunks that exist, how many did we get?", "Low recall = we missed the chunk with the answer"],
+            ["**Hit rate**", "Did *any* correct chunk show up in the top-k?", "A blunt pass/fail for \"did retrieval work at all\""],
+            ["**MRR**", "How high up was the first correct chunk?", "Rewards putting the right answer near the top"]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Precision and recall pull against each other. Retrieve 20 chunks and you'll probably catch the right one (high recall) but drown it in noise (low precision). Retrieve 2 and the opposite happens. Tuning `top_k` and adding a reranker is mostly a fight to push *both* up at once."
+        },
+        {
+          "type": "p",
+          "md": "The **generation metrics** ask whether the answer is any good *given* the chunks it was handed. The headline one is **faithfulness** (also called groundedness): does every claim in the answer trace back to the retrieved context, or did the model invent something? Then **answer relevance**: did it actually address the question, or wander? And **correctness**: does it match the known true answer, when you have one?"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Two stages, two failure modes",
+            "columns": [
+              {
+                "title": "Retrieval broke",
+                "accent": true,
+                "items": ["Right chunks not found", "Fix: chunking, embeddings", "Fix: top_k, reranker", "Caught by precision/recall"]
+              },
+              {
+                "title": "Generation broke",
+                "items": ["Chunks were fine", "Model ignored or twisted them", "Fix: the prompt, the model", "Caught by faithfulness"]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Notice the payoff: if recall is high but faithfulness is low, the right context was *there* and the model botched it — fix the prompt, not the search. If recall is low, no prompt on earth will save you — fix retrieval first. One split metric tells you which half of the system to touch."
+        }
+      ]
+    },
+    {
+      "id": "building-an-eval-set",
+      "title": "Building your evaluation set",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every metric above needs a dataset to score against. For RAG, each test case is richer than a normal eval row. You need the **question**, and ideally the **ground-truth answer** and the **ids of the chunks that should have been retrieved**. That last field is what lets you compute context recall without a human in the loop."
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "title": "rag_eval_set.json",
+          "code": "[\n  {\n    \"question\": \"How many days of paid leave do new employees get?\",\n    \"ground_truth\": \"New employees accrue 15 days of paid leave per year.\",\n    \"relevant_chunk_ids\": [\"hr-policy-12\", \"hr-policy-13\"]\n  },\n  {\n    \"question\": \"Can I expense a home-office monitor?\",\n    \"ground_truth\": \"Yes, up to the annual equipment stipend limit.\",\n    \"relevant_chunk_ids\": [\"expenses-04\"]\n  }\n]"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Don't hand-write 200 cases. Pull **real questions from logs** if you have them, or have an LLM generate question/answer pairs *from your actual documents* — then have a human spot-check a sample. A golden set of 30 true, messy questions beats 300 invented ones."
+        },
+        {
+          "type": "p",
+          "md": "Labelling `relevant_chunk_ids` is the tedious part, but it's what unlocks automatic retrieval scoring. If you skip it, you can still score the *answer* (faithfulness, relevance) using model-graded checks — you just lose the clean precision/recall numbers on the retriever. Many teams start answer-only and add chunk labels later."
+        }
+      ]
+    },
+    {
+      "id": "code-example",
+      "title": "Your first RAG eval in code",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You don't need a framework to start — a retrieval eval is just set math. Here's a complete one that scores **context precision, recall, and hit rate** for a retriever, using the labelled set above. No LLM calls at all; it's pure comparison of chunk ids."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "eval_retrieval.py",
+          "code": "import json\n\nwith open(\"rag_eval_set.json\") as f:\n    DATASET = json.load(f)\n\ndef retrieve(question: str, top_k: int = 4) -> list[str]:\n    \"\"\"Your real retriever goes here. Returns chunk ids, best-first.\n    Stubbed so the example runs standalone.\"\"\"\n    return [\"hr-policy-12\", \"misc-99\", \"hr-policy-13\", \"misc-04\"]\n\nprecisions, recalls, hits = [], [], []\nfor case in DATASET:\n    got = retrieve(case[\"question\"])\n    relevant = set(case[\"relevant_chunk_ids\"])\n    found = [c for c in got if c in relevant]\n\n    precision = len(found) / len(got) if got else 0.0\n    recall = len(found) / len(relevant) if relevant else 0.0\n    hit = 1.0 if found else 0.0\n\n    precisions.append(precision)\n    recalls.append(recall)\n    hits.append(hit)\n    if not found:\n        print(f\"MISS  {case['question']!r} retrieved {got}\")\n\nn = len(DATASET)\nprint(f\"Context precision: {sum(precisions)/n:.1%}\")\nprint(f\"Context recall:    {sum(recalls)/n:.1%}\")\nprint(f\"Hit rate:          {sum(hits)/n:.1%}\")"
+        },
+        {
+          "type": "p",
+          "md": "Run it, read the `MISS` lines, and you immediately see which questions retrieval is whiffing on. Now change your `top_k` or swap the embedding model, re-run, and the three percentages tell you the truth instead of a hunch."
+        },
+        {
+          "type": "p",
+          "md": "Scoring the *answer* is harder, because \"is this faithful?\" has no regex. That's where **LLM-as-a-judge** comes in: you ask a separate model to grade the answer against the retrieved context."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "judge_faithfulness.py",
+          "code": "from anthropic import Anthropic\n\nclient = Anthropic(api_key=\"sk-...\")  # placeholder\n\nRUBRIC = (\n    \"You are grading a RAG answer for FAITHFULNESS only.\\n\"\n    \"Score 1 if EVERY claim in the answer is supported by the context.\\n\"\n    \"Score 0 if the answer states anything the context does not support.\\n\"\n    \"Reply with only the digit 1 or 0.\"\n)\n\ndef faithfulness(context: str, answer: str) -> int:\n    msg = client.messages.create(\n        model=\"claude-sonnet-4-5\",\n        max_tokens=2,\n        messages=[{\n            \"role\": \"user\",\n            \"content\": f\"{RUBRIC}\\n\\nCONTEXT:\\n{context}\\n\\nANSWER:\\n{answer}\",\n        }],\n    )\n    return int(msg.content[0].text.strip())\n\n# faithfulness(\"...retrieved chunks...\", \"...model's answer...\") -> 1 or 0"
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "The judge has biases — it can favour longer answers and drift run to run. Before you trust it, grade a sample by hand and check how often the judge agrees. If agreement is low, you're measuring the judge, not your app. The full pitfalls live in [What Is LLM-as-a-Judge?](/learn/evaluation-safety/llm-as-judge/llm-as-a-judge-explained)."
+        }
+      ]
+    },
+    {
+      "id": "the-tool-landscape",
+      "title": "The tool landscape",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you outgrow scripts, RAG-specific frameworks ship the metrics above pre-built, so you don't re-derive context recall by hand. The names you'll meet:"
+        },
+        {
+          "type": "table",
+          "headers": ["Tool", "What it is", "Good when"],
+          "rows": [
+            ["**Ragas**", "Metrics built for RAG: faithfulness, answer relevance, context precision/recall", "You want batteries-included RAG scoring"],
+            ["**DeepEval**", "`pytest`-style LLM testing with RAG metrics included", "You already think in unit tests"],
+            ["**TruLens**", "The \"RAG triad\": context relevance, groundedness, answer relevance", "You want a clear three-metric mental model"],
+            ["**LangSmith**", "Hosted datasets, tracing, offline + online evals", "You want a UI and production monitoring"],
+            ["**promptfoo**", "Config-driven eval + side-by-side comparison CLI", "You want fast prompt/config A-B tests"]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Most of these wrap the same idea: an LLM judge scoring faithfulness and relevance, plus set math for retrieval. The framework matters far less than having a labelled set and running it on every change. Start with a 50-line script, graduate to a tool when you need shared datasets, dashboards, or [observability](/learn/production-llmops/observability-monitoring/what-is-llm-observability) on live traffic."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "RAG eval in your dev loop",
+            "steps": [
+              { "label": "Change a knob", "sub": "chunking, top_k, prompt" },
+              { "label": "Run eval", "sub": "retrieval + answer", "accent": true },
+              { "label": "Read misses", "sub": "which stage broke?" },
+              { "label": "Add cases", "sub": "from prod failures" }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once a basic RAG eval is running, the hard questions show up — the ones that separate a toy score from a number teams actually bet on."
+        },
+        {
+          "type": "h3",
+          "text": "The component-vs-end-to-end split"
+        },
+        {
+          "type": "p",
+          "md": "Scoring retrieval and generation separately is great for debugging but can mislead on overall quality. A pipeline can post decent component scores yet still produce bad answers because of how the pieces interact — a chunk is technically \"relevant\" but cut mid-sentence, so the model gets half a fact. Mature suites keep *both*: component metrics to localise bugs, and an end-to-end \"is the final answer correct and useful?\" score to judge the product the user actually sees."
+        },
+        {
+          "type": "h3",
+          "text": "Reference-free evaluation"
+        },
+        {
+          "type": "p",
+          "md": "Writing ground-truth answers and chunk labels is expensive, so a lot of RAG metrics are designed to need *no* reference. Faithfulness compares the answer to the *retrieved context*, not to a gold answer — so you can run it on live production traffic where no correct answer exists. This is the bridge from offline regression suites to online monitoring: the same faithfulness check guards both."
+        },
+        {
+          "type": "h3",
+          "text": "Evaluating agentic and multi-hop RAG"
+        },
+        {
+          "type": "p",
+          "md": "When the LLM decides *what* and *when* to search — [agentic RAG](/learn/rag/advanced-rag/what-is-agentic-rag) — single-shot metrics break down. The system might run three searches, refine the query, and synthesise across hops. Now you have to score the *trajectory*: were the sub-queries sensible, did it stop at the right time, did it avoid burning tokens on dead-end searches? This is an active frontier with far fewer settled practices than single-turn RAG, and it borrows heavily from agent evaluation."
+        },
+        {
+          "type": "h3",
+          "text": "Noise, contamination, and overfitting"
+        },
+        {
+          "type": "p",
+          "md": "Three quiet traps. **Judge noise**: LLM-graded scores wobble, so a faithfulness move from 88% to 89% may be sampling, not progress — use enough cases that the difference is real. **Contamination**: if your eval questions and documents leaked into a model's training data, high scores are memorisation, not skill. **Overfitting**: tune endlessly against the same 30 cases and you'll ace those 30 while quietly degrading everything else. Keep a held-out set you touch rarely, and refresh cases from live traffic so the eval can't go stale."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The mature mental model: a RAG eval is a **living product surface**, not a one-time test. The dataset grows with every production miss, the judge is audited against humans, retrieval and generation are scored apart, and the whole thing runs in CI on every chunking or prompt change."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "How do you evaluate a RAG system?",
+      "a": "Score its two stages separately. Use retrieval metrics (context precision, context recall, hit rate) to check whether the right chunks were found, and generation metrics (faithfulness, answer relevance, correctness) to check whether the answer is grounded in those chunks. The split tells you whether to fix the search or the prompt."
+    },
+    {
+      "q": "What are the main RAG evaluation metrics?",
+      "a": "On the retrieval side: context precision (how much of what you retrieved is relevant) and context recall (how much of the relevant material you found). On the generation side: faithfulness/groundedness (no claims beyond the context), answer relevance (it addressed the question), and correctness against a known answer when you have one."
+    },
+    {
+      "q": "What is faithfulness in RAG and how is it measured?",
+      "a": "Faithfulness (or groundedness) checks that every claim in the answer is supported by the retrieved chunks — that the model didn't hallucinate. It's usually measured with an LLM-as-a-judge: a second model grades the answer against the context and returns a pass/fail or a 0–1 score. Validate that judge against human labels before trusting it."
+    },
+    {
+      "q": "Can I evaluate RAG without ground-truth answers?",
+      "a": "Partly, yes. Faithfulness and answer relevance compare the answer to the retrieved context, not to a gold answer, so they run reference-free — even on live production traffic. You only need ground truth and labelled relevant chunks to compute clean retrieval precision/recall and answer correctness."
+    },
+    {
+      "q": "What tools can I use to evaluate RAG?",
+      "a": "Ragas and DeepEval ship RAG-specific metrics like faithfulness and context recall out of the box; TruLens frames it as the \"RAG triad\"; LangSmith adds hosted datasets and production monitoring; promptfoo is good for quick A-B config tests. The framework matters less than having a labelled set and running it on every change."
+    },
+    {
+      "q": "How many test cases do I need to evaluate RAG?",
+      "a": "Start with 20–30 real, messy questions drawn from logs or generated from your actual documents and spot-checked by a human. A small golden set of true questions beats hundreds of invented ones. Grow it every time production surprises you, turning each failure into a permanent test case."
+    }
+  ],
+  "related": [
+    "what-is-rag",
+    "what-is-a-retriever",
+    "what-is-chunking-in-rag",
+    "what-is-agentic-rag"
+  ],
+  "furtherReading": [
+    { "title": "Ragas — RAG evaluation framework (docs)", "url": "https://docs.ragas.io/en/stable/" },
+    { "title": "Ragas (GitHub)", "url": "https://github.com/explodinggradients/ragas" },
+    { "title": "DeepEval — RAG metrics", "url": "https://deepeval.com/docs/metrics-introduction" }
+  ]
+}

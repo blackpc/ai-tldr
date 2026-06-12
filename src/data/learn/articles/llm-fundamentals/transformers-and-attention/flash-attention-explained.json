@@ -1,0 +1,367 @@
+{
+  "slug": "flash-attention-explained",
+  "title": "What Is FlashAttention? Faster Attention, Same Math",
+  "seoTitle": "What Is FlashAttention? Explained Simply",
+  "metaDescription": "FlashAttention computes exact attention faster by being smart about GPU memory. Why it became standard and what it means for context length and speed.",
+  "keywords": [
+    "what is flash attention",
+    "flash attention explained simply",
+    "why is flash attention faster",
+    "flash attention vs standard attention",
+    "gpu memory bottleneck attention"
+  ],
+  "difficulty": "advanced",
+  "oneLiner": "Learn why attention's real bottleneck is memory movement, not math — and how FlashAttention exploits that to speed up every modern model.",
+  "updated": "2026-06-12",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**FlashAttention** is a faster way to run the *attention* step inside a transformer. It produces the exact same numbers as the textbook version — not an approximation — but it gets there in a fraction of the time by being clever about how it moves data around the GPU."
+        },
+        {
+          "type": "p",
+          "md": "Here's the analogy. Imagine a chef working with a huge walk-in fridge (lots of room, but a long walk away) and a tiny countertop right next to the stove (small, but instant to reach). The slow part of cooking isn't the chopping — it's all the trips back and forth to the fridge. A clumsy chef hauls out *every* ingredient, lays them all on a giant table, then walks each one back. A smart chef grabs one tray of ingredients, does everything possible with it on the countertop, stores the result, and only then fetches the next tray. Same dish, far fewer trips."
+        },
+        {
+          "type": "p",
+          "md": "On a GPU, the walk-in fridge is **HBM** (high-bandwidth memory — big but relatively slow) and the countertop is **SRAM** (tiny on-chip cache — small but blazing fast). Standard attention is the clumsy chef: it writes a giant table of intermediate scores out to HBM and reads it back. FlashAttention is the smart chef: it streams the data through the fast on-chip cache in small tiles and never writes the giant table at all. If you're new to *attention* itself, start with [how attention works](/learn/llm-fundamentals/transformers-and-attention/how-attention-works) and come back."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "FlashAttention is **exact attention**, not a shortcut. Approximate methods (sparse, low-rank, linear attention) change the math to save work. FlashAttention changes only the *memory choreography* — the output is bit-for-bit the same as a careful baseline."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Attention is the heart of every modern [transformer](/learn/llm-fundamentals/transformers-and-attention/what-is-a-transformer), and it's expensive in a very specific way. For a sequence of *N* tokens, attention compares every token with every other token — that's an *N × N* grid of scores. Double the context length and that grid quadruples. This quadratic blow-up is the reason long context is hard and why models need [serious GPUs](/learn/llm-fundamentals/llm-basics/why-llms-need-gpus)."
+        },
+        {
+          "type": "p",
+          "md": "The surprising part: most of that cost was never the *math*. Modern GPUs can multiply matrices astonishingly fast — far faster than they can shuttle data in and out of memory. So the real bottleneck for attention was **memory bandwidth**, the time spent reading and writing that giant *N × N* score grid. The chips were sitting idle waiting on memory. FlashAttention's whole insight is to attack the memory traffic, not the arithmetic."
+        },
+        {
+          "type": "p",
+          "md": "Who cares? Just about everyone who touches an LLM:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Anyone using long context.** FlashAttention turns the memory needed for attention from quadratic to roughly linear in sequence length. That's a big reason today's [million-token context windows](/learn/llm-fundamentals/context-windows/million-token-context-windows) are even feasible.",
+            "**Anyone training models.** Faster, more memory-efficient attention means bigger batches, longer sequences, and lower training bills — a direct lever on the [scaling laws](/learn/llm-fundamentals/llm-basics/what-are-scaling-laws) that drive model quality.",
+            "**Anyone serving models.** Faster attention means lower latency and higher throughput per GPU, which is most of what inference cost comes down to.",
+            "**You, indirectly.** You almost certainly used FlashAttention today without knowing it — it's the default attention kernel behind PyTorch, vLLM, and the major inference stacks."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Standard attention runs in distinct, memory-heavy passes. It computes the full score grid `S = Q·Kᵀ`, writes it to HBM, reads it back to apply softmax, writes the softmax result back, then reads it again to multiply by the values `V`. Every one of those round-trips drags a quadratic-sized matrix across the slow memory bus."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Standard attention vs FlashAttention",
+            "columns": [
+              {
+                "title": "Standard attention",
+                "items": [
+                  "Build full N×N score grid",
+                  "Write grid to slow HBM",
+                  "Read it back for softmax",
+                  "Write + read again for ×V",
+                  "Memory grows with N²"
+                ]
+              },
+              {
+                "title": "FlashAttention",
+                "accent": true,
+                "items": [
+                  "Split Q, K, V into tiles",
+                  "Stream tiles through fast SRAM",
+                  "Fuse score + softmax + ×V per tile",
+                  "Never write the full grid",
+                  "Memory grows with N"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "FlashAttention does it in one fused pass using three ideas working together: **tiling**, **online softmax**, and **recomputation**."
+        },
+        {
+          "type": "h3",
+          "text": "1. Tiling — work in small blocks"
+        },
+        {
+          "type": "p",
+          "md": "Instead of building the whole grid, FlashAttention chops the queries, keys, and values into small blocks that fit in fast on-chip SRAM. It loads a block of queries, then walks through the key/value blocks one at a time, computing scores and accumulating a partial output — all without ever writing the full grid to HBM. This is a *fused kernel*: scoring, softmax, and the value multiply happen back-to-back on-chip rather than as three separate trips to memory."
+        },
+        {
+          "type": "h3",
+          "text": "2. Online softmax — the hard part"
+        },
+        {
+          "type": "p",
+          "md": "Softmax is the catch. Normally you need *all* the scores in a row before you can normalize them, because softmax divides by a sum over the whole row and subtracts the row's maximum for numerical stability. But if you're processing one block at a time, you don't have the whole row yet. **Online softmax** solves this by keeping two running statistics per query — the max score seen so far and the running sum — and rescaling the partial result each time a new block arrives. When the last block is done, the answer is mathematically identical to softmaxing the full row at once."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "FlashAttention's fused inner loop (per query block)",
+            "steps": [
+              {
+                "label": "Load Q tile",
+                "sub": "into fast SRAM"
+              },
+              {
+                "label": "Loop K/V tiles",
+                "sub": "one block at a time"
+              },
+              {
+                "label": "Score + online softmax",
+                "sub": "update running max & sum",
+                "accent": true
+              },
+              {
+                "label": "Accumulate output",
+                "sub": "rescale on the fly"
+              },
+              {
+                "label": "Write result",
+                "sub": "one pass to HBM"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "3. Recomputation — cheaper than storing"
+        },
+        {
+          "type": "p",
+          "md": "Training needs a backward pass, which traditionally requires the stored attention grid to compute gradients. FlashAttention refuses to store it. Instead it keeps only the tiny running statistics from the forward pass and *recomputes* the needed blocks on the fly during the backward pass. Counterintuitively, this is faster overall: redoing a bit of cheap matrix math beats hauling a quadratic grid back across slow memory. It's the same memory-versus-compute trade the whole algorithm is built on."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The one-line summary: FlashAttention is **IO-aware**. It counts trips to slow memory as the thing to minimize, then restructures attention so the GPU's fast cores spend their time computing instead of waiting on data."
+        }
+      ]
+    },
+    {
+      "id": "memory-hierarchy",
+      "title": "The GPU memory hierarchy that makes it work",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "To see why FlashAttention is a memory trick and not a math trick, you have to picture the GPU's memory as a pyramid. The chips have a tiny pool of extremely fast on-chip SRAM and a large pool of slower off-chip HBM. The bandwidth gap between them is roughly an order of magnitude — and crucially, the compute units are fast enough that they're usually starved, waiting on HBM."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "stack",
+            "title": "GPU memory hierarchy (top = fast & small)",
+            "layers": [
+              {
+                "label": "SRAM / on-chip cache — tiny, ~10x faster bandwidth"
+              },
+              {
+                "label": "HBM (high-bandwidth memory) — gigabytes, the bottleneck"
+              },
+              {
+                "label": "Host RAM / NVLink — large, far away"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Standard attention generates a quadratic amount of HBM traffic. FlashAttention keeps the working set on the top layer, so it touches HBM roughly linearly in sequence length. That's the difference between a kernel that's *memory-bound* (idle cores) and one that's *compute-bound* (busy cores). For attention specifically, FlashAttention's authors reported up to a 20x reduction in memory reads and writes versus a standard implementation — which is where the dramatic speedups come from. Note this is about the attention *scratch memory* and bandwidth; the [context window](/learn/llm-fundamentals/context-windows/what-is-a-context-window) you can actually fit also depends on the KV cache, which is a separate budget."
+        }
+      ]
+    },
+    {
+      "id": "using-it",
+      "title": "How you actually use it",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The good news: you almost never call FlashAttention by hand. It's baked into the frameworks. In PyTorch, `scaled_dot_product_attention` (SDPA) automatically dispatches to a FlashAttention backend when your tensors qualify (right dtype, supported GPU, no exotic mask). Inference servers like vLLM and SGLang use it by default. If you write a transformer the normal way, you get it for free."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "flash_via_sdpa.py",
+          "code": "import torch\nimport torch.nn.functional as F\n\n# q, k, v: (batch, heads, seq_len, head_dim) on a CUDA GPU\nq = torch.randn(2, 16, 4096, 64, device=\"cuda\", dtype=torch.bfloat16)\nk = torch.randn_like(q)\nv = torch.randn_like(q)\n\n# PyTorch picks a fused FlashAttention kernel automatically\n# when the inputs qualify (GPU + dtype + simple mask).\nwith torch.nn.attention.sdpa_kernel(\n    torch.nn.attention.SDPBackend.FLASH_ATTENTION\n):\n    out = F.scaled_dot_product_attention(q, k, v, is_causal=True)\n\nprint(out.shape)  # (2, 16, 4096, 64) — exact attention, fused & fast"
+        },
+        {
+          "type": "p",
+          "md": "If you need the bleeding edge — the newest hardware, FP8, or custom masks — you can install the standalone package (`flash-attn`) from the Dao-AILab repo and call its kernels directly. Most people don't need to. The headline is simply: prefer `bfloat16` or `float16`, keep your masks simple (causal masks are the well-trodden fast path), and let the framework route you to the fused kernel."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "If attention feels unexpectedly slow, check that you're actually hitting the fast path. Custom additive masks, unusual head dimensions, `float32`, or an unsupported GPU can silently push PyTorch onto a slower fallback that *does* materialize the score grid. Simpler masks and half precision keep you on FlashAttention."
+        }
+      ]
+    },
+    {
+      "id": "current-landscape",
+      "title": "The current landscape (mid-2026)",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "FlashAttention isn't one frozen thing — it's a line of kernels, each rewritten to exploit a specific NVIDIA GPU generation. As of mid-2026, here's the family. (Numbers are vendor-reported peak figures, not promises about your workload.)"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Version",
+            "Year",
+            "Target GPU",
+            "Headline result"
+          ],
+          "rows": [
+            [
+              "FlashAttention (v1)",
+              "2022",
+              "Ampere (A100)",
+              "First IO-aware exact attention; up to ~20x fewer memory ops vs standard"
+            ],
+            [
+              "FlashAttention-2",
+              "2023",
+              "Ampere/Ada",
+              "Better work partitioning; ~2x faster than v1, ~70%+ FP16 utilization"
+            ],
+            [
+              "FlashAttention-3",
+              "2024",
+              "Hopper (H100)",
+              "Async + FP8; up to ~740 TFLOPs/s FP16 (75% util), ~1.2 PFLOPs/s FP8, 1.5–2.0x over v2"
+            ],
+            [
+              "FlashAttention-4",
+              "2026",
+              "Blackwell (B200)",
+              "Up to ~1605 TFLOPs/s BF16 (71% util); up to 1.3x over cuDNN, 2.7x over Triton"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The pattern is telling: each new GPU adds hardware tricks — asynchronous tensor cores, the TMA data-movement engine on Hopper, FP8, then Blackwell's fully asynchronous matrix units and larger tiles — and FlashAttention is rewritten to ride them. **FlashAttention-3** (2024) leaned on Hopper's asynchrony, overlapping the matrix multiply with the softmax and adding FP8 with a neat outlier-taming step (Hadamard 'incoherent processing') that cut FP8 error roughly 2.6x versus a naive FP8 baseline. **FlashAttention-4**, published in March 2026, is a ground-up redesign for Blackwell B200 with new forward/backward pipelines and a software-emulated exponential."
+        },
+        {
+          "type": "p",
+          "md": "Alongside the core line sits a small ecosystem: PyTorch's **FlexAttention** lets you express custom mask/score patterns and still get a fused kernel; vendor libraries like cuDNN ship their own competitive attention kernels. But FlashAttention remains the reference implementation everyone benchmarks against — the work largely came out of Tri Dao's research (now at Together AI and Princeton), with the code openly maintained at the Dao-AILab repository."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A few subtleties worth internalizing once the basics click."
+        },
+        {
+          "type": "h3",
+          "text": "It changes memory complexity, not compute complexity"
+        },
+        {
+          "type": "p",
+          "md": "This trips people up. FlashAttention still does *O(N²)* arithmetic — every token still attends to every token, so the FLOP count is unchanged. What drops from quadratic to linear is the *memory* footprint (and the HBM traffic), because the full *N × N* grid is never stored. So FlashAttention does not break the quadratic wall of attention; it makes the constant factor and the memory cost dramatically better. Truly sub-quadratic compute needs a different attack — sparse, linear, or [mixture-of-experts](/learn/llm-fundamentals/transformers-and-attention/mixture-of-experts-explained) style architectures — which *do* approximate or restructure the math."
+        },
+        {
+          "type": "h3",
+          "text": "Training vs inference are different problems"
+        },
+        {
+          "type": "p",
+          "md": "FlashAttention's original win was the *prefill* / training phase, where you process many tokens at once and the score grid is genuinely large. Single-token decoding (generating one token at a time) is a different regime — it's dominated by reading the KV cache, not by the attention grid — which is why decode-time variants like *FlashDecoding* and paged-KV schemes (the trick behind vLLM) exist. When you read that a serving stack is 'fast', it's usually FlashAttention for prefill plus a paged KV cache for decode, working together."
+        },
+        {
+          "type": "h3",
+          "text": "Why 'exact' is a selling point"
+        },
+        {
+          "type": "p",
+          "md": "Plenty of pre-2022 research chased cheaper attention by approximating it — sparse patterns, low-rank projections, kernelized 'linear' attention. The problem was that approximations often dented quality in ways that were hard to predict. FlashAttention's quiet genius is that it asked a different question: *what if we don't change the math at all, and just stop wasting memory bandwidth?* Because the output is exact, it's a free drop-in — no accuracy trade-off, no retraining, no eval surprises. That's exactly why it swept the field and became the silent default behind nearly every model you use, from frontier APIs to a [local model on your laptop](/learn/llm-fundamentals/llm-basics/what-is-an-llm)."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Mental model to keep: **approximate attention trades accuracy for speed; FlashAttention trades nothing — it just stops paying the memory tax.** That's why it won."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Is FlashAttention an approximation of attention?",
+      "a": "No. FlashAttention computes **exact** attention — the output matches a careful standard implementation to within normal floating-point rounding. It only changes how data moves through GPU memory (tiling, online softmax, recomputation), not the underlying math. Approximate methods like sparse or linear attention *do* change the math; FlashAttention does not."
+    },
+    {
+      "q": "Why is FlashAttention faster if it does the same amount of math?",
+      "a": "Because attention was never bottlenecked by math — it was bottlenecked by memory bandwidth. Standard attention writes and reads a giant N×N score grid to slow HBM repeatedly. FlashAttention keeps the work in fast on-chip SRAM and never materializes that grid, cutting memory traffic by up to ~20x. The GPU's compute units stop sitting idle waiting on memory, so wall-clock time drops sharply."
+    },
+    {
+      "q": "Does FlashAttention let me use longer context windows?",
+      "a": "Partly. It changes attention's scratch-memory footprint from quadratic to roughly linear in sequence length, which removes one major obstacle to long context. But the context length you can actually run also depends on the KV cache, model size, and total GPU memory — those are separate budgets. FlashAttention is necessary but not sufficient for million-token context."
+    },
+    {
+      "q": "Do I need to install anything to use FlashAttention?",
+      "a": "Usually not. PyTorch's `scaled_dot_product_attention` automatically dispatches to a FlashAttention backend when your inputs qualify (supported GPU, float16/bfloat16, simple mask), and servers like vLLM and SGLang use it by default. You only need the standalone `flash-attn` package for the newest hardware, FP8, or custom kernels."
+    },
+    {
+      "q": "What is the latest version of FlashAttention as of 2026?",
+      "a": "FlashAttention-4, published in March 2026, is the newest in the line. It's a ground-up redesign for NVIDIA Blackwell (B200) GPUs reaching up to ~1605 TFLOPs/s in BF16. Earlier generations are still widely used: FlashAttention-2 for Ampere/Ada and FlashAttention-3 for Hopper (H100), which added FP8 support."
+    },
+    {
+      "q": "What is the difference between FlashAttention and standard attention?",
+      "a": "Standard attention builds the full N×N attention grid, writes it to slow memory, and reads it back multiple times. FlashAttention fuses scoring, softmax, and the value multiply into one pass over small tiles in fast on-chip memory, never storing the full grid. Same exact output, far less memory movement, much faster — especially as sequences get longer."
+    }
+  ],
+  "related": [
+    "how-attention-works",
+    "what-is-a-transformer",
+    "why-llms-need-gpus",
+    "million-token-context-windows",
+    "mixture-of-experts-explained"
+  ],
+  "furtherReading": [
+    {
+      "title": "FlashAttention: Fast and Memory-Efficient Exact Attention with IO-Awareness (arXiv)",
+      "url": "https://arxiv.org/abs/2205.14135"
+    },
+    {
+      "title": "FlashAttention-3: Fast and Accurate Attention with Asynchrony and Low-precision (Tri Dao)",
+      "url": "https://tridao.me/blog/2024/flash3/"
+    },
+    {
+      "title": "FlashAttention-4 (Tri Dao blog, 2026)",
+      "url": "https://tridao.me/blog/2026/flash4/"
+    }
+  ]
+}
