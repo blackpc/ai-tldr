@@ -1,6 +1,6 @@
 ---
 prompt-id: tldr.update-releases
-prompt-version: 6.1.0
+prompt-version: 6.6.0
 output-target: src/data/releases.json (via finalize-sweep.ts)
 schema: src/data/schema.ts
 invoke-as: subagent
@@ -32,6 +32,9 @@ You write a draft. Scripts validate and merge. You do **NOT** edit
 2. **Discovery.** Search the sources listed below. For each candidate,
    apply the inclusion bar + the importance scale + the dedup check.
 3. **Helpers as needed:**
+   - `bun scripts/yt-rss-scan.ts` — scans all 8 YouTube creator channels,
+     returns JSON array of videos uploaded in the last 72h. Call this in
+     step 5 of the first pass (not optional).
    - `bun scripts/yt-meta.ts <url>` — returns
      `{ videoId, watchUrl, title, channelName, channelUrl, thumbnailUrl, uploadDate, ageHours, freshFor72hBar }`.
      For any video, ship only if `freshFor72hBar: true`.
@@ -111,6 +114,13 @@ same product, same announcement?" If yes:
   existing id.
 - Otherwise → drop the candidate.
 
+**Exception for `video` items:** A video by a listed creator is its own
+item — a creator's breakdown of a release is NOT a semantic dupe of the
+release itself. If `nvidia-lyra-2-0` is already in the feed and Two
+Minute Papers uploads a fresh video about it, add the video as a new
+`video` item. The existing release entry and the video coexist. Do NOT
+use semantic dedup to block video items from being added.
+
 The script will catch slug/url collisions you miss. The script CANNOT
 do semantic dedup. That's on you, every candidate, every sweep.
 
@@ -170,29 +180,47 @@ Ship a candidate only if it meets ALL of:
 
 ## Sources to scan
 
-Search whichever sources fit the candidate type. There is **no**
-"must search every category" rule — searching matters when you have a
-reason to look, not as a quota.
+**Search technical sources first.** Tier-1 press and business news are
+last-resort, not first-resort. The feed exists to surface what shipped,
+not what was funded or announced.
 
-- **HN**: front page top 30, "Show HN" AI posts.
-- **GitHub trending**: filter to AI/ML, `?since=daily`.
-- **HuggingFace**: `/papers` and `/models?sort=trending`.
-- **Lab blogs**: anthropic.com/news, openai.com/index, deepmind.google,
-  ai.meta.com/blog, x.ai/blog, mistral.ai/news, cohere.com/blog,
-  qwen.ai, moonshot.ai.
-- **Coding agents** (watch for new releases / blog posts): Cursor,
-  Claude Code, Windsurf, Cline, Aider, Continue, OpenCode, Codium,
-  Tabnine, Codeium.
-- **Tier-1 AI press**: theinformation.com, bloomberg.com (AI beat),
-  theverge.com/ai, theregister.com/AI, arstechnica.com/ai,
-  techcrunch.com/ai, stratechery.com.
-- **Reddit**: r/LocalLLaMA hot, r/MachineLearning hot, r/artificial top.
+**Required first pass (always do these before anything else):**
+1. **Lab blogs**: anthropic.com/news, openai.com/index, deepmind.google,
+   ai.meta.com/blog, x.ai/blog, mistral.ai/news, cohere.com/blog,
+   qwen.ai, moonshot.ai — model releases, API changes, new tools.
+2. **GitHub trending**: `github.com/trending?since=daily` filtered to AI/ML —
+   new repos with real traction.
+3. **HuggingFace**: `huggingface.co/models?sort=trending` and
+   `huggingface.co/papers` top 10 — new models and papers with code.
+4. **HN**: front page top 30 and "Show HN" AI posts.
+5. **YouTube fresh videos** — run:
+   ```
+   bun scripts/yt-rss-scan.ts
+   ```
+   This scans all 8 creator channels and returns a JSON array of videos
+   uploaded in the last 72h. For each result: run
+   `bun scripts/yt-meta.ts <watchUrl>` to confirm `freshFor72hBar: true`,
+   then add as a `video` item if the content is substantive AI/ML
+   (not a Short, not a promo, not off-topic). An empty array means no
+   fresh videos — that is fine, move on.
+
+**Second pass (only if first pass yields <2 qualifying items):**
+- **Coding agents**: Cursor, Claude Code, Windsurf, Cline, Aider,
+  Continue, OpenCode, Codium, Tabnine, Codeium — watch for new releases.
+- **Reddit**: r/LocalLLaMA hot, r/MachineLearning hot.
 - **Influential voices** (for `article` items only): simonwillison.net,
   karpathy.ai, latent.space, interconnects.ai, lilianweng.github.io,
   eugeneyan.com, importai.substack.com, deeplearning.ai/the-batch.
-- **YouTube** (for `video` items only): Two Minute Papers, AI Explained,
-  Yannic Kilcher, Fireship, Matthew Berman, Sam Witteveen, 1littlecoder,
-  Wes Roth.
+
+**Last resort (only after exhausting above with <2 items):**
+- **Tier-1 AI press**: theverge.com/ai, arstechnica.com/ai,
+  techcrunch.com/ai, bloomberg.com (AI beat), theinformation.com,
+  stratechery.com. Use these to confirm a technical item you found
+  above, or to find a genuinely structural ecosystem event — not as
+  a primary discovery channel.
+
+There is **no** "must search every category" rule — searching matters
+when you have a reason to look, not as a quota.
 
 ## Item schema
 
@@ -382,8 +410,12 @@ back to a tinted initial). For GitHub-using authors,
 
 ### `video` — top creators only, fresh only
 
-72h freshness bar enforced via `yt-meta.ts`'s `freshFor72hBar` flag.
-If false → drop. No "almost fresh" exceptions.
+72h freshness bar applies to the **video upload date** — the date the
+creator published the video on YouTube. It does NOT apply to any
+research paper, model, or product the video happens to cover. A video
+uploaded today reviewing a 30-day-old paper is FRESH. Use
+`yt-meta.ts`'s `uploadDate` as `date` and `freshFor72hBar` as the
+gate. If `freshFor72hBar: false` → drop. No exceptions.
 
 `org` = the channel name (e.g. "Two Minute Papers"), NEVER "YouTube".
 `image.url` = `thumbnailUrl` from `yt-meta.ts` (the deterministic
@@ -413,10 +445,28 @@ arXiv-trending alone is not enough.
 
 ALLOWED: foundation moves (PyTorch Foundation, Linux Foundation AI),
 license changes on widely-used projects, lab spinouts/shutdowns,
-deprecations that break downstream users.
+deprecations that break downstream users, regulatory changes with
+direct technical consequences (e.g. a law that changes what models
+can be deployed).
 
-NOT ALLOWED: funding rounds without product impact, hires/departures,
-roadmap announcements, conference dates.
+NOT ALLOWED: funding rounds, IPO filings, valuations, M&A rumours,
+revenue forecasts, headcount news, conference dates, roadmap
+announcements, government policy speculation without enacted change.
+
+**Concrete rejected examples (items that slipped through in 2026-05):**
+- "Cerebras Launches IPO Roadshow at $26.6B" → pure financial news, no product change
+- "Sierra Raises $950M at $15B+" → funding round, no product shipped
+- "OpenAI's CFO Pushes IPO to 2027" → corporate timeline, zero dev impact
+- "KKR's $10B AI Data-Center Spinout" → infrastructure investment, not a release
+- "Huawei Forecasts $12B in 2026 AI Chip Revenue" → revenue forecast, not a product
+
+**Ecosystem gate test:** Before accepting an ecosystem item, answer:
+*"What does a developer or researcher DO differently because of this?"*
+If you can't answer with a concrete action (migrate off X, update
+API key, stop using library Y), drop the item.
+
+**Cap: max 1 ecosystem-primary item per sweep.** If you already have
+one, demote additional candidates or drop them.
 
 Almost always combines with another category (e.g. license change on
 a model = `["ecosystem", "model"]`).
@@ -436,6 +486,9 @@ For every item, answer YES to all of:
 7. Did I scan `existing[].title` for semantic collisions and confirm
    none?
 8. Would I tweet about this today as "this just shipped"?
+9. If `categories[0]` is `ecosystem`: Can I name a concrete developer action
+   this triggers? If no → drop. Is this already the 2nd ecosystem-primary
+   item this sweep? If yes → drop.
 
 For seismic items specifically:
 9. Is this a NEW SOTA model OR a fundamentally new capability from a

@@ -223,3 +223,57 @@ Status. applied. Watch next cron run.
   zero seismic inflation, zero padding.
 - If any of A–F fail again, the pipeline regressed. Don't patch —
   audit the contradiction first.
+
+---
+
+## 2026-05-05-G — ecosystem over-inclusion / technical content starvation
+
+**Trigger:** User observed 2-3 items per day, majority ecosystem/news,
+very few model/repo/paper/tool items. Category breakdown over last 40
+sweeps: ecosystem 29%, tool 27%, repo 15%, model only 6%.
+
+**Root cause (two compounding issues):**
+1. `ecosystem` gate was being ignored. "NOT ALLOWED: funding rounds
+   without product impact" was in the prompt but agent kept adding
+   IPO filings, valuations, revenue forecasts (Sierra $950M, Cerebras
+   IPO, OpenAI CFO, Huawei chip forecast, KKR spinout).
+2. Sources were searched in wrong order. Tier-1 press (full of business
+   news) was being hit early, filling the 2-3 item quota before
+   GitHub/HuggingFace/lab-blogs were checked for technical content.
+
+**Changes (prompt v6.1.0 → v6.2.0):**
+- `ecosystem` section: added concrete rejected-item examples, added
+  "ecosystem gate test" (developer must have a concrete action),
+  added hard cap of max 1 ecosystem-primary item per sweep.
+- Sources section: reordered into required-first-pass (lab blogs,
+  GitHub trending, HuggingFace, HN) + second pass + last-resort
+  (tier-1 press). Press is now last-resort, not first-resort.
+- Self-check question 9 added: ecosystem items must name a concrete
+  dev action, and must not be the 2nd ecosystem-primary this sweep.
+
+**Status:** Applied. Watch next 10 cron runs for category balance shift.
+
+---
+
+## 2026-05-05-H — zero videos ever added (asked 3 times, never fixed)
+
+**Trigger:** User confirmed zero video items have ever been added by any
+cron sweep. The v6.x prompt listed YouTube creators by name only — no
+URLs, no channel IDs, no fetch mechanism. Agent had no way to discover
+fresh videos and was in the "second pass" bucket, so it never tried.
+
+**Root cause:** The YouTube section was purely decorative. "Two Minute
+Papers, AI Explained, ..." are meaningless without a fetchable URL.
+The agent cannot browse youtube.com channel pages reliably. RSS feeds
+are the correct mechanism but were never wired in.
+
+**Change (v6.2.0 → v6.3.0):**
+- Added 8 verified YouTube RSS feed URLs directly in the prompt
+  (channel_id confirmed via `feeds/videos.xml` for each):
+  Two Minute Papers, AI Explained, Yannic Kilcher, Fireship,
+  Matthew Berman, Sam Witteveen, 1littlecoder, Wes Roth.
+- Moved YouTube to the **required first pass** (step 5), not second pass.
+- Instruction: fetch all feeds every sweep, check `<published>` date,
+  run `yt-meta.ts` on any ≤72h video, ship if `freshFor72hBar: true`.
+
+**Status:** Applied. Next sweep should surface videos for the first time.
