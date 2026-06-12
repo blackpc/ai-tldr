@@ -2,24 +2,22 @@
  * /learn/map — the Learn section as an interactive radial mind map.
  *
  * The whole taxonomy (root → 14 categories → 64 subcategories → 142
- * articles) is drawn as one SVG radial tree: pan (drag the canvas), zoom
- * (wheel or the +/− buttons), hover to trace a branch to its root, fold a
- * category/subcategory by clicking its node, jump to any page by clicking
- * its label. A complete nested text index sits below the canvas so the
- * page is fully usable (and crawlable) without JavaScript — the prerender
- * emits the same SVG + index as static HTML.
+ * articles) is drawn as one full-bleed SVG radial tree: pan (drag the
+ * canvas anywhere), zoom (wheel or the +/− buttons), hover to trace a
+ * branch to its root, fold a category/subcategory by clicking its node,
+ * jump to any page by clicking its label. The title + controls + legend
+ * float over the canvas so the graph gets the whole viewport.
  *
  * Pure-presentational + SSR-safe: geometry comes from learnGraph (no DOM,
  * no randomness). All interactivity lives in client-only effects/handlers,
  * which never run during renderToStaticMarkup.
  */
 
-import { useCallback, useMemo, useRef, useState } from "react";
-import type { PointerEvent as RPointerEvent, WheelEvent as RWheelEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { PointerEvent as RPointerEvent } from "react";
 
 import { learnTaxonomy } from "../../data/learn/nav";
 import { categoryVisual } from "./categoryVisuals";
-import { Breadcrumbs } from "./ArticleBody";
 import {
   buildLearnGraph,
   labelTransform,
@@ -67,7 +65,6 @@ export default function LearnMap() {
     (id: string): Set<string> => {
       const out = new Set<string>([id]);
       for (const a of graph.ancestorsOf.get(id) ?? []) out.add(a);
-      // descendants
       const stack = [id];
       while (stack.length) {
         const cur = stack.pop()!;
@@ -106,14 +103,17 @@ export default function LearnMap() {
     [activeSet],
   );
 
-  // --- pan / zoom --------------------------------------------------------
+  // --- pan / zoom (work in SVG user space via the live screen matrix) ----
   const clientToView = useCallback((cx: number, cy: number) => {
     const svg = svgRef.current;
-    if (!svg) return { x: 0, y: 0 };
-    const r = svg.getBoundingClientRect();
-    const vx = -VIEW + ((cx - r.left) / r.width) * (VIEW * 2);
-    const vy = -VIEW + ((cy - r.top) / r.height) * (VIEW * 2);
-    return { x: vx, y: vy };
+    const ctm = svg?.getScreenCTM();
+    if (!ctm) return { x: 0, y: 0 };
+    return { x: (cx - ctm.e) / ctm.a, y: (cy - ctm.f) / ctm.d };
+  }, []);
+
+  const userScale = useCallback(() => {
+    const ctm = svgRef.current?.getScreenCTM();
+    return ctm ? ctm.a : 1;
   }, []);
 
   const zoomAt = useCallback((vx: number, vy: number, factor: number) => {
@@ -125,14 +125,19 @@ export default function LearnMap() {
     });
   }, []);
 
-  const onWheel = useCallback(
-    (e: RWheelEvent<SVGSVGElement>) => {
+  // Native, non-passive wheel listener so preventDefault actually stops
+  // the page from scrolling while zooming (React's onWheel is passive).
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const p = clientToView(e.clientX, e.clientY);
       zoomAt(p.x, p.y, e.deltaY < 0 ? 1.15 : 1 / 1.15);
-    },
-    [clientToView, zoomAt],
-  );
+    };
+    svg.addEventListener("wheel", onWheel, { passive: false });
+    return () => svg.removeEventListener("wheel", onWheel);
+  }, [clientToView, zoomAt]);
 
   const drag = useRef<{ id: number; lx: number; ly: number } | null>(null);
   const onBgDown = useCallback((e: RPointerEvent<SVGRectElement>) => {
@@ -143,26 +148,18 @@ export default function LearnMap() {
     (e: RPointerEvent<SVGRectElement>) => {
       const d = drag.current;
       if (!d || d.id !== e.pointerId) return;
-      const svg = svgRef.current;
-      const r = svg?.getBoundingClientRect();
-      const sx = r ? (VIEW * 2) / r.width : 1;
-      const sy = r ? (VIEW * 2) / r.height : 1;
-      const dx = (e.clientX - d.lx) * sx;
-      const dy = (e.clientY - d.ly) * sy;
+      const s = userScale();
+      const dx = (e.clientX - d.lx) / s;
+      const dy = (e.clientY - d.ly) / s;
       d.lx = e.clientX;
       d.ly = e.clientY;
       setView((cur) => ({ ...cur, x: cur.x + dx, y: cur.y + dy }));
     },
-    [],
+    [userScale],
   );
   const onBgUp = useCallback((e: RPointerEvent<SVGRectElement>) => {
     if (drag.current?.id === e.pointerId) drag.current = null;
   }, []);
-
-  const zoomButton = useCallback(
-    (factor: number) => zoomAt(0, 0, factor),
-    [zoomAt],
-  );
 
   const toggleFold = useCallback((id: string) => {
     setCollapsed((cur) => {
@@ -182,98 +179,31 @@ export default function LearnMap() {
   }, []);
 
   // ----------------------------------------------------------------------
-  // Render helpers
-  // ----------------------------------------------------------------------
   const links = graph.links.filter(
     (l) => isVisible(l.source) && isVisible(l.target),
   );
   const nodes = graph.nodes.filter(isVisible);
-
   const dimmed = activeSet !== null;
+  const articleCount = graph.nodes.filter((n) => n.kind === "article").length;
 
   return (
-    <div className="lrn-page lrn-map-page">
-      <header className="lrn-map-head">
-        <Breadcrumbs
-          trail={[{ label: "LEARN", href: "/learn" }, { label: "Map" }]}
-        />
-        <h1 className="lrn-map-title">
-          THE <span className="lrn-hub-title-accent">MAP</span>
-        </h1>
-        <p className="lrn-dek">
-          Every category, subcategory and article in one radial graph —{" "}
-          {graph.nodes.length - 1} nodes. Drag to pan, scroll to zoom, hover
-          a node to trace its branch, click a dot to fold it, click a label
-          to open the page.
-        </p>
-      </header>
-
-      <div className="lrn-map-toolbar">
-        <div className="lrn-map-search">
-          <span className="lrn-map-search-ic" aria-hidden="true">
-            ⌕
-          </span>
-          <input
-            type="search"
-            className="lrn-map-search-in"
-            placeholder="FILTER NODES…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            aria-label="Filter mind-map nodes by name"
-          />
-        </div>
-        <div className="lrn-map-btns">
-          <button
-            type="button"
-            className="lrn-map-btn"
-            onClick={() => zoomButton(1.25)}
-            aria-label="Zoom in"
-          >
-            +
-          </button>
-          <button
-            type="button"
-            className="lrn-map-btn"
-            onClick={() => zoomButton(1 / 1.25)}
-            aria-label="Zoom out"
-          >
-            −
-          </button>
-          <button
-            type="button"
-            className="lrn-map-btn lrn-map-btn-wide"
-            onClick={() => {
-              setView(IDENTITY);
-              setCollapsed(new Set());
-              setFocusCat(null);
-            }}
-          >
-            RESET
-          </button>
-          <button
-            type="button"
-            className="lrn-map-btn lrn-map-btn-wide"
-            onClick={collapseAll}
-          >
-            FOLD ALL
-          </button>
-        </div>
-      </div>
-
+    <div className="lrn-map-page">
       <div className="lrn-map-canvas">
         <svg
           ref={svgRef}
           className="lrn-map-svg"
           viewBox={`${-VIEW} ${-VIEW} ${VIEW * 2} ${VIEW * 2}`}
+          preserveAspectRatio="xMidYMid meet"
           role="img"
           aria-label="Radial map of every Learn AI topic"
-          onWheel={onWheel}
         >
+          {/* Oversized hit-plane so panning works across the whole
+              canvas, including the letterboxed sides of the square viewBox. */}
           <rect
-            x={-VIEW}
-            y={-VIEW}
-            width={VIEW * 2}
-            height={VIEW * 2}
+            x={-VIEW * 12}
+            y={-VIEW * 12}
+            width={VIEW * 24}
+            height={VIEW * 24}
             fill="transparent"
             className="lrn-map-bg"
             onPointerDown={onBgDown}
@@ -282,18 +212,10 @@ export default function LearnMap() {
             onPointerCancel={onBgUp}
           />
           <g transform={`translate(${view.x} ${view.y}) scale(${view.k})`}>
-            {/* faint depth rings */}
             {RING.slice(1).map((r) => (
-              <circle
-                key={r}
-                cx={0}
-                cy={0}
-                r={r}
-                className="lrn-map-ring"
-              />
+              <circle key={r} cx={0} cy={0} r={r} className="lrn-map-ring" />
             ))}
 
-            {/* links */}
             <g className="lrn-map-links">
               {links.map((l) => {
                 const on = isActive(l.target.id);
@@ -311,7 +233,6 @@ export default function LearnMap() {
               })}
             </g>
 
-            {/* nodes */}
             <g className="lrn-map-nodes">
               {nodes.map((n) => (
                 <MapNode
@@ -332,8 +253,75 @@ export default function LearnMap() {
           </g>
         </svg>
 
+        {/* title — floats over the canvas, top-left */}
+        <div className="lrn-map-ui lrn-map-ui-tl">
+          <a className="lrn-map-back" href="/learn" data-internal="true">
+            ← LEARN
+          </a>
+          <div className="lrn-map-word">
+            THE <span className="lrn-hub-title-accent">MAP</span>
+          </div>
+          <p className="lrn-map-hint">
+            {articleCount} topics · drag to pan · scroll to zoom · click a dot
+            to fold
+          </p>
+        </div>
+
+        {/* controls — top-right */}
+        <div className="lrn-map-ui lrn-map-ui-tr">
+          <div className="lrn-map-search">
+            <span className="lrn-map-search-ic" aria-hidden="true">
+              ⌕
+            </span>
+            <input
+              type="search"
+              className="lrn-map-search-in"
+              placeholder="FILTER…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              aria-label="Filter mind-map nodes by name"
+            />
+          </div>
+          <div className="lrn-map-btns">
+            <button
+              type="button"
+              className="lrn-map-btn"
+              onClick={() => zoomAt(0, 0, 1.25)}
+              aria-label="Zoom in"
+            >
+              +
+            </button>
+            <button
+              type="button"
+              className="lrn-map-btn"
+              onClick={() => zoomAt(0, 0, 1 / 1.25)}
+              aria-label="Zoom out"
+            >
+              −
+            </button>
+            <button
+              type="button"
+              className="lrn-map-btn lrn-map-btn-wide"
+              onClick={() => {
+                setView(IDENTITY);
+                setCollapsed(new Set());
+                setFocusCat(null);
+              }}
+            >
+              RESET
+            </button>
+            <button
+              type="button"
+              className="lrn-map-btn lrn-map-btn-wide"
+              onClick={collapseAll}
+            >
+              FOLD
+            </button>
+          </div>
+        </div>
+
         {/* category legend — click to focus a branch */}
-        <div className="lrn-map-legend" aria-hidden="true">
+        <div className="lrn-map-legend">
           {learnTaxonomy.categories.map((c) => {
             const { accent } = categoryVisual(c.slug);
             const on = focusCat === c.slug;
@@ -354,61 +342,14 @@ export default function LearnMap() {
           })}
         </div>
       </div>
-
-      {/* full text index — SEO + no-JS fallback */}
-      <section className="lrn-map-index" aria-label="Full topic index">
-        <h2 className="lrn-map-index-title">Full index</h2>
-        <div className="lrn-map-index-grid">
-          {learnTaxonomy.categories.map((c) => {
-            const { accent, Icon } = categoryVisual(c.slug);
-            return (
-              <div
-                className="lrn-map-idx-cat"
-                key={c.slug}
-                style={{ ["--cat" as string]: accent }}
-              >
-                <h3 className="lrn-map-idx-cat-head">
-                  <span className="lrn-map-idx-ic" aria-hidden="true">
-                    <Icon />
-                  </span>
-                  <a href={`/learn/${c.slug}`} data-internal="true">
-                    {c.title}
-                  </a>
-                </h3>
-                {c.subcategories.map((s) => (
-                  <div className="lrn-map-idx-sub" key={s.slug}>
-                    <a
-                      className="lrn-map-idx-sub-head"
-                      href={`/learn/${c.slug}/${s.slug}`}
-                      data-internal="true"
-                    >
-                      {s.title}
-                    </a>
-                    <ul className="lrn-map-idx-arts">
-                      {s.articles.map((a) => (
-                        <li key={a.slug}>
-                          <a
-                            href={`/learn/${c.slug}/${s.slug}/${a.slug}`}
-                            data-internal="true"
-                          >
-                            {a.title}
-                          </a>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ))}
-              </div>
-            );
-          })}
-        </div>
-      </section>
     </div>
   );
 }
 
 // -------------------------------------------------------------------------
 // One node: its dot (foldable for category/sub) + its label (a link).
+// The label is positioned from the origin via labelTransform, so it sits
+// just outside its own dot — no double-offset.
 // -------------------------------------------------------------------------
 function MapNode({
   node,
@@ -448,7 +389,8 @@ function MapNode({
     );
   }
 
-  const { transform, anchor } = labelTransform(node, node.kind === "category" ? 12 : 8);
+  const gap = node.kind === "category" ? 12 : node.kind === "subcategory" ? 9 : 7;
+  const { transform, anchor } = labelTransform(node, gap);
   const cls = `lrn-map-node lrn-map-node-${node.kind}${active ? " is-on" : ""}${
     dim ? " is-dim" : ""
   }`;
@@ -484,19 +426,17 @@ function MapNode({
         />
       )}
       {showLabel && (
-        <g transform={`translate(${node.x} ${node.y})`}>
-          <a href={node.href} data-internal="true">
-            <text
-              className="lrn-map-label"
-              transform={transform}
-              textAnchor={anchor}
-              dy="0.32em"
-              fill={node.kind === "article" ? undefined : node.accent}
-            >
-              {node.label}
-            </text>
-          </a>
-        </g>
+        <a href={node.href} data-internal="true">
+          <text
+            className="lrn-map-label"
+            transform={transform}
+            textAnchor={anchor}
+            dy="0.32em"
+            fill={node.kind === "article" ? undefined : node.accent}
+          >
+            {node.label}
+          </text>
+        </a>
       )}
     </g>
   );

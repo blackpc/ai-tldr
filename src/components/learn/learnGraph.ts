@@ -229,6 +229,12 @@ export function buildLearnGraph(): LearnGraph {
  * each end's angle, so links fan out cleanly without crossing their nodes.
  */
 export function radialLinkPath(source: GraphNode, target: GraphNode): string {
+  // From the center hub (radius 0) the source has no meaningful angle, so a
+  // curve would bend toward an arbitrary direction (east) and pull the burst
+  // off-center — draw those spokes straight instead.
+  if (source.radius === 0) {
+    return `M0,0L${target.x.toFixed(2)},${target.y.toFixed(2)}`;
+  }
   const midR = (source.radius + target.radius) / 2;
   const c1 = polar(midR, source.angle);
   const c2 = polar(midR, target.angle);
