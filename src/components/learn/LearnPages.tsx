@@ -152,8 +152,8 @@ export function LearnHubPage() {
 // Category — /learn/<cat>
 // ---------------------------------------------------------------------
 
-/** One article as a compact, clickable list row (difficulty + title). */
-function ArticleListItem({
+/** One article as a visual mini-card: its figure on top, title below. */
+function ArticleCard({
   category,
   subcategory,
   article,
@@ -162,47 +162,63 @@ function ArticleListItem({
   subcategory: LearnSubcategory;
   article: LearnArticleRef;
 }) {
+  const img = articleImage(article.slug);
   return (
     <a
-      className="lrn-item"
+      className="lrn-acard"
       href={learnArticlePath(category.slug, subcategory.slug, article.slug)}
       data-internal="true"
     >
-      <DifficultyBadge level={article.difficulty} />
-      <span className="lrn-item-title">{article.title}</span>
-      <span className="lrn-item-arr" aria-hidden="true">
-        →
+      <span
+        className="lrn-acard-thumb"
+        aria-hidden="true"
+        style={img ? { backgroundImage: `url(${img})` } : undefined}
+      />
+      <span className="lrn-acard-body">
+        <span className="lrn-acard-title">{article.title}</span>
+        <span className="lrn-acard-foot">
+          <DifficultyBadge level={article.difficulty} />
+          <span className="lrn-acard-arr" aria-hidden="true">
+            →
+          </span>
+        </span>
       </span>
     </a>
   );
 }
 
-/** A subcategory rendered as a full-width section: header (links to the
- *  subcategory page) + a responsive grid of article cells that wraps and
- *  grows as articles are added — no fixed-height boxes. */
-function CategorySection({
+/** A subcategory as a numbered "track board": header + card grid. */
+function TrackSection({
   category,
   subcategory,
+  index,
 }: {
   category: LearnCategory;
   subcategory: LearnSubcategory;
+  index: number;
 }) {
+  const href = learnSubcategoryPath(category.slug, subcategory.slug);
   return (
-    <section className="lrn-catsec">
-      <div className="lrn-catsec-head">
-        <h2 className="lrn-catsec-title">
-          <a
-            href={learnSubcategoryPath(category.slug, subcategory.slug)}
-            data-internal="true"
-          >
-            {subcategory.title}
-          </a>
-        </h2>
-        <p className="lrn-catsec-tagline">{subcategory.tagline}</p>
+    <section className="lrn-track">
+      <div className="lrn-track-head">
+        <span className="lrn-track-num" aria-hidden="true">
+          {pad(index)}
+        </span>
+        <div className="lrn-track-text">
+          <h2 className="lrn-track-title">
+            <a href={href} data-internal="true">
+              {subcategory.title}
+            </a>
+          </h2>
+          <p className="lrn-track-tagline">{subcategory.tagline}</p>
+        </div>
+        <a className="lrn-track-open" href={href} data-internal="true">
+          OPEN TRACK <span aria-hidden="true">→</span>
+        </a>
       </div>
-      <div className="lrn-catsec-grid">
+      <div className="lrn-track-grid">
         {subcategory.articles.map((a) => (
-          <ArticleListItem
+          <ArticleCard
             key={a.slug}
             category={category}
             subcategory={subcategory}
@@ -216,28 +232,72 @@ function CategorySection({
 
 export function LearnCategoryPage({ category }: { category: LearnCategory }) {
   const { accent, Icon } = categoryVisual(category.slug);
+  const idx = learnTaxonomy.categories.findIndex(
+    (c) => c.slug === category.slug,
+  );
+  const articleCount = category.subcategories.reduce(
+    (n, s) => n + s.articles.length,
+    0,
+  );
+  const present = DIFF_ORDER.filter((d) =>
+    category.subcategories.some((s) =>
+      s.articles.some((a) => a.difficulty === d),
+    ),
+  );
+  const diffSpan =
+    present.length > 1
+      ? `${present[0]} → ${present[present.length - 1]}`
+      : (present[0] ?? "");
+
   return (
     <div className="lrn-page" style={accentVar(accent)}>
-      <header className="lrn-cat-hero">
-        <Breadcrumbs
-          trail={[{ label: "LEARN", href: learnHubPath }, { label: category.title }]}
+      <header className="lrn-sub-hero">
+        <span
+          className="lrn-sub-hero-bg"
+          aria-hidden="true"
+          style={{
+            backgroundImage: `url(/learn-media/cat-${category.slug}.jpg)`,
+          }}
         />
-        <div className="lrn-cat-hero-row">
-          <span className="lrn-cat-hero-icon" aria-hidden="true">
-            <Icon />
-          </span>
-          <div className="lrn-cat-hero-text">
-            <h1 className="lrn-cat-hero-title">{category.title}</h1>
-            <p className="lrn-dek">{category.tagline}</p>
+        <span className="lrn-sub-hero-idx" aria-hidden="true">
+          {pad(idx)}
+        </span>
+        <div className="lrn-sub-hero-inner">
+          <Breadcrumbs
+            trail={[
+              { label: "LEARN", href: learnHubPath },
+              { label: category.title },
+            ]}
+          />
+          <div className="lrn-sub-hero-row">
+            <span className="lrn-sub-hero-icon" aria-hidden="true">
+              <Icon />
+            </span>
+            <div className="lrn-sub-hero-text">
+              <span className="lrn-sub-hero-eyebrow">
+                SYSTEM {pad(idx)}/{pad(learnTaxonomy.categories.length - 1)} ·
+                THE FIELD GUIDE
+              </span>
+              <h1 className="lrn-sub-hero-title">{category.title}</h1>
+              <p className="lrn-sub-hero-dek">{category.tagline}</p>
+            </div>
+          </div>
+          <div className="lrn-sub-hero-meta">
+            <span className="lrn-sub-hero-stat">
+              {category.subcategories.length} TRACKS
+            </span>
+            <span className="lrn-sub-hero-stat">{articleCount} ARTICLES</span>
+            {diffSpan && <span className="lrn-sub-hero-stat">{diffSpan}</span>}
           </div>
         </div>
       </header>
 
-      {category.subcategories.map((sub) => (
-        <CategorySection
+      {category.subcategories.map((sub, i) => (
+        <TrackSection
           key={sub.slug}
           category={category}
           subcategory={sub}
+          index={i}
         />
       ))}
     </div>

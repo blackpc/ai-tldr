@@ -8,6 +8,8 @@
  * in the SPA. No vite-specific APIs here (prerender imports this file).
  */
 
+import { useEffect } from "react";
+
 import type { LearnArticle } from "../../data/learn/schema";
 import {
   LEARN_DIFFICULTY_META,
@@ -24,6 +26,7 @@ import {
 } from "../../data/learn/nav";
 import { renderInlineMd } from "./markdown";
 import { Block } from "./Blocks";
+import { markRead } from "./learnProgress";
 
 function locPath(loc: LearnArticleLocation): string {
   return learnArticlePath(
@@ -77,6 +80,11 @@ function RelatedCard({ loc }: { loc: LearnArticleLocation }) {
 }
 
 export function ArticleBody({ article }: { article: LearnArticle }) {
+  // Chart this topic on the knowledge galaxy (client-only; no-op in SSR).
+  useEffect(() => {
+    markRead(article.slug);
+  }, [article.slug]);
+
   const loc = findLearnArticle(article.slug);
   const { prev, next } = learnPrevNext(article.slug);
   const minutes = learnReadingMinutes(article);

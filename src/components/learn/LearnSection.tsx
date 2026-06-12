@@ -193,7 +193,7 @@ export default function LearnSection({
   if (route.kind === "learn") {
     body = <LearnHubPage />;
   } else if (route.kind === "learn-map") {
-    body = <LearnMap />;
+    body = <LearnMap onNavigate={onNavigate} />;
   } else if (route.kind === "learn-cat") {
     const cat = findLearnCategory(route.cat);
     body = cat ? <LearnCategoryPage category={cat} /> : <NotFound what="topic" />;

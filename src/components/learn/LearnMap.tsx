@@ -1,275 +1,206 @@
 /**
- * /learn/map — the Learn section as an interactive radial mind map.
+ * /learn/map — the Learn section as a 3D knowledge galaxy.
  *
- * The whole taxonomy (root → 14 categories → 64 subcategories → 142
- * articles) is drawn as one full-bleed SVG radial tree: pan (drag the
- * canvas anywhere), zoom (wheel or the +/− buttons), hover to trace a
- * branch to its root, fold a category/subcategory by clicking its node,
- * jump to any page by clicking its label. The title + controls + legend
- * float over the canvas so the graph gets the whole viewport.
+ * The taxonomy (AI core → 14 category systems → subcategory clusters →
+ * 342 article stars) renders in WebGL via learnMap3dEngine, which this
+ * component dynamic-imports in a client-only effect — three.js ships as
+ * its own lazy chunk and never touches SSR/prerender (the static build
+ * emits just this HUD shell).
  *
- * Pure-presentational + SSR-safe: geometry comes from learnGraph (no DOM,
- * no randomness). All interactivity lives in client-only effects/handlers,
- * which never run during renderToStaticMarkup.
+ * Gamified: reading an article "charts" it (learnProgress/localStorage).
+ * Charted stars burn bright on the map, every category shows its charted
+ * count, and the HUD awards an explorer rank for overall coverage.
+ *
+ * Controls: drag to orbit, scroll to zoom, click a system/cluster to
+ * warp, click a star to read it, filter to hunt topics.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { PointerEvent as RPointerEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { learnTaxonomy } from "../../data/learn/nav";
-import { learnHubPath } from "../../data/learn/schema";
+import { learnArticlePath, learnHubPath } from "../../data/learn/schema";
 import { categoryVisual } from "./categoryVisuals";
-import {
-  buildLearnGraph,
-  labelTransform,
-  radialLinkPath,
-  RING,
-  type GraphNode,
-} from "./learnGraph";
+import { getReadSet, learnRank } from "./learnProgress";
+import type { Map3DHandle, Map3DHover, Map3DNode } from "./learnMap3dEngine";
 
-const VIEW = 920; // viewBox half-extent (graph reaches RING[3]=525 + labels)
-const MIN_K = 0.45;
-const MAX_K = 4.5;
-
-interface ViewState {
-  k: number;
-  x: number;
-  y: number;
+function buildNodes(): Map3DNode[] {
+  const out: Map3DNode[] = [
+    { id: "root", kind: "root", label: "AI", color: "#f7ff00" },
+  ];
+  for (const cat of learnTaxonomy.categories) {
+    const { accent } = categoryVisual(cat.slug);
+    out.push({
+      id: `cat:${cat.slug}`,
+      kind: "cat",
+      label: cat.title.toUpperCase(),
+      color: accent,
+      catSlug: cat.slug,
+      parentId: "root",
+    });
+    for (const sub of cat.subcategories) {
+      out.push({
+        id: `sub:${sub.slug}`,
+        kind: "sub",
+        label: sub.title,
+        color: accent,
+        catSlug: cat.slug,
+        parentId: `cat:${cat.slug}`,
+      });
+      for (const a of sub.articles) {
+        out.push({
+          id: a.slug,
+          kind: "art",
+          label: a.title,
+          color: accent,
+          catSlug: cat.slug,
+          parentId: `sub:${sub.slug}`,
+          href: learnArticlePath(cat.slug, sub.slug, a.slug),
+          difficulty: a.difficulty,
+        });
+      }
+    }
+  }
+  return out;
 }
 
-const IDENTITY: ViewState = { k: 1, x: 0, y: 0 };
+interface Stats {
+  read: number;
+  total: number;
+  pct: number;
+  rank: string;
+}
 
-export default function LearnMap() {
-  const graph = useMemo(() => buildLearnGraph(), []);
-  const svgRef = useRef<SVGSVGElement | null>(null);
+const KIND_LABEL: Record<string, string> = {
+  root: "THE CORE",
+  cat: "SYSTEM",
+  sub: "CLUSTER",
+  art: "ARTICLE",
+};
 
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
-  const [hovered, setHovered] = useState<string | null>(null);
-  const [focusCat, setFocusCat] = useState<string | null>(null);
+export default function LearnMap({
+  onNavigate,
+}: {
+  onNavigate?: (path: string) => void;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const labelsRef = useRef<HTMLDivElement | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const engineRef = useRef<Map3DHandle | null>(null);
+
+  const [stats, setStats] = useState<Stats | null>(null);
+  const [hover, setHover] = useState<Map3DHover | null>(null);
   const [query, setQuery] = useState("");
-  const [view, setView] = useState<ViewState>(IDENTITY);
+  const [matches, setMatches] = useState<number | null>(null);
+  const [focusCat, setFocusCat] = useState<string | null>(null);
+  const [webglDown, setWebglDown] = useState(false);
 
-  const q = query.trim().toLowerCase();
-
-  // --- visibility (a node hides when any ancestor branch is folded) ------
-  const isVisible = useCallback(
-    (n: GraphNode) => {
-      if (n.depth <= 1) return true;
-      const anc = graph.ancestorsOf.get(n.id) ?? [];
-      return !anc.some((id) => collapsed.has(id));
-    },
-    [graph, collapsed],
+  const articleCount = learnTaxonomy.categories.reduce(
+    (n, c) => n + c.subcategories.reduce((m, s) => m + s.articles.length, 0),
+    0,
   );
 
-  // --- the active set drives highlight + dimming -------------------------
-  const branchOf = useCallback(
-    (id: string): Set<string> => {
-      const out = new Set<string>([id]);
-      for (const a of graph.ancestorsOf.get(id) ?? []) out.add(a);
-      const stack = [id];
-      while (stack.length) {
-        const cur = stack.pop()!;
-        for (const kid of graph.childrenOf.get(cur) ?? []) {
-          out.add(kid);
-          stack.push(kid);
-        }
-      }
-      return out;
-    },
-    [graph],
-  );
-
-  const activeSet = useMemo<Set<string> | null>(() => {
-    if (hovered) return branchOf(hovered);
-    if (q) {
-      const out = new Set<string>();
-      for (const n of graph.nodes) {
-        if (n.label.toLowerCase().includes(q)) {
-          out.add(n.id);
-          for (const a of graph.ancestorsOf.get(n.id) ?? []) out.add(a);
-        }
-      }
-      return out;
-    }
-    if (focusCat) {
-      const out = new Set<string>(["root"]);
-      for (const n of graph.nodes) if (n.catSlug === focusCat) out.add(n.id);
-      return out;
-    }
-    return null;
-  }, [hovered, q, focusCat, graph, branchOf]);
-
-  const isActive = useCallback(
-    (id: string) => (activeSet ? activeSet.has(id) : true),
-    [activeSet],
-  );
-
-  // --- pan / zoom (work in SVG user space via the live screen matrix) ----
-  const clientToView = useCallback((cx: number, cy: number) => {
-    const svg = svgRef.current;
-    const ctm = svg?.getScreenCTM();
-    if (!ctm) return { x: 0, y: 0 };
-    return { x: (cx - ctm.e) / ctm.a, y: (cy - ctm.f) / ctm.d };
-  }, []);
-
-  const userScale = useCallback(() => {
-    const ctm = svgRef.current?.getScreenCTM();
-    return ctm ? ctm.a : 1;
-  }, []);
-
-  const zoomAt = useCallback((vx: number, vy: number, factor: number) => {
-    setView((cur) => {
-      const k = Math.min(MAX_K, Math.max(MIN_K, cur.k * factor));
-      const gx = (vx - cur.x) / cur.k;
-      const gy = (vy - cur.y) / cur.k;
-      return { k, x: vx - k * gx, y: vy - k * gy };
-    });
-  }, []);
-
-  // Native, non-passive wheel listener so preventDefault actually stops
-  // the page from scrolling while zooming (React's onWheel is passive).
+  // Boot the WebGL engine, client-only. three.js loads on demand here.
   useEffect(() => {
-    const svg = svgRef.current;
-    if (!svg) return;
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      const p = clientToView(e.clientX, e.clientY);
-      zoomAt(p.x, p.y, e.deltaY < 0 ? 1.15 : 1 / 1.15);
+    let disposed = false;
+    const canvas = canvasRef.current;
+    const labelLayer = labelsRef.current;
+    if (!canvas || !labelLayer) return;
+
+    const readSet = getReadSet();
+    setStats({
+      read: readSet.size,
+      total: articleCount,
+      pct: Math.round((readSet.size / Math.max(1, articleCount)) * 100),
+      rank: learnRank(readSet.size, articleCount),
+    });
+
+    import("./learnMap3dEngine")
+      .then(({ createLearnMap3D }) => {
+        if (disposed) return;
+        engineRef.current = createLearnMap3D({
+          canvas,
+          labelLayer,
+          nodes: buildNodes(),
+          readSet,
+          onHover: setHover,
+          onSelect: (node) => {
+            if (node.href && onNavigate) onNavigate(node.href);
+            else if (node.href) window.location.assign(node.href);
+          },
+        });
+      })
+      .catch(() => setWebglDown(true));
+
+    return () => {
+      disposed = true;
+      engineRef.current?.dispose();
+      engineRef.current = null;
     };
-    svg.addEventListener("wheel", onWheel, { passive: false });
-    return () => svg.removeEventListener("wheel", onWheel);
-  }, [clientToView, zoomAt]);
-
-  const drag = useRef<{ id: number; lx: number; ly: number } | null>(null);
-  const onBgDown = useCallback((e: RPointerEvent<SVGRectElement>) => {
-    (e.target as Element).setPointerCapture?.(e.pointerId);
-    drag.current = { id: e.pointerId, lx: e.clientX, ly: e.clientY };
-  }, []);
-  const onBgMove = useCallback(
-    (e: RPointerEvent<SVGRectElement>) => {
-      const d = drag.current;
-      if (!d || d.id !== e.pointerId) return;
-      const s = userScale();
-      const dx = (e.clientX - d.lx) / s;
-      const dy = (e.clientY - d.ly) / s;
-      d.lx = e.clientX;
-      d.ly = e.clientY;
-      setView((cur) => ({ ...cur, x: cur.x + dx, y: cur.y + dy }));
-    },
-    [userScale],
-  );
-  const onBgUp = useCallback((e: RPointerEvent<SVGRectElement>) => {
-    if (drag.current?.id === e.pointerId) drag.current = null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const toggleFold = useCallback((id: string) => {
-    setCollapsed((cur) => {
-      const next = new Set(cur);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }, []);
+  const setFilter = (q: string): void => {
+    setQuery(q);
+    const n = engineRef.current?.setFilter(q) ?? 0;
+    setMatches(q.trim() ? n : null);
+  };
 
-  const collapseAll = useCallback(() => {
-    setCollapsed(() => {
-      const next = new Set<string>();
-      for (const c of learnTaxonomy.categories) next.add(`cat:${c.slug}`);
-      return next;
-    });
-  }, []);
+  const toggleCat = (slug: string): void => {
+    const next = focusCat === slug ? null : slug;
+    setFocusCat(next);
+    engineRef.current?.focusCategory(next);
+  };
 
-  // ----------------------------------------------------------------------
-  const links = graph.links.filter(
-    (l) => isVisible(l.source) && isVisible(l.target),
-  );
-  const nodes = graph.nodes.filter(isVisible);
-  const dimmed = activeSet !== null;
-  const articleCount = graph.nodes.filter((n) => n.kind === "article").length;
+  const tipX = hover ? Math.min(hover.x + 16, 9999) : 0;
+  const tipY = hover ? hover.y + 16 : 0;
 
   return (
     <div className="lrn-map-page">
-      <div className="lrn-map-canvas">
-        <svg
-          ref={svgRef}
-          className="lrn-map-svg"
-          viewBox={`${-VIEW} ${-VIEW} ${VIEW * 2} ${VIEW * 2}`}
-          preserveAspectRatio="xMidYMid meet"
-          role="img"
-          aria-label="Radial map of every Learn AI topic"
-        >
-          {/* Oversized hit-plane so panning works across the whole
-              canvas, including the letterboxed sides of the square viewBox. */}
-          <rect
-            x={-VIEW * 12}
-            y={-VIEW * 12}
-            width={VIEW * 24}
-            height={VIEW * 24}
-            fill="transparent"
-            className="lrn-map-bg"
-            onPointerDown={onBgDown}
-            onPointerMove={onBgMove}
-            onPointerUp={onBgUp}
-            onPointerCancel={onBgUp}
-          />
-          <g transform={`translate(${view.x} ${view.y}) scale(${view.k})`}>
-            {RING.slice(1).map((r) => (
-              <circle key={r} cx={0} cy={0} r={r} className="lrn-map-ring" />
-            ))}
+      <div className="lrn-map-canvas" ref={stageRef}>
+        <canvas ref={canvasRef} className="lrn-map3-canvas" />
+        <div ref={labelsRef} className="lrn-map3-labels" aria-hidden="true" />
 
-            <g className="lrn-map-links">
-              {links.map((l) => {
-                const on = isActive(l.target.id);
-                return (
-                  <path
-                    key={l.id}
-                    d={radialLinkPath(l.source, l.target)}
-                    stroke={l.accent}
-                    className={`lrn-map-link${on ? " is-on" : ""}${
-                      dimmed && !on ? " is-dim" : ""
-                    }`}
-                    strokeWidth={l.source.id === "root" ? 1.4 : 1}
-                  />
-                );
-              })}
-            </g>
+        {webglDown && (
+          <div className="lrn-map3-fallback">
+            <p>
+              The 3D map needs WebGL.{" "}
+              <a href={learnHubPath} data-internal="true">
+                Browse the index instead →
+              </a>
+            </p>
+          </div>
+        )}
 
-            <g className="lrn-map-nodes">
-              {nodes.map((n) => (
-                <MapNode
-                  key={n.id}
-                  node={n}
-                  active={isActive(n.id)}
-                  dim={dimmed && !isActive(n.id)}
-                  folded={collapsed.has(n.id)}
-                  showLabel={
-                    n.kind !== "article" ||
-                    (activeSet !== null && activeSet.has(n.id))
-                  }
-                  onHover={setHovered}
-                  onToggle={toggleFold}
-                />
-              ))}
-            </g>
-          </g>
-        </svg>
-
-        {/* title — floats over the canvas, top-left */}
+        {/* title + rank — floats top-left */}
         <div className="lrn-map-ui lrn-map-ui-tl">
           <a className="lrn-map-back" href={learnHubPath} data-internal="true">
             ← LEARN
           </a>
           <div className="lrn-map-word">
-            THE <span className="lrn-hub-title-accent">MAP</span>
+            THE <span className="lrn-hub-title-accent">GALAXY</span>
           </div>
           <p className="lrn-map-hint">
-            {articleCount} topics · drag to pan · scroll to zoom · click a dot
-            to fold
+            {articleCount} topics · drag to orbit · scroll to zoom · click a
+            system to fly · click a star to read
           </p>
+          <div className="lrn-map-rank">
+            <span className="lrn-map-rank-name">
+              {stats ? stats.rank : "—"}
+            </span>
+            <span className="lrn-map-rank-nums">
+              {stats ? `${stats.read}/${stats.total} CHARTED · ${stats.pct}%` : ""}
+            </span>
+            <span className="lrn-map-rank-bar" aria-hidden="true">
+              <i style={{ width: `${stats ? stats.pct : 0}%` }} />
+            </span>
+          </div>
         </div>
 
         {/* controls — top-right */}
         <div className="lrn-map-ui lrn-map-ui-tr">
+          {matches !== null && (
+            <span className="lrn-map-hits">{matches} HITS</span>
+          )}
           <div className="lrn-map-search">
             <span className="lrn-map-search-ic" aria-hidden="true">
               ⌕
@@ -279,15 +210,18 @@ export default function LearnMap() {
               className="lrn-map-search-in"
               placeholder="FILTER…"
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              aria-label="Filter mind-map nodes by name"
+              onChange={(e) => setFilter(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") engineRef.current?.focusFirstMatch();
+              }}
+              aria-label="Filter the galaxy by topic name"
             />
           </div>
           <div className="lrn-map-btns">
             <button
               type="button"
               className="lrn-map-btn"
-              onClick={() => zoomAt(0, 0, 1.25)}
+              onClick={() => engineRef.current?.zoom(1.3)}
               aria-label="Zoom in"
             >
               +
@@ -295,7 +229,7 @@ export default function LearnMap() {
             <button
               type="button"
               className="lrn-map-btn"
-              onClick={() => zoomAt(0, 0, 1 / 1.25)}
+              onClick={() => engineRef.current?.zoom(1 / 1.3)}
               aria-label="Zoom out"
             >
               −
@@ -304,24 +238,48 @@ export default function LearnMap() {
               type="button"
               className="lrn-map-btn lrn-map-btn-wide"
               onClick={() => {
-                setView(IDENTITY);
-                setCollapsed(new Set());
                 setFocusCat(null);
+                setFilter("");
+                engineRef.current?.resetView();
               }}
             >
               RESET
             </button>
-            <button
-              type="button"
-              className="lrn-map-btn lrn-map-btn-wide"
-              onClick={collapseAll}
-            >
-              FOLD
-            </button>
           </div>
         </div>
 
-        {/* category legend — click to focus a branch */}
+        {/* hover tooltip */}
+        {hover && (
+          <div
+            className="lrn-map-tip"
+            style={{ left: tipX, top: tipY, ["--cat" as string]: hover.node.color }}
+          >
+            <span className="lrn-map-tip-kind">
+              {KIND_LABEL[hover.node.kind]}
+              {hover.node.kind === "cat" &&
+                hover.catTotal !== undefined &&
+                ` · ${hover.catRead}/${hover.catTotal} CHARTED`}
+            </span>
+            <span className="lrn-map-tip-title">{hover.node.label}</span>
+            {hover.node.kind === "art" && (
+              <span className="lrn-map-tip-meta">
+                {hover.node.difficulty?.toUpperCase()}
+                {" · "}
+                {hover.read ? (
+                  <b className="is-read">CHARTED ✓</b>
+                ) : (
+                  <b>UNCHARTED</b>
+                )}
+                {" · CLICK TO READ"}
+              </span>
+            )}
+            {hover.node.kind === "cat" && (
+              <span className="lrn-map-tip-meta">CLICK TO FLY THERE</span>
+            )}
+          </div>
+        )}
+
+        {/* category legend — click to warp to a system */}
         <div className="lrn-map-legend">
           {learnTaxonomy.categories.map((c) => {
             const { accent } = categoryVisual(c.slug);
@@ -332,9 +290,7 @@ export default function LearnMap() {
                 type="button"
                 className={`lrn-map-chip${on ? " is-on" : ""}`}
                 style={{ ["--cat" as string]: accent }}
-                onClick={() => setFocusCat(on ? null : c.slug)}
-                onMouseEnter={() => setHovered(`cat:${c.slug}`)}
-                onMouseLeave={() => setHovered(null)}
+                onClick={() => toggleCat(c.slug)}
               >
                 <span className="lrn-map-chip-dot" />
                 {c.title}
@@ -344,101 +300,5 @@ export default function LearnMap() {
         </div>
       </div>
     </div>
-  );
-}
-
-// -------------------------------------------------------------------------
-// One node: its dot (foldable for category/sub) + its label (a link).
-// The label is positioned from the origin via labelTransform, so it sits
-// just outside its own dot — no double-offset.
-// -------------------------------------------------------------------------
-function MapNode({
-  node,
-  active,
-  dim,
-  folded,
-  showLabel,
-  onHover,
-  onToggle,
-}: {
-  node: GraphNode;
-  active: boolean;
-  dim: boolean;
-  folded: boolean;
-  showLabel: boolean;
-  onHover: (id: string | null) => void;
-  onToggle: (id: string) => void;
-}) {
-  const enter = () => onHover(node.id);
-  const leave = () => onHover(null);
-
-  if (node.kind === "root") {
-    return (
-      <g
-        className="lrn-map-node lrn-map-node-root"
-        onMouseEnter={enter}
-        onMouseLeave={leave}
-      >
-        <rect x={-13} y={-13} width={26} height={26} className="lrn-map-root-box" />
-        <text className="lrn-map-root-label" textAnchor="middle" dy="0.32em">
-          AI
-        </text>
-        <text className="lrn-map-root-cap" textAnchor="middle" y={30}>
-          LEARN
-        </text>
-      </g>
-    );
-  }
-
-  const gap = node.kind === "category" ? 12 : node.kind === "subcategory" ? 9 : 7;
-  const { transform, anchor } = labelTransform(node, gap);
-  const cls = `lrn-map-node lrn-map-node-${node.kind}${active ? " is-on" : ""}${
-    dim ? " is-dim" : ""
-  }`;
-  const foldable = node.kind === "category" || node.kind === "subcategory";
-  const r =
-    node.kind === "category" ? 6.5 : node.kind === "subcategory" ? 4.2 : 2.6;
-
-  return (
-    <g className={cls} onMouseEnter={enter} onMouseLeave={leave}>
-      <circle
-        cx={node.x}
-        cy={node.y}
-        r={r}
-        fill={node.accent}
-        className="lrn-map-dot"
-        style={foldable ? { cursor: "pointer" } : undefined}
-        onClick={
-          foldable
-            ? (e) => {
-                e.stopPropagation();
-                onToggle(node.id);
-              }
-            : undefined
-        }
-      />
-      {folded && (
-        <circle
-          cx={node.x}
-          cy={node.y}
-          r={r + 3}
-          className="lrn-map-folded-ring"
-          stroke={node.accent}
-        />
-      )}
-      {showLabel && (
-        <a href={node.href} data-internal="true">
-          <text
-            className="lrn-map-label"
-            transform={transform}
-            textAnchor={anchor}
-            dy="0.32em"
-            fill={node.kind === "article" ? undefined : node.accent}
-          >
-            {node.label}
-          </text>
-        </a>
-      )}
-    </g>
   );
 }
