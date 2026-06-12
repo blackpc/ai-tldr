@@ -90,9 +90,9 @@ export function LearnHubPage() {
             <MapGlyph />
           </span>
           <span className="lrn-hub-maplink-tx">
-            <span className="lrn-hub-maplink-lead">See the whole map</span>
+            <span className="lrn-hub-maplink-lead">Enter Knowledge City</span>
             <span className="lrn-hub-maplink-sub">
-              every topic as one interactive graph
+              every article is a tower — read it to light it up
             </span>
           </span>
           <span className="lrn-hub-maplink-go" aria-hidden="true">

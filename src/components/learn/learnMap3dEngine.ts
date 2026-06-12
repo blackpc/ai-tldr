@@ -1,168 +1,260 @@
 /**
- * /learn/map — the WebGL engine behind the 3D knowledge galaxy.
+ * /learn/map — KNOWLEDGE CITY: the Learn encyclopedia as a procedural
+ * neon city at night, rendered in WebGL (three.js).
  *
- * Pure three.js, zero React: LearnMap.tsx dynamic-imports this module in
- * a client-only effect, so three.js ships as its own lazy chunk that only
- * the map page ever downloads, and prerender never touches WebGL.
+ * Not a graph. A game world:
+ *   - 14 DISTRICTS (categories) on a city grid, each in its accent color
+ *   - city BLOCKS inside each district (subcategories)
+ *   - every article is a TOWER. Reading it powers the building — its
+ *     windows light up in the district color. Unread towers stand dark.
+ *   - the AI CORE spire burns in the central plaza
+ *   - completed districts fire a light beacon into the sky
+ *   - headlight/taillight traffic flows through the streets
  *
- * Scene model: the taxonomy as a galaxy. The AI core burns in the center,
- * 14 category "systems" orbit it on a wobbled disk, subcategory clusters
- * ring each system, and every article is a star in its cluster. Charted
- * (read) articles burn bright; uncharted ones smolder until visited.
- * Hierarchy edges are additive light-lines. The whole galaxy slow-rotates
- * when idle; clicking a system warps the camera to it.
+ * RTS controls (MapControls): drag to roam, right-drag to orbit, wheel
+ * to zoom, arrow keys to pan. Click a tower to inspect it, click a
+ * district sign to fly there. Deterministic procedural geometry — no
+ * assets, no randomness across reloads.
+ *
+ * This module is dynamic-imported by LearnMap.tsx in a client-only
+ * effect, so three.js ships as its own lazy chunk and never touches SSR.
  */
 
 import * as THREE from "three";
-import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { MapControls } from "three/examples/jsm/controls/MapControls.js";
 
-export type Map3DKind = "root" | "cat" | "sub" | "art";
+// ---------------------------------------------------------------------------
+// Public data model
+// ---------------------------------------------------------------------------
 
-export interface Map3DNode {
-  id: string;
-  kind: Map3DKind;
-  label: string;
-  /** Category accent hex, inherited down the branch. */
-  color: string;
-  /** Site path to navigate to on click (articles). */
-  href?: string;
-  catSlug?: string;
-  parentId?: string;
-  difficulty?: string;
+export interface CityArticle {
+  slug: string;
+  title: string;
+  difficulty: string;
+  href: string;
 }
 
-export interface Map3DHover {
-  node: Map3DNode;
-  /** Pointer position in canvas-local px, for the HTML tooltip. */
+export interface CityBlock {
+  slug: string;
+  title: string;
+  articles: CityArticle[];
+}
+
+export interface CityDistrict {
+  slug: string;
+  title: string;
+  color: string;
+  blocks: CityBlock[];
+}
+
+export interface CityTowerInfo {
+  slug: string;
+  title: string;
+  difficulty: string;
+  href: string;
+  district: string;
+  districtSlug: string;
+  block: string;
+  color: string;
+  read: boolean;
+}
+
+export interface CityHover {
+  kind: "tower" | "district" | "core";
+  label: string;
+  sub?: string;
+  color: string;
   x: number;
   y: number;
-  read: boolean;
-  catRead?: number;
-  catTotal?: number;
+  read?: boolean;
 }
 
-export interface Map3DOptions {
+export interface CityOptions {
   canvas: HTMLCanvasElement;
-  /** Absolutely-positioned div the engine fills with projected labels. */
-  labelLayer: HTMLElement;
-  nodes: Map3DNode[];
+  districts: CityDistrict[];
   readSet: Set<string>;
-  onHover(h: Map3DHover | null): void;
-  onSelect(node: Map3DNode): void;
+  onHover(h: CityHover | null): void;
+  onSelectTower(t: CityTowerInfo | null): void;
+  onFocusDistrict(slug: string | null): void;
 }
 
-export interface Map3DHandle {
+export interface CityHandle {
   dispose(): void;
   zoom(factor: number): void;
   resetView(): void;
-  /** Warp to a category system (null = clear focus, keep camera). */
-  focusCategory(slug: string | null): void;
-  /** Recolor to a search query; returns the number of article matches. */
+  focusDistrict(slug: string | null): void;
   setFilter(q: string): number;
-  focusFirstMatch(): void;
+  /** Fly to the next unread tower (least-powered district first). */
+  nextTarget(): CityTowerInfo | null;
   setReadSet(read: Set<string>): void;
 }
 
-const BG = 0x050505;
-const UP = new THREE.Vector3(0, 1, 0);
-const WHITE = new THREE.Color(1, 1, 1);
-const HOME_POS = new THREE.Vector3(0, 135, 345);
-const HOME_TARGET = new THREE.Vector3(0, 0, 0);
+// ---------------------------------------------------------------------------
+// Deterministic helpers
+// ---------------------------------------------------------------------------
 
-const SIZE: Record<Map3DKind, number> = { root: 0, cat: 17, sub: 9, art: 5 };
+const BG = 0x050505;
+
+function hash(s: string): number {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+function lcg(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s = (s * 1664525 + 1013904223) >>> 0;
+    return s / 0xffffffff;
+  };
+}
 
 function easeInOutCubic(t: number): number {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
-/** Soft radial glow used by every star/point in the scene. */
-function glowTexture(): THREE.CanvasTexture {
+/** Shared window-grid texture: dark walls, faint window cells. Instance
+ *  color multiplies it — dark gray for unread concrete, bright accent for
+ *  powered buildings whose windows then glow. */
+function windowsTexture(): THREE.CanvasTexture {
   const c = document.createElement("canvas");
-  c.width = c.height = 64;
+  c.width = 64;
+  c.height = 128;
   const g = c.getContext("2d")!;
-  const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-  grad.addColorStop(0, "rgba(255,255,255,1)");
-  grad.addColorStop(0.25, "rgba(255,255,255,0.85)");
-  grad.addColorStop(0.6, "rgba(255,255,255,0.2)");
-  grad.addColorStop(1, "rgba(255,255,255,0)");
-  g.fillStyle = grad;
-  g.fillRect(0, 0, 64, 64);
-  return new THREE.CanvasTexture(c);
+  g.fillStyle = "#3a3a3a";
+  g.fillRect(0, 0, 64, 128);
+  const rnd = lcg(424242);
+  for (let y = 6; y < 122; y += 10) {
+    for (let x = 5; x < 58; x += 9) {
+      const on = rnd();
+      g.fillStyle =
+        on > 0.45 ? `rgba(255,255,255,${0.55 + on * 0.45})` : "rgba(255,255,255,0.10)";
+      g.fillRect(x, y, 5, 6);
+    }
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
 }
 
-interface Tier {
-  points: THREE.Points;
-  nodes: Map3DNode[];
-  /** Unfiltered per-vertex colors (filter recolors are derived from this). */
-  base: Float32Array;
-  geo: THREE.BufferGeometry;
+/** Neon district sign rendered to a sprite texture. */
+function signTexture(text: string, color: string): THREE.CanvasTexture {
+  const c = document.createElement("canvas");
+  c.width = 1024;
+  c.height = 128;
+  const g = c.getContext("2d")!;
+  g.font = "700 64px 'JetBrains Mono', 'Cascadia Code', Consolas, monospace";
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+  g.shadowColor = color;
+  g.shadowBlur = 26;
+  g.fillStyle = color;
+  g.fillText(text.toUpperCase(), 512, 64, 990);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
 }
 
-export function createLearnMap3D(opts: Map3DOptions): Map3DHandle {
-  const { canvas, labelLayer, nodes, onHover, onSelect } = opts;
+// ---------------------------------------------------------------------------
+// City layout constants
+// ---------------------------------------------------------------------------
+
+const CELL = 175; // district grid pitch (plate + street)
+const PLATE = 140; // district plate size
+const COLS = 5;
+const ROWS = 3;
+const CORE_CELL = { col: 2, row: 1 }; // central plaza
+const HOME_POS = new THREE.Vector3(0, 270, 400);
+const HOME_TARGET = new THREE.Vector3(0, 0, 0);
+
+const BLOCK_OFFSETS: [number, number][] = [
+  [0, 0],
+  [-44, -44],
+  [44, -44],
+  [-44, 44],
+  [44, 44],
+  [0, -44],
+  [0, 44],
+  [-44, 0],
+  [44, 0],
+];
+
+interface Tower {
+  info: CityTowerInfo;
+  pos: THREE.Vector3;
+  w: number;
+  h: number;
+}
+
+// ---------------------------------------------------------------------------
+// Engine
+// ---------------------------------------------------------------------------
+
+export function createLearnMap3D(opts: CityOptions): CityHandle {
+  const { canvas, districts, onHover, onSelectTower, onFocusDistrict } = opts;
   let readSet = new Set(opts.readSet);
 
-  // --- graph indexes ------------------------------------------------------
-  const root = nodes.find((n) => n.kind === "root")!;
-  const cats = nodes.filter((n) => n.kind === "cat");
-  const subs = nodes.filter((n) => n.kind === "sub");
-  const arts = nodes.filter((n) => n.kind === "art");
-  const childrenOf = new Map<string, Map3DNode[]>();
-  for (const n of nodes) {
-    if (!n.parentId) continue;
-    if (!childrenOf.has(n.parentId)) childrenOf.set(n.parentId, []);
-    childrenOf.get(n.parentId)!.push(n);
-  }
-  const artsByCat = new Map<string, Map3DNode[]>();
-  for (const a of arts) {
-    const key = a.catSlug ?? "";
-    if (!artsByCat.has(key)) artsByCat.set(key, []);
-    artsByCat.get(key)!.push(a);
-  }
+  // --- district cell positions (skip the core plaza cell) -------------------
+  const cells: { col: number; row: number }[] = [];
+  for (let row = 0; row < ROWS; row++)
+    for (let col = 0; col < COLS; col++)
+      if (!(col === CORE_CELL.col && row === CORE_CELL.row)) cells.push({ col, row });
 
-  // --- layout: deterministic galaxy geometry ------------------------------
-  const pos = new Map<string, THREE.Vector3>();
-  pos.set(root.id, new THREE.Vector3(0, 0, 0));
-
-  cats.forEach((c, i) => {
-    const a = (i / cats.length) * Math.PI * 2 - Math.PI / 2;
-    const y = 30 * Math.sin(a * 2.7 + 1.3); // disk wobble
-    pos.set(c.id, new THREE.Vector3(Math.cos(a) * 175, y, Math.sin(a) * 175));
+  const districtCenter = new Map<string, THREE.Vector3>();
+  districts.forEach((d, i) => {
+    const cell = cells[i % cells.length];
+    districtCenter.set(
+      d.slug,
+      new THREE.Vector3((cell.col - 2) * CELL, 0, (cell.row - 1) * CELL),
+    );
   });
 
-  for (const c of cats) {
-    const cp = pos.get(c.id)!;
-    const out = cp.clone().setY(0).normalize();
-    const u = new THREE.Vector3().crossVectors(UP, out).normalize();
-    const v = new THREE.Vector3().crossVectors(out, u).normalize();
-    const subList = childrenOf.get(c.id) ?? [];
-    subList.forEach((s, j) => {
-      const b = (j / subList.length) * Math.PI * 2 + 0.7;
-      const r2 = subList.length > 6 ? 62 : 52;
-      const sp = cp
-        .clone()
-        .addScaledVector(u, Math.cos(b) * r2)
-        .addScaledVector(v, Math.sin(b) * r2 * 0.85)
-        .addScaledVector(out, Math.sin(b * 2 + j) * 9);
-      pos.set(s.id, sp);
+  // --- towers ----------------------------------------------------------------
+  const towers: Tower[] = [];
+  const towersByDistrict = new Map<string, Tower[]>();
 
-      const w1 = u.clone().applyAxisAngle(out, j * 0.9);
-      const w2 = v.clone().applyAxisAngle(out, j * 0.9);
-      const artList = childrenOf.get(s.id) ?? [];
-      artList.forEach((art, k) => {
-        const b2 = (k / artList.length) * Math.PI * 2 + j;
-        const r3 = artList.length > 5 ? 19 : 15;
-        const ap = sp
-          .clone()
-          .addScaledVector(w1, Math.cos(b2) * r3)
-          .addScaledVector(w2, Math.sin(b2) * r3)
-          .addScaledVector(out, Math.cos(b2 * 2 + k) * 4);
-        pos.set(art.id, ap);
+  for (const d of districts) {
+    const center = districtCenter.get(d.slug)!;
+    const list: Tower[] = [];
+    d.blocks.forEach((b, j) => {
+      const [ox, oz] = BLOCK_OFFSETS[j % BLOCK_OFFSETS.length];
+      const arts = b.articles;
+      const cols = Math.ceil(Math.sqrt(Math.max(1, arts.length)));
+      const rows = Math.ceil(arts.length / cols);
+      arts.forEach((a, k) => {
+        const rnd = lcg(hash(a.slug));
+        const col = k % cols;
+        const row = Math.floor(k / cols);
+        const x = center.x + ox + (col - (cols - 1) / 2) * 12 + (rnd() - 0.5) * 3;
+        const z = center.z + oz + (row - (rows - 1) / 2) * 12 + (rnd() - 0.5) * 3;
+        const base =
+          a.difficulty === "advanced" ? 26 : a.difficulty === "intermediate" ? 17 : 10;
+        const h = base + rnd() * 9;
+        const w = 7 + rnd() * 2.4;
+        const tower: Tower = {
+          info: {
+            slug: a.slug,
+            title: a.title,
+            difficulty: a.difficulty,
+            href: a.href,
+            district: d.title,
+            districtSlug: d.slug,
+            block: b.title,
+            color: d.color,
+            read: readSet.has(a.slug),
+          },
+          pos: new THREE.Vector3(x, h / 2 + 0.8, z),
+          w,
+          h,
+        };
+        towers.push(tower);
+        list.push(tower);
       });
     });
+    towersByDistrict.set(d.slug, list);
   }
 
-  // --- renderer / scene / camera ------------------------------------------
+  // --- renderer / scene / camera ----------------------------------------------
   const renderer = new THREE.WebGLRenderer({
     canvas,
     antialias: true,
@@ -171,254 +263,337 @@ export function createLearnMap3D(opts: Map3DOptions): Map3DHandle {
   renderer.setClearColor(BG, 1);
 
   const scene = new THREE.Scene();
-  scene.fog = new THREE.FogExp2(BG, 0.0008);
+  scene.fog = new THREE.FogExp2(BG, 0.0011);
 
-  const camera = new THREE.PerspectiveCamera(55, 1, 1, 4000);
-  camera.position.copy(HOME_POS);
+  const camera = new THREE.PerspectiveCamera(50, 1, 1, 5000);
+  camera.position.set(0, 540, 720); // intro flyover start
 
-  const controls = new OrbitControls(camera, canvas);
+  const controls = new MapControls(camera, canvas);
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
-  controls.minDistance = 24;
-  controls.maxDistance = 950;
-  controls.enablePan = false;
+  controls.minDistance = 30;
+  controls.maxDistance = 900;
+  controls.maxPolarAngle = 1.42; // never dive below the streets
+  controls.listenToKeyEvents(window);
+  controls.keyPanSpeed = 24;
 
-  const galaxy = new THREE.Group();
-  scene.add(galaxy);
+  // --- ground + streets ----------------------------------------------------------
+  const ground = new THREE.Mesh(
+    new THREE.PlaneGeometry(2400, 1600),
+    new THREE.MeshBasicMaterial({ color: 0x070708 }),
+  );
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = -0.2;
+  scene.add(ground);
 
-  const tex = glowTexture();
+  // street center-lines (additive, faint) + district plates with accent edges
+  const streetVerts: number[] = [];
+  for (let c = 0; c <= COLS - 1; c++) {
+    const x = (c - 2) * CELL + CELL / 2;
+    if (c < COLS - 1) streetVerts.push(x, 0.25, -CELL * 1.6, x, 0.25, CELL * 1.6);
+  }
+  for (let r = 0; r < ROWS - 1; r++) {
+    const z = (r - 1) * CELL + CELL / 2;
+    streetVerts.push(-CELL * 2.6, 0.25, z, CELL * 2.6, 0.25, z);
+  }
+  const streetGeo = new THREE.BufferGeometry();
+  streetGeo.setAttribute("position", new THREE.Float32BufferAttribute(streetVerts, 3));
+  scene.add(
+    new THREE.LineSegments(
+      streetGeo,
+      new THREE.LineBasicMaterial({
+        color: 0x2a2a20,
+        transparent: true,
+        opacity: 0.8,
+      }),
+    ),
+  );
 
-  // --- node colors ----------------------------------------------------------
-  const colorOf = (n: Map3DNode): THREE.Color => {
-    const c = new THREE.Color(n.color);
-    if (n.kind === "sub") return c.lerp(WHITE, 0.12);
-    if (n.kind === "art") {
-      return readSet.has(n.id)
-        ? c.lerp(WHITE, 0.6) // charted: burns bright
-        : c.multiplyScalar(0.42); // uncharted: smolders
-    }
-    return c;
-  };
+  const plateGeo = new THREE.BoxGeometry(PLATE, 1.2, PLATE);
+  const plateMat = new THREE.MeshBasicMaterial({ color: 0x0c0c0e });
+  const plates: THREE.Mesh[] = [];
+  const plateDistrict = new Map<THREE.Object3D, CityDistrict>();
+  const edgeGeo = new THREE.EdgesGeometry(plateGeo);
+  for (const d of districts) {
+    const p = districtCenter.get(d.slug)!;
+    const plate = new THREE.Mesh(plateGeo, plateMat);
+    plate.position.set(p.x, 0, p.z);
+    scene.add(plate);
+    plates.push(plate);
+    plateDistrict.set(plate, d);
+    const edge = new THREE.LineSegments(
+      edgeGeo,
+      new THREE.LineBasicMaterial({
+        color: new THREE.Color(d.color).multiplyScalar(0.55),
+        transparent: true,
+        opacity: 0.9,
+      }),
+    );
+    edge.position.copy(plate.position);
+    scene.add(edge);
+  }
 
-  // --- point tiers (one draw call per tier) ---------------------------------
-  function makeTier(list: Map3DNode[], size: number): Tier {
-    const position = new Float32Array(list.length * 3);
-    const color = new Float32Array(list.length * 3);
-    list.forEach((n, i) => {
-      const p = pos.get(n.id)!;
-      position.set([p.x, p.y, p.z], i * 3);
-      const c = colorOf(n);
-      color.set([c.r, c.g, c.b], i * 3);
+  // --- instanced towers -------------------------------------------------------------
+  const winTex = windowsTexture();
+  const towerGeo = new THREE.BoxGeometry(1, 1, 1);
+  const towerMat = new THREE.MeshBasicMaterial({ map: winTex });
+  const towerMesh = new THREE.InstancedMesh(towerGeo, towerMat, towers.length);
+  const m4 = new THREE.Matrix4();
+  towers.forEach((t, i) => {
+    m4.makeScale(t.w, t.h, t.w);
+    m4.setPosition(t.pos);
+    towerMesh.setMatrixAt(i, m4);
+  });
+
+  const DARK = new THREE.Color(0x53565e); // unread concrete (windows stay faint)
+  const towerColor = (t: Tower): THREE.Color =>
+    readSet.has(t.info.slug)
+      ? new THREE.Color(t.info.color).lerp(new THREE.Color(1, 1, 1), 0.18).multiplyScalar(1.5)
+      : DARK.clone();
+
+  const baseColors = new Float32Array(towers.length * 3);
+  towers.forEach((t, i) => {
+    const c = towerColor(t);
+    baseColors.set([c.r, c.g, c.b], i * 3);
+    towerMesh.setColorAt(i, c);
+  });
+  towerMesh.instanceColor!.needsUpdate = true;
+  scene.add(towerMesh);
+
+  function repaintTowers(mod?: (t: Tower, c: THREE.Color) => void): void {
+    const c = new THREE.Color();
+    towers.forEach((t, i) => {
+      c.setRGB(baseColors[i * 3], baseColors[i * 3 + 1], baseColors[i * 3 + 2]);
+      mod?.(t, c);
+      towerMesh.setColorAt(i, c);
     });
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.BufferAttribute(position, 3));
-    geo.setAttribute("color", new THREE.BufferAttribute(color, 3));
-    const mat = new THREE.PointsMaterial({
-      size,
-      map: tex,
+    towerMesh.instanceColor!.needsUpdate = true;
+  }
+
+  // --- district signs + completion beacons ----------------------------------------------
+  const signSprites: THREE.Sprite[] = [];
+  const signDistrict = new Map<THREE.Object3D, CityDistrict>();
+  const signTextures: THREE.Texture[] = [];
+  for (const d of districts) {
+    const tex = signTexture(d.title, d.color);
+    signTextures.push(tex);
+    const sprite = new THREE.Sprite(
+      new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }),
+    );
+    const p = districtCenter.get(d.slug)!;
+    sprite.position.set(p.x, 47, p.z);
+    sprite.scale.set(64, 8, 1);
+    scene.add(sprite);
+    signSprites.push(sprite);
+    signDistrict.set(sprite, d);
+  }
+
+  const beaconGeo = new THREE.CylinderGeometry(1.6, 2.6, 340, 8, 1, true);
+  const beacons = new Map<string, THREE.Mesh>();
+  function syncBeacons(): void {
+    for (const d of districts) {
+      const list = towersByDistrict.get(d.slug) ?? [];
+      const done = list.length > 0 && list.every((t) => readSet.has(t.info.slug));
+      const existing = beacons.get(d.slug);
+      if (done && !existing) {
+        const beam = new THREE.Mesh(
+          beaconGeo,
+          new THREE.MeshBasicMaterial({
+            color: d.color,
+            transparent: true,
+            opacity: 0.28,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+          }),
+        );
+        const p = districtCenter.get(d.slug)!;
+        beam.position.set(p.x, 170, p.z);
+        scene.add(beam);
+        beacons.set(d.slug, beam);
+      } else if (!done && existing) {
+        scene.remove(existing);
+        (existing.material as THREE.Material).dispose();
+        beacons.delete(d.slug);
+      }
+    }
+  }
+  syncBeacons();
+
+  // --- the AI core spire -----------------------------------------------------------------
+  const core = new THREE.Group();
+  const coreBase = new THREE.Mesh(
+    new THREE.BoxGeometry(18, 26, 18),
+    new THREE.MeshBasicMaterial({ map: winTex, color: 0xbbb36a }),
+  );
+  coreBase.position.y = 13;
+  core.add(coreBase);
+  const coreSpire = new THREE.Mesh(
+    new THREE.BoxGeometry(7, 58, 7),
+    new THREE.MeshBasicMaterial({ map: winTex, color: 0xf7ff00 }),
+  );
+  coreSpire.position.y = 26 + 29;
+  core.add(coreSpire);
+  const coreBeam = new THREE.Mesh(
+    beaconGeo,
+    new THREE.MeshBasicMaterial({
+      color: 0xf7ff00,
+      transparent: true,
+      opacity: 0.22,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
+  );
+  coreBeam.position.y = 230;
+  core.add(coreBeam);
+  const glowTex = signTexture("◆", "#f7ff00");
+  const coreSign = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: signTexture("A I", "#f7ff00"),
+      transparent: true,
+      depthWrite: false,
+    }),
+  );
+  coreSign.position.y = 98;
+  coreSign.scale.set(40, 5, 1);
+  core.add(coreSign);
+  scene.add(core);
+
+  // --- street traffic (headlights white, taillights red) -----------------------------------
+  interface Car {
+    horizontal: boolean;
+    fixed: number;
+    t: number;
+    speed: number;
+    dir: 1 | -1;
+  }
+  const CARS = 90;
+  const cars: Car[] = [];
+  const carRnd = lcg(777);
+  const hStreets = [-CELL / 2, CELL / 2];
+  const vStreets = [-CELL * 1.5, -CELL / 2, CELL / 2, CELL * 1.5];
+  for (let i = 0; i < CARS; i++) {
+    const horizontal = carRnd() > 0.45;
+    cars.push({
+      horizontal,
+      fixed: horizontal
+        ? hStreets[Math.floor(carRnd() * hStreets.length)]
+        : vStreets[Math.floor(carRnd() * vStreets.length)],
+      t: carRnd(),
+      speed: 0.02 + carRnd() * 0.05,
+      dir: carRnd() > 0.5 ? 1 : -1,
+    });
+  }
+  const carGeo = new THREE.BufferGeometry();
+  const carPos = new Float32Array(CARS * 3);
+  const carCol = new Float32Array(CARS * 3);
+  cars.forEach((car, i) => {
+    const c = car.dir > 0 ? new THREE.Color(0xfff6d8) : new THREE.Color(0xff3b30);
+    carCol.set([c.r, c.g, c.b], i * 3);
+  });
+  carGeo.setAttribute("position", new THREE.BufferAttribute(carPos, 3));
+  carGeo.setAttribute("color", new THREE.BufferAttribute(carCol, 3));
+  const carPoints = new THREE.Points(
+    carGeo,
+    new THREE.PointsMaterial({
+      size: 2.6,
       vertexColors: true,
       transparent: true,
+      opacity: 0.95,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
       sizeAttenuation: true,
-    });
-    const points = new THREE.Points(geo, mat);
-    points.frustumCulled = false;
-    galaxy.add(points);
-    return { points, nodes: list, base: color.slice(), geo };
-  }
-
-  const catTier = makeTier(cats, SIZE.cat);
-  const subTier = makeTier(subs, SIZE.sub);
-  const artTier = makeTier(arts, SIZE.art);
-  const tierOf = new Map<THREE.Object3D, Tier>([
-    [catTier.points, catTier],
-    [subTier.points, subTier],
-    [artTier.points, artTier],
-  ]);
-
-  // --- the AI core -----------------------------------------------------------
-  const coreGlow = new THREE.Sprite(
-    new THREE.SpriteMaterial({
-      map: tex,
-      color: 0xf7ff00,
-      transparent: true,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
     }),
   );
-  coreGlow.scale.setScalar(64);
-  galaxy.add(coreGlow);
-  const coreHeart = new THREE.Sprite(
-    new THREE.SpriteMaterial({
-      map: tex,
-      color: 0xffffff,
-      transparent: true,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-    }),
-  );
-  coreHeart.scale.setScalar(18);
-  galaxy.add(coreHeart);
+  carPoints.frustumCulled = false;
+  scene.add(carPoints);
 
-  // --- hierarchy edges as light-lines ----------------------------------------
-  function makeEdges(
-    pairs: [Map3DNode, Map3DNode][],
-    pDim: number,
-    cDim: number,
-    opacity: number,
-  ): THREE.LineSegments {
-    const position = new Float32Array(pairs.length * 6);
-    const color = new Float32Array(pairs.length * 6);
-    pairs.forEach(([p, c], i) => {
-      const pp = pos.get(p.id)!;
-      const cp = pos.get(c.id)!;
-      position.set([pp.x, pp.y, pp.z, cp.x, cp.y, cp.z], i * 6);
-      const pc = new THREE.Color(p.kind === "root" ? "#f7ff00" : p.color).multiplyScalar(pDim);
-      const cc = new THREE.Color(c.color).multiplyScalar(cDim);
-      color.set([pc.r, pc.g, pc.b, cc.r, cc.g, cc.b], i * 6);
+  const SPAN_H = CELL * 2.6;
+  const SPAN_V = CELL * 1.6;
+  function updateCars(dt: number): void {
+    cars.forEach((car, i) => {
+      car.t += car.speed * dt * car.dir;
+      if (car.t > 1) car.t -= 1;
+      if (car.t < 0) car.t += 1;
+      const along = car.horizontal
+        ? (car.t * 2 - 1) * SPAN_H
+        : (car.t * 2 - 1) * SPAN_V;
+      carPos[i * 3] = car.horizontal ? along : car.fixed + (car.dir > 0 ? 2.4 : -2.4);
+      carPos[i * 3 + 1] = 0.7;
+      carPos[i * 3 + 2] = car.horizontal ? car.fixed + (car.dir > 0 ? 2.4 : -2.4) : along;
     });
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.BufferAttribute(position, 3));
-    geo.setAttribute("color", new THREE.BufferAttribute(color, 3));
-    const mat = new THREE.LineBasicMaterial({
-      vertexColors: true,
-      transparent: true,
-      opacity,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-    });
-    const lines = new THREE.LineSegments(geo, mat);
-    lines.frustumCulled = false;
-    galaxy.add(lines);
-    return lines;
+    (carGeo.getAttribute("position") as THREE.BufferAttribute).needsUpdate = true;
   }
 
-  const trunkPairs: [Map3DNode, Map3DNode][] = [
-    ...cats.map((c): [Map3DNode, Map3DNode] => [root, c]),
-    ...subs.map((s): [Map3DNode, Map3DNode] => [byIdOrThrow(s.parentId), s]),
-  ];
-  const leafPairs: [Map3DNode, Map3DNode][] = arts.map((a) => [
-    byIdOrThrow(a.parentId),
-    a,
-  ]);
-  function byIdOrThrow(id: string | undefined): Map3DNode {
-    const n = nodes.find((x) => x.id === id);
-    if (!n) throw new Error(`map3d: missing parent ${id}`);
-    return n;
-  }
-  makeEdges(trunkPairs, 0.6, 0.4, 0.55);
-  makeEdges(leafPairs, 0.3, 0.18, 0.45);
-
-  // --- starfield backdrop -----------------------------------------------------
-  const starGeo = new THREE.BufferGeometry();
+  // --- night sky ------------------------------------------------------------------------------
   {
-    const N = 1400;
+    const N = 700;
     const arr = new Float32Array(N * 3);
-    let seed = 1337;
-    const rnd = () => {
-      // deterministic LCG so SSR snapshots / reloads look identical
-      seed = (seed * 1664525 + 1013904223) >>> 0;
-      return seed / 0xffffffff;
-    };
+    const rnd = lcg(9001);
     for (let i = 0; i < N; i++) {
-      const v = new THREE.Vector3(rnd() * 2 - 1, rnd() * 2 - 1, rnd() * 2 - 1)
+      const v = new THREE.Vector3(rnd() * 2 - 1, rnd() * 0.9 + 0.18, rnd() * 2 - 1)
         .normalize()
-        .multiplyScalar(480 + rnd() * 520);
+        .multiplyScalar(1400 + rnd() * 400);
       arr.set([v.x, v.y, v.z], i * 3);
     }
-    starGeo.setAttribute("position", new THREE.BufferAttribute(arr, 3));
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(arr, 3));
+    const stars = new THREE.Points(
+      geo,
+      new THREE.PointsMaterial({
+        size: 1.6,
+        color: 0x6b7480,
+        transparent: true,
+        opacity: 0.7,
+        sizeAttenuation: false,
+        depthWrite: false,
+      }),
+    );
+    stars.frustumCulled = false;
+    scene.add(stars);
   }
-  const stars = new THREE.Points(
-    starGeo,
-    new THREE.PointsMaterial({
-      size: 1.6,
-      map: tex,
-      color: 0x99a3aa,
-      transparent: true,
-      opacity: 0.55,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      sizeAttenuation: false,
-    }),
-  );
-  stars.frustumCulled = false;
-  scene.add(stars);
 
-  // --- hover highlight ---------------------------------------------------------
-  const highlight = new THREE.Sprite(
+  // --- hover highlight + selection marker ---------------------------------------------------
+  const hlGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
+  const hlMat = new THREE.LineBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0.95,
+  });
+  const hl = new THREE.LineSegments(hlGeo, hlMat);
+  hl.visible = false;
+  scene.add(hl);
+
+  const selMarker = new THREE.Sprite(
     new THREE.SpriteMaterial({
-      map: tex,
+      map: glowTex,
       color: 0xffffff,
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
     }),
   );
-  highlight.visible = false;
-  scene.add(highlight);
-  let hovered: Map3DNode | null = null;
+  selMarker.visible = false;
+  selMarker.scale.set(10, 10, 1);
+  scene.add(selMarker);
 
-  // --- HTML labels (projected every frame) --------------------------------------
-  let focusedCatId: string | null = null;
-  const labelEls = new Map<string, HTMLElement>();
-
-  function catChartedText(c: Map3DNode): string {
-    const list = artsByCat.get(c.catSlug ?? "") ?? [];
-    const read = list.filter((a) => readSet.has(a.id)).length;
-    return `${read}/${list.length}`;
+  function placeBox(target: THREE.LineSegments, t: Tower, grow: number): void {
+    target.position.copy(t.pos);
+    target.scale.set(t.w + grow, t.h + grow, t.w + grow);
   }
 
-  function buildLabels(): void {
-    labelLayer.textContent = "";
-    labelEls.clear();
-    for (const c of cats) {
-      const el = document.createElement("span");
-      el.className = "lm3-label lm3-label-cat";
-      el.style.color = c.color;
-      el.textContent = c.label;
-      const i = document.createElement("i");
-      i.textContent = catChartedText(c);
-      el.appendChild(i);
-      labelLayer.appendChild(el);
-      labelEls.set(c.id, el);
-    }
-    if (focusedCatId) {
-      for (const s of childrenOf.get(focusedCatId) ?? []) {
-        const el = document.createElement("span");
-        el.className = "lm3-label lm3-label-sub";
-        el.textContent = s.label;
-        labelLayer.appendChild(el);
-        labelEls.set(s.id, el);
-      }
-    }
-  }
-  buildLabels();
-
-  const projV = new THREE.Vector3();
-  function updateLabels(): void {
-    const w = canvas.clientWidth;
-    const h = canvas.clientHeight;
-    galaxy.updateMatrixWorld();
-    for (const [id, el] of labelEls) {
-      projV.copy(pos.get(id)!).applyMatrix4(galaxy.matrixWorld).project(camera);
-      if (projV.z > 1 || projV.x < -1.1 || projV.x > 1.1 || projV.y < -1.1 || projV.y > 1.1) {
-        el.style.display = "none";
-        continue;
-      }
-      el.style.display = "";
-      const x = (projV.x * 0.5 + 0.5) * w;
-      const y = (-projV.y * 0.5 + 0.5) * h;
-      el.style.transform = `translate(-50%, -160%) translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
-    }
-  }
-
-  // --- picking --------------------------------------------------------------------
+  // --- picking --------------------------------------------------------------------------------
   const raycaster = new THREE.Raycaster();
-  raycaster.params.Points = { threshold: 5 };
   const ndc = new THREE.Vector2();
 
-  function pick(clientX: number, clientY: number): Map3DNode | null {
+  type Pick =
+    | { kind: "tower"; tower: Tower }
+    | { kind: "district"; district: CityDistrict }
+    | { kind: "core" }
+    | null;
+
+  function pick(clientX: number, clientY: number): Pick {
     const rect = canvas.getBoundingClientRect();
     ndc.set(
       ((clientX - rect.left) / rect.width) * 2 - 1,
@@ -426,18 +601,20 @@ export function createLearnMap3D(opts: Map3DOptions): Map3DHandle {
     );
     raycaster.setFromCamera(ndc, camera);
     const hits = raycaster.intersectObjects(
-      [artTier.points, subTier.points, catTier.points, coreHeart],
+      [towerMesh, coreBase, coreSpire, ...signSprites],
       false,
     );
-    for (const h of hits) {
-      if (h.object === coreHeart) return root;
-      const tier = tierOf.get(h.object);
-      if (tier && h.index !== undefined) return tier.nodes[h.index] ?? null;
-    }
+    const h = hits[0];
+    if (!h) return null;
+    if (h.object === towerMesh && h.instanceId !== undefined)
+      return { kind: "tower", tower: towers[h.instanceId] };
+    if (h.object === coreBase || h.object === coreSpire) return { kind: "core" };
+    const d = signDistrict.get(h.object);
+    if (d) return { kind: "district", district: d };
     return null;
   }
 
-  // --- camera warp -------------------------------------------------------------------
+  // --- camera tween -----------------------------------------------------------------------------
   interface Tween {
     t0: number;
     dur: number;
@@ -448,83 +625,78 @@ export function createLearnMap3D(opts: Map3DOptions): Map3DHandle {
   }
   let tween: Tween | null = null;
 
-  function worldPos(id: string): THREE.Vector3 {
-    galaxy.updateMatrixWorld();
-    return pos.get(id)!.clone().applyMatrix4(galaxy.matrixWorld);
-  }
-
-  function flyTo(target: THREE.Vector3, dist: number): void {
-    const dir = target.clone().sub(worldPos(root.id));
-    if (dir.lengthSq() < 1) dir.set(0, 0.25, 1);
-    dir.normalize();
-    const toPos = target
-      .clone()
-      .addScaledVector(dir, dist)
-      .add(new THREE.Vector3(0, dist * 0.38, 0));
+  function flyTo(target: THREE.Vector3, offset: THREE.Vector3, dur = 1000): void {
     tween = {
       t0: performance.now(),
-      dur: 900,
+      dur,
       fromPos: camera.position.clone(),
-      toPos,
+      toPos: target.clone().add(offset),
       fromTar: controls.target.clone(),
       toTar: target.clone(),
     };
     controls.enabled = false;
   }
 
-  // --- input ------------------------------------------------------------------------
+  // intro flyover
+  flyTo(HOME_TARGET, HOME_POS.clone().sub(HOME_TARGET), 2000);
+
+  // --- input -------------------------------------------------------------------------------------
   let downX = 0;
   let downY = 0;
   let downT = 0;
-  let interacting = false;
-  let lastUser = performance.now();
-
-  const onControlStart = (): void => {
-    interacting = true;
-  };
-  const onControlEnd = (): void => {
-    interacting = false;
-    lastUser = performance.now();
-  };
-  controls.addEventListener("start", onControlStart);
-  controls.addEventListener("end", onControlEnd);
 
   const onPointerMove = (e: PointerEvent): void => {
-    lastUser = performance.now();
-    const node = pick(e.clientX, e.clientY);
-    if (node !== hovered) {
-      hovered = node;
-      if (node && node.kind !== "root") {
-        highlight.visible = true;
-        highlight.position.copy(worldPos(node.id));
-        highlight.material.color.set(node.color);
-      } else {
-        highlight.visible = false;
-      }
-    }
-    canvas.style.cursor = node ? "pointer" : "grab";
-    if (node) {
-      const rect = canvas.getBoundingClientRect();
-      const h: Map3DHover = {
-        node,
-        x: e.clientX - rect.left,
-        y: e.clientY - rect.top,
-        read: readSet.has(node.id),
-      };
-      if (node.kind === "cat") {
-        const list = artsByCat.get(node.catSlug ?? "") ?? [];
-        h.catRead = list.filter((a) => readSet.has(a.id)).length;
-        h.catTotal = list.length;
-      }
-      onHover(h);
+    const p = pick(e.clientX, e.clientY);
+    if (p?.kind === "tower") {
+      placeBox(hl, p.tower, 1.2);
+      hlMat.color.set(p.tower.info.color);
+      hl.visible = true;
     } else {
+      hl.visible = false;
+    }
+    canvas.style.cursor = p ? "pointer" : "grab";
+    if (!p) {
       onHover(null);
+      return;
+    }
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    if (p.kind === "tower") {
+      onHover({
+        kind: "tower",
+        label: p.tower.info.title,
+        sub: `${p.tower.info.district} · ${p.tower.info.block}`,
+        color: p.tower.info.color,
+        x,
+        y,
+        read: readSet.has(p.tower.info.slug),
+      });
+    } else if (p.kind === "district") {
+      const list = towersByDistrict.get(p.district.slug) ?? [];
+      const lit = list.filter((t) => readSet.has(t.info.slug)).length;
+      onHover({
+        kind: "district",
+        label: p.district.title,
+        sub: `${lit}/${list.length} TOWERS LIT · CLICK TO FLY`,
+        color: p.district.color,
+        x,
+        y,
+      });
+    } else {
+      onHover({
+        kind: "core",
+        label: "THE AI CORE",
+        sub: "CLICK TO FLY HOME",
+        color: "#f7ff00",
+        x,
+        y,
+      });
     }
   };
 
   const onPointerLeave = (): void => {
-    hovered = null;
-    highlight.visible = false;
+    hl.visible = false;
     onHover(null);
   };
 
@@ -535,19 +707,20 @@ export function createLearnMap3D(opts: Map3DOptions): Map3DHandle {
   };
 
   const onPointerUp = (e: PointerEvent): void => {
-    const moved = Math.hypot(e.clientX - downX, e.clientY - downY);
-    if (moved > 6 || performance.now() - downT > 600) return; // was a drag
-    const node = pick(e.clientX, e.clientY);
-    if (!node) return;
-    if (node.kind === "art") {
-      onSelect(node);
-    } else if (node.kind === "root") {
-      resetView();
-    } else if (node.kind === "cat") {
-      focusCategory(node.catSlug ?? null);
-    } else {
-      flyTo(worldPos(node.id), 42);
+    if (
+      Math.hypot(e.clientX - downX, e.clientY - downY) > 6 ||
+      performance.now() - downT > 600
+    )
+      return;
+    const p = pick(e.clientX, e.clientY);
+    if (!p) {
+      onSelectTower(null);
+      selMarker.visible = false;
+      return;
     }
+    if (p.kind === "tower") selectTower(p.tower);
+    else if (p.kind === "district") focusDistrict(p.district.slug);
+    else resetView();
   };
 
   canvas.addEventListener("pointermove", onPointerMove);
@@ -555,103 +728,82 @@ export function createLearnMap3D(opts: Map3DOptions): Map3DHandle {
   canvas.addEventListener("pointerdown", onPointerDown);
   canvas.addEventListener("pointerup", onPointerUp);
 
-  // --- public ops ----------------------------------------------------------------------
+  function selectTower(t: Tower): void {
+    selMarker.visible = true;
+    selMarker.position.set(t.pos.x, t.pos.y + t.h / 2 + 7, t.pos.z);
+    selMarker.material.color.set(t.info.color);
+    flyTo(
+      new THREE.Vector3(t.pos.x, t.h * 0.5, t.pos.z),
+      new THREE.Vector3(34, 26 + t.h * 0.4, 34),
+      850,
+    );
+    onSelectTower({ ...t.info, read: readSet.has(t.info.slug) });
+  }
+
+  // --- public ops -----------------------------------------------------------------------------------
   function resetView(): void {
-    focusedCatId = null;
-    buildLabels();
-    tween = {
-      t0: performance.now(),
-      dur: 900,
-      fromPos: camera.position.clone(),
-      toPos: HOME_POS.clone(),
-      fromTar: controls.target.clone(),
-      toTar: HOME_TARGET.clone(),
-    };
-    controls.enabled = false;
+    onFocusDistrict(null);
+    onSelectTower(null);
+    selMarker.visible = false;
+    flyTo(HOME_TARGET, HOME_POS.clone().sub(HOME_TARGET), 1100);
   }
 
-  function focusCategory(slug: string | null): void {
-    if (!slug) {
-      focusedCatId = null;
-      buildLabels();
-      return;
-    }
-    const cat = cats.find((c) => c.catSlug === slug);
-    if (!cat) return;
-    focusedCatId = cat.id;
-    buildLabels();
-    flyTo(worldPos(cat.id), 120);
+  function focusDistrict(slug: string | null): void {
+    onFocusDistrict(slug);
+    if (!slug) return;
+    const center = districtCenter.get(slug);
+    if (!center) return;
+    flyTo(center, new THREE.Vector3(70, 120, 110), 950);
   }
 
-  // --- filter ------------------------------------------------------------------------
-  let matchIds: string[] = [];
-
-  function applyTierColors(
-    tier: Tier,
-    mod: (n: Map3DNode, c: THREE.Color) => void,
-  ): void {
-    const attr = tier.geo.getAttribute("color") as THREE.BufferAttribute;
-    const out = attr.array as Float32Array;
-    const c = new THREE.Color();
-    tier.nodes.forEach((n, i) => {
-      c.setRGB(tier.base[i * 3], tier.base[i * 3 + 1], tier.base[i * 3 + 2]);
-      mod(n, c);
-      out[i * 3] = c.r;
-      out[i * 3 + 1] = c.g;
-      out[i * 3 + 2] = c.b;
-    });
-    attr.needsUpdate = true;
-  }
-
+  let matchSlugs: string[] = [];
   function setFilter(qRaw: string): number {
     const q = qRaw.trim().toLowerCase();
     if (!q) {
-      matchIds = [];
-      for (const tier of [catTier, subTier, artTier]) applyTierColors(tier, () => {});
+      matchSlugs = [];
+      repaintTowers();
       return 0;
     }
-    const matches = new Set<string>();
-    const liveSubs = new Set<string>();
-    const liveCats = new Set<string>();
-    for (const a of arts) {
-      if (a.label.toLowerCase().includes(q)) {
-        matches.add(a.id);
-        if (a.parentId) liveSubs.add(a.parentId);
-        if (a.catSlug) liveCats.add(a.catSlug);
-      }
-    }
-    matchIds = arts.filter((a) => matches.has(a.id)).map((a) => a.id);
-    applyTierColors(artTier, (n, c) => {
-      if (matches.has(n.id)) c.set("#ffe93d").multiplyScalar(1.6);
-      else c.multiplyScalar(0.08);
+    const matches = new Set(
+      towers.filter((t) => t.info.title.toLowerCase().includes(q)).map((t) => t.info.slug),
+    );
+    matchSlugs = towers.filter((t) => matches.has(t.info.slug)).map((t) => t.info.slug);
+    repaintTowers((t, c) => {
+      if (matches.has(t.info.slug)) c.set(0xffe93d).multiplyScalar(1.7);
+      else c.multiplyScalar(0.16);
     });
-    applyTierColors(subTier, (n, c) => {
-      if (!liveSubs.has(n.id)) c.multiplyScalar(0.15);
-    });
-    applyTierColors(catTier, (n, c) => {
-      if (!liveCats.has(n.catSlug ?? "")) c.multiplyScalar(0.2);
-    });
-    return matchIds.length;
+    return matchSlugs.length;
   }
 
-  function focusFirstMatch(): void {
-    const id = matchIds[0];
-    if (id) flyTo(worldPos(id), 26);
+  function nextTarget(): CityTowerInfo | null {
+    // least-powered district first, then taxonomy order
+    const ranked = [...districts].sort((a, b) => {
+      const la = towersByDistrict.get(a.slug) ?? [];
+      const lb = towersByDistrict.get(b.slug) ?? [];
+      const ra = la.length ? la.filter((t) => readSet.has(t.info.slug)).length / la.length : 1;
+      const rb = lb.length ? lb.filter((t) => readSet.has(t.info.slug)).length / lb.length : 1;
+      return ra - rb;
+    });
+    for (const d of ranked) {
+      const t = (towersByDistrict.get(d.slug) ?? []).find(
+        (x) => !readSet.has(x.info.slug),
+      );
+      if (t) {
+        selectTower(t);
+        return { ...t.info, read: false };
+      }
+    }
+    return null;
   }
 
   function setReadSet(read: Set<string>): void {
     readSet = new Set(read);
-    artTier.nodes.forEach((n, i) => {
-      const c = colorOf(n);
-      artTier.base[i * 3] = c.r;
-      artTier.base[i * 3 + 1] = c.g;
-      artTier.base[i * 3 + 2] = c.b;
+    towers.forEach((t, i) => {
+      const c = towerColor(t);
+      baseColors.set([c.r, c.g, c.b], i * 3);
     });
-    if (matchIds.length === 0) applyTierColors(artTier, () => {});
-    for (const c of cats) {
-      const el = labelEls.get(c.id)?.querySelector("i");
-      if (el) el.textContent = catChartedText(c);
-    }
+    if (matchSlugs.length === 0) repaintTowers();
+    syncBeacons();
   }
 
   function zoom(factor: number): void {
@@ -664,7 +816,7 @@ export function createLearnMap3D(opts: Map3DOptions): Map3DHandle {
     camera.position.copy(controls.target).addScaledVector(v.normalize(), len);
   }
 
-  // --- resize ---------------------------------------------------------------------------
+  // --- resize -------------------------------------------------------------------------------------------
   const stage = canvas.parentElement!;
   function applySize(): void {
     const w = Math.max(1, stage.clientWidth);
@@ -678,7 +830,7 @@ export function createLearnMap3D(opts: Map3DOptions): Map3DHandle {
   const ro = new ResizeObserver(applySize);
   ro.observe(stage);
 
-  // --- main loop --------------------------------------------------------------------------
+  // --- main loop -------------------------------------------------------------------------------------------
   let raf = 0;
   let prev = performance.now();
 
@@ -687,7 +839,6 @@ export function createLearnMap3D(opts: Map3DOptions): Map3DHandle {
     const dt = Math.min(0.05, (now - prev) / 1000);
     prev = now;
 
-    // camera warp tween
     if (tween) {
       const t = Math.min(1, (now - tween.t0) / tween.dur);
       const e = easeInOutCubic(t);
@@ -696,44 +847,34 @@ export function createLearnMap3D(opts: Map3DOptions): Map3DHandle {
       if (t >= 1) {
         tween = null;
         controls.enabled = true;
-        lastUser = now;
       }
     }
 
-    // idle drift: the galaxy breathes when nobody is flying it
-    if (!tween && !interacting && now - lastUser > 3500 && !focusedCatId) {
-      galaxy.rotation.y += dt * 0.05;
-    }
-    stars.rotation.y -= dt * 0.004;
+    updateCars(dt);
 
-    // core + highlight pulse
-    const s = 1 + 0.06 * Math.sin(now / 480);
-    coreGlow.scale.setScalar(64 * s);
-    coreHeart.scale.setScalar(18 * (2 - s));
-    if (highlight.visible && hovered) {
-      highlight.position.copy(worldPos(hovered.id));
-      highlight.scale.setScalar(
-        SIZE[hovered.kind] * (2.1 + 0.25 * Math.sin(now / 160)),
-      );
-    }
+    // core spire breathes; beams shimmer; selection marker bobs
+    const pulse = 1 + 0.1 * Math.sin(now / 420);
+    (coreSpire.material as THREE.MeshBasicMaterial).color.setScalar(0).set(0xf7ff00);
+    coreSpire.scale.set(pulse, 1, pulse);
+    coreBeam.rotation.y += dt * 0.4;
+    for (const beam of beacons.values()) beam.rotation.y += dt * 0.35;
+    if (selMarker.visible) selMarker.position.y += Math.sin(now / 240) * 0.05;
 
     controls.update();
-    updateLabels();
     renderer.render(scene, camera);
   }
   raf = requestAnimationFrame(frame);
 
-  // --- teardown ------------------------------------------------------------------------------
+  // --- teardown ----------------------------------------------------------------------------------------------
   function dispose(): void {
     cancelAnimationFrame(raf);
     ro.disconnect();
-    controls.removeEventListener("start", onControlStart);
-    controls.removeEventListener("end", onControlEnd);
+    controls.stopListenToKeyEvents();
+    controls.dispose();
     canvas.removeEventListener("pointermove", onPointerMove);
     canvas.removeEventListener("pointerleave", onPointerLeave);
     canvas.removeEventListener("pointerdown", onPointerDown);
     canvas.removeEventListener("pointerup", onPointerUp);
-    controls.dispose();
     scene.traverse((o) => {
       const obj = o as THREE.Mesh;
       if (obj.geometry) obj.geometry.dispose();
@@ -741,18 +882,19 @@ export function createLearnMap3D(opts: Map3DOptions): Map3DHandle {
       if (Array.isArray(m)) m.forEach((x) => x.dispose());
       else m?.dispose();
     });
-    tex.dispose();
+    for (const t of signTextures) t.dispose();
+    winTex.dispose();
+    glowTex.dispose();
     renderer.dispose();
-    labelLayer.textContent = "";
   }
 
   return {
     dispose,
     zoom,
     resetView,
-    focusCategory,
+    focusDistrict,
     setFilter,
-    focusFirstMatch,
+    nextTarget,
     setReadSet,
   };
 }

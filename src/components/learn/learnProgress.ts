@@ -33,15 +33,15 @@ export function markRead(slug: string): void {
   }
 }
 
-/** Explorer ranks, by fraction of the encyclopedia charted. */
+/** City ranks, by fraction of the encyclopedia powered up. */
 const RANKS: [number, string][] = [
   [0.9, "SINGULARITY"],
-  [0.6, "COMMANDER"],
-  [0.35, "PILOT"],
-  [0.15, "NAVIGATOR"],
-  [0.05, "EXPLORER"],
-  [0.000001, "CADET"], // anything read at all
-  [0, "VISITOR"],
+  [0.6, "MAYOR"],
+  [0.35, "ARCHITECT"],
+  [0.15, "ENGINEER"],
+  [0.05, "OPERATOR"],
+  [0.000001, "RESIDENT"], // anything read at all
+  [0, "TOURIST"],
 ];
 
 export function learnRank(read: number, total: number): string {

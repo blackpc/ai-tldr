@@ -140,8 +140,8 @@ export default function LearnSection({
       );
     } else if (route.kind === "learn-map") {
       setPageMeta(
-        "AI Knowledge Map — Every Topic, Visualized | AI/TLDR",
-        "An interactive mind map of the whole Learn AI encyclopedia: every category, subcategory and article as one explorable radial graph. Free and beginner-friendly.",
+        "Knowledge City — Explore Every AI Topic in 3D | AI/TLDR",
+        "The whole Learn AI encyclopedia as an explorable 3D city: every article is a tower, reading it lights the building. Roam the districts, power up the city.",
         learnMapPath,
       );
     } else if (route.kind === "learn-cat") {

@@ -1,66 +1,44 @@
 /**
- * /learn/map — the Learn section as a 3D knowledge galaxy.
+ * /learn/map — KNOWLEDGE CITY. The Learn encyclopedia as a playable
+ * procedural city: every article is a tower, reading it lights the
+ * building, districts are categories, beacons fire when a district is
+ * fully powered. learnMap3dEngine renders the world (three.js, dynamic-
+ * imported client-side so it ships as its own lazy chunk); this component
+ * is the game HUD — power meter, rank, quest button, tower card, filter,
+ * district chips.
  *
- * The taxonomy (AI core → 14 category systems → subcategory clusters →
- * 342 article stars) renders in WebGL via learnMap3dEngine, which this
- * component dynamic-imports in a client-only effect — three.js ships as
- * its own lazy chunk and never touches SSR/prerender (the static build
- * emits just this HUD shell).
- *
- * Gamified: reading an article "charts" it (learnProgress/localStorage).
- * Charted stars burn bright on the map, every category shows its charted
- * count, and the HUD awards an explorer rank for overall coverage.
- *
- * Controls: drag to orbit, scroll to zoom, click a system/cluster to
- * warp, click a star to read it, filter to hunt topics.
+ * SSR/prerender emit only this shell; the canvas boots in the browser.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { learnTaxonomy } from "../../data/learn/nav";
 import { learnArticlePath, learnHubPath } from "../../data/learn/schema";
 import { categoryVisual } from "./categoryVisuals";
 import { getReadSet, learnRank } from "./learnProgress";
-import type { Map3DHandle, Map3DHover, Map3DNode } from "./learnMap3dEngine";
+import type {
+  CityDistrict,
+  CityHandle,
+  CityHover,
+  CityTowerInfo,
+} from "./learnMap3dEngine";
 
-function buildNodes(): Map3DNode[] {
-  const out: Map3DNode[] = [
-    { id: "root", kind: "root", label: "AI", color: "#f7ff00" },
-  ];
-  for (const cat of learnTaxonomy.categories) {
-    const { accent } = categoryVisual(cat.slug);
-    out.push({
-      id: `cat:${cat.slug}`,
-      kind: "cat",
-      label: cat.title.toUpperCase(),
-      color: accent,
-      catSlug: cat.slug,
-      parentId: "root",
-    });
-    for (const sub of cat.subcategories) {
-      out.push({
-        id: `sub:${sub.slug}`,
-        kind: "sub",
-        label: sub.title,
-        color: accent,
-        catSlug: cat.slug,
-        parentId: `cat:${cat.slug}`,
-      });
-      for (const a of sub.articles) {
-        out.push({
-          id: a.slug,
-          kind: "art",
-          label: a.title,
-          color: accent,
-          catSlug: cat.slug,
-          parentId: `sub:${sub.slug}`,
-          href: learnArticlePath(cat.slug, sub.slug, a.slug),
-          difficulty: a.difficulty,
-        });
-      }
-    }
-  }
-  return out;
+function buildDistricts(): CityDistrict[] {
+  return learnTaxonomy.categories.map((cat) => ({
+    slug: cat.slug,
+    title: cat.title,
+    color: categoryVisual(cat.slug).accent,
+    blocks: cat.subcategories.map((sub) => ({
+      slug: sub.slug,
+      title: sub.title,
+      articles: sub.articles.map((a) => ({
+        slug: a.slug,
+        title: a.title,
+        difficulty: a.difficulty,
+        href: learnArticlePath(cat.slug, sub.slug, a.slug),
+      })),
+    })),
+  }));
 }
 
 interface Stats {
@@ -68,14 +46,34 @@ interface Stats {
   total: number;
   pct: number;
   rank: string;
+  perCat: Map<string, { read: number; total: number }>;
 }
 
-const KIND_LABEL: Record<string, string> = {
-  root: "THE CORE",
-  cat: "SYSTEM",
-  sub: "CLUSTER",
-  art: "ARTICLE",
-};
+function computeStats(): Stats {
+  const readSet = getReadSet();
+  const perCat = new Map<string, { read: number; total: number }>();
+  let read = 0;
+  let total = 0;
+  for (const cat of learnTaxonomy.categories) {
+    let r = 0;
+    let t = 0;
+    for (const sub of cat.subcategories)
+      for (const a of sub.articles) {
+        t++;
+        if (readSet.has(a.slug)) r++;
+      }
+    perCat.set(cat.slug, { read: r, total: t });
+    read += r;
+    total += t;
+  }
+  return {
+    read,
+    total,
+    pct: Math.round((read / Math.max(1, total)) * 100),
+    rank: learnRank(read, total),
+    perCat,
+  };
+}
 
 export default function LearnMap({
   onNavigate,
@@ -83,50 +81,43 @@ export default function LearnMap({
   onNavigate?: (path: string) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const labelsRef = useRef<HTMLDivElement | null>(null);
-  const stageRef = useRef<HTMLDivElement | null>(null);
-  const engineRef = useRef<Map3DHandle | null>(null);
+  const engineRef = useRef<CityHandle | null>(null);
 
   const [stats, setStats] = useState<Stats | null>(null);
-  const [hover, setHover] = useState<Map3DHover | null>(null);
+  const [hover, setHover] = useState<CityHover | null>(null);
+  const [selected, setSelected] = useState<CityTowerInfo | null>(null);
   const [query, setQuery] = useState("");
   const [matches, setMatches] = useState<number | null>(null);
   const [focusCat, setFocusCat] = useState<string | null>(null);
   const [webglDown, setWebglDown] = useState(false);
 
-  const articleCount = learnTaxonomy.categories.reduce(
-    (n, c) => n + c.subcategories.reduce((m, s) => m + s.articles.length, 0),
-    0,
+  const articleCount = useMemo(
+    () =>
+      learnTaxonomy.categories.reduce(
+        (n, c) => n + c.subcategories.reduce((m, s) => m + s.articles.length, 0),
+        0,
+      ),
+    [],
   );
 
-  // Boot the WebGL engine, client-only. three.js loads on demand here.
+  // Boot the city, client-only. three.js loads on demand here.
   useEffect(() => {
     let disposed = false;
     const canvas = canvasRef.current;
-    const labelLayer = labelsRef.current;
-    if (!canvas || !labelLayer) return;
+    if (!canvas) return;
 
-    const readSet = getReadSet();
-    setStats({
-      read: readSet.size,
-      total: articleCount,
-      pct: Math.round((readSet.size / Math.max(1, articleCount)) * 100),
-      rank: learnRank(readSet.size, articleCount),
-    });
+    setStats(computeStats());
 
     import("./learnMap3dEngine")
       .then(({ createLearnMap3D }) => {
         if (disposed) return;
         engineRef.current = createLearnMap3D({
           canvas,
-          labelLayer,
-          nodes: buildNodes(),
-          readSet,
+          districts: buildDistricts(),
+          readSet: getReadSet(),
           onHover: setHover,
-          onSelect: (node) => {
-            if (node.href && onNavigate) onNavigate(node.href);
-            else if (node.href) window.location.assign(node.href);
-          },
+          onSelectTower: setSelected,
+          onFocusDistrict: setFocusCat,
         });
       })
       .catch(() => setWebglDown(true));
@@ -145,25 +136,23 @@ export default function LearnMap({
     setMatches(q.trim() ? n : null);
   };
 
-  const toggleCat = (slug: string): void => {
-    const next = focusCat === slug ? null : slug;
-    setFocusCat(next);
-    engineRef.current?.focusCategory(next);
+  const openSelected = (e: React.MouseEvent): void => {
+    if (!selected) return;
+    if (onNavigate) {
+      e.preventDefault();
+      onNavigate(selected.href);
+    }
   };
-
-  const tipX = hover ? Math.min(hover.x + 16, 9999) : 0;
-  const tipY = hover ? hover.y + 16 : 0;
 
   return (
     <div className="lrn-map-page">
-      <div className="lrn-map-canvas" ref={stageRef}>
+      <div className="lrn-map-canvas">
         <canvas ref={canvasRef} className="lrn-map3-canvas" />
-        <div ref={labelsRef} className="lrn-map3-labels" aria-hidden="true" />
 
         {webglDown && (
           <div className="lrn-map3-fallback">
             <p>
-              The 3D map needs WebGL.{" "}
+              The city needs WebGL.{" "}
               <a href={learnHubPath} data-internal="true">
                 Browse the index instead →
               </a>
@@ -171,24 +160,24 @@ export default function LearnMap({
           </div>
         )}
 
-        {/* title + rank — floats top-left */}
+        {/* title + power HUD — top-left */}
         <div className="lrn-map-ui lrn-map-ui-tl">
           <a className="lrn-map-back" href={learnHubPath} data-internal="true">
             ← LEARN
           </a>
           <div className="lrn-map-word">
-            THE <span className="lrn-hub-title-accent">GALAXY</span>
+            KNOWLEDGE <span className="lrn-hub-title-accent">CITY</span>
           </div>
           <p className="lrn-map-hint">
-            {articleCount} topics · drag to orbit · scroll to zoom · click a
-            system to fly · click a star to read
+            {articleCount} towers · every article is a building — reading it
+            lights it up · drag to roam · right-drag to orbit · scroll to zoom
           </p>
           <div className="lrn-map-rank">
-            <span className="lrn-map-rank-name">
-              {stats ? stats.rank : "—"}
-            </span>
+            <span className="lrn-map-rank-name">{stats ? stats.rank : "—"}</span>
             <span className="lrn-map-rank-nums">
-              {stats ? `${stats.read}/${stats.total} CHARTED · ${stats.pct}%` : ""}
+              {stats
+                ? `CITY POWER ${stats.pct}% · ${stats.read}/${stats.total} TOWERS LIT`
+                : ""}
             </span>
             <span className="lrn-map-rank-bar" aria-hidden="true">
               <i style={{ width: `${stats ? stats.pct : 0}%` }} />
@@ -198,9 +187,7 @@ export default function LearnMap({
 
         {/* controls — top-right */}
         <div className="lrn-map-ui lrn-map-ui-tr">
-          {matches !== null && (
-            <span className="lrn-map-hits">{matches} HITS</span>
-          )}
+          {matches !== null && <span className="lrn-map-hits">{matches} HITS</span>}
           <div className="lrn-map-search">
             <span className="lrn-map-search-ic" aria-hidden="true">
               ⌕
@@ -208,16 +195,23 @@ export default function LearnMap({
             <input
               type="search"
               className="lrn-map-search-in"
-              placeholder="FILTER…"
+              placeholder="FIND A TOWER…"
               value={query}
               onChange={(e) => setFilter(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") engineRef.current?.focusFirstMatch();
+                if (e.key === "Enter") engineRef.current?.nextTarget();
               }}
-              aria-label="Filter the galaxy by topic name"
+              aria-label="Find a tower by topic name"
             />
           </div>
           <div className="lrn-map-btns">
+            <button
+              type="button"
+              className="lrn-map-btn lrn-map-btn-quest"
+              onClick={() => engineRef.current?.nextTarget()}
+            >
+              ⚡ NEXT TARGET
+            </button>
             <button
               type="button"
               className="lrn-map-btn"
@@ -238,7 +232,6 @@ export default function LearnMap({
               type="button"
               className="lrn-map-btn lrn-map-btn-wide"
               onClick={() => {
-                setFocusCat(null);
                 setFilter("");
                 engineRef.current?.resetView();
               }}
@@ -249,40 +242,71 @@ export default function LearnMap({
         </div>
 
         {/* hover tooltip */}
-        {hover && (
+        {hover && !selected && (
           <div
             className="lrn-map-tip"
-            style={{ left: tipX, top: tipY, ["--cat" as string]: hover.node.color }}
+            style={{
+              left: hover.x + 16,
+              top: hover.y + 16,
+              ["--cat" as string]: hover.color,
+            }}
           >
             <span className="lrn-map-tip-kind">
-              {KIND_LABEL[hover.node.kind]}
-              {hover.node.kind === "cat" &&
-                hover.catTotal !== undefined &&
-                ` · ${hover.catRead}/${hover.catTotal} CHARTED`}
+              {hover.kind === "tower"
+                ? hover.read
+                  ? "TOWER · LIT ✓"
+                  : "TOWER · DARK"
+                : hover.kind === "district"
+                  ? "DISTRICT"
+                  : "MONUMENT"}
             </span>
-            <span className="lrn-map-tip-title">{hover.node.label}</span>
-            {hover.node.kind === "art" && (
-              <span className="lrn-map-tip-meta">
-                {hover.node.difficulty?.toUpperCase()}
-                {" · "}
-                {hover.read ? (
-                  <b className="is-read">CHARTED ✓</b>
-                ) : (
-                  <b>UNCHARTED</b>
-                )}
-                {" · CLICK TO READ"}
-              </span>
-            )}
-            {hover.node.kind === "cat" && (
-              <span className="lrn-map-tip-meta">CLICK TO FLY THERE</span>
-            )}
+            <span className="lrn-map-tip-title">{hover.label}</span>
+            {hover.sub && <span className="lrn-map-tip-meta">{hover.sub}</span>}
           </div>
         )}
 
-        {/* category legend — click to warp to a system */}
+        {/* selected tower card */}
+        {selected && (
+          <div
+            className="lrn-map-card"
+            style={{ ["--cat" as string]: selected.color }}
+          >
+            <button
+              type="button"
+              className="lrn-map-card-x"
+              onClick={() => setSelected(null)}
+              aria-label="Close"
+            >
+              ×
+            </button>
+            <span className="lrn-map-tip-kind">
+              {selected.district} · {selected.block}
+            </span>
+            <span className="lrn-map-card-title">{selected.title}</span>
+            <span className="lrn-map-tip-meta">
+              {selected.difficulty.toUpperCase()} ·{" "}
+              {selected.read ? (
+                <b className="is-read">LIT ✓ — READ AGAIN</b>
+              ) : (
+                <b>DARK — POWER IT UP</b>
+              )}
+            </span>
+            <a
+              className="lrn-map-card-go"
+              href={selected.href}
+              data-internal="true"
+              onClick={openSelected}
+            >
+              READ ARTICLE →
+            </a>
+          </div>
+        )}
+
+        {/* district chips with power counters */}
         <div className="lrn-map-legend">
           {learnTaxonomy.categories.map((c) => {
             const { accent } = categoryVisual(c.slug);
+            const p = stats?.perCat.get(c.slug);
             const on = focusCat === c.slug;
             return (
               <button
@@ -290,10 +314,15 @@ export default function LearnMap({
                 type="button"
                 className={`lrn-map-chip${on ? " is-on" : ""}`}
                 style={{ ["--cat" as string]: accent }}
-                onClick={() => toggleCat(c.slug)}
+                onClick={() => engineRef.current?.focusDistrict(on ? null : c.slug)}
               >
                 <span className="lrn-map-chip-dot" />
                 {c.title}
+                {p && (
+                  <span className="lrn-map-chip-n">
+                    {p.read}/{p.total}
+                  </span>
+                )}
               </button>
             );
           })}
