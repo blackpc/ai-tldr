@@ -118,8 +118,10 @@ export type LearnBlock =
   /** Consistent, responsive diagram from the fixed DSL above. */
   | { type: "diagram"; diagram: LearnDiagram }
   /**
-   * Real external image — only for stable official assets (logos, docs
-   * screenshots). URL must be https and verified live at authoring time.
+   * A real image. Either a self-hosted file served from our own domain
+   * (a site-rooted path like "/learn-media/learn-001.jpg") or a stable
+   * external https asset (official logo / docs screenshot), verified live
+   * at authoring time. `credit` carries source attribution.
    */
   | {
       type: "image";

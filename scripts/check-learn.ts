@@ -251,7 +251,10 @@ function checkBlock(ctx: string, b: LearnBlock, counters: { words: number; visua
     }
     case "image":
       counters.visuals++;
-      if (!b.url?.startsWith("https://")) err(ctx, `image url not https: ${b.url}`);
+      // Either an external https asset or a self-hosted, site-rooted file
+      // under /learn-media/ (served from our own domain).
+      if (!b.url?.startsWith("https://") && !b.url?.startsWith("/"))
+        err(ctx, `image url must be https:// or site-rooted (/…): ${b.url}`);
       if (!b.alt?.trim()) err(ctx, "image missing alt text");
       break;
     default:
