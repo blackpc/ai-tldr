@@ -21,7 +21,12 @@ import type {
   CityHandle,
   CityHover,
   CityTowerInfo,
+  CityView,
 } from "./learnMap3dEngine";
+
+// Survives SPA navigation (the chunk stays loaded): reading an article and
+// coming back restores the exact camera instead of replaying the intro.
+let savedView: CityView | null = null;
 
 function buildDistricts(): CityDistrict[] {
   return learnTaxonomy.categories.map((cat) => ({
@@ -115,6 +120,7 @@ export default function LearnMap({
           canvas,
           districts: buildDistricts(),
           readSet: getReadSet(),
+          initialView: savedView ?? undefined,
           onHover: setHover,
           onSelectTower: setSelected,
           onFocusDistrict: setFocusCat,
@@ -124,6 +130,7 @@ export default function LearnMap({
 
     return () => {
       disposed = true;
+      if (engineRef.current) savedView = engineRef.current.getView();
       engineRef.current?.dispose();
       engineRef.current = null;
     };

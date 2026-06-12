@@ -77,10 +77,17 @@ export interface CityHover {
   read?: boolean;
 }
 
+export interface CityView {
+  pos: [number, number, number];
+  tar: [number, number, number];
+}
+
 export interface CityOptions {
   canvas: HTMLCanvasElement;
   districts: CityDistrict[];
   readSet: Set<string>;
+  /** Restore a previous camera (skips the intro flyover). */
+  initialView?: CityView;
   onHover(h: CityHover | null): void;
   onSelectTower(t: CityTowerInfo | null): void;
   onFocusDistrict(slug: string | null): void;
@@ -94,6 +101,8 @@ export interface CityHandle {
   setFilter(q: string): number;
   nextTarget(): CityTowerInfo | null;
   setReadSet(read: Set<string>): void;
+  /** Current camera state, for restoring after SPA navigation. */
+  getView(): CityView;
 }
 
 // ---------------------------------------------------------------------------
@@ -310,8 +319,13 @@ function skyTexture(): THREE.CanvasTexture {
   return t;
 }
 
-/** Neon sign sprite texture. */
-function signTexture(text: string, color: string, px = 64): THREE.CanvasTexture {
+/** Neon sign sprite texture. `fill` defaults to the glow color. */
+function signTexture(
+  text: string,
+  color: string,
+  px = 64,
+  fill?: string,
+): THREE.CanvasTexture {
   const c = document.createElement("canvas");
   c.width = 1024;
   c.height = px * 2;
@@ -320,11 +334,12 @@ function signTexture(text: string, color: string, px = 64): THREE.CanvasTexture 
   g.textAlign = "center";
   g.textBaseline = "middle";
   g.shadowColor = color;
-  g.shadowBlur = px * 0.2;
-  g.fillStyle = color;
+  g.shadowBlur = px * 0.22;
+  g.fillStyle = fill ?? color;
   g.fillText(text.toUpperCase(), 512, px, 1000);
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
   return t;
 }
 
@@ -458,11 +473,14 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
       lampSpots.push({ x: x + (Math.round(z / 36) % 2 === 0 ? 10.4 : -10.4), z });
 
   // --- ground ------------------------------------------------------------------------
+  const groundTex = track(groundTexture(lampSpots));
+  // max anisotropy kills the lane-dash shimmer at grazing angles
+  groundTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
   const ground = new THREE.Mesh(
     track(new THREE.PlaneGeometry(GROUND_W, GROUND_D)),
     track(
       new THREE.MeshStandardMaterial({
-        map: track(groundTexture(lampSpots)),
+        map: groundTex,
         roughness: 0.96,
         metalness: 0,
       }),
@@ -531,7 +549,11 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
         }),
       ),
     );
+    // lift + inflate slightly so the line never coplanes with the plate
+    // faces (z-fighting flicker while panning/zooming)
     edge.position.copy(plate.position);
+    edge.position.y += 0.06;
+    edge.scale.set(1.003, 1.08, 1.003);
     scene.add(edge);
   }
 
@@ -570,20 +592,21 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
         ),
       );
       curb.position.copy(plat.position);
+      curb.position.y += 0.06; // off the platform faces — no z-fight flicker
+      curb.scale.set(1.004, 1.1, 1.004);
       scene.add(curb);
 
       const label = new THREE.Sprite(
         track(
           new THREE.SpriteMaterial({
-            map: track(signTexture(b.title, "#dfe5ef", 46)),
+            map: track(signTexture(b.title, d.color, 56, "#f4f7fd")),
             transparent: true,
             depthWrite: false,
-            color: 0xb9b9b9,
           }),
         ),
       );
-      label.position.set(bc.x, 4.6, bc.z + BLOCK_SIZE / 2 + 3.6);
-      label.scale.set(30, 3.75, 1);
+      label.position.set(bc.x, 5.6, bc.z + BLOCK_SIZE / 2 + 4.2);
+      label.scale.set(42, 4.6, 1);
       label.raycast = () => undefined;
       scene.add(label);
 
@@ -1000,20 +1023,30 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
   hl.visible = false;
   scene.add(hl);
 
-  const selMarker = new THREE.Sprite(
+  // game-style selection marker: a small spinning diamond hovering over
+  // the roof (absolute positioning each frame — never drifts/clips)
+  const selMat = track(
+    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.95 }),
+  );
+  const selMarker = new THREE.Mesh(track(new THREE.OctahedronGeometry(2.4)), selMat);
+  selMarker.visible = false;
+  scene.add(selMarker);
+  const selGlow = new THREE.Sprite(
     track(
       new THREE.SpriteMaterial({
         map: track(glowTexture()),
         color: 0xffffff,
         transparent: true,
+        opacity: 0.4,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
       }),
     ),
   );
-  selMarker.visible = false;
-  selMarker.scale.set(10, 10, 1);
-  scene.add(selMarker);
+  selGlow.visible = false;
+  selGlow.scale.set(7, 7, 1);
+  scene.add(selGlow);
+  let selTopY = 0; // roof height of the selected tower
 
   // --- picking ----------------------------------------------------------------------------------------------------------
   const raycaster = new THREE.Raycaster();
@@ -1077,7 +1110,13 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
     controls.enabled = false;
   }
 
-  flyTo(HOME_TARGET, HOME_POS.clone().sub(HOME_TARGET), 2100); // intro flyover
+  if (opts.initialView) {
+    // returning from an article — restore the exact camera, no intro
+    camera.position.fromArray(opts.initialView.pos);
+    controls.target.fromArray(opts.initialView.tar);
+  } else {
+    flyTo(HOME_TARGET, HOME_POS.clone().sub(HOME_TARGET), 2100); // intro flyover
+  }
 
   // --- input ----------------------------------------------------------------------------------------------------------------------
   let downX = 0;
@@ -1166,6 +1205,7 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
     if (!p) {
       onSelectTower(null);
       selMarker.visible = false;
+      selGlow.visible = false;
       return;
     }
     if (p.kind === "tower") selectTower(p.tower);
@@ -1181,9 +1221,14 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
   canvas.addEventListener("pointerup", onPointerUp);
 
   function selectTower(t: Tower): void {
+    // roof = top of the tier if the tower has one
+    selTopY = t.pos.y + t.h / 2 + (t.hasTier ? t.h * 0.34 : 0);
     selMarker.visible = true;
-    selMarker.position.set(t.pos.x, t.pos.y + t.h / 2 + 8, t.pos.z);
-    selMarker.material.color.set(t.info.color);
+    selGlow.visible = true;
+    selMarker.position.set(t.pos.x, selTopY + 7, t.pos.z);
+    selGlow.position.copy(selMarker.position);
+    selMat.color.set(t.info.color);
+    selGlow.material.color.set(t.info.color);
     flyTo(
       new THREE.Vector3(t.pos.x, t.h * 0.5, t.pos.z),
       new THREE.Vector3(32, 24 + t.h * 0.4, 32),
@@ -1197,6 +1242,7 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
     onFocusDistrict(null);
     onSelectTower(null);
     selMarker.visible = false;
+    selGlow.visible = false;
     flyTo(HOME_TARGET, HOME_POS.clone().sub(HOME_TARGET), 1100);
   }
 
@@ -1315,19 +1361,24 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
     camV.copy(camera.position);
     for (const site of blockSites) {
       const d = camV.distanceTo(site.center);
-      const o = THREE.MathUtils.clamp(1 - (d - 150) / 130, 0, 1);
+      const o = THREE.MathUtils.clamp(1 - (d - 175) / 150, 0, 1);
       if (o <= 0.02) {
         if (site.label.visible) site.label.visible = false;
       } else {
         site.label.visible = true;
-        site.label.material.opacity = o * 0.95;
+        site.label.material.opacity = o;
       }
     }
 
     coreBeam.rotation.y += dt * 0.4;
     for (const beam of beacons.values()) beam.rotation.y += dt * 0.35;
     aviMat.opacity = 0.45 + 0.55 * Math.sin(now / 540);
-    if (selMarker.visible) selMarker.position.y += Math.sin(now / 240) * 0.05;
+    if (selMarker.visible) {
+      // absolute bob above the roof — never wanders into the building
+      selMarker.position.y = selTopY + 7 + Math.sin(now / 320) * 1.3;
+      selMarker.rotation.y += dt * 2.2;
+      selGlow.position.copy(selMarker.position);
+    }
 
     controls.update();
     composer.render();
@@ -1355,6 +1406,13 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
     renderer.dispose();
   }
 
+  function getView(): CityView {
+    return {
+      pos: camera.position.toArray() as [number, number, number],
+      tar: controls.target.toArray() as [number, number, number],
+    };
+  }
+
   return {
     dispose,
     zoom,
@@ -1363,5 +1421,6 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
     setFilter,
     nextTarget,
     setReadSet,
+    getView,
   };
 }
