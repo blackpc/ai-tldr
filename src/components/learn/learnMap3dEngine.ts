@@ -1,27 +1,27 @@
 /**
  * /learn/map — KNOWLEDGE CITY: the Learn encyclopedia as a procedural
- * neon city at night, rendered in WebGL (three.js).
+ * night city, rendered in WebGL (three.js).
  *
  * World model:
- *   - 14 DISTRICTS (categories) on a 5x3 city grid, accent-edged plates
- *   - named BLOCKS inside each district (subcategories): raised platforms
- *     with accent curbs and distance-faded street-level signs
- *   - every article is a TOWER (height = difficulty); reading it powers
- *     the building — its windows light up in the district color. Tall
- *     towers get setback tiers, antennas, and blinking aviation lights.
- *   - fully-powered districts fire a rotating sky beacon
- *   - the AI core spire burns in the central plaza; street lamps and
- *     headlight/taillight traffic line the avenues
+ *   - 14 DISTRICTS (categories) on a 5x3 city grid, accent-trimmed plates
+ *   - named BLOCKS (subcategories): raised platforms, neon curbs, street
+ *     signs that fade in as you approach
+ *   - every article is a TOWER. Walls are real lit geometry (PBR, moon
+ *     shadows); windows are a separate emissive layer. Reading an article
+ *     powers the building: full window grid burns in the district color.
+ *     Unread towers show only sparse dim windows, like a real skyline.
+ *   - tall towers get setback tiers, antenna masts, blinking aviation
+ *     lights; fully-read districts fire a sky beacon
+ *   - shaded car bodies drive the avenues with headlights/taillights;
+ *     lamp poles pool warm light on the asphalt (baked); the sky dome is
+ *     a baked gradient with faint stars and a moon
  *
- * Render pipeline: ACES filmic tone mapping + UnrealBloom — emissive
- * windows, neon signs, lamps and beacons actually glow; dark concrete
- * doesn't. Gradient sky dome + gridded ground instead of a void.
+ * Pipeline: hemisphere + shadow-casting moonlight, ACES tone mapping,
+ * restrained UnrealBloom (only true emitters glow). Deterministic
+ * procedural geometry; the 342 buildings cost 4 instanced draw calls.
  *
- * Deterministic procedural geometry (zero assets, zero Math.random) and
- * few draw calls: all 342 towers are 3 InstancedMeshes (base/tier/mast).
- *
- * Dynamic-imported by LearnMap.tsx in a client-only effect, so three.js
- * ships as its own lazy chunk and never touches SSR.
+ * Dynamic-imported by LearnMap.tsx client-side only — three.js ships as
+ * its own lazy chunk and never touches SSR.
  */
 
 import * as THREE from "three";
@@ -32,7 +32,7 @@ import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 
 // ---------------------------------------------------------------------------
-// Public data model
+// Public data model (unchanged API)
 // ---------------------------------------------------------------------------
 
 export interface CityArticle {
@@ -92,7 +92,6 @@ export interface CityHandle {
   resetView(): void;
   focusDistrict(slug: string | null): void;
   setFilter(q: string): number;
-  /** Fly to the next unread tower (least-powered district first). */
   nextTarget(): CityTowerInfo | null;
   setReadSet(read: Set<string>): void;
 }
@@ -100,8 +99,6 @@ export interface CityHandle {
 // ---------------------------------------------------------------------------
 // Deterministic helpers
 // ---------------------------------------------------------------------------
-
-const BG = 0x030308;
 
 function hash(s: string): number {
   let h = 5381;
@@ -122,123 +119,6 @@ function easeInOutCubic(t: number): number {
 }
 
 // ---------------------------------------------------------------------------
-// Procedural textures
-// ---------------------------------------------------------------------------
-
-/** Facade texture: window grid with lived-in variety — bright rooms, dim
- *  rooms, dark floors, a dead roof band. Multiplied by instance color:
- *  dark gray = unlit concrete; bright accent = powered building. */
-function facadeTexture(): THREE.CanvasTexture {
-  const c = document.createElement("canvas");
-  c.width = 128;
-  c.height = 256;
-  const g = c.getContext("2d")!;
-  g.fillStyle = "#1b1d22";
-  g.fillRect(0, 0, 128, 256);
-  const rnd = lcg(20260612);
-  for (let row = 0; row < 23; row++) {
-    const floorDead = rnd() < 0.12; // whole floor dark
-    for (let col = 0; col < 9; col++) {
-      const x = 7 + col * 13.4;
-      const y = 16 + row * 10.2;
-      const r = rnd();
-      let a: number;
-      if (floorDead || r < 0.38) a = 0.05; // dark room
-      else if (r < 0.72) a = 0.32 + rnd() * 0.25; // dim glow
-      else a = 0.78 + rnd() * 0.22; // bright room
-      g.fillStyle = `rgba(255,244,214,${a})`;
-      g.fillRect(x, y, 7.2, 5.4);
-    }
-  }
-  // dead band at the roof line
-  g.fillStyle = "#15161a";
-  g.fillRect(0, 0, 128, 12);
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  return t;
-}
-
-/** Ground texture: city grid + radial vignette, baked once. */
-function groundTexture(): THREE.CanvasTexture {
-  const S = 1024;
-  const c = document.createElement("canvas");
-  c.width = c.height = S;
-  const g = c.getContext("2d")!;
-  g.fillStyle = "#07070b";
-  g.fillRect(0, 0, S, S);
-  g.strokeStyle = "rgba(150,160,190,0.07)";
-  g.lineWidth = 1;
-  for (let i = 0; i <= S; i += 16) {
-    g.beginPath();
-    g.moveTo(i, 0);
-    g.lineTo(i, S);
-    g.stroke();
-    g.beginPath();
-    g.moveTo(0, i);
-    g.lineTo(S, i);
-    g.stroke();
-  }
-  const grad = g.createRadialGradient(S / 2, S / 2, S * 0.22, S / 2, S / 2, S * 0.62);
-  grad.addColorStop(0, "rgba(3,3,8,0)");
-  grad.addColorStop(1, "rgba(3,3,8,1)");
-  g.fillStyle = grad;
-  g.fillRect(0, 0, S, S);
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  return t;
-}
-
-/** Night-sky dome gradient: near-black zenith → cold haze at the horizon. */
-function skyTexture(): THREE.CanvasTexture {
-  const c = document.createElement("canvas");
-  c.width = 4;
-  c.height = 512;
-  const g = c.getContext("2d")!;
-  const grad = g.createLinearGradient(0, 0, 0, 512);
-  grad.addColorStop(0, "#020207");
-  grad.addColorStop(0.62, "#04040c");
-  grad.addColorStop(0.88, "#0a0d1c");
-  grad.addColorStop(1, "#11152a");
-  g.fillStyle = grad;
-  g.fillRect(0, 0, 4, 512);
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  return t;
-}
-
-/** Neon sign sprite texture (district + block names). */
-function signTexture(text: string, color: string, px = 64): THREE.CanvasTexture {
-  const c = document.createElement("canvas");
-  c.width = 1024;
-  c.height = px * 2;
-  const g = c.getContext("2d")!;
-  g.font = `700 ${px}px 'JetBrains Mono', 'Cascadia Code', Consolas, monospace`;
-  g.textAlign = "center";
-  g.textBaseline = "middle";
-  g.shadowColor = color;
-  g.shadowBlur = px * 0.22;
-  g.fillStyle = color;
-  g.fillText(text.toUpperCase(), 512, px, 1000);
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  return t;
-}
-
-/** Soft radial glow (selection marker, lamps). */
-function glowTexture(): THREE.CanvasTexture {
-  const c = document.createElement("canvas");
-  c.width = c.height = 64;
-  const g = c.getContext("2d")!;
-  const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-  grad.addColorStop(0, "rgba(255,255,255,1)");
-  grad.addColorStop(0.3, "rgba(255,255,255,0.7)");
-  grad.addColorStop(1, "rgba(255,255,255,0)");
-  g.fillStyle = grad;
-  g.fillRect(0, 0, 64, 64);
-  return new THREE.CanvasTexture(c);
-}
-
-// ---------------------------------------------------------------------------
 // Layout constants
 // ---------------------------------------------------------------------------
 
@@ -248,7 +128,9 @@ const COLS = 5;
 const ROWS = 3;
 const CORE_CELL = { col: 2, row: 1 };
 const BLOCK_SIZE = 38;
-const HOME_POS = new THREE.Vector3(0, 320, 330);
+const GROUND_W = 2600;
+const GROUND_D = 1800;
+const HOME_POS = new THREE.Vector3(0, 310, 340);
 const HOME_TARGET = new THREE.Vector3(0, 0, 0);
 
 const BLOCK_OFFSETS: [number, number][] = [
@@ -263,11 +145,212 @@ const BLOCK_OFFSETS: [number, number][] = [
   [46, 0],
 ];
 
+const H_STREETS = [-CELL / 2, CELL / 2];
+const V_STREETS = [-CELL * 1.5, -CELL / 2, CELL / 2, CELL * 1.5];
+const SPAN_H = CELL * 2.6;
+const SPAN_V = CELL * 1.6;
+
+// ---------------------------------------------------------------------------
+// Procedural textures
+// ---------------------------------------------------------------------------
+
+/** Wall albedo: dark panels with floor lines — shading needs detail. */
+function wallAlbedo(): THREE.CanvasTexture {
+  const c = document.createElement("canvas");
+  c.width = 128;
+  c.height = 256;
+  const g = c.getContext("2d")!;
+  g.fillStyle = "#5b5f6a";
+  g.fillRect(0, 0, 128, 256);
+  const rnd = lcg(11);
+  // vertical panel seams
+  for (let x = 0; x < 128; x += 16) {
+    g.fillStyle = `rgba(0,0,0,${0.22 + rnd() * 0.14})`;
+    g.fillRect(x, 0, 2, 256);
+  }
+  // floor lines
+  for (let y = 12; y < 256; y += 10) {
+    g.fillStyle = "rgba(0,0,0,0.34)";
+    g.fillRect(0, y, 128, 1.6);
+  }
+  // roof band
+  g.fillStyle = "#41454e";
+  g.fillRect(0, 0, 128, 12);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+/** Window emissive layers: full grid (powered) / sparse (dark building).
+ *  Transparent except the window rects, drawn aligned to the albedo floors. */
+function windowLayer(density: number, seed: number): THREE.CanvasTexture {
+  const c = document.createElement("canvas");
+  c.width = 128;
+  c.height = 256;
+  const g = c.getContext("2d")!;
+  g.clearRect(0, 0, 128, 256);
+  const rnd = lcg(seed);
+  for (let row = 0; row < 24; row++) {
+    for (let col = 0; col < 7; col++) {
+      if (rnd() > density) continue;
+      const a = 0.45 + rnd() * 0.55;
+      g.fillStyle = `rgba(255,255,255,${a})`;
+      g.fillRect(8 + col * 17, 16 + row * 10, 9, 5.4);
+    }
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+interface LampSpot {
+  x: number;
+  z: number;
+}
+
+/** Ground: asphalt noise, lane dashes along every street, and a warm
+ *  baked light pool under each lamp. */
+function groundTexture(lamps: LampSpot[]): THREE.CanvasTexture {
+  const W = 2048;
+  const H = Math.round((W * GROUND_D) / GROUND_W);
+  const c = document.createElement("canvas");
+  c.width = W;
+  c.height = H;
+  const g = c.getContext("2d")!;
+  g.fillStyle = "#15161a";
+  g.fillRect(0, 0, W, H);
+  const rnd = lcg(31337);
+  // asphalt speckle
+  for (let i = 0; i < 26000; i++) {
+    const v = rnd();
+    g.fillStyle = `rgba(${v > 0.5 ? "255,255,255" : "0,0,0"},${0.015 + rnd() * 0.03})`;
+    g.fillRect(rnd() * W, rnd() * H, 1.6, 1.6);
+  }
+  const tx = (x: number): number => ((x + GROUND_W / 2) / GROUND_W) * W;
+  const tz = (z: number): number => ((z + GROUND_D / 2) / GROUND_D) * H;
+  const sx = W / GROUND_W;
+  // street asphalt (slightly lighter) + center dashes
+  g.fillStyle = "#1e1f24";
+  for (const z of H_STREETS) g.fillRect(tx(-SPAN_H), tz(z) - 14 * sx, (SPAN_H * 2) * sx, 28 * sx);
+  for (const x of V_STREETS) g.fillRect(tx(x) - 14 * sx, tz(-SPAN_V), 28 * sx, (SPAN_V * 2) * sx);
+  g.fillStyle = "rgba(214,201,120,0.5)";
+  for (const z of H_STREETS)
+    for (let x = -SPAN_H; x < SPAN_H; x += 18)
+      g.fillRect(tx(x), tz(z) - 0.8 * sx, 8 * sx, 1.6 * sx);
+  for (const x of V_STREETS)
+    for (let z = -SPAN_V; z < SPAN_V; z += 18)
+      g.fillRect(tx(x) - 0.8 * sx, tz(z), 1.6 * sx, 8 * sx);
+  // lamp light pools
+  for (const l of lamps) {
+    const px = tx(l.x);
+    const pz = tz(l.z);
+    const r = 26 * sx;
+    const grad = g.createRadialGradient(px, pz, 0, px, pz, r);
+    grad.addColorStop(0, "rgba(255,176,89,0.3)");
+    grad.addColorStop(1, "rgba(255,176,89,0)");
+    g.fillStyle = grad;
+    g.fillRect(px - r, pz - r, r * 2, r * 2);
+  }
+  // vignette
+  const v = g.createRadialGradient(W / 2, H / 2, W * 0.24, W / 2, H / 2, W * 0.6);
+  v.addColorStop(0, "rgba(4,5,8,0)");
+  v.addColorStop(1, "rgba(4,5,8,1)");
+  g.fillStyle = v;
+  g.fillRect(0, 0, W, H);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+/** Night sky: vertical gradient, faint baked stars, a moon with halo. */
+function skyTexture(): THREE.CanvasTexture {
+  const W = 2048;
+  const H = 1024;
+  const c = document.createElement("canvas");
+  c.width = W;
+  c.height = H;
+  const g = c.getContext("2d")!;
+  const grad = g.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, "#05060d");
+  grad.addColorStop(0.55, "#070912");
+  grad.addColorStop(0.82, "#0c1020");
+  grad.addColorStop(1, "#161b33");
+  g.fillStyle = grad;
+  g.fillRect(0, 0, W, H);
+  // stars: only the upper sky, tiny, mostly dim
+  const rnd = lcg(501);
+  for (let i = 0; i < 900; i++) {
+    const x = rnd() * W;
+    const y = rnd() * rnd() * H * 0.55;
+    const a = 0.12 + rnd() * rnd() * 0.5;
+    const s = rnd() < 0.92 ? 1 : 2;
+    g.fillStyle = `rgba(214,224,248,${a})`;
+    g.fillRect(x, y, s, s);
+  }
+  // the moon
+  const mx = W * 0.69;
+  const my = H * 0.2;
+  const halo = g.createRadialGradient(mx, my, 6, mx, my, 110);
+  halo.addColorStop(0, "rgba(228,236,255,0.55)");
+  halo.addColorStop(0.25, "rgba(200,214,248,0.12)");
+  halo.addColorStop(1, "rgba(200,214,248,0)");
+  g.fillStyle = halo;
+  g.fillRect(mx - 110, my - 110, 220, 220);
+  g.fillStyle = "#e7edfb";
+  g.beginPath();
+  g.arc(mx, my, 17, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = "rgba(190,200,225,0.5)"; // craters
+  g.beginPath();
+  g.arc(mx - 5, my - 3, 4, 0, Math.PI * 2);
+  g.arc(mx + 6, my + 5, 3, 0, Math.PI * 2);
+  g.fill();
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+/** Neon sign sprite texture. */
+function signTexture(text: string, color: string, px = 64): THREE.CanvasTexture {
+  const c = document.createElement("canvas");
+  c.width = 1024;
+  c.height = px * 2;
+  const g = c.getContext("2d")!;
+  g.font = `700 ${px}px 'JetBrains Mono', 'Cascadia Code', Consolas, monospace`;
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+  g.shadowColor = color;
+  g.shadowBlur = px * 0.2;
+  g.fillStyle = color;
+  g.fillText(text.toUpperCase(), 512, px, 1000);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+function glowTexture(): THREE.CanvasTexture {
+  const c = document.createElement("canvas");
+  c.width = c.height = 64;
+  const g = c.getContext("2d")!;
+  const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grad.addColorStop(0, "rgba(255,255,255,1)");
+  grad.addColorStop(0.3, "rgba(255,255,255,0.7)");
+  grad.addColorStop(1, "rgba(255,255,255,0)");
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(c);
+}
+
+// ---------------------------------------------------------------------------
+// Engine
+// ---------------------------------------------------------------------------
+
 interface Tower {
   info: CityTowerInfo;
   pos: THREE.Vector3;
   w: number;
   h: number;
+  hasTier: boolean;
 }
 
 interface BlockSite {
@@ -278,15 +361,17 @@ interface BlockSite {
   label: THREE.Sprite;
 }
 
-// ---------------------------------------------------------------------------
-// Engine
-// ---------------------------------------------------------------------------
-
 export function createLearnMap3D(opts: CityOptions): CityHandle {
   const { canvas, districts, onHover, onSelectTower, onFocusDistrict } = opts;
   let readSet = new Set(opts.readSet);
 
-  // --- district cells --------------------------------------------------------
+  const disposables: { dispose(): void }[] = [];
+  function track<T extends { dispose(): void }>(x: T): T {
+    disposables.push(x);
+    return x;
+  }
+
+  // --- district cells ----------------------------------------------------------
   const cells: { col: number; row: number }[] = [];
   for (let row = 0; row < ROWS; row++)
     for (let col = 0; col < COLS; col++)
@@ -301,25 +386,43 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
     );
   });
 
-  // --- renderer / pipeline ----------------------------------------------------
+  // --- renderer / lights / pipeline -----------------------------------------------
   const renderer = new THREE.WebGLRenderer({
     canvas,
     antialias: true,
     powerPreference: "high-performance",
   });
-  renderer.setClearColor(BG, 1);
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.12;
+  renderer.toneMappingExposure = 1.15;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
   const scene = new THREE.Scene();
-  scene.fog = new THREE.FogExp2(BG, 0.00115);
+  scene.fog = new THREE.FogExp2(0x05070d, 0.00095);
 
   const camera = new THREE.PerspectiveCamera(50, 1, 1, 6000);
-  camera.position.set(0, 520, 740); // intro flyover start
+  camera.position.set(0, 520, 760);
+
+  const hemi = new THREE.HemisphereLight(0x9aacd8, 0x23252c, 1.5);
+  scene.add(hemi);
+  const moon = new THREE.DirectionalLight(0xdde6ff, 2.3);
+  moon.position.set(430, 540, 250);
+  moon.castShadow = true;
+  moon.shadow.mapSize.set(2048, 2048);
+  moon.shadow.camera.left = -580;
+  moon.shadow.camera.right = 580;
+  moon.shadow.camera.top = 420;
+  moon.shadow.camera.bottom = -420;
+  moon.shadow.camera.near = 60;
+  moon.shadow.camera.far = 1400;
+  moon.shadow.bias = -0.0005;
+  moon.shadow.normalBias = 0.9;
+  scene.add(moon);
+  scene.add(moon.target);
 
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
-  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.85, 0.55, 0.5);
+  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.35, 0.42, 0.82);
   composer.addPass(bloom);
   composer.addPass(new OutputPass());
 
@@ -332,47 +435,99 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
   controls.listenToKeyEvents(window);
   controls.keyPanSpeed = 24;
 
-  const disposables: { dispose(): void }[] = [];
-  function track<T extends { dispose(): void }>(x: T): T {
-    disposables.push(x);
-    return x;
-  }
-
-  // --- sky + ground -------------------------------------------------------------
-  const skyTex = track(skyTexture());
+  // --- sky -----------------------------------------------------------------------
   const sky = new THREE.Mesh(
-    track(new THREE.SphereGeometry(2600, 24, 16)),
+    track(new THREE.SphereGeometry(2500, 32, 18)),
     track(
-      new THREE.MeshBasicMaterial({ map: skyTex, side: THREE.BackSide, fog: false }),
+      new THREE.MeshBasicMaterial({
+        map: track(skyTexture()),
+        side: THREE.BackSide,
+        fog: false,
+      }),
     ),
   );
   scene.add(sky);
 
-  const groundTex = track(groundTexture());
+  // --- lamps (positions first — their pools are baked into the ground) -------------
+  const lampSpots: LampSpot[] = [];
+  for (const z of H_STREETS)
+    for (let x = -CELL * 2.3; x <= CELL * 2.3; x += 36)
+      lampSpots.push({ x, z: z + (Math.round(x / 36) % 2 === 0 ? 10.4 : -10.4) });
+  for (const x of V_STREETS)
+    for (let z = -CELL * 1.3; z <= CELL * 1.3; z += 36)
+      lampSpots.push({ x: x + (Math.round(z / 36) % 2 === 0 ? 10.4 : -10.4), z });
+
+  // --- ground ------------------------------------------------------------------------
   const ground = new THREE.Mesh(
-    track(new THREE.PlaneGeometry(2600, 1800)),
-    track(new THREE.MeshBasicMaterial({ map: groundTex })),
+    track(new THREE.PlaneGeometry(GROUND_W, GROUND_D)),
+    track(
+      new THREE.MeshStandardMaterial({
+        map: track(groundTexture(lampSpots)),
+        roughness: 0.96,
+        metalness: 0,
+      }),
+    ),
   );
   ground.rotation.x = -Math.PI / 2;
   ground.position.y = -0.25;
+  ground.receiveShadow = true;
   scene.add(ground);
 
-  // --- district plates + edges ------------------------------------------------------
+  // --- lamp poles + heads ----------------------------------------------------------------
+  {
+    const poleGeo = track(new THREE.BoxGeometry(0.5, 7.2, 0.5));
+    const poleMat = track(
+      new THREE.MeshStandardMaterial({ color: 0x3a3e46, roughness: 0.8, metalness: 0.4 }),
+    );
+    const poles = new THREE.InstancedMesh(poleGeo, poleMat, lampSpots.length);
+    const m = new THREE.Matrix4();
+    const headPos = new Float32Array(lampSpots.length * 3);
+    lampSpots.forEach((l, i) => {
+      m.makeTranslation(l.x, 3.6, l.z);
+      poles.setMatrixAt(i, m);
+      headPos.set([l.x, 7.6, l.z], i * 3);
+    });
+    scene.add(poles);
+    const headGeo = track(new THREE.BufferGeometry());
+    headGeo.setAttribute("position", new THREE.BufferAttribute(headPos, 3));
+    const heads = new THREE.Points(
+      headGeo,
+      track(
+        new THREE.PointsMaterial({
+          size: 2.4,
+          color: new THREE.Color(0xffb869).multiplyScalar(1.35),
+          transparent: true,
+          opacity: 0.95,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          sizeAttenuation: true,
+          map: track(glowTexture()),
+        }),
+      ),
+    );
+    heads.frustumCulled = false;
+    scene.add(heads);
+  }
+
+  // --- district plates -------------------------------------------------------------------
   const plateGeo = track(new THREE.BoxGeometry(PLATE, 1.4, PLATE));
-  const plateEdgeGeo = track(new THREE.EdgesGeometry(plateGeo));
-  const plateMat = track(new THREE.MeshBasicMaterial({ color: 0x0d0d11 }));
+  const plateEdges = track(new THREE.EdgesGeometry(plateGeo));
+  const plateMat = track(
+    new THREE.MeshStandardMaterial({ color: 0x2b2d34, roughness: 0.92, metalness: 0.05 }),
+  );
   for (const d of districts) {
     const p = districtCenter.get(d.slug)!;
     const plate = new THREE.Mesh(plateGeo, plateMat);
     plate.position.set(p.x, 0, p.z);
+    plate.receiveShadow = true;
     scene.add(plate);
     const edge = new THREE.LineSegments(
-      plateEdgeGeo,
+      plateEdges,
       track(
         new THREE.LineBasicMaterial({
-          color: new THREE.Color(d.color).multiplyScalar(0.7),
+          color: new THREE.Color(d.color).multiplyScalar(0.65),
           transparent: true,
-          opacity: 0.95,
+          opacity: 0.9,
         }),
       ),
     );
@@ -380,16 +535,17 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
     scene.add(edge);
   }
 
-  // --- blocks (SUBCATEGORIES): platforms + curbs + street signs ----------------------
+  // --- blocks (subcategories) ----------------------------------------------------------------
   const towers: Tower[] = [];
   const towersByDistrict = new Map<string, Tower[]>();
   const blockSites: BlockSite[] = [];
   const blockOf = new Map<THREE.Object3D, BlockSite>();
 
-  const blockGeo = track(new THREE.BoxGeometry(BLOCK_SIZE, 1.1, BLOCK_SIZE));
-  const blockEdgeGeo = track(new THREE.EdgesGeometry(blockGeo));
-  const blockMat = track(new THREE.MeshBasicMaterial({ color: 0x131318 }));
-  const signTextures: THREE.Texture[] = [];
+  const blockGeo = track(new THREE.BoxGeometry(BLOCK_SIZE, 1.2, BLOCK_SIZE));
+  const blockEdges = track(new THREE.EdgesGeometry(blockGeo));
+  const blockMat = track(
+    new THREE.MeshStandardMaterial({ color: 0x33363e, roughness: 0.9, metalness: 0.05 }),
+  );
 
   for (const d of districts) {
     const center = districtCenter.get(d.slug)!;
@@ -399,37 +555,38 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
       const [ox, oz] = BLOCK_OFFSETS[j % BLOCK_OFFSETS.length];
       const bc = new THREE.Vector3(center.x + ox, 0, center.z + oz);
 
-      // platform + accent curb
       const plat = new THREE.Mesh(blockGeo, blockMat);
-      plat.position.set(bc.x, 0.7, bc.z);
+      plat.position.set(bc.x, 0.75, bc.z);
+      plat.receiveShadow = true;
       scene.add(plat);
       const curb = new THREE.LineSegments(
-        blockEdgeGeo,
+        blockEdges,
         track(
           new THREE.LineBasicMaterial({
-            color: new THREE.Color(d.color).multiplyScalar(0.32),
+            color: new THREE.Color(d.color).multiplyScalar(0.3),
             transparent: true,
-            opacity: 0.9,
+            opacity: 0.85,
           }),
         ),
       );
       curb.position.copy(plat.position);
       scene.add(curb);
 
-      // street-level sign (distance-faded in the loop)
-      const tex = track(signTexture(b.title, "#e8ecf2", 46));
-      signTextures.push(tex);
       const label = new THREE.Sprite(
         track(
-          new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }),
+          new THREE.SpriteMaterial({
+            map: track(signTexture(b.title, "#dfe5ef", 46)),
+            transparent: true,
+            depthWrite: false,
+            color: 0xb9b9b9,
+          }),
         ),
       );
-      label.position.set(bc.x, 4.4, bc.z + BLOCK_SIZE / 2 + 3.4);
+      label.position.set(bc.x, 4.6, bc.z + BLOCK_SIZE / 2 + 3.6);
       label.scale.set(30, 3.75, 1);
-      label.raycast = () => undefined; // labels are display-only
+      label.raycast = () => undefined;
       scene.add(label);
 
-      // towers on the platform
       const arts = b.articles;
       const cols = Math.ceil(Math.sqrt(Math.max(1, arts.length)));
       const rows = Math.ceil(arts.length / cols);
@@ -438,12 +595,12 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
         const rnd = lcg(hash(a.slug));
         const col = k % cols;
         const row = Math.floor(k / cols);
-        const x = bc.x + (col - (cols - 1) / 2) * 11.4 + (rnd() - 0.5) * 2.4;
-        const z = bc.z + (row - (rows - 1) / 2) * 11.4 + (rnd() - 0.5) * 2.4;
+        const x = bc.x + (col - (cols - 1) / 2) * 11.4 + (rnd() - 0.5) * 2.2;
+        const z = bc.z + (row - (rows - 1) / 2) * 11.4 + (rnd() - 0.5) * 2.2;
         const base =
           a.difficulty === "advanced" ? 27 : a.difficulty === "intermediate" ? 17 : 10;
         const h = base + rnd() * 9;
-        const w = 6.4 + rnd() * 2.2;
+        const w = 6.6 + rnd() * 2.2;
         const tower: Tower = {
           info: {
             slug: a.slug,
@@ -456,9 +613,10 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
             color: d.color,
             read: readSet.has(a.slug),
           },
-          pos: new THREE.Vector3(x, h / 2 + 1.25, z),
+          pos: new THREE.Vector3(x, h / 2 + 1.35, z),
           w,
           h,
+          hasTier: h > 20,
         };
         towers.push(tower);
         blockTowers.push(tower);
@@ -473,99 +631,117 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
     towersByDistrict.set(d.slug, districtTowers);
   }
 
-  // --- instanced towers: base + setback tier + antenna mast ---------------------------
-  const facadeTex = track(facadeTexture());
-  const boxGeo = track(new THREE.BoxGeometry(1, 1, 1));
-  const towerMat = track(new THREE.MeshBasicMaterial({ map: facadeTex }));
-
-  const baseMesh = new THREE.InstancedMesh(boxGeo, towerMat, towers.length);
-  const tierIdx: number[] = [];
-  const mastIdx: number[] = [];
-  towers.forEach((t, i) => {
-    if (t.h > 20) tierIdx.push(i);
-    if (t.h > 27) mastIdx.push(i);
+  // --- buildings: shaded walls + emissive window layers -------------------------------------------
+  // Instance list = base boxes for every tower + setback tier boxes for the
+  // tall ones. The same transforms back three meshes: PBR walls, a "full
+  // grid" window layer (powered) and a "sparse" window layer (dark), with
+  // the inactive layer collapsed to zero scale per instance.
+  interface Slab {
+    tower: Tower;
+    pos: THREE.Vector3;
+    sx: number;
+    sy: number;
+    sz: number;
+  }
+  const slabs: Slab[] = [];
+  for (const t of towers) {
+    slabs.push({ tower: t, pos: t.pos.clone(), sx: t.w, sy: t.h, sz: t.w });
+    if (t.hasTier) {
+      const th = t.h * 0.34;
+      slabs.push({
+        tower: t,
+        pos: new THREE.Vector3(t.pos.x, t.pos.y + t.h / 2 + th / 2, t.pos.z),
+        sx: t.w * 0.62,
+        sy: th,
+        sz: t.w * 0.62,
+      });
+    }
+  }
+  const slabIndexByTower = new Map<string, number[]>();
+  slabs.forEach((s, i) => {
+    const arr = slabIndexByTower.get(s.tower.info.slug) ?? [];
+    arr.push(i);
+    slabIndexByTower.set(s.tower.info.slug, arr);
   });
-  const tierMesh = new THREE.InstancedMesh(boxGeo, towerMat, tierIdx.length);
-  const mastMat = track(new THREE.MeshBasicMaterial());
-  const mastMesh = new THREE.InstancedMesh(boxGeo, mastMat, mastIdx.length);
+
+  const boxGeo = track(new THREE.BoxGeometry(1, 1, 1));
+  const wallsMat = track(
+    new THREE.MeshStandardMaterial({
+      map: track(wallAlbedo()),
+      roughness: 0.85,
+      metalness: 0.18,
+    }),
+  );
+  const walls = new THREE.InstancedMesh(boxGeo, wallsMat, slabs.length);
+  walls.castShadow = true;
+  walls.receiveShadow = true;
+
+  const winFullTex = track(windowLayer(0.86, 77));
+  const winSparseTex = track(windowLayer(0.12, 78));
+  const winMatBase = {
+    transparent: true,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
+  } as const;
+  const winFull = new THREE.InstancedMesh(
+    boxGeo,
+    track(new THREE.MeshBasicMaterial({ map: winFullTex, ...winMatBase })),
+    slabs.length,
+  );
+  const winSparse = new THREE.InstancedMesh(
+    boxGeo,
+    track(new THREE.MeshBasicMaterial({ map: winSparseTex, ...winMatBase })),
+    slabs.length,
+  );
 
   const m4 = new THREE.Matrix4();
-  towers.forEach((t, i) => {
-    m4.makeScale(t.w, t.h, t.w);
-    m4.setPosition(t.pos);
-    baseMesh.setMatrixAt(i, m4);
+  const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
+  slabs.forEach((s, i) => {
+    m4.makeScale(s.sx, s.sy, s.sz);
+    m4.setPosition(s.pos);
+    walls.setMatrixAt(i, m4);
   });
-  tierIdx.forEach((ti, i) => {
-    const t = towers[ti];
-    const th = t.h * 0.34;
-    m4.makeScale(t.w * 0.62, th, t.w * 0.62);
-    m4.setPosition(t.pos.x, t.pos.y + t.h / 2 + th / 2, t.pos.z);
-    tierMesh.setMatrixAt(i, m4);
-  });
-  mastIdx.forEach((ti, i) => {
-    const t = towers[ti];
+
+  function syncWindowMatrices(): void {
+    slabs.forEach((s, i) => {
+      const lit = readSet.has(s.tower.info.slug);
+      m4.makeScale(s.sx * 1.004, s.sy * 1.004, s.sz * 1.004);
+      m4.setPosition(s.pos);
+      winFull.setMatrixAt(i, lit ? m4 : ZERO);
+      winSparse.setMatrixAt(i, lit ? ZERO : m4);
+    });
+    winFull.instanceMatrix.needsUpdate = true;
+    winSparse.instanceMatrix.needsUpdate = true;
+  }
+  syncWindowMatrices();
+  scene.add(walls, winFull, winSparse);
+
+  // masts + aviation lights on skyscrapers
+  const mastTowers = towers.filter((t) => t.h > 27);
+  const mastMat = track(
+    new THREE.MeshStandardMaterial({ color: 0x424650, roughness: 0.7, metalness: 0.5 }),
+  );
+  const masts = new THREE.InstancedMesh(boxGeo, mastMat, mastTowers.length);
+  const aviPos = new Float32Array(mastTowers.length * 3);
+  mastTowers.forEach((t, i) => {
     const rnd = lcg(hash(t.info.slug) ^ 0xbeef);
     const len = 5 + rnd() * 5;
-    const topY = t.pos.y + t.h / 2 + t.h * 0.34;
-    m4.makeScale(0.6, len, 0.6);
+    const topY = t.pos.y + t.h / 2 + (t.hasTier ? t.h * 0.34 : 0);
+    m4.makeScale(0.55, len, 0.55);
     m4.setPosition(t.pos.x, topY + len / 2, t.pos.z);
-    mastMesh.setMatrixAt(i, m4);
+    masts.setMatrixAt(i, m4);
+    aviPos.set([t.pos.x, topY + len + 0.8, t.pos.z], i * 3);
   });
-  scene.add(baseMesh, tierMesh, mastMesh);
+  scene.add(masts);
 
-  const DARK = new THREE.Color(0x707788); // dark concrete, windows still read
-  const towerColor = (t: Tower): THREE.Color =>
-    readSet.has(t.info.slug)
-      ? new THREE.Color(t.info.color).lerp(new THREE.Color(1, 1, 1), 0.16).multiplyScalar(2.1)
-      : DARK.clone();
-
-  const baseColors = new Float32Array(towers.length * 3);
-  function paint(mod?: (t: Tower, c: THREE.Color) => void): void {
-    const c = new THREE.Color();
-    towers.forEach((t, i) => {
-      c.setRGB(baseColors[i * 3], baseColors[i * 3 + 1], baseColors[i * 3 + 2]);
-      mod?.(t, c);
-      baseMesh.setColorAt(i, c);
-    });
-    tierIdx.forEach((ti, i) => {
-      c.setRGB(baseColors[ti * 3], baseColors[ti * 3 + 1], baseColors[ti * 3 + 2]);
-      mod?.(towers[ti], c);
-      tierMesh.setColorAt(i, c);
-    });
-    mastIdx.forEach((ti, i) => {
-      c.setRGB(baseColors[ti * 3], baseColors[ti * 3 + 1], baseColors[ti * 3 + 2]);
-      mod?.(towers[ti], c);
-      mastMesh.setColorAt(i, c.clone().multiplyScalar(0.6));
-    });
-    baseMesh.instanceColor!.needsUpdate = true;
-    if (tierIdx.length) tierMesh.instanceColor!.needsUpdate = true;
-    if (mastIdx.length) mastMesh.instanceColor!.needsUpdate = true;
-  }
-  function rebase(): void {
-    towers.forEach((t, i) => {
-      const c = towerColor(t);
-      baseColors.set([c.r, c.g, c.b], i * 3);
-    });
-  }
-  rebase();
-  paint();
-
-  // --- aviation lights on the tallest towers ---------------------------------------------
   const aviGeo = track(new THREE.BufferGeometry());
-  {
-    const arr = new Float32Array(mastIdx.length * 3);
-    mastIdx.forEach((ti, i) => {
-      const t = towers[ti];
-      const rnd = lcg(hash(t.info.slug) ^ 0xbeef);
-      const len = 5 + rnd() * 5;
-      arr.set([t.pos.x, t.pos.y + t.h / 2 + t.h * 0.34 + len + 0.8, t.pos.z], i * 3);
-    });
-    aviGeo.setAttribute("position", new THREE.BufferAttribute(arr, 3));
-  }
+  aviGeo.setAttribute("position", new THREE.BufferAttribute(aviPos, 3));
   const aviMat = track(
     new THREE.PointsMaterial({
-      size: 2.2,
-      color: 0xff2d20,
+      size: 1.9,
+      color: new THREE.Color(0xff3326).multiplyScalar(1.6),
       transparent: true,
       opacity: 0.9,
       depthWrite: false,
@@ -578,30 +754,58 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
   aviLights.frustumCulled = false;
   scene.add(aviLights);
 
-  // --- district neon signs ------------------------------------------------------------------
+  // --- building colors ----------------------------------------------------------------------------
+  const WALL_DARK = new THREE.Color(0xffffff); // albedo carries the tone
+  const WIN_DIM = new THREE.Color(0xa89a72);
+
+  function paint(
+    mod?: (t: Tower, walls: THREE.Color, win: THREE.Color) => void,
+  ): void {
+    const wc = new THREE.Color();
+    const fc = new THREE.Color();
+    slabs.forEach((s, i) => {
+      const t = s.tower;
+      const lit = readSet.has(t.info.slug);
+      if (lit) {
+        wc.set(t.info.color).lerp(new THREE.Color(1, 1, 1), 0.55);
+        fc.set(t.info.color).lerp(new THREE.Color(1, 1, 1), 0.35).multiplyScalar(2.6);
+      } else {
+        wc.copy(WALL_DARK);
+        fc.copy(WIN_DIM);
+      }
+      mod?.(t, wc, fc);
+      walls.setColorAt(i, wc);
+      winFull.setColorAt(i, fc);
+      winSparse.setColorAt(i, lit ? fc : fc.clone());
+    });
+    walls.instanceColor!.needsUpdate = true;
+    winFull.instanceColor!.needsUpdate = true;
+    winSparse.instanceColor!.needsUpdate = true;
+  }
+  paint();
+
+  // --- district signs --------------------------------------------------------------------------------
   const signDistrict = new Map<THREE.Object3D, CityDistrict>();
   for (const d of districts) {
-    const tex = track(signTexture(d.title, d.color));
-    signTextures.push(tex);
     const sprite = new THREE.Sprite(
       track(
         new THREE.SpriteMaterial({
-          map: tex,
+          map: track(signTexture(d.title, d.color)),
           transparent: true,
           depthWrite: false,
-          color: 0xc4c4c4, // keep neon signs under the bloom blow-out point
+          color: 0xbababa,
         }),
       ),
     );
     const p = districtCenter.get(d.slug)!;
-    sprite.position.set(p.x, 50, p.z);
-    sprite.scale.set(58, 7.25, 1);
+    sprite.position.set(p.x, 49, p.z);
+    sprite.scale.set(56, 7, 1);
     scene.add(sprite);
     signDistrict.set(sprite, d);
   }
 
-  // --- completion beacons ----------------------------------------------------------------------
-  const beaconGeo = track(new THREE.CylinderGeometry(1.1, 2.1, 340, 8, 1, true));
+  // --- completion beacons -------------------------------------------------------------------------------
+  const beaconGeo = track(new THREE.CylinderGeometry(1.1, 2.0, 330, 8, 1, true));
   const beacons = new Map<string, THREE.Mesh>();
   function syncBeacons(): void {
     for (const d of districts) {
@@ -612,16 +816,16 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
         const beam = new THREE.Mesh(
           beaconGeo,
           new THREE.MeshBasicMaterial({
-            color: new THREE.Color(d.color).multiplyScalar(1.4),
+            color: new THREE.Color(d.color).multiplyScalar(1.5),
             transparent: true,
-            opacity: 0.3,
+            opacity: 0.2,
             blending: THREE.AdditiveBlending,
             depthWrite: false,
             side: THREE.DoubleSide,
           }),
         );
         const p = districtCenter.get(d.slug)!;
-        beam.position.set(p.x, 170, p.z);
+        beam.position.set(p.x, 166, p.z);
         scene.add(beam);
         beacons.set(d.slug, beam);
       } else if (!done && existing) {
@@ -633,33 +837,53 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
   }
   syncBeacons();
 
-  // --- the AI core --------------------------------------------------------------------------------
+  // --- the AI core ------------------------------------------------------------------------------------------
   const coreBase = new THREE.Mesh(
     track(new THREE.BoxGeometry(17, 24, 17)),
-    track(new THREE.MeshBasicMaterial({ map: facadeTex, color: 0x8a8650 })),
+    track(
+      new THREE.MeshStandardMaterial({
+        map: wallsMat.map,
+        color: 0xcfc89a,
+        roughness: 0.8,
+        metalness: 0.2,
+        emissive: 0xffe9a0,
+        emissiveMap: winFullTex,
+        emissiveIntensity: 0.55,
+      }),
+    ),
   );
   coreBase.position.y = 12;
+  coreBase.castShadow = true;
   scene.add(coreBase);
   const coreSpire = new THREE.Mesh(
-    track(new THREE.BoxGeometry(6.4, 56, 6.4)),
-    track(new THREE.MeshBasicMaterial({ color: new THREE.Color(0xf7ff00).multiplyScalar(1.9) })),
+    track(new THREE.BoxGeometry(6.2, 56, 6.2)),
+    track(
+      new THREE.MeshStandardMaterial({
+        color: 0x16171c,
+        roughness: 0.5,
+        metalness: 0.6,
+        emissive: 0xf7ff00,
+        emissiveIntensity: 1.5,
+      }),
+    ),
   );
   coreSpire.position.y = 24 + 28;
+  coreSpire.castShadow = true;
   scene.add(coreSpire);
   const coreBeam = new THREE.Mesh(
     beaconGeo,
     track(
       new THREE.MeshBasicMaterial({
-        color: new THREE.Color(0xf7ff00).multiplyScalar(1.3),
+        color: new THREE.Color(0xf7ff00).multiplyScalar(1.2),
         transparent: true,
-        opacity: 0.24,
+        opacity: 0.16,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
         side: THREE.DoubleSide,
       }),
     ),
   );
-  coreBeam.position.y = 230;
+  coreBeam.position.y = 220;
   scene.add(coreBeam);
   const coreSign = new THREE.Sprite(
     track(
@@ -667,44 +891,15 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
         map: track(signTexture("A I", "#f7ff00")),
         transparent: true,
         depthWrite: false,
+        color: 0xc9c9c9,
       }),
     ),
   );
-  coreSign.position.y = 94;
-  coreSign.scale.set(34, 4.25, 1);
+  coreSign.position.y = 92;
+  coreSign.scale.set(32, 4, 1);
   scene.add(coreSign);
 
-  // --- street lamps ----------------------------------------------------------------------------------
-  {
-    const pts: number[] = [];
-    const hStreets = [-CELL / 2, CELL / 2];
-    const vStreets = [-CELL * 1.5, -CELL / 2, CELL / 2, CELL * 1.5];
-    for (const z of hStreets)
-      for (let x = -CELL * 2.4; x <= CELL * 2.4; x += 34) pts.push(x, 5, z - 8, x, 5, z + 8);
-    for (const x of vStreets)
-      for (let z = -CELL * 1.4; z <= CELL * 1.4; z += 34) pts.push(x - 8, 5, z, x + 8, 5, z);
-    const geo = track(new THREE.BufferGeometry());
-    geo.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
-    const lamps = new THREE.Points(
-      geo,
-      track(
-        new THREE.PointsMaterial({
-          size: 2.6,
-          color: new THREE.Color(0xffc97a).multiplyScalar(1.25),
-          transparent: true,
-          opacity: 0.85,
-          depthWrite: false,
-          blending: THREE.AdditiveBlending,
-          sizeAttenuation: true,
-          map: track(glowTexture()),
-        }),
-      ),
-    );
-    lamps.frustumCulled = false;
-    scene.add(lamps);
-  }
-
-  // --- traffic ------------------------------------------------------------------------------------------
+  // --- traffic: shaded car bodies + head/tail lights -----------------------------------------------------------
   interface Car {
     horizontal: boolean;
     fixed: number;
@@ -712,42 +907,51 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
     speed: number;
     dir: 1 | -1;
   }
-  const CARS = 110;
+  const CARS = 96;
   const cars: Car[] = [];
   const carRnd = lcg(777);
+  for (let i = 0; i < CARS; i++) {
+    const horizontal = carRnd() > 0.45;
+    cars.push({
+      horizontal,
+      fixed: horizontal
+        ? H_STREETS[Math.floor(carRnd() * H_STREETS.length)]
+        : V_STREETS[Math.floor(carRnd() * V_STREETS.length)],
+      t: carRnd(),
+      speed: 0.018 + carRnd() * 0.045,
+      dir: carRnd() > 0.5 ? 1 : -1,
+    });
+  }
+  const carGeo = track(new THREE.BoxGeometry(2.0, 1.15, 4.4));
+  const carMat = track(
+    new THREE.MeshStandardMaterial({ roughness: 0.45, metalness: 0.6 }),
+  );
+  const carMesh = new THREE.InstancedMesh(carGeo, carMat, CARS);
+  const CAR_PAINTS = [0x6a7080, 0x8a8f9a, 0x4a5562, 0x9a4a52, 0x46647a, 0xa39a84];
+  cars.forEach((_, i) => {
+    carMesh.setColorAt(i, new THREE.Color(CAR_PAINTS[i % CAR_PAINTS.length]));
+  });
+  carMesh.instanceColor!.needsUpdate = true;
+  scene.add(carMesh);
+
+  const lightGeo = track(new THREE.BufferGeometry());
+  const lightPos = new Float32Array(CARS * 2 * 3);
+  const lightCol = new Float32Array(CARS * 2 * 3);
   {
-    const hStreets = [-CELL / 2, CELL / 2];
-    const vStreets = [-CELL * 1.5, -CELL / 2, CELL / 2, CELL * 1.5];
+    const head = new THREE.Color(0xfff3cf).multiplyScalar(1.7);
+    const tail = new THREE.Color(0xff2d20).multiplyScalar(1.3);
     for (let i = 0; i < CARS; i++) {
-      const horizontal = carRnd() > 0.45;
-      cars.push({
-        horizontal,
-        fixed: horizontal
-          ? hStreets[Math.floor(carRnd() * hStreets.length)]
-          : vStreets[Math.floor(carRnd() * vStreets.length)],
-        t: carRnd(),
-        speed: 0.02 + carRnd() * 0.05,
-        dir: carRnd() > 0.5 ? 1 : -1,
-      });
+      lightCol.set([head.r, head.g, head.b], i * 6);
+      lightCol.set([tail.r, tail.g, tail.b], i * 6 + 3);
     }
   }
-  const carGeo = track(new THREE.BufferGeometry());
-  const carPos = new Float32Array(CARS * 3);
-  const carCol = new Float32Array(CARS * 3);
-  cars.forEach((car, i) => {
-    const c =
-      car.dir > 0
-        ? new THREE.Color(0xfff3cf).multiplyScalar(1.5)
-        : new THREE.Color(0xff2d20).multiplyScalar(1.2);
-    carCol.set([c.r, c.g, c.b], i * 3);
-  });
-  carGeo.setAttribute("position", new THREE.BufferAttribute(carPos, 3));
-  carGeo.setAttribute("color", new THREE.BufferAttribute(carCol, 3));
-  const carPoints = new THREE.Points(
-    carGeo,
+  lightGeo.setAttribute("position", new THREE.BufferAttribute(lightPos, 3));
+  lightGeo.setAttribute("color", new THREE.BufferAttribute(lightCol, 3));
+  const carLights = new THREE.Points(
+    lightGeo,
     track(
       new THREE.PointsMaterial({
-        size: 2.1,
+        size: 1.7,
         vertexColors: true,
         transparent: true,
         opacity: 0.95,
@@ -758,56 +962,37 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
       }),
     ),
   );
-  carPoints.frustumCulled = false;
-  scene.add(carPoints);
+  carLights.frustumCulled = false;
+  scene.add(carLights);
 
-  const SPAN_H = CELL * 2.6;
-  const SPAN_V = CELL * 1.6;
+  const carM = new THREE.Matrix4();
+  const rotH = new THREE.Matrix4().makeRotationY(Math.PI / 2);
   function updateCars(dt: number): void {
-    cars.forEach((car, i) => {
+    for (let i = 0; i < CARS; i++) {
+      const car = cars[i];
       car.t += car.speed * dt * car.dir;
       if (car.t > 1) car.t -= 1;
       if (car.t < 0) car.t += 1;
       const along = car.horizontal ? (car.t * 2 - 1) * SPAN_H : (car.t * 2 - 1) * SPAN_V;
-      carPos[i * 3] = car.horizontal ? along : car.fixed + (car.dir > 0 ? 2.4 : -2.4);
-      carPos[i * 3 + 1] = 0.9;
-      carPos[i * 3 + 2] = car.horizontal ? car.fixed + (car.dir > 0 ? 2.4 : -2.4) : along;
-    });
-    (carGeo.getAttribute("position") as THREE.BufferAttribute).needsUpdate = true;
-  }
-
-  // --- stars ---------------------------------------------------------------------------------------------
-  {
-    const N = 600;
-    const arr = new Float32Array(N * 3);
-    const rnd = lcg(9001);
-    for (let i = 0; i < N; i++) {
-      const v = new THREE.Vector3(rnd() * 2 - 1, rnd() * 0.85 + 0.2, rnd() * 2 - 1)
-        .normalize()
-        .multiplyScalar(2200);
-      arr.set([v.x, v.y, v.z], i * 3);
+      const lane = car.dir > 0 ? 3.4 : -3.4;
+      const x = car.horizontal ? along : car.fixed + lane;
+      const z = car.horizontal ? car.fixed + lane : along;
+      if (car.horizontal) carM.copy(rotH);
+      else carM.identity();
+      carM.setPosition(x, 0.85, z);
+      carMesh.setMatrixAt(i, carM);
+      // lights at the bumpers, along the travel axis
+      const fx = car.horizontal ? car.dir * 2.4 : 0;
+      const fz = car.horizontal ? 0 : car.dir * 2.4;
+      lightPos.set([x + fx, 0.95, z + fz], i * 6);
+      lightPos.set([x - fx, 1.05, z - fz], i * 6 + 3);
     }
-    const geo = track(new THREE.BufferGeometry());
-    geo.setAttribute("position", new THREE.BufferAttribute(arr, 3));
-    const stars = new THREE.Points(
-      geo,
-      track(
-        new THREE.PointsMaterial({
-          size: 1.4,
-          color: 0x97a3b8,
-          transparent: true,
-          opacity: 0.55,
-          sizeAttenuation: false,
-          depthWrite: false,
-          fog: false,
-        }),
-      ),
-    );
-    stars.frustumCulled = false;
-    scene.add(stars);
+    carMesh.instanceMatrix.needsUpdate = true;
+    (lightGeo.getAttribute("position") as THREE.BufferAttribute).needsUpdate = true;
   }
+  updateCars(0);
 
-  // --- hover highlight + selection marker -------------------------------------------------------------------
+  // --- hover highlight + selection marker --------------------------------------------------------------------------
   const hlMat = track(
     new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.95 }),
   );
@@ -827,10 +1012,10 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
     ),
   );
   selMarker.visible = false;
-  selMarker.scale.set(11, 11, 1);
+  selMarker.scale.set(10, 10, 1);
   scene.add(selMarker);
 
-  // --- picking -----------------------------------------------------------------------------------------------
+  // --- picking ----------------------------------------------------------------------------------------------------------
   const raycaster = new THREE.Raycaster();
   const ndc = new THREE.Vector2();
 
@@ -842,8 +1027,7 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
     | null;
 
   const pickables: THREE.Object3D[] = [
-    baseMesh,
-    tierMesh,
+    walls,
     coreBase,
     coreSpire,
     ...signDistrict.keys(),
@@ -860,10 +1044,8 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
     const hits = raycaster.intersectObjects(pickables, false);
     const h = hits[0];
     if (!h) return null;
-    if ((h.object === baseMesh || h.object === tierMesh) && h.instanceId !== undefined) {
-      const idx = h.object === baseMesh ? h.instanceId : tierIdx[h.instanceId];
-      return { kind: "tower", tower: towers[idx] };
-    }
+    if (h.object === walls && h.instanceId !== undefined)
+      return { kind: "tower", tower: slabs[h.instanceId].tower };
     if (h.object === coreBase || h.object === coreSpire) return { kind: "core" };
     const d = signDistrict.get(h.object);
     if (d) return { kind: "district", district: d };
@@ -872,7 +1054,7 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
     return null;
   }
 
-  // --- camera tween --------------------------------------------------------------------------------------------
+  // --- camera tween ---------------------------------------------------------------------------------------------------------
   interface Tween {
     t0: number;
     dur: number;
@@ -895,9 +1077,9 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
     controls.enabled = false;
   }
 
-  flyTo(HOME_TARGET, HOME_POS.clone().sub(HOME_TARGET), 2100); // intro
+  flyTo(HOME_TARGET, HOME_POS.clone().sub(HOME_TARGET), 2100); // intro flyover
 
-  // --- input -------------------------------------------------------------------------------------------------------
+  // --- input ----------------------------------------------------------------------------------------------------------------------
   let downX = 0;
   let downY = 0;
   let downT = 0;
@@ -988,7 +1170,7 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
     }
     if (p.kind === "tower") selectTower(p.tower);
     else if (p.kind === "block")
-      flyTo(p.site.center.clone(), new THREE.Vector3(30, 52, 56), 850);
+      flyTo(p.site.center.clone(), new THREE.Vector3(30, 50, 56), 850);
     else if (p.kind === "district") focusDistrict(p.district.slug);
     else resetView();
   };
@@ -1010,7 +1192,7 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
     onSelectTower({ ...t.info, read: readSet.has(t.info.slug) });
   }
 
-  // --- public ops ----------------------------------------------------------------------------------------------------
+  // --- public ops ------------------------------------------------------------------------------------------------------------------------
   function resetView(): void {
     onFocusDistrict(null);
     onSelectTower(null);
@@ -1023,26 +1205,35 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
     if (!slug) return;
     const center = districtCenter.get(slug);
     if (!center) return;
-    flyTo(center, new THREE.Vector3(45, 150, 95), 950);
+    flyTo(center, new THREE.Vector3(45, 145, 95), 950);
   }
 
-  let matchSlugs: string[] = [];
+  let filtering = false;
   function setFilter(qRaw: string): number {
     const q = qRaw.trim().toLowerCase();
     if (!q) {
-      matchSlugs = [];
+      filtering = false;
       paint();
       return 0;
     }
-    const matches = new Set(
-      towers.filter((t) => t.info.title.toLowerCase().includes(q)).map((t) => t.info.slug),
-    );
-    matchSlugs = towers.filter((t) => matches.has(t.info.slug)).map((t) => t.info.slug);
-    paint((t, c) => {
-      if (matches.has(t.info.slug)) c.set(0xffe93d).multiplyScalar(2.4);
-      else c.multiplyScalar(0.14);
+    filtering = true;
+    let n = 0;
+    const matched = new Set<string>();
+    for (const t of towers)
+      if (t.info.title.toLowerCase().includes(q)) {
+        matched.add(t.info.slug);
+        n++;
+      }
+    paint((t, wc, fc) => {
+      if (matched.has(t.info.slug)) {
+        wc.set(0xfff7c2);
+        fc.set(0xffe93d).multiplyScalar(3.2);
+      } else {
+        wc.multiplyScalar(0.3);
+        fc.multiplyScalar(0.12);
+      }
     });
-    return matchSlugs.length;
+    return n;
   }
 
   function nextTarget(): CityTowerInfo | null {
@@ -1065,8 +1256,8 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
 
   function setReadSet(read: Set<string>): void {
     readSet = new Set(read);
-    rebase();
-    if (matchSlugs.length === 0) paint();
+    syncWindowMatrices();
+    if (!filtering) paint();
     syncBeacons();
   }
 
@@ -1080,7 +1271,7 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
     camera.position.copy(controls.target).addScaledVector(v.normalize(), len);
   }
 
-  // --- resize ----------------------------------------------------------------------------------------------------------
+  // --- resize --------------------------------------------------------------------------------------------------------------------------------
   const stage = canvas.parentElement!;
   function applySize(): void {
     const w = Math.max(1, stage.clientWidth);
@@ -1097,7 +1288,7 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
   const ro = new ResizeObserver(applySize);
   ro.observe(stage);
 
-  // --- main loop ----------------------------------------------------------------------------------------------------------
+  // --- main loop -------------------------------------------------------------------------------------------------------------------------------
   let raf = 0;
   let prev = performance.now();
   const camV = new THREE.Vector3();
@@ -1120,26 +1311,22 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
 
     updateCars(dt);
 
-    // block signs fade in as you approach their district
+    // block signs fade in near their district
     camV.copy(camera.position);
     for (const site of blockSites) {
       const d = camV.distanceTo(site.center);
       const o = THREE.MathUtils.clamp(1 - (d - 150) / 130, 0, 1);
-      const mat = site.label.material;
       if (o <= 0.02) {
         if (site.label.visible) site.label.visible = false;
       } else {
         site.label.visible = true;
-        mat.opacity = o * 0.95;
+        site.label.material.opacity = o * 0.95;
       }
     }
 
-    // pulses
-    const pulse = 1 + 0.09 * Math.sin(now / 430);
-    coreSpire.scale.set(pulse, 1, pulse);
     coreBeam.rotation.y += dt * 0.4;
     for (const beam of beacons.values()) beam.rotation.y += dt * 0.35;
-    aviMat.opacity = 0.55 + 0.45 * Math.sin(now / 520);
+    aviMat.opacity = 0.45 + 0.55 * Math.sin(now / 540);
     if (selMarker.visible) selMarker.position.y += Math.sin(now / 240) * 0.05;
 
     controls.update();
@@ -1147,7 +1334,7 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
   }
   raf = requestAnimationFrame(frame);
 
-  // --- teardown -----------------------------------------------------------------------------------------------------------
+  // --- teardown ---------------------------------------------------------------------------------------------------------------------------------
   function dispose(): void {
     cancelAnimationFrame(raf);
     ro.disconnect();
@@ -1159,9 +1346,11 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
     canvas.removeEventListener("pointerup", onPointerUp);
     for (const beam of beacons.values()) (beam.material as THREE.Material).dispose();
     for (const x of disposables) x.dispose();
-    baseMesh.dispose();
-    tierMesh.dispose();
-    mastMesh.dispose();
+    walls.dispose();
+    winFull.dispose();
+    winSparse.dispose();
+    masts.dispose();
+    carMesh.dispose();
     composer.dispose();
     renderer.dispose();
   }
