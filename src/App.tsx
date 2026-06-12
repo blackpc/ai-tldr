@@ -358,6 +358,23 @@ function App() {
     document.title = "AI/TLDR — New AI Models, Tools & Papers This Week";
   }, [route, sorted]);
 
+  // The homepage's static FAQ + "Learn AI from zero" link strip are
+  // injected OUTSIDE #root (just before </body>) by scripts/prerender.ts
+  // so crawlers see them in the raw HTML of `/` — they back the FAQPage
+  // JSON-LD. React doesn't own those nodes, so once `/` is loaded they'd
+  // linger in the DOM through every client-side SPA navigation, showing a
+  // stray FAQ on /learn, /influencers, etc. — and a SECOND FAQ on article
+  // pages, which render their own. They belong only on the feed home, so
+  // toggle their visibility with the route. (On a direct landing on any
+  // other page the static file has no such section, so this is a no-op.)
+  useEffect(() => {
+    document
+      .querySelectorAll<HTMLElement>(".static-faq, .static-learn")
+      .forEach((el) => {
+        el.style.display = page === "feed" ? "" : "none";
+      });
+  }, [page]);
+
   // Each chip toggle is a new history entry so the back button walks
   // through prior filter states. Changing the filter always resets the
   // scroll-depth back to the first page — otherwise you could land on
