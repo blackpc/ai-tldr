@@ -24,6 +24,33 @@ function pad(n: number): string {
   return String(n + 1).padStart(2, "0");
 }
 
+/** Tiny radial-graph glyph for the "see the whole map" hub link. */
+function MapGlyph() {
+  return (
+    <svg
+      viewBox="0 0 32 32"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.6}
+      strokeLinecap="square"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <line x1="16" y1="16" x2="16" y2="6" />
+      <line x1="16" y1="16" x2="24" y2="11" />
+      <line x1="16" y1="16" x2="25" y2="21" />
+      <line x1="16" y1="16" x2="9" y2="23" />
+      <line x1="16" y1="16" x2="7" y2="12" />
+      <circle cx="16" cy="16" r="2.4" />
+      <circle cx="16" cy="6" r="1.7" />
+      <circle cx="24" cy="11" r="1.7" />
+      <circle cx="25" cy="21" r="1.7" />
+      <circle cx="9" cy="23" r="1.7" />
+      <circle cx="7" cy="12" r="1.7" />
+    </svg>
+  );
+}
+
 /** Sets the per-category accent as a CSS custom property on a node. */
 function accentVar(accent: string): CSSProperties {
   return { ["--cat" as string]: accent };
@@ -46,6 +73,20 @@ export function LearnHubPage() {
           vector databases, agents, fine-tuning and the tools around them.
           Pick a track. Every page starts from zero and ends deep.
         </p>
+        <a className="lrn-hub-maplink" href="/learn/map" data-internal="true">
+          <span className="lrn-hub-maplink-ic" aria-hidden="true">
+            <MapGlyph />
+          </span>
+          <span className="lrn-hub-maplink-tx">
+            <span className="lrn-hub-maplink-lead">See the whole map</span>
+            <span className="lrn-hub-maplink-sub">
+              every topic as one interactive graph
+            </span>
+          </span>
+          <span className="lrn-hub-maplink-go" aria-hidden="true">
+            →
+          </span>
+        </a>
       </header>
 
       <div className="lrn-cat-grid">

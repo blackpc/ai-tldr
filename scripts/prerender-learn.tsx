@@ -26,6 +26,7 @@ import type { LearnArticle } from "../src/data/learn/schema";
 import { learnArticlePath } from "../src/data/learn/schema";
 import { learnTaxonomy, learnArticleCount } from "../src/data/learn/nav";
 import { ArticleBody } from "../src/components/learn/ArticleBody";
+import LearnMap from "../src/components/learn/LearnMap";
 import {
   LearnCategoryPage,
   LearnHubPage,
@@ -244,6 +245,54 @@ export async function prerenderLearn(opts: {
   );
   pages++;
   urls.push({ loc: `${siteUrl}/learn`, lastmod: today, changefreq: "weekly", priority: 0.9 });
+
+  // ---- map (/learn/map) ----
+  const mapPath = "/learn/map";
+  const mapMeta: LearnPageMeta = {
+    title: "AI Knowledge Map — Every Topic, Visualized | AI/TLDR",
+    description:
+      "An interactive mind map of the whole Learn AI encyclopedia: every category, subcategory and article as one explorable radial graph. Free and beginner-friendly.",
+    canonical: `${siteUrl}${mapPath}`,
+    ogType: "website",
+    ogImage: defaultOgImage,
+  };
+  const mapLd = [
+    wrapJsonLd({
+      "@context": "https://schema.org",
+      "@type": "CollectionPage",
+      "@id": `${siteUrl}${mapPath}#webpage`,
+      url: `${siteUrl}${mapPath}`,
+      name: "AI Knowledge Map",
+      description: mapMeta.description,
+      inLanguage: "en-US",
+      isPartOf: { "@id": `${siteUrl}/#website` },
+      publisher: { "@id": `${siteUrl}/#org` },
+      mainEntity: {
+        "@type": "ItemList",
+        numberOfItems: learnTaxonomy.categories.length,
+        itemListElement: learnTaxonomy.categories.map((c, i) => ({
+          "@type": "ListItem",
+          position: i + 1,
+          name: c.title,
+          url: `${siteUrl}/learn/${c.slug}`,
+        })),
+      },
+    }),
+    breadcrumbLd(wrapJsonLd, siteUrl, [
+      { name: "AI/TLDR", path: "/" },
+      { name: "Learn AI", path: "/learn" },
+      { name: "Map", path: mapPath },
+    ]),
+  ].join("\n    ");
+  await writeHtml(
+    "learn/map/index.html",
+    injectBody(
+      injectMeta(template, mapMeta, mapLd),
+      renderToStaticMarkup(<LearnMap />),
+    ),
+  );
+  pages++;
+  urls.push({ loc: `${siteUrl}${mapPath}`, lastmod: today, changefreq: "weekly", priority: 0.8 });
 
   for (const cat of learnTaxonomy.categories) {
     // ---- category page ----

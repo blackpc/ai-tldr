@@ -62,6 +62,10 @@ function parseRoute(): Route {
   const m = path.match(/^\/releases\/([^/]+)\/?$/);
   if (m) return { kind: "release", id: m[1] };
 
+  if (path === "/learn/map" || path === "/learn/map/") {
+    return { kind: "learn-map" };
+  }
+
   const learn = path.match(/^\/learn(?:\/([^/]+))?(?:\/([^/]+))?(?:\/([^/]+))?\/?$/);
   if (learn) {
     const [, cat, sub, slug] = learn;

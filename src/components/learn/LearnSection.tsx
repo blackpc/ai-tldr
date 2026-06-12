@@ -18,6 +18,7 @@ import {
   findLearnSubcategory,
 } from "../../data/learn/nav";
 import { ArticleBody } from "./ArticleBody";
+import LearnMap from "./LearnMap";
 import {
   LearnCategoryPage,
   LearnHubPage,
@@ -27,6 +28,7 @@ import { track } from "../../lib/analytics";
 
 export type LearnRoute =
   | { kind: "learn" }
+  | { kind: "learn-map" }
   | { kind: "learn-cat"; cat: string }
   | { kind: "learn-sub"; cat: string; sub: string }
   | { kind: "learn-article"; cat: string; sub: string; slug: string };
@@ -129,6 +131,12 @@ export default function LearnSection({
         "A plain-English encyclopedia of AI engineering: LLMs, RAG, vector databases, agents, fine-tuning and the tools around them. Free, beginner-friendly, no signup.",
         "/learn",
       );
+    } else if (route.kind === "learn-map") {
+      setPageMeta(
+        "AI Knowledge Map — Every Topic, Visualized | AI/TLDR",
+        "An interactive mind map of the whole Learn AI encyclopedia: every category, subcategory and article as one explorable radial graph. Free and beginner-friendly.",
+        "/learn/map",
+      );
     } else if (route.kind === "learn-cat") {
       const cat = findLearnCategory(route.cat);
       if (cat)
@@ -177,6 +185,8 @@ export default function LearnSection({
   let body: React.ReactNode;
   if (route.kind === "learn") {
     body = <LearnHubPage />;
+  } else if (route.kind === "learn-map") {
+    body = <LearnMap />;
   } else if (route.kind === "learn-cat") {
     const cat = findLearnCategory(route.cat);
     body = cat ? <LearnCategoryPage category={cat} /> : <NotFound what="topic" />;
