@@ -277,3 +277,63 @@ are the correct mechanism but were never wired in.
   run `yt-meta.ts` on any ≤72h video, ship if `freshFor72hBar: true`.
 
 **Status:** Applied. Next sweep should surface videos for the first time.
+
+---
+
+## 2026-06-13-A — STILL zero videos in CI (the real RCA, 4th attempt)
+
+**Trigger:** User: videos work when the sweep is run locally but the cron
+(GitHub Actions) adds ZERO. Asked several times, never fixed. Confirmed
+from data: last video added 2026-05-06 (a residential/manual backfill —
+all share publishDate `2026-05-06T21:17:51.354Z`). Every CI sweep since =
+0 videos, despite "video"/"youtube" appearing in `coverage`. finalize
+warned "919h since last video added".
+
+**Root cause (proven from the 2026-06-13T07:40 CI run log, not guessed):**
+The RSS scan was never the problem. `yt-rss-scan.ts` hits
+`youtube.com/feeds/videos.xml` — that endpoint IS reachable from GitHub
+Actions datacenter IPs; in CI it returned 6 fresh videos (ages 0–60h).
+The killer was the SECOND step: `yt-meta.ts`'s `fetchUploadDate()`
+scrapes the YouTube **watch page** (`/watch?v=…`) for `uploadDate`.
+YouTube bot-walls the watch page from datacenter IPs and serves a
+consent page with no date, so in CI **every** `yt-meta` call returned
+`uploadDate: null` → `freshFor72hBar: false`. The prompt made that field
+the hard gate ("false → drop, no exceptions"), so the agent correctly
+dropped all 6 fresh videos. Its own CI log: *"YouTube videos dropped
+because … `yt-meta.ts` returned `freshFor72hBar: false` … oembed page
+scrape returning null uploadDate in CI."* Locally (residential IP) the
+watch page returns the date → videos pass → "works locally."
+
+Prior fix 2026-05-05-H added the RSS feeds but left the watch-page scrape
+as the freshness gate, so it only ever worked from a residential IP.
+
+**Fix (prompt v6.6.0 → v6.7.0 + 3 scripts):**
+- `yt-rss-scan.ts`: each record is now SHIP-READY and authoritative —
+  added `uploadDate` (== RSS `<published>`), `freshFor72hBar: true`
+  (only ≤72h returned), `thumbnailUrl`, `channelUrl`. The RSS upload
+  date is the freshness source; it works in CI.
+- `yt-meta.ts`: new optional `<channelId>` arg → reads the date from the
+  channel RSS feed (datacenter-safe) instead of the watch page. Watch-page
+  scrape kept only as a fallback for ad-hoc videos with no channelId.
+  Added `uploadDateSource` to the output for debugging.
+- `verify-draft.ts`: YouTube watch URLs are now validated via the oembed
+  endpoint (datacenter-safe, canonical "exists + embeddable" check)
+  instead of GETting the bot-walled watch page — pre-empts a 2nd CI
+  blocker where a real video's `url` would 4xx on the runner. Still
+  rejects bogus video ids (oembed 404).
+- `prompts/update-releases.md`: video flow now builds the item straight
+  from `yt-rss-scan.ts` fields and forbids using a bare watch-page scrape
+  as the freshness gate. yt-meta is optional and must be passed channelId.
+
+**Why this won't regress:** the freshness decision no longer touches any
+endpoint that YouTube blocks from datacenter IPs. RSS feed + oembed +
+i.ytimg.com thumbnails are all proven-200 from CI.
+
+**Do NOT reintroduce** a watch-page (`/watch?v=`) HTML scrape as a
+freshness or verification gate — it is the exact thing that breaks in CI.
+
+**Status:** Applied. Verified locally: scan emits ship-ready records;
+`yt-meta … <channelId>` resolves date via `source: rss`; verify-draft
+passes a real video (oembed) and fails a bogus id; typecheck green.
+Watch the next cron run (and `coverage`/feed) for a video actually
+landing — the 919h counter should reset.

@@ -5,8 +5,21 @@
  *
  * Usage: bun scripts/yt-rss-scan.ts
  *
- * Output: JSON array of fresh video candidates, sorted by publishedAt DESC.
- * Each entry: { channelName, videoId, watchUrl, title, publishedAt, ageHours }
+ * Output: JSON array of fresh, SHIP-READY video candidates, sorted by
+ * publishedAt DESC. Each entry carries everything needed to build a
+ * `video` ReleaseItem with no further network calls:
+ *   { channelName, channelId, videoId, watchUrl, channelUrl, thumbnailUrl,
+ *     title, publishedAt, uploadDate, ageHours, freshFor72hBar }
+ *
+ * Why this is the authoritative freshness source (DO NOT re-derive the
+ * upload date from a watch-page scrape): the RSS endpoint
+ * `youtube.com/feeds/videos.xml` is reachable from datacenter IPs
+ * (GitHub Actions runners), whereas the watch page `youtube.com/watch`
+ * is bot-walled there and returns a consent page with NO uploadDate.
+ * `<published>` in the RSS entry IS the upload timestamp, so it is both
+ * correct and CI-safe. See SWEEP_MEMORY 2026-06-13 (the "919h, zero
+ * videos in CI" bug). `freshFor72hBar` is always true here — only
+ * videos within the 72h window are returned.
  */
 
 const CHANNELS: { name: string; id: string }[] = [
@@ -27,9 +40,17 @@ interface FreshVideo {
   channelId: string;
   videoId: string;
   watchUrl: string;
+  /** Canonical channel page — datacenter-safe, always valid. */
+  channelUrl: string;
+  /** Deterministic thumbnail (i.ytimg.com returns 200 image/* from CI). */
+  thumbnailUrl: string;
   title: string;
   publishedAt: string;
+  /** Authoritative RSS upload timestamp (== publishedAt). Use as `date`. */
+  uploadDate: string;
   ageHours: number;
+  /** Always true: only ≤72h videos are returned. The CI-safe gate. */
+  freshFor72hBar: true;
 }
 
 async function scanChannel(channel: { name: string; id: string }): Promise<FreshVideo[]> {
@@ -58,9 +79,13 @@ async function scanChannel(channel: { name: string; id: string }): Promise<Fresh
           channelId: channel.id,
           videoId,
           watchUrl: `https://www.youtube.com/watch?v=${videoId}`,
+          channelUrl: `https://www.youtube.com/channel/${channel.id}`,
+          thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
           title,
           publishedAt: published,
+          uploadDate: published,
           ageHours,
+          freshFor72hBar: true,
         });
       }
     }

@@ -1,6 +1,6 @@
 ---
 prompt-id: tldr.update-releases
-prompt-version: 6.6.0
+prompt-version: 6.7.0
 output-target: src/data/releases.json (via finalize-sweep.ts)
 schema: src/data/schema.ts
 invoke-as: subagent
@@ -33,11 +33,24 @@ You write a draft. Scripts validate and merge. You do **NOT** edit
    apply the inclusion bar + the importance scale + the dedup check.
 3. **Helpers as needed:**
    - `bun scripts/yt-rss-scan.ts` — scans all 8 YouTube creator channels,
-     returns JSON array of videos uploaded in the last 72h. Call this in
-     step 5 of the first pass (not optional).
-   - `bun scripts/yt-meta.ts <url>` — returns
-     `{ videoId, watchUrl, title, channelName, channelUrl, thumbnailUrl, uploadDate, ageHours, freshFor72hBar }`.
-     For any video, ship only if `freshFor72hBar: true`.
+     returns a JSON array of SHIP-READY videos uploaded in the last 72h.
+     Call this in step 5 of the first pass (not optional). Each record is
+     `{ channelName, channelId, videoId, watchUrl, channelUrl,
+     thumbnailUrl, title, publishedAt, uploadDate, ageHours,
+     freshFor72hBar: true }`. **This is the authoritative, CI-safe
+     freshness source** — it reads the upload date from the YouTube RSS
+     feed, which works from GitHub Actions runners. Build the `video`
+     item directly from these fields. Do NOT re-check freshness with a
+     watch-page scrape (see below).
+   - `bun scripts/yt-meta.ts <url> [channelId]` — returns
+     `{ videoId, watchUrl, title, channelName, channelUrl, thumbnailUrl, uploadDate, uploadDateSource, ageHours, freshFor72hBar }`.
+     Only needed for ad-hoc videos NOT already returned by the RSS scan.
+     **Always pass the `channelId`** (it is in the scan output and in the
+     watchUrl's channel) so the date comes from the RSS feed. Without a
+     channelId it falls back to scraping the watch page, which YouTube
+     bot-walls from CI runners → `uploadDate: null` →
+     `freshFor72hBar: false` → the video is wrongly dropped. That exact
+     bug killed every cron video for 5+ weeks (SWEEP_MEMORY 2026-06-13).
    - `bun scripts/og-image.ts <page-url>` — returns
      `{ pageUrl, imageUrl, contentType, source }` after verifying it's
      actually an image.
@@ -197,12 +210,18 @@ not what was funded or announced.
    ```
    bun scripts/yt-rss-scan.ts
    ```
-   This scans all 8 creator channels and returns a JSON array of videos
-   uploaded in the last 72h. For each result: run
-   `bun scripts/yt-meta.ts <watchUrl>` to confirm `freshFor72hBar: true`,
-   then add as a `video` item if the content is substantive AI/ML
-   (not a Short, not a promo, not off-topic). An empty array means no
-   fresh videos — that is fine, move on.
+   This scans all 8 creator channels and returns a JSON array of
+   ship-ready videos uploaded in the last 72h (freshness already
+   confirmed from the RSS upload date — CI-safe). For each result, build
+   a `video` item straight from its fields if the content is substantive
+   AI/ML (not a Short, not a promo, not off-topic):
+   `date` = `uploadDate` (YYYY-MM-DD part), `url` = `watchUrl`,
+   `image.url` = `thumbnailUrl`, `org` = `channelName`,
+   `author.profileUrl` = `channelUrl`. **Do NOT run `yt-meta.ts` just to
+   re-confirm freshness** — the scan already did it from a source that
+   works in CI; re-checking via the watch page returns `false` on the
+   runner and silently drops every video. An empty array means no fresh
+   videos — that is fine, move on (do not pad).
 
 **Second pass (only if first pass yields <2 qualifying items):**
 - **Coding agents**: Cursor, Claude Code, Windsurf, Cline, Aider,
@@ -414,8 +433,16 @@ back to a tinted initial). For GitHub-using authors,
 creator published the video on YouTube. It does NOT apply to any
 research paper, model, or product the video happens to cover. A video
 uploaded today reviewing a 30-day-old paper is FRESH. Use
-`yt-meta.ts`'s `uploadDate` as `date` and `freshFor72hBar` as the
-gate. If `freshFor72hBar: false` → drop. No exceptions.
+`yt-rss-scan.ts`'s `uploadDate` (== `publishedAt`) as `date`; its records
+are already inside the 72h window, so they ARE the freshness gate.
+
+The freshness decision MUST come from the RSS feed (`yt-rss-scan.ts`, or
+`yt-meta.ts` WITH a `channelId`), never from a bare watch-page scrape.
+YouTube serves a bot/consent page with no upload date to GitHub Actions
+runners, so a watch-page `freshFor72hBar` is `false` in CI for valid
+fresh videos and drops them all. This is the documented 2026-06-13 bug
+("919h since last video"). Do not reintroduce a watch-page freshness
+gate.
 
 `org` = the channel name (e.g. "Two Minute Papers"), NEVER "YouTube".
 `image.url` = `thumbnailUrl` from `yt-meta.ts` (the deterministic

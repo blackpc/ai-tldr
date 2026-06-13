@@ -84,10 +84,54 @@ interface ProbeResult {
   error?: string;
 }
 
+/** Extract the video id from a youtube.com/watch or youtu.be URL, else null. */
+function youtubeWatchId(u: string): string | null {
+  try {
+    const url = new URL(u);
+    if (url.hostname === "youtu.be") return url.pathname.slice(1) || null;
+    if (/(^|\.)youtube\.com$/.test(url.hostname)) {
+      return url.searchParams.get("v");
+    }
+  } catch {
+    /* not a URL */
+  }
+  return null;
+}
+
 async function check(p: Probe): Promise<ProbeResult> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 15_000);
   try {
+    // YouTube watch pages are bot-walled from datacenter IPs (GitHub
+    // Actions runners) — a plain GET can return a consent/HTTP-error page
+    // and falsely fail a real video. Validate via the oembed endpoint
+    // instead: it is datacenter-safe and is the canonical "this video
+    // exists and is embeddable" check. (Thumbnails are images → handled
+    // by the normal image path below.)
+    if (!p.expectImage) {
+      const ytId = youtubeWatchId(p.url);
+      if (ytId) {
+        const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(
+          `https://www.youtube.com/watch?v=${ytId}`,
+        )}&format=json`;
+        const res = await fetch(oembedUrl, {
+          method: "GET",
+          headers: { "User-Agent": "ai-tldr-sweep-bot" },
+          redirect: "follow",
+          signal: ctrl.signal,
+        });
+        await res.body?.cancel().catch(() => {});
+        if (res.ok) {
+          return { ...p, ok: true, status: res.status, contentType: "youtube/oembed" };
+        }
+        return {
+          ...p,
+          ok: false,
+          status: res.status,
+          error: "youtube oembed failed (video missing or not embeddable)",
+        };
+      }
+    }
     // Bun fetch auto-decompresses gzip, but a partial body from `Range`
     // ends in a truncated gzip stream → ZlibError on github.com / pypi
     // / etc. Two-pronged fix: ask for identity encoding, AND only send

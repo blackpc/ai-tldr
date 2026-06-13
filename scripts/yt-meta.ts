@@ -2,18 +2,32 @@
 /**
  * YouTube metadata helper.
  *
- * Usage:  bun scripts/yt-meta.ts <youtube-url-or-id>
+ * Usage:  bun scripts/yt-meta.ts <youtube-url-or-id> [channelId]
  *
  * Hits the public oembed endpoint (no auth, no scraping) and returns
  * a normalized JSON blob the agent can drop directly into a video item:
  *
- *   { videoId, title, channelName, channelUrl, thumbnailUrl }
+ *   { videoId, title, channelName, channelUrl, thumbnailUrl,
+ *     uploadDate, uploadDateSource, ageHours, freshFor72hBar }
+ *
+ * Upload date resolution (in order):
+ *   1. If a channelId (UC…) is passed, read it from the channel RSS feed
+ *      `youtube.com/feeds/videos.xml` — this is DATACENTER-SAFE and is
+ *      the only reliable path on GitHub Actions runners. ALWAYS pass the
+ *      channelId from yt-rss-scan.ts when you have it.
+ *   2. Fallback: scrape the watch page for uploadDate. This works from a
+ *      residential IP but YouTube bot-walls the watch page from
+ *      datacenter IPs (CI), where it returns null → freshFor72hBar:false
+ *      → the video gets dropped. That exact failure silently killed every
+ *      cron video for 5+ weeks (SWEEP_MEMORY 2026-06-13). Never rely on
+ *      this path in CI; pass channelId instead.
  *
  * Exit 0 = found, exit 1 = invalid input or oembed failure.
  */
 const arg = process.argv[2];
+const channelIdArg = process.argv[3];
 if (!arg) {
-  console.error("usage: bun scripts/yt-meta.ts <youtube-url-or-id>");
+  console.error("usage: bun scripts/yt-meta.ts <youtube-url-or-id> [channelId]");
   process.exit(1);
 }
 
@@ -42,6 +56,34 @@ const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
 const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(
   watchUrl,
 )}&format=json`;
+
+async function fetchUploadDateFromRss(
+  channelId: string,
+  id: string,
+): Promise<string | null> {
+  // The channel RSS feed is reachable from datacenter IPs (CI) and its
+  // <published> is the authoritative upload timestamp. Fresh videos are
+  // always present in the feed (latest ~15 entries), so this resolves any
+  // ≤72h video reliably.
+  try {
+    const res = await fetch(
+      `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`,
+      { headers: { "User-Agent": "ai-tldr-sweep-bot" } },
+    );
+    if (!res.ok) return null;
+    const xml = await res.text();
+    const entries = xml.match(/<entry>([\s\S]*?)<\/entry>/g) ?? [];
+    for (const entry of entries) {
+      const vid = entry.match(/<yt:videoId>([^<]+)<\/yt:videoId>/)?.[1];
+      if (vid === id) {
+        return entry.match(/<published>([^<]+)<\/published>/)?.[1] ?? null;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 async function fetchUploadDate(id: string): Promise<string | null> {
   // Scrape the watch page for the uploadDate / datePublished meta tag.
@@ -79,7 +121,18 @@ try {
     author_name?: string;
     author_url?: string;
   };
-  const uploadDate = await fetchUploadDate(videoId);
+  // Resolve the upload date: RSS first (datacenter-safe), watch-page
+  // scrape only as a fallback for ad-hoc videos with no channelId.
+  let uploadDate: string | null = null;
+  let uploadDateSource: "rss" | "watch-page" | null = null;
+  if (channelIdArg && /^UC[\w-]{22}$/.test(channelIdArg)) {
+    uploadDate = await fetchUploadDateFromRss(channelIdArg, videoId);
+    if (uploadDate) uploadDateSource = "rss";
+  }
+  if (!uploadDate) {
+    uploadDate = await fetchUploadDate(videoId);
+    if (uploadDate) uploadDateSource = "watch-page";
+  }
   let ageHours: number | null = null;
   if (uploadDate) {
     const ms = Date.now() - new Date(uploadDate).getTime();
@@ -93,6 +146,7 @@ try {
     channelUrl: data.author_url ?? "",
     thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
     uploadDate,
+    uploadDateSource,
     ageHours,
     freshFor72hBar: ageHours !== null && ageHours <= 72,
   };
