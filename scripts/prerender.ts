@@ -23,8 +23,9 @@
  * matching item.
  *
  * Fallbacks (paths that don't match a generated file) are handled by
- * public/_redirects — Cloudflare Pages serves /index.html with a 200
- * for any unknown path so client routing still works.
+ * the Cloudflare Worker's SPA asset fallback (wrangler.jsonc
+ * `not_found_handling: "single-page-application"`), which serves
+ * /index.html with a 200 for any unknown path so client routing works.
  */
 
 import { readFile, writeFile, mkdir } from "node:fs/promises";
@@ -32,6 +33,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import feed from "../src/data/releases.json" with { type: "json" };
+import sweepsData from "../src/data/sweeps.json" with { type: "json" };
 import type { ReleaseItem } from "../src/data/schema";
 import { influencers } from "../src/data/influencers";
 import {
@@ -82,6 +84,31 @@ function escapeAttr(s: string): string {
 
 function escapeText(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/**
+ * Truncate a string on a word boundary with an ellipsis. Used to keep
+ * JSON-LD `headline` under Google's 110-char hard limit (over-length
+ * headlines silently disqualify the Article rich result).
+ */
+function clampHeadline(s: string, max = 110): string {
+  if (s.length <= max) return s;
+  const cut = s.slice(0, max - 1);
+  const lastSpace = cut.lastIndexOf(" ");
+  return (lastSpace > max * 0.6 ? cut.slice(0, lastSpace) : cut).trimEnd() + "…";
+}
+
+/**
+ * JSON-LD image value. We only KNOW the dimensions of our own
+ * og-image.png (1200×630); third-party thumbnails vary wildly
+ * (GitHub OG = 1200×600, YouTube hqdefault = 480×360), so asserting
+ * 1200×630 on them is a lie that hurts the image signal. For unknown
+ * hosts, return the bare URL and let Google measure it.
+ */
+function jsonLdImage(url: string): unknown {
+  return url === DEFAULT_OG_IMAGE
+    ? { "@type": "ImageObject", url, width: 1200, height: 630 }
+    : url;
 }
 
 // -----------------------------------------------------------------------
@@ -272,25 +299,22 @@ function renderJsonLdArticle(item: ReleaseItem): string {
     // feed, every item has a real publication date, and Google's News
     // surfaces (Top Stories, News tab, Discover) require NewsArticle.
     "@type": "NewsArticle",
-    headline: item.title,
+    // Google hard-caps headline at 110 chars; longer disables the result.
+    headline: clampHeadline(item.title),
     description,
     url,
     datePublished: item.date,
-    // We don't track per-item modification timestamps, so fall back to the
-    // feed-level generatedAt — crawlers use this to decide whether to
-    // recrawl, and "never modified" signals a stale feed.
-    dateModified: (feed as { generatedAt?: string }).generatedAt ?? item.date,
+    // Release content doesn't change after publish and we don't track
+    // per-item edits, so dateModified = the publish date. (Stamping the
+    // feed-level generatedAt made every page claim "modified now" on every
+    // 8h build — a false freshness signal that wastes crawl budget.)
+    dateModified: item.date,
     author: {
       "@type": "Organization",
       name: item.org,
     },
     publisher: { "@id": `${SITE_URL}/#org` },
-    image: {
-      "@type": "ImageObject",
-      url: item.image?.url ?? DEFAULT_OG_IMAGE,
-      width: 1200,
-      height: 630,
-    },
+    image: jsonLdImage(item.image?.url ?? DEFAULT_OG_IMAGE),
     mainEntityOfPage: {
       "@type": "WebPage",
       "@id": url,
@@ -422,7 +446,7 @@ function renderJsonLdTechArticle(item: ReleaseItem): string | null {
   return wrapJsonLd({
     "@context": "https://schema.org",
     "@type": "TechArticle",
-    headline: item.title,
+    headline: clampHeadline(item.title),
     description: item.explainer?.tagline ?? item.summary,
     url,
     datePublished: item.date,
@@ -650,8 +674,15 @@ function renderMetaBlock(meta: PageMeta): string {
     `<meta property="og:description" content="${escapeAttr(meta.description)}" />`,
     `<meta property="og:url" content="${escapeAttr(meta.canonical)}" />`,
     `<meta property="og:image" content="${escapeAttr(meta.ogImage)}" />`,
-    `<meta property="og:image:width" content="1200" />`,
-    `<meta property="og:image:height" content="630" />`,
+    // Only assert dimensions for our own og-image.png (known 1200×630).
+    // Third-party thumbnails have unknown/varied dims — asserting 1200×630
+    // there causes social-card cropping. Omit and let scrapers measure.
+    meta.ogImage === DEFAULT_OG_IMAGE
+      ? `<meta property="og:image:width" content="1200" />`
+      : null,
+    meta.ogImage === DEFAULT_OG_IMAGE
+      ? `<meta property="og:image:height" content="630" />`
+      : null,
     meta.ogImageAlt
       ? `<meta property="og:image:alt" content="${escapeAttr(meta.ogImageAlt)}" />`
       : null,
@@ -750,15 +781,28 @@ function buildReleaseTitle(item: ReleaseItem): string {
   if (withOrg.length <= 60) return withOrg;
   const withoutOrg = `${item.title}${brand}`;
   if (withoutOrg.length <= 60) return withoutOrg;
-  return item.title;
+  // Title alone exceeds the SERP budget. Truncate the title on a word
+  // boundary so the brand suffix STILL fits in ~60 chars — previously we
+  // shipped a 100+ char bare title with no brand (92% of pages), which
+  // truncates mid-phrase in SERPs and reinforces no brand.
+  const budget = 60 - brand.length - 1; // room for "…" + brand
+  const cut = item.title.slice(0, budget);
+  const lastSpace = cut.lastIndexOf(" ");
+  const truncated = (lastSpace > budget * 0.6 ? cut.slice(0, lastSpace) : cut).trimEnd();
+  return `${truncated}…${brand}`;
 }
 
 function releaseMeta(item: ReleaseItem): PageMeta {
   const tagline = item.explainer?.tagline ?? item.summary;
-  // Description should be ≤ 160 chars for best SEO truncation behavior.
-  const description = tagline.length > 155
-    ? tagline.slice(0, 152) + "…"
-    : tagline;
+  // Use the snippet budget (~120–155 chars). A short tagline wastes it,
+  // so append the summary when it adds new information; then clamp.
+  let description = tagline;
+  if (description.length < 120 && item.summary && item.summary !== tagline) {
+    description = `${tagline} ${item.summary}`;
+  }
+  description = description.length > 155
+    ? description.slice(0, 152).trimEnd() + "…"
+    : description;
 
   return {
     title: buildReleaseTitle(item),
@@ -769,6 +813,195 @@ function releaseMeta(item: ReleaseItem): PageMeta {
     ogImageAlt: item.image?.alt,
     publishedTime: item.date,
   };
+}
+
+// -----------------------------------------------------------------------
+// Release page body — crawlable static content injected into #root
+// -----------------------------------------------------------------------
+//
+// Until now every /releases/<id> page shipped an EMPTY #root: full
+// JSON-LD but no visible body, so crawlers (and no-JS users) saw nothing
+// but shared boilerplate. The SPA mounts with createRoot().render(),
+// which REPLACES #root wholesale on boot, so we can inject any static
+// HTML here with zero hydration risk (same pattern the Learn section
+// uses). This gives each page unique, indexable text that backs up its
+// structured data.
+
+const RELEASE_BODY_STYLE = `<style data-rls-css>
+      .rls-main{max-width:760px;margin:0 auto;padding:24px;font-family:Inter,system-ui,sans-serif;color:#cfcfcf}
+      .rls-crumbs{font-size:13px;color:#888;margin:0 0 8px}
+      .rls-crumbs a{color:#9ab}
+      .rls-kicker{font-size:12px;color:#9a9a9a;text-transform:uppercase;letter-spacing:.05em;margin:0 0 6px}
+      .rls-article h1{font-size:30px;line-height:1.22;color:#fff;margin:6px 0 14px}
+      .rls-article h2{font-size:18px;color:#fff;margin:26px 0 8px}
+      .rls-article p{line-height:1.6;margin:0 0 12px}
+      .rls-summary{font-size:18px;color:#e8e8e8}
+      .rls-tagline{font-style:italic;color:#bdbdbd}
+      .rls-img{max-width:100%;height:auto;border-radius:10px;margin:16px 0;border:1px solid #1e1e1e}
+      .rls-metrics,.rls-links{padding-left:18px}
+      .rls-tags{list-style:none;padding:0;display:flex;flex-wrap:wrap;gap:8px}
+      .rls-tags li{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:999px;padding:3px 10px;font-size:12px;color:#bbb}
+      .rls-article a{color:#7db3ff}
+      .rls-back{margin-top:28px}
+      .rls-body pre{background:#111;border:1px solid #222;border-radius:8px;padding:12px;overflow:auto}
+      .rls-feed{list-style:none;padding:0;margin:24px 0 0}
+      .rls-feed-item{border-top:1px solid #1e1e1e;padding:16px 0}
+      .rls-feed-item a{color:#fff;text-decoration:none;font-size:18px}
+      .rls-feed-meta{display:block;font-size:12px;color:#9a9a9a;margin:4px 0}
+      .rls-feed-item p{margin:6px 0 0;color:#bbb;font-size:14px}
+    </style>`;
+
+function section(label: string, text?: string): string {
+  if (!text) return "";
+  return `<section><h2>${escapeText(label)}</h2><p>${escapeText(text)}</p></section>`;
+}
+
+function renderReleaseBody(item: ReleaseItem): string {
+  const ex = item.explainer;
+  const img = item.image;
+  const metricRows = Object.entries(item.metrics ?? {})
+    .map(
+      ([k, v]) =>
+        `<li><strong>${escapeText(k.replace(/_/g, " "))}:</strong> ${escapeText(String(v))}</li>`,
+    )
+    .join("");
+  const linkRows = (item.links ?? [])
+    .map(
+      (l) =>
+        `<li><a href="${escapeAttr(l.url)}" rel="noopener nofollow">${escapeText(l.label)}</a></li>`,
+    )
+    .join("");
+  const tagRows = item.tags.map((t) => `<li>${escapeText(t)}</li>`).join("");
+
+  return (
+    `<div class="page rls-body"><header class="page-head">` +
+    `<a class="brand" href="/" aria-label="AI/TLDR — home">` +
+    `<span class="brand-mark">█</span><p class="brand-name">AI/TLDR</p></a></header>` +
+    `<main class="rls-main"><article class="rls-article">` +
+    `<nav class="rls-crumbs" aria-label="Breadcrumb"><a href="/">AI/TLDR</a> › ` +
+    `<span>${escapeText(item.categories[0])}</span></nav>` +
+    `<p class="rls-kicker">${escapeText(item.org)} · ${escapeText(item.date)} · ${escapeText(item.importance)}</p>` +
+    `<h1>${escapeText(item.title)}</h1>` +
+    `<p class="rls-summary">${escapeText(item.summary)}</p>` +
+    (img
+      ? `<img class="rls-img" src="${escapeAttr(img.url)}" alt="${escapeAttr(img.alt ?? item.title)}" loading="lazy" />`
+      : "") +
+    (ex?.tagline ? `<p class="rls-tagline">${escapeText(ex.tagline)}</p>` : "") +
+    section("What is it", ex?.whatIsIt) +
+    section("How it works", ex?.howItWorks) +
+    section("Why it matters", ex?.whyItMatters) +
+    section("Who it's for", ex?.forWho) +
+    (ex?.tryIt
+      ? `<section><h2>Try it</h2><pre><code>${escapeText(ex.tryIt)}</code></pre></section>`
+      : "") +
+    (metricRows ? `<section><h2>Key numbers</h2><ul class="rls-metrics">${metricRows}</ul></section>` : "") +
+    (linkRows ? `<section><h2>Links</h2><ul class="rls-links">${linkRows}</ul></section>` : "") +
+    (tagRows ? `<section><h2>Tags</h2><ul class="rls-tags">${tagRows}</ul></section>` : "") +
+    `<p class="rls-back"><a href="/">← All releases</a> · <a href="/learn/">Learn AI</a></p>` +
+    `</article></main></div>`
+  );
+}
+
+/** Inline the release body styles and fill the empty #root with the
+ *  crawlable article. Function replacements throughout: release content
+ *  can contain `$`, which String.replace would otherwise interpret. */
+function injectReleaseBody(html: string, item: ReleaseItem): string {
+  html = html.replace("</head>", () => `  ${RELEASE_BODY_STYLE}\n  </head>`);
+  html = html.replace(
+    /<div id="root"><\/div>/,
+    () => `<div id="root">${renderReleaseBody(item)}</div>`,
+  );
+  return html;
+}
+
+/** Crawlable latest-releases list for the homepage #root. The homepage
+ *  carried ItemList JSON-LD but no visible links to any release page, so
+ *  the only internal-link path to the 725 release pages was the sitemap.
+ *  This emits real anchors (the strongest discovery signal). React
+ *  replaces #root on mount, so JS users still get the live feed. */
+function renderHomeBody(items: ReleaseItem[]): string {
+  const recent = [...items]
+    .sort((a, b) =>
+      String(b.publishDate ?? b.date).localeCompare(String(a.publishDate ?? a.date)),
+    )
+    .slice(0, 60);
+  const cards = recent
+    .map(
+      (it) =>
+        `<li class="rls-feed-item"><a href="${escapeAttr(`/releases/${it.id}/`)}">` +
+        `<strong>${escapeText(it.title)}</strong></a>` +
+        `<span class="rls-feed-meta">${escapeText(it.org)} · ${escapeText(it.date)} · ${escapeText(it.categories[0])}</span>` +
+        `<p>${escapeText(it.summary)}</p></li>`,
+    )
+    .join("");
+  return (
+    `<div class="page rls-body"><header class="page-head">` +
+    `<a class="brand" href="/" aria-label="AI/TLDR — home">` +
+    `<span class="brand-mark">█</span><p class="brand-name">AI/TLDR</p></a></header>` +
+    `<main class="rls-main">` +
+    `<h1>AI/TLDR — every new AI model, tool, repo &amp; paper</h1>` +
+    `<p class="rls-summary">The latest AI releases, refreshed every few hours and explained in plain English.</p>` +
+    `<ul class="rls-feed">${cards}</ul>` +
+    `</main></div>`
+  );
+}
+
+function injectHomeBody(html: string, items: ReleaseItem[]): string {
+  html = html.replace("</head>", () => `  ${RELEASE_BODY_STYLE}\n  </head>`);
+  html = html.replace(
+    /<div id="root"><\/div>/,
+    () => `<div id="root">${renderHomeBody(items)}</div>`,
+  );
+  return html;
+}
+
+interface SweepReportLite {
+  timestamp?: string;
+  source?: string;
+  summary?: string;
+  added?: { id?: string; title?: string }[];
+}
+
+/** Crawlable changelog body for /log (was an empty #root at sitemap
+ *  priority 0.7/daily — Google recrawling nothing). Newest sweep first. */
+function renderLogBody(reports: SweepReportLite[]): string {
+  const recent = reports.slice(-50).reverse();
+  const rows = recent
+    .map((r) => {
+      const added = (r.added ?? [])
+        .map((a) => (a.title ? `<li>${escapeText(a.title)}</li>` : ""))
+        .filter(Boolean)
+        .join("");
+      const when = (r.timestamp ?? "").slice(0, 16).replace("T", " ");
+      return (
+        `<section><h2>${escapeText(when)} · ${escapeText(r.source ?? "")}</h2>` +
+        (r.summary ? `<p>${escapeText(r.summary)}</p>` : "") +
+        (added ? `<ul class="rls-links">${added}</ul>` : "") +
+        `</section>`
+      );
+    })
+    .join("");
+  return (
+    `<div class="page rls-body"><header class="page-head">` +
+    `<a class="brand" href="/" aria-label="AI/TLDR — home">` +
+    `<span class="brand-mark">█</span><p class="brand-name">AI/TLDR</p></a></header>` +
+    `<main class="rls-main"><article class="rls-article">` +
+    `<nav class="rls-crumbs" aria-label="Breadcrumb"><a href="/">AI/TLDR</a> › <span>Changelog</span></nav>` +
+    `<h1>AI Release Changelog</h1>` +
+    `<p class="rls-summary">Every automated sweep that refreshed the AI/TLDR feed, newest first.</p>` +
+    rows +
+    `<p class="rls-back"><a href="/">← All releases</a></p>` +
+    `</article></main></div>`
+  );
+}
+
+function injectLogBody(html: string, reports: SweepReportLite[]): string {
+  html = html.replace("</head>", () => `  ${RELEASE_BODY_STYLE}\n  </head>`);
+  html = html.replace(
+    /<div id="root"><\/div>/,
+    () => `<div id="root">${renderLogBody(reports)}</div>`,
+  );
+  return html;
 }
 
 // ---- Static page meta ---------------------------------------------------
@@ -965,6 +1198,7 @@ async function main() {
     renderJsonLdFaq(),
   ].join("\n    ");
   let homeHtml = injectMeta(template, HOME_META, homeJsonLd);
+  homeHtml = injectHomeBody(homeHtml, items);
   homeHtml = injectVisibleFaq(homeHtml);
   // Static, crawler-visible link strip into the Learn section — internal
   // links from the homepage are the strongest discovery signal we have.
@@ -981,10 +1215,9 @@ async function main() {
     ),
   );
 
-  // 3. Sweep log page — CollectionPage JSON-LD
-  await writeHtml(
-    "log/index.html",
-    injectMeta(
+  // 3. Sweep log page — CollectionPage JSON-LD + crawlable changelog body
+  {
+    let logHtml = injectMeta(
       template,
       LOG_META,
       renderJsonLdCollectionPage({
@@ -992,8 +1225,13 @@ async function main() {
         name: "AI Release Changelog",
         description: LOG_META.description,
       }),
-    ),
-  );
+    );
+    logHtml = injectLogBody(
+      logHtml,
+      (sweepsData as { sweeps: SweepReportLite[] }).sweeps ?? [],
+    );
+    await writeHtml("log/index.html", logHtml);
+  }
 
   // 4. One page per release — full structured-data stack. Most blocks
   // are conditional on category/importance; releases that don't match
@@ -1012,7 +1250,8 @@ async function main() {
       renderJsonLdHowTo(item),         // HowTo (tutorial w/ tryIt)
     ].filter((b): b is string => !!b);
     const jsonLd = blocks.join("\n    ");
-    const html = injectMeta(template, releaseMeta(item), jsonLd);
+    let html = injectMeta(template, releaseMeta(item), jsonLd);
+    html = injectReleaseBody(html, item);
     await writeHtml(`releases/${item.id}/index.html`, html);
     count++;
   }
