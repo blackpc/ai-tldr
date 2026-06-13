@@ -1,6 +1,6 @@
 ---
 prompt-id: tldr.update-releases
-prompt-version: 6.7.0
+prompt-version: 6.8.0
 output-target: src/data/releases.json (via finalize-sweep.ts)
 schema: src/data/schema.ts
 invoke-as: subagent
@@ -67,9 +67,15 @@ You write a draft. Scripts validate and merge. You do **NOT** edit
      "notes":      { "<id>": "one-sentence why-included" }
    }
    ```
-   `coverage` lists categories you actually queried this run. Don't
-   pad it. On a zero-add sweep, omit `coverage` entirely or pass an
-   empty array — the soft warning is informational only.
+   `coverage` lists categories you actually queried this run. Entries
+   MUST be values from the `categories` enum (model, repo, tool, video,
+   dataset, …) — NOT source names like "youtube", "hn", "lab-blog",
+   "tier1-press". Only list a category you genuinely searched for and
+   would have added from; do not list a category just because you
+   glanced at a page. (Historically `coverage` claimed "video"/"dataset"
+   on sweeps that added zero of them for weeks — the listing was
+   meaningless. Keep it honest.) Don't pad it. On a zero-add sweep, omit
+   `coverage` entirely or pass an empty array — informational only.
 5. **Verify.**
    ```
    bun scripts/verify-draft.ts sweep-draft.json
@@ -201,10 +207,22 @@ not what was funded or announced.
 1. **Lab blogs**: anthropic.com/news, openai.com/index, deepmind.google,
    ai.meta.com/blog, x.ai/blog, mistral.ai/news, cohere.com/blog,
    qwen.ai, moonshot.ai — model releases, API changes, new tools.
+   Also check the Chinese frontier labs, which we under-cover: DeepSeek
+   (deepseek.com), Zhipu / Z.ai (z.ai), MiniMax (minimax.io), plus Baidu
+   ERNIE and ByteDance Seed — find their official release channel. Verify
+   every URL as always; if a channel 404s, skip it.
 2. **GitHub trending**: `github.com/trending?since=daily` filtered to AI/ML —
    new repos with real traction.
-3. **HuggingFace**: `huggingface.co/models?sort=trending` and
-   `huggingface.co/papers` top 10 — new models and papers with code.
+3. **HuggingFace**: `huggingface.co/models?sort=trending`,
+   `huggingface.co/datasets?sort=trending`, and `huggingface.co/papers`
+   top 10 — new models, notable open datasets, and papers with code. A
+   trending open dataset with real adoption is a `dataset` item; a paper
+   that introduces a named, reusable technique (not just a result) is
+   also an `algorithm` item — tag it `["paper", "algorithm", ...]`.
+   (`dataset` and `algorithm` are first-class categories that went 48
+   days with zero automated adds — see SWEEP_MEMORY 2026-06-13-B —
+   because nothing here pointed at their sources. This is where to look,
+   NOT a quota: if nothing qualifies, add nothing.)
 4. **HN**: front page top 30 and "Show HN" AI posts.
 5. **YouTube fresh videos** — run:
    ```
@@ -230,6 +248,10 @@ not what was funded or announced.
 - **Influential voices** (for `article` items only): simonwillison.net,
   karpathy.ai, latent.space, interconnects.ai, lilianweng.github.io,
   eugeneyan.com, importai.substack.com, deeplearning.ai/the-batch.
+- **Benchmarks & learning** (also under-covered, same no-quota caveat):
+  new eval benchmarks / leaderboards with real adoption → `benchmark`;
+  standout tutorials or hands-on guides (deeplearning.ai/the-batch, HF
+  cookbook/blog) → `tutorial`. Only if something genuinely qualifies.
 
 **Last resort (only after exhausting above with <2 items):**
 - **Tier-1 AI press**: theverge.com/ai, arstechnica.com/ai,

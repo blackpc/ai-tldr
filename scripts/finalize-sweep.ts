@@ -262,17 +262,45 @@ if (paperPrimary > 2) {
 }
 
 const todayIso = generatedAt.slice(0, 10);
-const lastVideo = feed.items
-  .filter((i) => i.categories.includes("video"))
-  .sort((a, b) => b.date.localeCompare(a.date))[0];
-const lastVideoTs = lastVideo ? new Date(lastVideo.date).getTime() : 0;
-const hoursSince = (Date.now() - lastVideoTs) / (1000 * 60 * 60);
-const addedAnyVideo = newItems.some((i) => i.categories.includes("video"));
-if (!addedAnyVideo && hoursSince > 30) {
-  warnings.push(
-    `video cadence: ${Math.floor(hoursSince)}h since last video added (target ≤24h). ` +
-      `Sweep videoSearch=${JSON.stringify(draft.videoSearch ?? null)}.`,
-  );
+
+// Per-category drought alarm. Generalized from the old video-only check
+// (SWEEP_MEMORY 2026-06-13-A): ANY first-class content category that goes
+// silent too long self-alarms here, so the next "silent zero" is caught
+// the way video finally was. `dataset` and `algorithm` sat dead for 48
+// days, undiagnosed, because the alarm only ever watched `video`.
+//
+// Cadence axis is `publishDate` (when we INGESTED it), not `date` — a
+// back-dated item shouldn't reset the clock. This is a SOFT warning only:
+// it never blocks and never feeds back into sweep-context, so it cannot
+// become a quota that drives padding (SWEEP_MEMORY 2026-04-28-B/C).
+const DROUGHT_DAYS: Record<string, number> = {
+  video: 4,
+  model: 5,
+  tool: 5,
+  repo: 7,
+  paper: 10,
+  benchmark: 14,
+  dataset: 14,
+  algorithm: 14,
+  tutorial: 14,
+};
+const nowMs = Date.now();
+for (const [cat, maxDays] of Object.entries(DROUGHT_DAYS)) {
+  if (newItems.some((i) => i.categories.includes(cat))) continue;
+  const lastTs = feed.items
+    .filter((i) => i.categories.includes(cat))
+    .reduce((max, i) => {
+      const t = Date.parse(i.publishDate ?? i.date);
+      return Number.isFinite(t) && t > max ? t : max;
+    }, 0);
+  const daysSince = lastTs ? (nowMs - lastTs) / 86_400_000 : Infinity;
+  if (daysSince > maxDays) {
+    warnings.push(
+      `${cat} drought: ${lastTs ? Math.floor(daysSince) + "d" : "never"} since last ${cat} ingested ` +
+        `(alarm >${maxDays}d). Check this category's discovery source — a silent zero here is ` +
+        `how the video/dataset/algorithm gaps hid for weeks (SWEEP_MEMORY 2026-06-13-A).`,
+    );
+  }
 }
 
 if ((draft.coverage ?? []).length < 15) {

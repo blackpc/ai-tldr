@@ -56,8 +56,17 @@ function buildNewsSitemap(items: ReleaseItem[]): string {
 
   const urls = recent
     .map((it) => {
-      const loc = `${SITE_URL}/releases/${it.id}`;
-      const pubDate = it.publishDate ?? new Date(it.date).toISOString();
+      // Trailing slash: the release page's canonical + og:url end in "/"
+      // (prerender.ts). A slash-less loc 307-redirects, so Google News
+      // would index a redirect instead of the canonical URL.
+      const loc = `${SITE_URL}/releases/${it.id}/`;
+      // Advertise the REAL release date (matches the page's visible date
+      // and its NewsArticle JSON-LD datePublished, both = it.date). The
+      // 48h FILTER above still uses publishDate (ingest) so freshly-swept
+      // but slightly-older items keep surfacing — but emitting ingest time
+      // here disagreed with the page on ~70% of items (audit 2026-06-13),
+      // which Google News flags as a date mismatch.
+      const pubDate = it.date;
       return `  <url>
     <loc>${escapeXml(loc)}</loc>
     <news:news>

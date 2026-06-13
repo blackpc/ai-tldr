@@ -877,10 +877,11 @@ ${body}
  *  - <news:publication> with name + language required
  *  - <news:publication_date> in W3C format, <news:title> required
  *
- * This file is regenerated on every build (every 8h) AND served live by
- * a Cloudflare Pages Function (functions/sitemap-news.xml.ts) that
- * filters against the request-time clock so stale items vanish from the
- * news feed even between deploys.
+ * This static file is a build-time fallback only. The LIVE news sitemap
+ * at /sitemap-news.xml is served by the Cloudflare Worker (src/worker.ts),
+ * which re-filters against the request-time clock so stale items vanish
+ * between deploys. Keep this generator in sync with the Worker's copy
+ * (trailing-slash loc, publication_date = it.date).
  */
 function buildNewsSitemap(items: ReleaseItem[]): string {
   const cutoff = Date.now() - 48 * 60 * 60 * 1000;
@@ -893,7 +894,8 @@ function buildNewsSitemap(items: ReleaseItem[]): string {
   const body = recent
     .map((it) => {
       const url = releaseUrl(it.id);
-      const pubDate = it.publishDate ?? new Date(it.date).toISOString();
+      // Real release date — matches the page canonical's datePublished.
+      const pubDate = it.date;
       return `  <url>
     <loc>${escapeText(url)}</loc>
     <news:news>
@@ -1084,8 +1086,8 @@ async function main() {
   await writeFile(join(DIST, "sitemap-main.xml"), mainSitemap, "utf8");
 
   // 6. News sitemap — last-48h items only. Static fallback; the live
-  // version is served by functions/sitemap-news.xml.ts (Cloudflare
-  // Pages Function) which re-filters on every request.
+  // version is served by the Cloudflare Worker (src/worker.ts), which
+  // re-filters on every request.
   const newsSitemap = buildNewsSitemap(items);
   await writeFile(join(DIST, "sitemap-news-static.xml"), newsSitemap, "utf8");
 
@@ -1096,7 +1098,7 @@ async function main() {
 
   // 7. Sitemap index — what robots.txt points at. Splits the load across
   // a static main sitemap, the learn sitemap, and the live
-  // CF-function-served news sitemap.
+  // Worker-served news sitemap.
   const sitemapIndex = buildSitemapIndex([
     { loc: `${SITE_URL}/sitemap-main.xml`, lastmod: today },
     { loc: `${SITE_URL}/sitemap-learn.xml`, lastmod: today },

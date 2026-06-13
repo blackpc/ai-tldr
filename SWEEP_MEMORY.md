@@ -337,3 +337,54 @@ freshness or verification gate — it is the exact thing that breaks in CI.
 passes a real video (oembed) and fails a bogus id; typecheck green.
 Watch the next cron run (and `coverage`/feed) for a video actually
 landing — the 919h counter should reset.
+
+---
+
+## 2026-06-13-B — video wasn't the only dead category (audit follow-up)
+
+**Trigger:** After the video-in-CI fix, a multi-agent audit of all 510
+sweep reports asked "what ELSE repeats?" Found that `dataset` and
+`algorithm` were ALSO silently dead — zero AUTOMATED adds for 48 days
+(last auto-add 2026-04-26; the apparent "2026-05-06 add" was a manual
+backfill). `paper` had gone 14d dry. Undiagnosed because the only
+drought alarm in finalize-sweep.ts watched `'video'` and nothing else.
+
+**Root cause:** Half the first-class categories had NO discovery source
+in the prompt. Required-first-pass only mapped lab-blogs→model/tool,
+GitHub→repo, HF models+papers→model/paper, HN→article, YouTube→video.
+`dataset`/`algorithm`/`benchmark`/`tutorial` were named in category
+lists but never pointed at a feed, so they only ever entered via manual
+backfill. `coverage[]` made this invisible: it claimed "video"/"dataset"
+on sweeps that added none for weeks, and was polluted with non-enum
+source names (youtube, hn, …) that always delivered 0.
+
+**Change (prompt v6.7.0 → v6.8.0 + finalize-sweep.ts):**
+- `finalize-sweep.ts`: replaced the video-only cadence warning with a
+  GENERAL per-category drought alarm (DROUGHT_DAYS map; cadence axis =
+  `publishDate`/ingest, not `date`). Soft warning only — never blocks,
+  never feeds sweep-context, so it CANNOT become a quota (the 04-28-B/C
+  scar). Catches the next silent-zero automatically.
+- `prompts/update-releases.md`: added HF Datasets to the first-pass HF
+  visit (→ `dataset`); noted technique-papers are also `algorithm`;
+  added a second-pass benchmarks/tutorials lane; added the Chinese
+  frontier labs (DeepSeek/Zhipu-Z.ai/MiniMax/Baidu/ByteDance) to the
+  lab-blog list (Western-lab discovery had been narrowing: Chinese-lab
+  share 15.7%→7.2% over 3 months). Every addition is framed as "where to
+  look, NOT a quota — if nothing qualifies, add nothing." The inclusion
+  bar still gates; this does not pressure padding.
+- Tightened `coverage[]` rule: enum values only, no source-name
+  pollution, no listing a category you didn't really query.
+
+**Deliberately NOT changed here (need an editor decision, logged so they
+aren't re-litigated blind):**
+- The 368 over-cap titles (50.8% of feed) — backfill is content-
+  sensitive (zero-hallucination); the title CAP itself is already
+  working on new items (06-12/06-13 new items comply).
+- Importance grade-inflation (major 39%→78%): the prompt currently
+  DEFINES `major` as the default tier, so "inflation" may be working as
+  written. Re-anchor the definition before adding any guard.
+
+**Status:** Applied. Watch next ~10 crons: expect the drought alarm to
+fire for paper/dataset/algorithm until their new sources land items, and
+expect at least occasional dataset/algorithm/benchmark adds. Do NOT let
+the alarm tempt padding — an empty category is still a valid sweep.
