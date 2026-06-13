@@ -1,0 +1,378 @@
+{
+  "slug": "agent-framework-lock-in",
+  "title": "Agent Framework Lock-In: How to Stay Portable",
+  "shortTitle": "Framework Lock-In & Portability",
+  "seoTitle": "Agent Framework Lock-In: How to Stay Portable",
+  "metaDescription": "Every agent framework couples your code to its abstractions. Learn where lock-in hides, the real cost of switching, and patterns that keep your agent portable.",
+  "keywords": [
+    "agent framework lock-in",
+    "avoid vendor lock-in ai agents",
+    "portable llm agent code",
+    "switching agent frameworks cost",
+    "framework agnostic agent design"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Understand exactly where an agent framework locks you in — and the concrete design patterns that keep your prompts, tools, and logic portable if you ever need to leave.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you build an [AI agent](/learn/ai-agents/agent-fundamentals/what-is-an-ai-agent), you rarely wire everything from scratch. You reach for an [agent framework](/learn/agent-frameworks/choosing-a-framework/what-is-agent-framework) like [LangGraph](/learn/agent-frameworks/langchain-ecosystem/what-is-langgraph), the [OpenAI Agents SDK](/learn/agent-frameworks/provider-agent-sdks/what-is-openai-agents-sdk), or the [Claude Agent SDK](/learn/agent-frameworks/provider-agent-sdks/what-is-claude-agent-sdk). The framework hands you tool calling, memory, retries, and orchestration for free. That convenience has a price: your code starts to *speak the framework's language*."
+        },
+        {
+          "type": "p",
+          "md": "**Lock-in** is what happens when so much of your application is written in that language that leaving becomes painful. It is not a single switch someone flips. It is a slow accumulation: a tool defined the framework's way here, a memory object passed around there, a callback hooked into its event system. Each one is small. Together they become a wall."
+        },
+        {
+          "type": "p",
+          "md": "Think of renting a furnished apartment. Moving in is effortless — the sofa, the bed, the kitchen are all there. But the longer you stay, the more *your* things get tangled with *theirs*. Move-out day, you discover the shelves you filled are bolted to their walls. The question this article answers is: how do you live comfortably in the furnished apartment while keeping your own belongings in boxes you can actually carry out?"
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Lock-in is a spectrum, not a yes/no. The goal is almost never *zero* lock-in — that means rebuilding the framework yourself. The goal is to know *where* you are coupled and keep the cost of leaving small enough that you stay by choice, not by trap."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Agent frameworks are young and the field moves fast. The library you pick today may be deprecated, acquired, repriced, or simply out-paced in eighteen months. You may also outgrow it: a framework that was perfect for a prototype can become a straitjacket once you need fine control over latency, streaming, or cost. Portability is insurance against a future you cannot predict."
+        },
+        {
+          "type": "p",
+          "md": "Concrete reasons a team ends up wanting to switch:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**The framework changes under you.** A major version rewrites the API, or a feature you depend on is dropped. Now an *upgrade* is itself a migration.",
+            "**You hit a ceiling.** You need custom retry logic, a streaming behavior, or a control-flow shape the framework's abstractions fight against. Working around the framework costs more than the framework saved.",
+            "**Cost or vendor pressure.** A provider-specific SDK ties your orchestration to one model vendor. When pricing or model quality shifts, you want to move the underlying model without rewriting the agent.",
+            "**Team or stack consolidation.** The company standardizes on a different framework, or you inherit a second agent built on another one and want them to share infrastructure."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Here is the trap most teams fall into: lock-in is invisible while everything is going well. You only feel the wall on the day you try to leave — which is the worst possible day to discover how high it is. The work in this article is cheap to do *up front* and brutally expensive to retrofit. That asymmetry is the whole reason to care now rather than later."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "This is not an argument against frameworks. Building [without a framework](/learn/agent-frameworks/choosing-a-framework/agent-without-framework) has its own real costs. The argument is for adopting one *deliberately*, with a thin seam between your logic and theirs, so the decision stays reversible."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How lock-in actually forms",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "An agent is not one thing; it is a stack of layers. Lock-in is uneven across them — some layers are trivially portable, others bind you tightly. Knowing which is which is the whole game. Here is the typical stack, from the parts that are *yours* down to the parts the framework owns."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "stack",
+            "title": "The agent stack — and how sticky each layer is",
+            "layers": [
+              {
+                "label": "Prompts & instructions",
+                "sub": "low lock-in — plain text, fully yours"
+              },
+              {
+                "label": "Tool / function logic",
+                "sub": "low lock-in — but the SCHEMA wrapping it is sticky"
+              },
+              {
+                "label": "Business logic & control flow",
+                "sub": "medium — depends how much you express in their primitives"
+              },
+              {
+                "label": "Memory & state",
+                "sub": "medium-high — framework state objects leak everywhere",
+                "accent": true
+              },
+              {
+                "label": "Orchestration & graph",
+                "sub": "high — the framework's core abstraction"
+              },
+              {
+                "label": "Observability & callbacks",
+                "sub": "high — hooks into their event system"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The pattern is clear: **the closer a layer is to *meaning*, the more portable it is; the closer it is to *plumbing*, the stickier it gets.** Your prompts are just strings — they move anywhere. Your orchestration graph is expressed entirely in the framework's API — it moves nowhere without a rewrite. Most of your design effort should go into pushing valuable logic *up* the stack, away from the framework's plumbing."
+        },
+        {
+          "type": "h3",
+          "text": "Where the coupling hides"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Layer",
+            "What ties you in",
+            "Portability"
+          ],
+          "rows": [
+            [
+              "Prompts",
+              "Nothing — they are plain text you author",
+              "High"
+            ],
+            [
+              "Tool functions",
+              "The body is yours; the decorator/schema that registers it is framework-specific",
+              "High (body) / Low (registration)"
+            ],
+            [
+              "Control flow",
+              "Whether your logic lives in your code or in their graph nodes/handoffs",
+              "Depends on you"
+            ],
+            [
+              "Memory / state",
+              "Framework `State` or `Context` objects passed between steps",
+              "Low"
+            ],
+            [
+              "Orchestration",
+              "The graph, agent-loop, or runner — the framework's reason to exist",
+              "Very low"
+            ],
+            [
+              "Observability",
+              "Callback/tracing hooks bound to their lifecycle events",
+              "Very low"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Notice the tool row. The *logic* of a tool — call an API, query a database, do a calculation — is pure Python or TypeScript that owes nothing to any framework. What binds you is the thin wrapper that *describes* that tool to the framework: the decorator, the schema format, the way arguments are validated. That distinction is the key to the main escape pattern, below."
+        }
+      ]
+    },
+    {
+      "id": "thin-wrapper-pattern",
+      "title": "The thin-wrapper pattern",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The single most effective portability technique is also the oldest idea in software: put a seam between *your* code and *their* code. Define your own small interface for what an agent needs to do, and let the framework live behind it. Your application talks to your interface; only one thin adapter talks to the framework. When you switch frameworks, you rewrite the adapter — not the application."
+        },
+        {
+          "type": "h3",
+          "text": "Before: framework calls everywhere"
+        },
+        {
+          "type": "p",
+          "md": "In the typical first draft, framework imports and types are smeared across the whole codebase. Every module knows which framework you use."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "before — coupled directly to the framework",
+          "code": "from some_framework import Agent, tool, Runner\n\n@tool  # framework decorator wraps your logic\ndef lookup_order(order_id: str) -> str:\n    return db.get_order(order_id)\n\n# Orchestration expressed in the framework's primitives\nagent = Agent(\n    name=\"support\",\n    instructions=SUPPORT_PROMPT,\n    tools=[lookup_order],\n)\n\ndef handle(message: str) -> str:\n    result = Runner.run_sync(agent, message)   # framework type leaks out\n    return result.final_output                  # framework-shaped result"
+        },
+        {
+          "type": "p",
+          "md": "The problem: `@tool`, `Agent`, `Runner`, and `result.final_output` all belong to the framework, and they appear in code your whole app calls. To switch, you touch every one of these sites."
+        },
+        {
+          "type": "h3",
+          "text": "After: one adapter, plain logic everywhere else"
+        },
+        {
+          "type": "p",
+          "md": "Now the tool logic is a plain function with no decorator. Your app depends on an `AgentClient` interface you defined. A single adapter file translates that interface into framework calls — and is the *only* place that imports the framework."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "after — your interface, framework behind one adapter",
+          "code": "# tools.py — plain functions, zero framework imports\ndef lookup_order(order_id: str) -> str:\n    return db.get_order(order_id)\n\nTOOLS = {\n    \"lookup_order\": {\n        \"fn\": lookup_order,\n        \"description\": \"Look up an order by its ID.\",\n        \"params\": {\"order_id\": \"str\"},\n    },\n}\n\n# port.py — YOUR interface; the rest of the app depends only on this\nclass AgentClient(Protocol):\n    def run(self, message: str) -> str: ...\n\n# adapter_framework.py — the ONLY file that imports the framework\nfrom some_framework import Agent, tool, Runner\n\nclass FrameworkAgent:\n    def __init__(self, prompt: str, tools: dict):\n        wrapped = [tool(t[\"fn\"]) for t in tools.values()]  # wrap here, once\n        self._agent = Agent(instructions=prompt, tools=wrapped)\n\n    def run(self, message: str) -> str:\n        return Runner.run_sync(self._agent, message).final_output"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The win is *containment*, not avoidance. You still use every framework feature — you just use it in one file. Switching to LangGraph or a [provider SDK](/learn/agent-frameworks/provider-agent-sdks/what-is-openai-agents-sdk) means writing one new adapter against the same `AgentClient` interface. Your prompts, tool logic, tests, and business code never move."
+        },
+        {
+          "type": "p",
+          "md": "Keep the interface *small*. The temptation is to expose every framework feature through your port; resist it. The narrower your interface, the cheaper every adapter. If you expose `run(message) -> str` plus a streaming variant, almost any framework can satisfy it. If you expose the framework's full graph API, you have rebuilt the lock-in inside your own wrapper."
+        }
+      ]
+    },
+    {
+      "id": "portability-checklist",
+      "title": "A portability checklist",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Run through this before you commit to a framework, and again every few months as the codebase grows. Each item is a place lock-in quietly accretes."
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Are prompts stored as plain data?** Keep system prompts and instructions in your own files or config, not inlined inside framework objects. They are your most valuable, most portable asset.",
+            "**Is tool *logic* free of framework decorators?** The function should run standalone in a unit test with no framework imported. Registration lives in the adapter only.",
+            "**Does your app depend on a *your* interface, not framework types?** If a framework class name appears outside the adapter, that is a leak. Search your imports.",
+            "**Is state expressed in your own types?** Convert framework `State`/`Context` objects to plain dicts or dataclasses at the boundary so memory does not bind you.",
+            "**Is the model choice separable from the orchestration?** You want to swap the underlying model (or even provider) without touching agent logic.",
+            "**Is observability behind an interface?** Emit your own structured events; let the adapter forward them to the framework's tracing, not the reverse.",
+            "**Do you have an evaluation set that is framework-agnostic?** A suite of input/expected-behavior cases lets you prove a new framework matches the old one's quality before you cut over."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "The most overlooked item is the last one. Without a portable evaluation set, switching frameworks is a leap of faith — you *hope* the new agent behaves like the old one. With one, migration becomes a measurable, de-risked change you can verify objectively."
+        }
+      ]
+    },
+    {
+      "id": "when-to-not-bother",
+      "title": "When lock-in is fine to accept",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Portability is not free. The thin-wrapper pattern adds an interface, an adapter, and a layer of indirection. Sometimes that cost is not worth paying, and pretending otherwise is just gold-plating. Be honest about which situation you are in."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Invest in portability vs. embrace the framework",
+            "columns": [
+              {
+                "title": "Worth the seam",
+                "accent": true,
+                "items": [
+                  "Long-lived, production system",
+                  "Multiple agents to share infra",
+                  "Provider/model likely to change",
+                  "Framework is young or volatile",
+                  "High cost if you're forced to migrate"
+                ]
+              },
+              {
+                "title": "Just use the framework directly",
+                "items": [
+                  "Prototype or throwaway demo",
+                  "Single small agent, short-lived",
+                  "Deeply committed to one ecosystem",
+                  "Framework is stable and mature",
+                  "Team velocity matters more than future flexibility"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "A useful middle path: do the *cheap* portability items always, skip the expensive ones until you need them. Keeping prompts as data and tool logic decorator-free costs almost nothing and pays off immediately in testability. Building a full adapter layer for orchestration is real work — defer it until the system is clearly long-lived. You can always extract a seam later if the early items kept your logic clean. The reverse — untangling framework calls from a sprawling codebase — is the migration you were trying to avoid."
+        },
+        {
+          "type": "p",
+          "md": "If you are still *choosing* a framework rather than escaping one, the companion guides cover that decision directly: [how to choose an agent framework](/learn/agent-frameworks/choosing-a-framework/choose-agent-framework), the [framework comparison](/learn/agent-frameworks/choosing-a-framework/agent-framework-comparison), and the [mental models](/learn/agent-frameworks/choosing-a-framework/agent-framework-mental-models) that frame the trade-offs."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the thin-wrapper basics click, a few subtler points separate teams that stay genuinely portable from those that only think they are."
+        },
+        {
+          "type": "p",
+          "md": "**Leaky abstractions are the silent killer.** An interface that returns a plain string is portable; one that returns the framework's rich result object — with its token counts, tool-call traces, and step history — has smuggled the framework back across your boundary. The day you switch, every caller that read `.tool_calls` breaks. Audit your interface for framework *types* in signatures, not just framework *imports*. If your `run()` returns `FrameworkResult`, the seam is decorative."
+        },
+        {
+          "type": "p",
+          "md": "**Standards reduce, but do not erase, lock-in.** Open conventions help. The [Model Context Protocol](/learn/ai-agents/model-context-protocol/what-is-mcp) standardizes how tools and data sources plug into agents, so a tool you expose over MCP is reusable across any MCP-aware framework — a genuine portability win for the tool layer. But MCP does not standardize orchestration, memory, or control flow, so the stickiest layers stay sticky. Treat standards as lowering *specific* walls, not as a portability silver bullet."
+        },
+        {
+          "type": "p",
+          "md": "**Provider SDKs trade portability for power.** A vendor's own agent SDK is often the best, fastest way to use that vendor's models — but it couples orchestration to one provider on purpose. That is a legitimate choice; just make it *knowingly*. Put the thin wrapper around it exactly as you would any framework, so that if you later want a multi-provider setup, the model swap is an adapter change, not an app rewrite."
+        },
+        {
+          "type": "p",
+          "md": "**Test at the seam.** The interface you defined is the perfect test boundary. Write your behavior tests against `AgentClient`, with a fake adapter that returns canned responses, so your business logic is tested without any LLM call at all. Then run the same evaluation suite against each real adapter. This is what makes a framework migration a *verified* change rather than a hopeful one — you prove the new adapter passes the exact tests the old one did."
+        },
+        {
+          "type": "p",
+          "md": "The durable lesson: lock-in is a property of *where your valuable logic lives*, not of which framework you picked. Keep meaning — prompts, tool logic, control decisions, evaluation cases — in code you own, and keep plumbing behind one thin adapter. Do that, and the question \"which framework?\" stops being a one-way door and becomes what it should be: a reversible, low-stakes choice you can revisit whenever the landscape shifts."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is agent framework lock-in?",
+      "a": "It is the accumulated cost of having your agent code written in one framework's specific abstractions — its tool decorators, state objects, graph API, and callbacks — so that switching to a different framework requires rewriting large parts of your application rather than swapping one component."
+    },
+    {
+      "q": "How do I avoid vendor lock-in with AI agents?",
+      "a": "Define your own small interface for what your agent must do (for example `run(message) -> str`), keep prompts as plain data and tool logic free of framework decorators, and let a single thin adapter translate your interface into framework calls. Then switching frameworks means rewriting one adapter, not your whole app."
+    },
+    {
+      "q": "Is it worth making my agent framework-agnostic?",
+      "a": "It depends on the stakes. For a long-lived production system, multiple agents, or a volatile/young framework, yes — the cheap portability steps cost almost nothing and the seam pays off if you ever migrate. For a short-lived prototype or a single small agent, using the framework directly is usually the right call."
+    },
+    {
+      "q": "Which parts of an agent are hardest to make portable?",
+      "a": "Orchestration (the graph or agent-loop) and observability (callbacks tied to the framework's lifecycle) are the stickiest, because they are expressed entirely in the framework's core API. Prompts and tool logic are the easiest to keep portable — prompts are just text, and a tool's body is plain code that only its registration wrapper ties to the framework."
+    },
+    {
+      "q": "Does using Model Context Protocol remove framework lock-in?",
+      "a": "It reduces it for the tool layer. MCP standardizes how tools and data sources connect to agents, so an MCP tool is reusable across MCP-aware frameworks. But MCP does not standardize orchestration, memory, or control flow, so those layers stay framework-specific. It lowers specific walls rather than removing lock-in entirely."
+    },
+    {
+      "q": "How much does switching agent frameworks actually cost?",
+      "a": "It depends almost entirely on how coupled your code is. With framework calls smeared across every module, a switch touches every file and is effectively a rewrite. With a thin-wrapper seam and a framework-agnostic evaluation set, it is rewriting one adapter and re-running your tests — a contained, verifiable change."
+    }
+  ],
+  "related": [
+    "choose-agent-framework",
+    "agent-framework-comparison",
+    "agent-without-framework",
+    "agent-framework-mental-models",
+    "what-is-agent-framework"
+  ],
+  "furtherReading": [
+    {
+      "title": "LangGraph documentation",
+      "url": "https://langchain-ai.github.io/langgraph/"
+    },
+    {
+      "title": "OpenAI Agents SDK documentation",
+      "url": "https://openai.github.io/openai-agents-python/"
+    },
+    {
+      "title": "Model Context Protocol — official site",
+      "url": "https://modelcontextprotocol.io/"
+    },
+    {
+      "title": "Building effective agents — Anthropic",
+      "url": "https://www.anthropic.com/research/building-effective-agents"
+    }
+  ]
+}

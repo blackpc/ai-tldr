@@ -1,0 +1,377 @@
+{
+  "slug": "quantization-quality-loss",
+  "title": "How Much Quality Do You Lose When You Quantize a Model?",
+  "shortTitle": "Quality Loss from Quantization",
+  "seoTitle": "How Much Quality Do You Lose Quantizing an LLM?",
+  "metaDescription": "Quantization saves memory but costs accuracy. Learn what perplexity measures, how much quality drops at each bit level, and which tasks degrade first.",
+  "keywords": [
+    "quantization quality loss llm",
+    "does quantization hurt accuracy",
+    "perplexity quantization explained",
+    "q4 vs q8 quality difference",
+    "how much accuracy lost quantizing"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You will be able to reason about the real accuracy cost of each quantization level and predict which of your tasks will suffer first.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "[Quantization](/learn/local-open-models/quantization-and-formats/what-is-quantization) shrinks a model by storing its numbers in fewer bits — say 4 bits each instead of 16. That makes the file smaller and lets it run on a weaker machine. But there is no free lunch: every number you round off loses a little precision, and *some* of that precision was doing useful work. The question this article answers is the one the sibling [Q4 vs Q8 vs FP16](/learn/local-open-models/quantization-and-formats/q4-vs-q8-vs-fp16) guide skips — not *how small does it get*, but *how dumb does it get*."
+        },
+        {
+          "type": "p",
+          "md": "Think of quantization like re-saving a photo as a smaller JPEG. At high quality you cannot tell the difference. Drop the quality slider a bit and it still looks fine on a phone. Drop it far enough and you start to see blocky artifacts — first in the fine details like hair and text, while large flat areas of sky still look perfect. A quantized model degrades the same way: the easy parts stay sharp long after the hard parts have gone fuzzy."
+        },
+        {
+          "type": "p",
+          "md": "So \"how much quality do you lose?\" has no single number. It depends on how aggressively you quantize, how big the original model is, and — crucially — *what you ask it to do*. A 4-bit model can chat about your weekend flawlessly and then quietly botch a multiplication or drop a closing brace in a function. The loss is real but uneven, and learning where it hides is the whole skill."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Common shorthand: **FP16** = the full-precision baseline (16-bit floats). **Q8** = roughly 8-bit, almost lossless. **Q4** = roughly 4-bit, the popular sweet spot. **Q2/Q3** = aggressive, noticeably degraded. The exact bit budget varies by method, but lower number = smaller and lossier."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "If you run models in the cloud, you mostly do not think about this — the provider serves full or near-full precision and hides the details. The moment you run a model yourself, quantization stops being optional. A 70-billion-parameter model is about 140 GB at FP16 and will not fit on any consumer GPU. At Q4 it is roughly 40 GB and suddenly *might* fit. Quantization is the bridge between \"this model exists\" and \"this model runs on my hardware,\" which is exactly why anyone building a [local LLM](/learn/local-open-models/running-models-locally/what-is-local-llm) setup has to care about the trade."
+        },
+        {
+          "type": "p",
+          "md": "The trap is treating quantization as free because the demos look fine. People download the smallest file that fits their VRAM, ask it a couple of friendly questions, see fluent answers, and conclude the quality is identical. Then they wire it into something that actually matters — a coding assistant, a data-extraction job, a long-document summarizer — and the failures show up in production where they are expensive to debug. The fluency fools you; fluency is the *last* thing to break."
+        },
+        {
+          "type": "p",
+          "md": "Getting this right means you can make the trade on purpose instead of by accident. You might happily run Q4 for a brainstorming buddy, insist on Q6 or Q8 for a code generator, and decide a task simply needs to go back to the cloud. That is a real engineering decision with a memory budget and a quality budget on each side — and you can only balance it if you know which side you are spending."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How quality loss actually happens",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A model's knowledge lives in its weights — millions or billions of decimal numbers. Quantization rounds each weight to one of a small set of allowed values. At 4 bits there are only 16 possible values; at 8 bits, 256. The model still computes in the same shape, just with coarser numbers. Each rounding introduces a tiny error, and those errors accumulate as signals pass through dozens of layers."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Where the error enters",
+            "steps": [
+              {
+                "label": "Original weight",
+                "sub": "e.g. 0.7183 (16-bit)"
+              },
+              {
+                "label": "Round to grid",
+                "sub": "nearest 4-bit value"
+              },
+              {
+                "label": "Stored weight",
+                "sub": "e.g. 0.75"
+              },
+              {
+                "label": "Error propagates",
+                "sub": "compounds across layers",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Most of those errors are harmless — the model has huge redundancy and shrugs them off. The danger is the **outlier weights**: a small number of unusually large values that carry disproportionate influence. Crush those down to the same coarse grid as everything else and the model genuinely loses capability. This is why naive 4-bit quantization once looked terrible and modern methods look fine: the good ones spend extra bits protecting the weights that matter and squeeze the rest."
+        },
+        {
+          "type": "h3",
+          "text": "How we measure the loss: perplexity"
+        },
+        {
+          "type": "p",
+          "md": "The standard yardstick is **perplexity**. Run the model over a fixed chunk of text and, at each word, look at how much probability it assigned to the word that actually came next. A confident, correct model gives high probability and scores *low* perplexity; a model that is constantly surprised scores high. Roughly, perplexity is \"on average, how many words was the model torn between?\" Lower is better."
+        },
+        {
+          "type": "p",
+          "md": "When you quantize, perplexity creeps up. A change from 5.80 to 5.85 is noise — invisible in practice. A jump from 5.80 to 7.50 means the model is meaningfully less sure of itself and you will feel it. Perplexity is the early-warning gauge: it is cheap to compute, it moves before obvious errors appear, and it lets you compare two quants of the same model on equal footing."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Perplexity has real limits. It measures *next-word prediction on generic text*, not whether your code compiles or your math is right. Two quants can have near-identical perplexity yet behave very differently on reasoning. Treat a small perplexity gap as \"probably fine,\" never as proof — always confirm on your own tasks."
+        }
+      ]
+    },
+    {
+      "id": "the-quality-curve",
+      "title": "The rough quality curve, FP16 down to Q2",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "There is a well-known shape to how quality falls as you cut bits. The exact numbers depend on the model and method, so treat this as a *map of the terrain*, not a spec sheet — but the shape holds across most modern models."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Level",
+            "Approx. bits",
+            "Quality vs FP16",
+            "Typical use"
+          ],
+          "rows": [
+            [
+              "FP16 / BF16",
+              "16",
+              "Baseline (100%)",
+              "The reference; rarely run locally"
+            ],
+            [
+              "Q8",
+              "~8",
+              "Essentially identical",
+              "When you have the memory and want zero worries"
+            ],
+            [
+              "Q6",
+              "~6",
+              "Indistinguishable in practice",
+              "Great quality-size balance"
+            ],
+            [
+              "Q5",
+              "~5",
+              "Very close; tiny slips on hard tasks",
+              "Solid everyday default"
+            ],
+            [
+              "Q4",
+              "~4",
+              "Small but real loss; usually fine",
+              "The popular sweet spot"
+            ],
+            [
+              "Q3",
+              "~3",
+              "Noticeable; errors on coding/math rise",
+              "Only if memory forces it"
+            ],
+            [
+              "Q2",
+              "~2",
+              "Clearly degraded; often unreliable",
+              "Last resort / experiments"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The key insight is that the curve is **flat then steep**. From FP16 down to about Q5 or Q4, quality barely moves — you are giving up a sliver of accuracy for a huge memory saving, which is why Q4 is so popular. Below Q4 the floor falls away fast: each bit you remove now costs much more than the last. Q3 is a meaningful step down, and Q2 frequently breaks things outright."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "The flat zone vs the cliff",
+            "columns": [
+              {
+                "title": "Flat zone (Q8 → Q4)",
+                "accent": true,
+                "items": [
+                  "Quality loss is small",
+                  "Memory savings are large",
+                  "Best bang for the bit",
+                  "Safe default for most work"
+                ]
+              },
+              {
+                "title": "The cliff (Q3 → Q2)",
+                "items": [
+                  "Quality drops sharply per bit",
+                  "Hard tasks fail first",
+                  "Output gets less reliable",
+                  "Only when nothing else fits"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "One more lever decides where the cliff sits: **model size**. Big models tolerate quantization far better than small ones, because they have more redundant capacity to spare. A 70B model at Q4 stays excellent; a 7B model at Q4 already feels the squeeze, and at Q2 it can become close to useless. A practical rule of thumb: a *larger* model at a *lower* bit level often beats a *smaller* model at a higher one for the same memory budget — so prefer 13B-Q4 over 7B-Q8 if they fit the same VRAM."
+        }
+      ]
+    },
+    {
+      "id": "what-degrades-first",
+      "title": "What degrades first",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Quality loss is not spread evenly across tasks. Anything with a single brittle correct answer breaks early; anything forgiving and open-ended survives. This is why a quant that seems perfect in casual chat can fail the moment you give it real work."
+        },
+        {
+          "type": "h3",
+          "text": "Breaks first (least forgiving)"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Code generation.** One wrong token — a missing bracket, a hallucinated method name, an off-by-one index — and the program does not run. There is no partial credit. Coding is the canary in the coal mine for quantization damage.",
+            "**Math and step-by-step reasoning.** Long chains of dependent steps mean a small slip early on poisons everything after it. Quantized models drop or transpose digits and lose the thread on multi-step problems.",
+            "**Structured output.** Asking for strict JSON, a specific schema, or exact formatting demands precision the coarse weights struggle to maintain — you see more malformed brackets and broken keys.",
+            "**Long context.** Tracking facts across a long document or conversation stresses the model's precision, and quantized models lose the thread of distant details sooner."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Survives longest (most forgiving)"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Casual conversation and chit-chat.** Many phrasings are equally fine, so small errors vanish into acceptable variation.",
+            "**Summarizing and rephrasing.** The source text carries most of the information; the model is reorganizing, not recalling from fragile memory.",
+            "**Brainstorming and creative writing.** There is no single right answer, so reduced precision reads as a different valid choice rather than a mistake."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "This ordering is your shortcut. If your use case is a chat companion or a writing aid, you can push to Q4 or even Q3 with confidence. If it is a coding agent or a data extractor, stay at Q5–Q8 and budget the memory for it. Match the bit level to the *brittleness* of the task, not to a generic benchmark."
+        }
+      ]
+    },
+    {
+      "id": "test-it-yourself",
+      "title": "How to sanity-check a quant yourself",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Published perplexity tables and leaderboard scores are a starting point, not a verdict. They are measured on generic text and may not touch your actual workload. The only test that counts is *your* prompts. Build a tiny evaluation set — ten to thirty prompts that look like your real traffic, including the hard cases — and run them through two quant levels side by side."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "A quick quant comparison loop",
+            "steps": [
+              {
+                "label": "Collect ~20 real prompts"
+              },
+              {
+                "label": "Run on the higher quant"
+              },
+              {
+                "label": "Run on the lower quant"
+              },
+              {
+                "label": "Compare answers side by side"
+              },
+              {
+                "label": "Pick the smallest that still passes"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Keep the comparison honest. Set the same prompts, same parameters, and a low or zero temperature so randomness does not muddy the signal — you want to see the model's *quality* difference, not the dice. Then read the outputs as a human. Does the code still run? Is the math right? Did the JSON parse? You are looking for the cheapest quant whose answers you cannot tell apart from the expensive one on the cases you care about."
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "title": "compare two quants on the same prompts",
+          "code": "# Pull the same model at two precisions (Ollama example)\nollama pull llama3.1:8b-instruct-q4_K_M\nollama pull llama3.1:8b-instruct-q8_0\n\n# Run an identical prompt through each, deterministic settings\nfor q in q4_K_M q8_0; do\n  echo \"===== $q =====\"\n  ollama run llama3.1:8b-instruct-$q \\\n    \"Write a Python function that returns the nth Fibonacci number.\" \\\n    --format json 2>/dev/null\ndone\n# Eyeball both outputs: does the code run? same logic? any dropped tokens?"
+        },
+        {
+          "type": "p",
+          "md": "Tools like [Ollama](/learn/local-open-models/running-models-locally/what-is-ollama) and [llama.cpp](/learn/local-open-models/running-models-locally/what-is-llama-cpp) make this swap a one-line change, so the experiment costs minutes. Spending those minutes once, up front, beats discovering the quality cliff in production a week later."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics click, a few nuances separate a rough mental model from a reliable one."
+        },
+        {
+          "type": "p",
+          "md": "**Not all 4-bit is equal.** The method matters as much as the bit count. Modern schemes like GPTQ and AWG-style quantization use calibration data to decide *which* weights to protect, and GGUF's K-quant variants (the `_K_S`, `_K_M`, `_K_L` suffixes) spend extra bits on the most sensitive layers. A well-made Q4_K_M can beat a naive Q5 on quality despite using fewer bits. If you are choosing a method, the [GGUF vs GPTQ vs AWQ](/learn/local-open-models/quantization-and-formats/gguf-vs-gptq-vs-awq) comparison is the next stop."
+        },
+        {
+          "type": "p",
+          "md": "**Weights are not the only thing quantized.** The numbers flowing *through* the model at runtime — the activations and the [KV cache](/learn/local-open-models/quantization-and-formats/what-is-quantization) that stores attention history — can also be quantized to save memory. Activation and cache quantization tends to bite harder than weight quantization, and it hits long-context tasks especially, which is part of why distant details degrade first."
+        },
+        {
+          "type": "p",
+          "md": "**Benchmarks can mislead in both directions.** A quant can score the same on a multiple-choice benchmark yet feel worse in open-ended use, because picking the right letter from four options is far more forgiving than generating a flawless 50-line program. Trust holistic, generative tests over single aggregate scores, and weight the tests toward *your* workload."
+        },
+        {
+          "type": "p",
+          "md": "**Quantization stacks with other compromises.** If you also run a smaller model, a heavily quantized KV cache, and a tight context window — common when squeezing a model onto a phone or laptop — the losses compound. See [local hardware requirements](/learn/local-open-models/running-models-locally/local-llm-hardware-requirements) and [running LLMs on a phone](/learn/local-open-models/running-models-locally/run-llms-on-a-phone) for how these trade-offs add up. The durable takeaway: quantization quality loss is small, uneven, and predictable. Spend your bits where the task is brittle, save them where it is forgiving, and never trust a single number over your own prompts."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Does quantization hurt accuracy?",
+      "a": "Yes, but usually less than people fear. From FP16 down to about Q4, the accuracy loss is small enough that most users cannot tell the difference on everyday tasks. Below Q4 (Q3, Q2) the loss grows quickly and becomes obvious, especially on coding, math, and other precision-heavy work."
+    },
+    {
+      "q": "What is the quality difference between Q4 and Q8?",
+      "a": "In practice, very little for most tasks. Q8 is essentially indistinguishable from full precision, and Q4 is only slightly behind it — a small, often invisible drop. The gap mainly shows up on brittle tasks like code generation and multi-step math, where Q8 makes fewer slips. For chat and writing, you will rarely notice a difference."
+    },
+    {
+      "q": "What does perplexity measure in quantization?",
+      "a": "Perplexity measures how surprised a model is by real text — how well it predicts each next word. Lower perplexity means a more confident, accurate model. When you quantize, perplexity rises slightly; a tiny rise is noise, while a large jump signals real quality loss. It is a useful early-warning gauge but does not directly test coding or reasoning."
+    },
+    {
+      "q": "Which tasks break first when you quantize a model?",
+      "a": "Tasks with one brittle correct answer break first: code generation, step-by-step math, strict structured output like JSON, and long-context tracking. Forgiving tasks — casual chat, summarizing, brainstorming — survive much lower bit levels because small errors blend into acceptable variation."
+    },
+    {
+      "q": "Is a bigger quantized model better than a smaller full-precision one?",
+      "a": "Often yes, for the same memory budget. Larger models have more redundancy and tolerate quantization better, so a 13B model at Q4 frequently beats a 7B model at Q8 of similar size on disk. The best move is usually to pick the largest model that fits at a reasonable quant, rather than a tiny model at full precision."
+    },
+    {
+      "q": "How can I tell if a quantized model is good enough for my use case?",
+      "a": "Test it on your own prompts, not just benchmarks. Build about 20 prompts that mirror your real workload, including the hard cases, then run them through two quant levels with deterministic settings and compare outputs by hand. Pick the smallest quant whose answers you cannot distinguish from the larger one on the cases that matter."
+    }
+  ],
+  "related": [
+    "what-is-quantization",
+    "q4-vs-q8-vs-fp16",
+    "gguf-vs-gptq-vs-awq",
+    "local-llm-hardware-requirements",
+    "what-is-llama-cpp"
+  ],
+  "furtherReading": [
+    {
+      "title": "llama.cpp — quantization formats and tools (GitHub)",
+      "url": "https://github.com/ggml-org/llama.cpp"
+    },
+    {
+      "title": "Quantization — Hugging Face Transformers docs",
+      "url": "https://huggingface.co/docs/transformers/en/quantization/overview"
+    },
+    {
+      "title": "Perplexity — Wikipedia",
+      "url": "https://en.wikipedia.org/wiki/Perplexity"
+    }
+  ]
+}

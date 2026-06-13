@@ -1,0 +1,423 @@
+{
+  "slug": "recall-vs-precision-vector-search",
+  "title": "Recall vs Precision in Vector Search: Measuring Retrieval Quality",
+  "shortTitle": "Recall vs Precision",
+  "seoTitle": "Recall vs Precision in Vector Search Explained",
+  "metaDescription": "Recall@k, precision, and how to benchmark a vector index against exact search. Learn what these metrics mean and how to tune your index without guessing.",
+  "keywords": [
+    "recall vs precision vector search",
+    "recall at k explained",
+    "how to measure vector search quality",
+    "benchmark ann index recall",
+    "vector search evaluation metrics"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn what recall@k and precision actually measure in vector search and how to benchmark your ANN index against ground-truth exact search.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you run a [vector search](/learn/embeddings-vector-databases/vector-database-guides/what-is-a-vector-database), you ask the index for the *k* nearest items to a query — say the 10 closest [embeddings](/learn/embeddings-vector-databases/embeddings-explained/what-are-embeddings). There are two different questions you can ask about the results. **Recall** asks: *of the items that truly belong in the top 10, how many did the index actually return?* **Precision** asks: *of the 10 items the index returned, how many are actually relevant to what the user wanted?* They sound similar but they measure opposite kinds of mistakes."
+        },
+        {
+          "type": "p",
+          "md": "Here is the everyday analogy. Imagine a librarian fetching books for you. **Recall** is whether they found *all* the books that match your request — miss two and recall drops, no matter how good the ones they brought are. **Precision** is whether the books they handed you are *actually about your topic* — bring ten books but three are off-topic and precision drops, even if every relevant book made it onto the cart. A perfect librarian scores high on both, but in the real world you usually trade one against the other."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The trap for beginners: in vector-search benchmarks, *recall* almost always means **recall against the exact answer** — did your fast, approximate index return the same neighbors that a slow, brute-force search would? That is a property of the **index**. *Precision*, as users feel it, is about whether those neighbors are **genuinely relevant** — a property of your **embeddings and data**. Two different layers, two different fixes."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every article about [approximate nearest neighbor search](/learn/embeddings-vector-databases/similarity-search-indexing/approximate-nearest-neighbors) tells you there is a *recall-versus-speed tradeoff*. Almost none of them tell you how to **measure** it. So teams ship an index with default settings, the search feels \"mostly fine,\" and nobody notices that 1 in 5 correct results is silently missing. The whole point of these metrics is to turn that vague feeling into a number you can tune against."
+        },
+        {
+          "type": "p",
+          "md": "Why a builder should care, concretely:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**You can't tune what you can't measure.** Index parameters like HNSW's `ef` or IVF's `nprobe` directly trade recall for latency. Without a recall number you are guessing — turn a knob, hope search feels better, ship it.",
+            "**\"Approximate\" means it skips things on purpose.** An [ANN index](/learn/embeddings-vector-databases/similarity-search-indexing/approximate-nearest-neighbors) is fast *because* it doesn't check every vector. That speed is paid for in missed neighbors. Recall@k tells you exactly how much you're missing.",
+            "**Bad retrieval poisons everything downstream.** If you feed search results into a RAG pipeline or a recommender, a missing-but-correct chunk can never be reasoned about. The model isn't wrong — the retriever never gave it the right document.",
+            "**Recall and precision fail differently.** Low recall is usually an *index* problem (tune the index). Low precision is usually an *embedding or data* problem (better model, better chunking, reranking). Measuring both tells you which lever to pull."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "A useful rule of thumb: **measure recall to validate your index, measure precision to validate your retrieval design.** If exact search already gives bad results, no amount of index tuning will save you — the problem is upstream in the embeddings."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "To measure recall you need a **ground truth**: the *correct* answer you compare your index against. For an ANN index the ground truth is wonderfully concrete — it's whatever **exact (brute-force) search** returns. Exact search compares the query to *every* vector and keeps the true top-k. It's slow, but for evaluation you only run it once on a sample, so slowness is fine."
+        },
+        {
+          "type": "h3",
+          "text": "Step 1 — build a ground-truth set"
+        },
+        {
+          "type": "p",
+          "md": "Take a representative sample of queries (a few hundred to a few thousand real or realistic queries). For each one, run **exact** nearest-neighbor search over your full dataset to get the *true* top-k neighbors. Save those. This is your answer key. You compute it once and reuse it every time you re-tune the index."
+        },
+        {
+          "type": "h3",
+          "text": "Step 2 — run the same queries through your real index"
+        },
+        {
+          "type": "p",
+          "md": "Now run the identical queries through your fast ANN index. For each query you get the index's top-k. **Recall@k** for one query is simply: *of the k true neighbors, how many appear in the index's k results?* Average that fraction across all queries and you have your index's recall@k — usually reported as a number like 0.95, meaning the index recovers 95% of the true neighbors on average."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Measuring recall@k against exact search",
+            "steps": [
+              {
+                "label": "Sample queries",
+                "sub": "few hundred–few thousand"
+              },
+              {
+                "label": "Exact search",
+                "sub": "true top-k (answer key)"
+              },
+              {
+                "label": "ANN search",
+                "sub": "your fast index, top-k"
+              },
+              {
+                "label": "Compare overlap",
+                "sub": "hits ÷ k, per query"
+              },
+              {
+                "label": "Average",
+                "sub": "recall@k",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Notice what recall@k here does **not** measure: whether the neighbors are *good*. If your embeddings are weak, exact search returns mediocre neighbors and a recall@k of 1.0 just means your index faithfully reproduced those mediocre results. Recall@k against exact search measures **index fidelity** — agreement with brute force — not real-world relevance."
+        },
+        {
+          "type": "h3",
+          "text": "Step 3 — measure precision the way users feel it"
+        },
+        {
+          "type": "p",
+          "md": "Precision needs a *human* judgment of relevance, not just agreement with brute force. You take the results actually shown to a user and label which ones are genuinely relevant. **Precision@k** = relevant results ÷ k. If 7 of the top 10 are on-target, precision@10 is 0.7. This is the metric your users actually experience, and it depends mostly on your embedding model and data quality, not your index parameters."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Two questions, two ground truths",
+            "columns": [
+              {
+                "title": "Recall@k",
+                "accent": true,
+                "items": [
+                  "Found all the true neighbors?",
+                  "Ground truth = exact search",
+                  "Measures the INDEX",
+                  "Fix with ef / nprobe / index choice",
+                  "Cheap to compute automatically"
+                ]
+              },
+              {
+                "title": "Precision@k",
+                "items": [
+                  "Are the returned items relevant?",
+                  "Ground truth = human labels",
+                  "Measures EMBEDDINGS + data",
+                  "Fix with better model / reranking",
+                  "Needs relevance judgments"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "worked-example",
+      "title": "A worked example",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Concrete numbers make this click. You're searching a catalog and you want the top **5** neighbors (k=5) for a query. Exact brute-force search gives you the answer key — the *true* top 5 by [cosine similarity](/learn/embeddings-vector-databases/similarity-search-indexing/cosine-similarity-vs-dot-product). Your fast HNSW index returns its own top 5. Compare them:"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Rank",
+            "Exact (truth)",
+            "ANN index",
+            "Hit?"
+          ],
+          "rows": [
+            [
+              "1",
+              "doc_A",
+              "doc_A",
+              "yes"
+            ],
+            [
+              "2",
+              "doc_B",
+              "doc_C",
+              "yes (B/C swapped)"
+            ],
+            [
+              "3",
+              "doc_C",
+              "doc_B",
+              "yes"
+            ],
+            [
+              "4",
+              "doc_D",
+              "doc_D",
+              "yes"
+            ],
+            [
+              "5",
+              "doc_E",
+              "doc_Z",
+              "no — E missing"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The index returned 4 of the 5 true neighbors (A, B, C, D); it missed E and substituted an outsider, Z. So **recall@5 = 4/5 = 0.80** for this query. Note that the B/C reordering does *not* hurt recall — recall@k counts membership in the top-k as a set, not the exact order. Average this 0.80 across all your sample queries to get the index's overall recall@5."
+        },
+        {
+          "type": "p",
+          "md": "Now suppose a human looks at the index's 5 results and judges that doc_A, doc_C, doc_B, and doc_D are genuinely relevant but doc_Z is off-topic. That's 4 relevant out of 5 shown, so **precision@5 = 0.80** too — but for a completely different reason. Recall dropped because the index *skipped* a true neighbor; precision dropped because one returned item *wasn't relevant*. Same score, different disease."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "recall_at_k.py — the whole computation",
+          "code": "import numpy as np\n\ndef recall_at_k(truth_ids, ann_ids, k):\n    \"\"\"Average recall@k over many queries.\n    truth_ids[i] = exact top-k neighbor IDs for query i.\n    ann_ids[i]   = ANN index's top-k IDs for query i.\"\"\"\n    scores = []\n    for truth, ann in zip(truth_ids, ann_ids):\n        true_set = set(truth[:k])\n        got = len(true_set & set(ann[:k]))\n        scores.append(got / k)        # set overlap, order ignored\n    return float(np.mean(scores))\n\n# Ground truth comes from exact (brute-force) search, computed once:\n#   sims = corpus @ query            # cosine if vectors are normalized\n#   truth = np.argsort(sims)[::-1][:k]\n\nprint(recall_at_k(truth_ids, ann_ids, k=10))  # e.g. 0.96"
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Because recall@k treats the top-k as a **set**, an index that returns the right documents in a slightly different order still scores recall = 1.0. If exact *ordering* matters for your use case, look at rank-aware metrics like nDCG or MRR instead — but for \"did we surface the right candidates,\" recall@k is the standard."
+        }
+      ]
+    },
+    {
+      "id": "reading-the-recall-latency-curve",
+      "title": "Reading the recall-vs-latency curve",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The reason recall matters at all is that you can *buy* it with time. ANN indexes expose a knob that controls how hard they search: in [HNSW](/learn/embeddings-vector-databases/similarity-search-indexing/hnsw-explained) it's `ef` (or `efSearch`) — how many candidates to explore; in IVF-style indexes it's `nprobe` — how many partitions to scan. Turn the knob up and the index inspects more vectors: recall climbs toward 1.0, but each query gets slower. Turn it down and queries fly, but recall sags."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "The knob you actually tune",
+            "steps": [
+              {
+                "label": "Raise ef / nprobe",
+                "sub": "explore more candidates"
+              },
+              {
+                "label": "More vectors checked",
+                "sub": "extra work per query"
+              },
+              {
+                "label": "Recall ↑",
+                "sub": "fewer true neighbors missed"
+              },
+              {
+                "label": "Latency ↑",
+                "sub": "the price you pay",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The right way to tune is to sweep the knob across several values and plot **recall@k on one axis against query latency (or queries-per-second) on the other**. You get a curve. The shape is the whole story: at first recall rises steeply for a tiny latency cost (cheap wins), then it flattens into diminishing returns where you're paying a lot of milliseconds for the last fraction of a percent."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "ef (HNSW)",
+            "Recall@10",
+            "p95 latency",
+            "Read this as"
+          ],
+          "rows": [
+            [
+              "32",
+              "0.86",
+              "1.2 ms",
+              "fast but lossy"
+            ],
+            [
+              "64",
+              "0.94",
+              "1.9 ms",
+              "cheap win — recall jumps"
+            ],
+            [
+              "128",
+              "0.98",
+              "3.4 ms",
+              "good sweet spot for many apps"
+            ],
+            [
+              "256",
+              "0.99",
+              "6.1 ms",
+              "diminishing returns begin"
+            ],
+            [
+              "512",
+              "0.995",
+              "11.0 ms",
+              "paying a lot for +0.5%"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The numbers above are illustrative — *your* curve depends on your data, dimensions, and hardware, which is exactly why you must measure your own. But the **shape** is universal: find the elbow where the curve bends flat, and pick the lowest knob value that clears your recall target. In this example, if you need recall ≥ 0.95 at the lowest latency, `ef=128` is the answer; going to 512 nearly triples latency to recover half a percent almost nobody will notice."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Don't chase recall = 1.0. The whole reason you chose an approximate index is to *not* pay for exact search. A target like recall@10 ≥ 0.95 is excellent for most production retrieval; 0.98–0.99 is for accuracy-critical work. Decide the target from the product, then find the cheapest knob setting that hits it."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "**Confusing index recall with relevance.** Recall@k against exact search only proves your index matches brute force. If brute force returns junk (weak embeddings), high recall just faithfully reproduces junk. Validate relevance separately with precision and human labels.",
+            "**A stale or wrong ground truth.** Your exact-search answer key must use the *same* dataset, the *same* distance metric, and the *same* embeddings as the live index. Re-embed your corpus or switch from cosine to dot-product and the old answer key is invalid — recompute it.",
+            "**Too few or unrepresentative queries.** Twenty hand-picked queries don't reflect real traffic. Use a few hundred to a few thousand realistic queries so the average recall is stable and not dominated by a handful of easy ones.",
+            "**Measuring recall at the wrong k.** Recall@10 and recall@100 can look very different. Measure at the *k you actually serve*. If your app shows 5 results, recall@5 is the number that matters, not recall@100.",
+            "**Reporting only the average.** A mean recall of 0.95 can hide a tail of queries at 0.5. Look at the distribution — the worst 5% of queries are often where users feel the pain.",
+            "**Forgetting precision entirely.** Teams obsess over index recall and never ask whether results are *relevant*. A perfectly tuned index over bad embeddings still disappoints users."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Recall and precision are **not** interchangeable, and improving one can quietly hurt the other. Returning more results (larger k) tends to raise recall but can lower precision as weaker matches creep in. Always state *which* metric, at *which* k, against *which* ground truth — a bare \"95% accuracy\" is meaningless here."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics click, a few refinements separate a toy benchmark from a trustworthy one."
+        },
+        {
+          "type": "p",
+          "md": "**Rank-aware metrics.** Recall@k ignores order; sometimes order is the product. **nDCG** (normalized discounted cumulative gain) rewards putting relevant items near the top and discounts ones lower down. **MRR** (mean reciprocal rank) focuses on where the *first* relevant result lands — ideal when users mostly want one good answer. Use recall@k to gate the index, then nDCG or MRR to judge the ranking your users see."
+        },
+        {
+          "type": "p",
+          "md": "**Two ground truths, two layers.** It's worth holding the distinction firmly: *index quality* is recall against exact search and is fixed by tuning the index; *retrieval quality* is precision/nDCG against human relevance labels and is fixed by better [embeddings](/learn/embeddings-vector-databases/embeddings-explained/what-are-embeddings), better chunking, or a reranking step. Diagnose which layer is failing before you spend effort — tuning `ef` won't help a relevance problem, and a fancier model won't help an index that's silently dropping neighbors."
+        },
+        {
+          "type": "p",
+          "md": "**The build-time vs search-time tradeoff.** `ef`/`nprobe` are *search-time* knobs you can change live. But index *construction* parameters (HNSW's `M` and `efConstruction`, IVF's number of partitions) also cap how high recall can climb. If your recall-latency curve plateaus below your target no matter how high you push `ef`, the ceiling is baked into how the index was built — rebuild with stronger construction settings."
+        },
+        {
+          "type": "p",
+          "md": "**Automate it as a regression test.** Save your ground-truth set and run recall@k in CI. Then any change — a new [embedding model](/learn/embeddings-vector-databases/embeddings-explained/what-are-embeddings), an index upgrade, a re-chunking — gets a before/after recall number instead of a vibe. This is how you avoid the classic silent regression where retrieval quietly degrades over months and nobody notices until users complain."
+        },
+        {
+          "type": "p",
+          "md": "**Where to go next.** Understand the index you're measuring — [approximate nearest neighbor search](/learn/embeddings-vector-databases/similarity-search-indexing/approximate-nearest-neighbors) and [HNSW](/learn/embeddings-vector-databases/similarity-search-indexing/hnsw-explained) explain *why* recall is less than 1.0 in the first place, and [semantic search](/learn/embeddings-vector-databases/similarity-search-indexing/what-is-semantic-search) covers the relevance side that precision measures. The durable lesson: an ANN benchmark without a measured recall number is just a hope, and a recall number without a relevance check is only half the picture."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is recall@k in vector search?",
+      "a": "Recall@k measures how many of the *true* top-k nearest neighbors your fast (approximate) index actually returned, compared to a slow exact brute-force search that you treat as the correct answer. A recall@10 of 0.95 means the index recovered 95% of the true top-10 neighbors on average. It's computed as a set overlap, so result order doesn't affect it."
+    },
+    {
+      "q": "What is the difference between recall and precision in vector search?",
+      "a": "Recall asks whether the index found *all* the items it should have (measured against exact search — an index property). Precision asks whether the items it *did* return are genuinely relevant (measured against human judgment — an embeddings-and-data property). Low recall is usually fixed by tuning the index; low precision is usually fixed by better embeddings, chunking, or reranking."
+    },
+    {
+      "q": "How do I benchmark the recall of an ANN index?",
+      "a": "Take a representative sample of a few hundred to a few thousand queries. For each, run exact brute-force search to get the true top-k — this is your answer key. Then run the same queries through your real ANN index, and for each query compute how many of the true top-k it returned, divided by k. Average across all queries to get recall@k."
+    },
+    {
+      "q": "What is a good recall value for vector search?",
+      "a": "It depends on the product, but recall@k of 0.95 or higher is excellent for most production retrieval, and 0.98–0.99 is reserved for accuracy-critical applications. Don't chase 1.0 — the whole point of an approximate index is to avoid paying for exact search, so pick the lowest index setting that clears your target."
+    },
+    {
+      "q": "Does higher recall mean slower search?",
+      "a": "Usually yes. ANN indexes expose a knob — HNSW's `ef` or IVF's `nprobe` — that controls how many candidates are explored. Raising it inspects more vectors, so recall climbs but each query gets slower. The standard practice is to sweep the knob and plot recall against latency, then pick the value at the curve's elbow that meets your recall target at the lowest cost."
+    },
+    {
+      "q": "Why is my recall@k high but search results still feel bad?",
+      "a": "Because recall@k against exact search only proves your index matches brute force — it says nothing about relevance. If your embeddings are weak, exact search itself returns mediocre neighbors, and a perfect recall just faithfully reproduces them. Measure precision with human relevance labels to catch this; the fix is usually a better embedding model, better chunking, or a reranking step."
+    }
+  ],
+  "related": [
+    "approximate-nearest-neighbors",
+    "hnsw-explained",
+    "what-is-semantic-search",
+    "cosine-similarity-vs-dot-product",
+    "what-is-a-vector-database"
+  ],
+  "furtherReading": [
+    {
+      "title": "ann-benchmarks — standard ANN recall/latency benchmark suite (GitHub)",
+      "url": "https://github.com/erikbern/ann-benchmarks"
+    },
+    {
+      "title": "Faiss — guidelines and evaluation (GitHub Wiki)",
+      "url": "https://github.com/facebookresearch/faiss/wiki"
+    },
+    {
+      "title": "Precision and recall (Wikipedia)",
+      "url": "https://en.wikipedia.org/wiki/Precision_and_recall"
+    }
+  ]
+}

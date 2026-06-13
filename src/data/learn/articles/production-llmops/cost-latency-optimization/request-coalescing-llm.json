@@ -1,0 +1,369 @@
+{
+  "slug": "request-coalescing-llm",
+  "title": "Request Coalescing for LLMs: Collapsing Duplicate Calls Under Load",
+  "shortTitle": "Request Coalescing",
+  "seoTitle": "Request Coalescing for LLMs: Collapse Duplicate Calls",
+  "metaDescription": "When many users ask the same thing at once, request coalescing serves one model call to all of them. Learn the pattern, when it applies, and its pitfalls.",
+  "keywords": [
+    "request coalescing",
+    "llm deduplication",
+    "single-flight llm",
+    "thundering herd llm",
+    "dedupe llm requests"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You'll understand how request coalescing (single-flight) serves one in-flight LLM call to many identical concurrent requests, cutting cost and load spikes.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Imagine a busy ticket counter at a train station. A delay is announced, and forty people rush up at once, all asking the exact same question: *\"Is the 9:15 cancelled?\"* A bad clerk answers each person separately, forty times over, even though the answer is identical. A smart clerk holds up a hand, says \"let me check,\" looks it up **once**, and then announces the answer to the whole crowd at the same time."
+        },
+        {
+          "type": "p",
+          "md": "**Request coalescing** is that smart clerk, applied to your LLM service. When many requests for the *same* answer arrive within the same brief window, instead of firing off one expensive model call per request, your system fires **one** call and shares its single result with everyone who was waiting. The pattern is also called **single-flight**: at most one in-flight call exists per unique question, no matter how many callers want it."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Coalescing is *not* the same as caching. A cache answers from a result that already exists. Coalescing handles the moment *before* any result exists — when the first identical requests all miss the cache at the same time and would each trigger their own model call. It collapses those concurrent duplicates into one."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "LLM calls are unusually expensive and slow compared with a normal API: a single completion can cost real money in tokens and take seconds to finish. So duplicate work hurts far more here than it would for a typical web endpoint. Two specific failure modes make coalescing worth building."
+        },
+        {
+          "type": "h3",
+          "text": "The thundering herd on a cache miss"
+        },
+        {
+          "type": "p",
+          "md": "[Semantic caching](/learn/production-llmops/cost-latency-optimization/semantic-caching-llm/) stores answers so repeat questions skip the model. But a cache only helps *after* the first answer lands. Picture a popular item with no cached answer yet — a breaking-news summary, a viral prompt, a homepage greeting. The instant it goes live, a thousand users ask it within the same second. Every one of them checks the cache, every one misses (nothing is stored yet), and every one launches its own model call. You just paid for a thousand identical generations to fill a cache slot that only needed **one**. That spike is the classic *thundering herd*, and it lands exactly when your traffic is highest and you can least afford it."
+        },
+        {
+          "type": "list",
+          "ordered": false,
+          "items": [
+            "**Cost.** N identical calls cost N times as much as one. At scale, on a hot key, that is the difference between a few cents and a serious bill.",
+            "**Load and rate limits.** Each call consumes provider quota and GPU time. A herd can blow through your rate limit or saturate a self-hosted [inference](/learn/production-llmops/llmops-fundamentals/training-vs-inference/) cluster, causing failures for *unrelated* requests too.",
+            "**Latency stability.** When the backend is overloaded by redundant work, every request — duplicate or not — gets slower. Removing the redundant load keeps tail latency predictable."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Coalescing fixes all three at once with a single rule: *if an identical request is already in flight, don't start a second one — wait for the first and reuse its answer.* It is one of the cheapest, highest-leverage tricks in the [cost and latency](/learn/production-llmops/cost-latency-optimization/cut-llm-token-costs/) toolbox because it costs you nothing per saved call — you simply stop doing work you didn't need to do."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The mechanism has three parts: a **key** that decides what counts as \"the same\" request, an **in-flight map** that tracks calls currently running, and a **fan-out** step that delivers one result to every waiter."
+        },
+        {
+          "type": "h3",
+          "text": "1. Normalize the request into a key"
+        },
+        {
+          "type": "p",
+          "md": "Two requests should coalesce only if they would produce interchangeable answers. So you build a stable key from everything that affects the output: the **normalized prompt** (trim whitespace, fix casing where safe), the **model name**, and any decoding parameters that change the result such as `temperature`, `top_p`, `max_tokens`, and `system` prompt. Anything that does *not* affect the answer — a request ID, a timestamp, the user's name in a header — must be left out, or identical questions will get different keys and never coalesce."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Be careful with sampling. If `temperature > 0`, two calls are *supposed* to return different text. Coalescing them gives every waiter the **same** sampled answer. That is fine for cost (and often invisible to users), but if your product promises fresh variety per request, only coalesce deterministic calls (`temperature = 0`) or treat a random seed as part of the key."
+        },
+        {
+          "type": "h3",
+          "text": "2. Check the in-flight map (single-flight)"
+        },
+        {
+          "type": "p",
+          "md": "Keep a map from key to a *pending* result (a promise/future). When a request arrives, take a lock on its key and check the map. If no entry exists, you are the **leader**: insert a pending entry and start the real model call. If an entry already exists, you are a **follower**: don't call the model — just subscribe to the leader's pending result and wait. When the leader finishes, it resolves the pending result, every follower wakes up with the same answer, and the entry is removed so the next miss starts fresh."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "One leader call serves many followers",
+            "steps": [
+              {
+                "label": "N identical requests",
+                "sub": "arrive together"
+              },
+              {
+                "label": "Compute key",
+                "sub": "prompt + model + params"
+              },
+              {
+                "label": "In-flight?",
+                "sub": "check the map"
+              },
+              {
+                "label": "Leader: 1 model call",
+                "sub": "followers wait",
+                "accent": true
+              },
+              {
+                "label": "Fan out result",
+                "sub": "all N get one answer"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "3. A minimal single-flight in code"
+        },
+        {
+          "type": "p",
+          "md": "The whole pattern is a few lines around an `async` lock and a dictionary of futures. The first caller for a key creates the future and does the work; everyone else awaits the same future."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "single_flight.py",
+          "code": "import asyncio\n\n_inflight: dict[str, asyncio.Future] = {}\n_lock = asyncio.Lock()\n\nasync def coalesced_call(key: str, do_call):\n    # do_call() is the real, expensive LLM request (a coroutine fn).\n    async with _lock:\n        fut = _inflight.get(key)\n        is_leader = fut is None\n        if is_leader:\n            fut = asyncio.get_event_loop().create_future()\n            _inflight[key] = fut\n\n    if not is_leader:\n        return await fut          # follower: reuse the leader's result\n\n    try:\n        result = await do_call()  # leader: the ONLY model call\n        fut.set_result(result)\n        return result\n    except Exception as exc:\n        fut.set_exception(exc)    # share the failure too (see pitfalls)\n        raise\n    finally:\n        async with _lock:\n            _inflight.pop(key, None)  # clear so the next miss starts fresh"
+        },
+        {
+          "type": "p",
+          "md": "Notice what is *not* here: no waiting timer, no batching delay. Coalescing does not deliberately hold requests back. It only piggybacks the followers that *happen* to be there while the leader is already running. That is what separates it from request batching, which we compare below."
+        }
+      ]
+    },
+    {
+      "id": "coalescing-vs-caching-vs-batching",
+      "title": "Coalescing vs caching vs batching",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "These three optimizations are easy to mix up because they all reduce redundant LLM work, but they act at different moments and solve different problems. They stack — most serious services use all three together."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Technique",
+            "When it acts",
+            "What it collapses",
+            "Adds latency?"
+          ],
+          "rows": [
+            [
+              "Caching",
+              "After an answer exists",
+              "Repeat requests over time",
+              "No — it removes a call"
+            ],
+            [
+              "Request coalescing",
+              "While a call is in flight",
+              "Concurrent duplicate requests",
+              "No deliberate delay"
+            ],
+            [
+              "Request batching",
+              "Before calls are sent",
+              "Different requests into one GPU pass",
+              "Yes — a short wait window"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The clean way to see it: **caching** is *\"have I answered this before?\"*, **coalescing** is *\"am I answering this right now?\"*, and **batching** is *\"can I run these different prompts together for GPU efficiency?\"* Coalescing is the thin layer that protects the gap caching can't cover — the cold window between the first request and the first stored answer."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "stack",
+            "title": "Layers a hot request passes through",
+            "layers": [
+              {
+                "label": "Exact / semantic cache",
+                "sub": "answer already exists → return it"
+              },
+              {
+                "label": "Request coalescing",
+                "sub": "identical call in flight → wait & share",
+                "accent": true
+              },
+              {
+                "label": "Model call (batched on GPU)",
+                "sub": "the one real generation"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Order matters. Check the cache first (cheapest). On a miss, hit the coalescing layer so the herd folds into one leader. Only the leader reaches the model, where batching and the [KV cache](/learn/production-llmops/cost-latency-optimization/kv-cache-explained/) take over. For the difference between exact and meaning-based caches, see [prompt caching vs semantic caching](/learn/production-llmops/cost-latency-optimization/prompt-caching-vs-semantic-caching/)."
+        }
+      ]
+    },
+    {
+      "id": "the-streaming-caveat",
+      "title": "The streaming caveat",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Most modern LLM endpoints **stream** tokens — the answer arrives word by word so the user sees output immediately. Streaming makes coalescing trickier, because there is no single \"final result\" to hand back; there is a *live stream* that only the leader is consuming."
+        },
+        {
+          "type": "p",
+          "md": "The naive single-flight above returns one finished value, which works for non-streaming calls. To coalesce a streamed response you need a **fan-out (broadcast) stream**: the leader reads tokens from the provider once and re-publishes each token to every subscribed follower, like one radio broadcast heard by many receivers."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "One token stream, many subscribers",
+            "root": {
+              "label": "Leader reads provider stream once",
+              "accent": true
+            },
+            "children": [
+              {
+                "label": "Follower A",
+                "sub": "tee of tokens"
+              },
+              {
+                "label": "Follower B",
+                "sub": "tee of tokens"
+              },
+              {
+                "label": "Follower C",
+                "sub": "tee of tokens"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Two real consequences fall out of this design:"
+        },
+        {
+          "type": "list",
+          "ordered": false,
+          "items": [
+            "**Late joiners.** A follower who subscribes when the leader is already 50 tokens in either has to replay the buffered tokens-so-far before live ones, or it misses the start. So you must buffer the stream as it flows, not just forward it.",
+            "**Time to first token is shared, not improved.** Followers can't see a token before the leader does. Their [time to first token](/learn/production-llmops/cost-latency-optimization/time-to-first-token/) is the leader's TTFT minus however long they waited to join — coalescing saves cost and load here, not per-user speed.",
+            "**One failure hits everyone.** If the leader's stream errors out halfway, every follower's stream breaks at the same point. You need a clear policy: fail all followers, or let one promote to a new leader and retry."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "If streaming fan-out is too much to build, a common compromise is to coalesce only *non-streaming* calls (background jobs, embeddings, classification, summaries you store) and leave interactive chat streams un-coalesced. You still capture most of the herd savings where they are largest."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Coalescing is a small amount of code with a few sharp edges. Almost every production bug here comes from one of these."
+        },
+        {
+          "type": "list",
+          "ordered": false,
+          "items": [
+            "**Over-coalescing personalized output.** If the answer depends on the user (their name, their permissions, their documents) but those inputs aren't in the key, follower B receives an answer generated for leader A. That is a correctness *and* a security leak. When in doubt, include the identity/context that shapes the answer in the key — or don't coalesce that route.",
+            "**Sharing failures forever.** If the leader fails and you cache that failure in the in-flight map without clearing it, every later request for that key fails too. Always remove the entry on completion (success *or* error), as the `finally` block above does, so the next request retries cleanly.",
+            "**A stuck leader hangs the herd.** If the leader's call never returns (network stall, no timeout), every follower waits forever. Give the leader a hard timeout, and on timeout fail the waiters or let one promote to a fresh leader.",
+            "**It only works per process.** A single in-flight map lives in one server's memory. Across many replicas behind a load balancer, each replica coalesces its own slice — you get partial dedup, not perfect dedup. For cross-node single-flight you need a shared lock (e.g. in Redis), which adds a network round trip and its own failure modes.",
+            "**Forgetting params in the key.** Coalescing two requests that differ in `system` prompt, `max_tokens`, or model returns the wrong answer to one of them. The key must capture *everything* that changes the output, and *nothing* that doesn't."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic single-flight is in place, a few directions are worth knowing as your traffic and architecture grow."
+        },
+        {
+          "type": "p",
+          "md": "**Where to put the layer.** Coalescing usually lives in an [LLM gateway](/learn/production-llmops/llmops-fundamentals/what-is-llm-gateway/) or a proxy in front of the model, because that is the one chokepoint every request flows through. Putting it there means you write it once and it protects every service and model behind it, and it composes naturally with rate limiting, [model routing](/learn/production-llmops/cost-latency-optimization/reduce-llm-latency/), and caching that already live at the gateway."
+        },
+        {
+          "type": "p",
+          "md": "**Coalescing meets semantic keys.** Plain coalescing keys on an *exact* normalized prompt, so \"reset my password\" and \"how do I reset my password\" don't collapse together. A more advanced setup keys on a *semantic* signature (an embedding bucket), so near-duplicate phrasings join the same leader. This borrows directly from [semantic caching](/learn/production-llmops/cost-latency-optimization/semantic-caching-llm/) and carries the same risk: collapse two prompts that *look* similar but should differ, and a follower gets a subtly wrong answer. The looser the match, the more you must verify it is safe."
+        },
+        {
+          "type": "p",
+          "md": "**Distributed single-flight.** The per-process limit is the main thing that breaks at scale. The usual fix is a short-lived lock in a shared store keyed by the request hash: the first node to grab the lock becomes the global leader and writes its result (or a stream handle) where the others can read it; the rest poll or subscribe. This buys true cross-node dedup at the cost of latency, a dependency on the lock store, and careful handling of the case where the leader node dies mid-flight."
+        },
+        {
+          "type": "p",
+          "md": "**Know when *not* to coalesce.** The pattern earns its keep only when identical requests actually arrive concurrently. For long-tail, highly personalized, or low-traffic endpoints, the in-flight map almost never has a hit, and you've added complexity for nothing. Measure your duplicate rate on hot keys first. If coalescing wins, it tends to win big on exactly the spiky, viral, cache-cold moments where everything else is already on fire — which is the whole point. From here, the natural next steps are the broader [cost-cutting](/learn/production-llmops/cost-latency-optimization/cut-llm-token-costs/) and [latency](/learn/production-llmops/cost-latency-optimization/reduce-llm-latency/) playbooks that coalescing slots into."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is request coalescing for LLMs?",
+      "a": "Request coalescing (also called single-flight) is a pattern where many identical LLM requests arriving at the same time are served by a single model call instead of one call each. The first request becomes the leader and actually calls the model; the rest wait for and reuse its result. It cuts cost and protects the backend from duplicate load during traffic spikes."
+    },
+    {
+      "q": "How is coalescing different from caching?",
+      "a": "A cache returns an answer that already exists from an earlier call. Coalescing handles the moment *before* any answer exists — when the first identical requests all miss the cache at the same time and would each start their own model call. Caching answers \"have I done this before?\"; coalescing answers \"am I doing this right now?\" They are complementary and usually run together."
+    },
+    {
+      "q": "What is the thundering herd problem?",
+      "a": "It's when a popular item with no cached answer suddenly gets many concurrent requests. They all miss the cache simultaneously, and each one triggers its own expensive model call to fill the same empty cache slot. You pay N times for one answer and can overload your backend right when traffic peaks. Coalescing solves it by letting only one call through."
+    },
+    {
+      "q": "Does request coalescing work with streaming responses?",
+      "a": "Yes, but it's harder. Instead of returning one finished value, the leader reads the token stream once and re-broadcasts each token to every follower (a fan-out stream). You must buffer tokens for late joiners, and a leader-side stream error breaks all followers at once. A common shortcut is to coalesce only non-streaming calls and leave interactive chat streams alone."
+    },
+    {
+      "q": "When should I not use request coalescing?",
+      "a": "Skip it when identical requests rarely arrive together — long-tail, highly personalized, or low-traffic endpoints — because the in-flight map almost never has a hit and you've added complexity for no gain. Also avoid coalescing when each call must return a genuinely fresh sampled answer, unless you include a random seed in the key. Measure your duplicate rate on hot keys before adding it."
+    },
+    {
+      "q": "Does coalescing work across multiple servers?",
+      "a": "Not by default. A normal in-flight map lives in one process's memory, so each replica only coalesces its own share of traffic. For true cross-node deduplication you need a shared lock (for example in Redis) keyed on the request hash, which adds a network round trip and extra failure handling when a leader node dies mid-flight."
+    }
+  ],
+  "related": [
+    "semantic-caching-llm",
+    "prompt-caching-vs-semantic-caching",
+    "cut-llm-token-costs",
+    "reduce-llm-latency",
+    "time-to-first-token",
+    "what-is-llm-gateway"
+  ],
+  "furtherReading": [
+    {
+      "title": "golang.org/x/sync — singleflight package",
+      "url": "https://pkg.go.dev/golang.org/x/sync/singleflight"
+    },
+    {
+      "title": "Prompt caching — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching"
+    },
+    {
+      "title": "vLLM documentation",
+      "url": "https://docs.vllm.ai/"
+    }
+  ]
+}

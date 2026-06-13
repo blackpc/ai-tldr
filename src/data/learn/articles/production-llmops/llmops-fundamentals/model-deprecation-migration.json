@@ -1,0 +1,330 @@
+{
+  "slug": "model-deprecation-migration",
+  "title": "Model Deprecation: How to Survive When a Provider Retires Your Model",
+  "shortTitle": "Model Deprecation & Migration",
+  "seoTitle": "Model Deprecation: Surviving When a Provider Retires a Model",
+  "metaDescription": "Providers retire models on a schedule. Learn how to plan for deprecation, pin versions, run migration evals, and avoid silent quality drops in production.",
+  "keywords": [
+    "llm model deprecation",
+    "migrate to new llm model",
+    "model version pinning",
+    "provider sunset model",
+    "llm migration eval"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You'll understand how to prepare for the day your provider retires the model your app depends on, and migrate without breaking behavior.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you build an app on a hosted language model, you don't own the model — you rent it. The provider can retire (\"deprecate\") the version you depend on and eventually switch it off. After that date, every call to that model ID returns an error instead of an answer. **Model deprecation** is the provider's announcement that a model is on its way out; **migration** is the work you do to move to a newer model before the lights go off."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like a phone carrier shutting down its old 3G network. Your phone still works, but one morning it can't connect. The carrier warned you for months, sold you a newer phone, and set a hard cut-off date. If you ignored every notice, you wake up to a dead device. Model deprecation is the same: a scheduled sunset, plenty of warning, a recommended replacement — and a real outage for anyone who didn't plan."
+        },
+        {
+          "type": "p",
+          "md": "The twist that makes this different from a normal upgrade: **you don't choose the timing**. A regular model upgrade is something you decide to do when you're ready. A forced migration runs on the provider's calendar. Your job is to be ready *before* their deadline, not after a 404 starts your incident."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Two words people mix up. *Deprecated* means \"still works, but scheduled for removal — stop building new things on it.\" *Retired* means \"gone — calls now fail.\" There is always a gap between the two dates, and that gap is your migration window."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A retired model is not a quality problem — it's an availability problem. The model doesn't get worse; it simply stops responding. For a production app, that's an outage with a known date attached, which is the most avoidable kind of outage there is."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**A hard date turns into a hard outage.** Providers publish retirement dates well in advance. If nobody on the team is watching, the date passes silently and the first signal is failing requests in production.",
+            "**Behavior shifts even when the swap succeeds.** Moving to a newer model rarely breaks the API call, but it often changes the *output*: different tone, different formatting, slightly different answers to the same prompt. A migration that returns HTTP 200 can still quietly break a feature that depended on the old model's exact style.",
+            "**Pinned versions go stale.** Pinning a specific model version (a good practice — see below) protects you from surprise changes, but it also means you're the one responsible for moving off it. A pin is a promise to migrate later.",
+            "**Costs and limits change.** A newer model may tokenize text differently, price tokens differently, or cap output length differently. Your cost dashboards and rate-limit assumptions need re-checking, not just your code."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who should care? Anyone running an LLM feature past the prototype stage. If real users hit your app and a provider's model sits behind it, deprecation is a standing operational risk — part of [LLMOps](/learn/production-llmops/llmops-fundamentals/what-is-llmops), the discipline of running language models reliably in production. The good news: unlike most outages, this one is fully predictable, so it's fully preventable."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every hosted model moves through the same lifecycle. Understanding the stages tells you exactly when to act."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "The model lifecycle",
+            "steps": [
+              {
+                "label": "Active",
+                "sub": "recommended; build freely"
+              },
+              {
+                "label": "Deprecated",
+                "sub": "still works; stop adopting"
+              },
+              {
+                "label": "Sunset window",
+                "sub": "your time to migrate",
+                "accent": true
+              },
+              {
+                "label": "Retired",
+                "sub": "calls now fail"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "A model is **active** when the provider recommends it. At some point it becomes **deprecated** — an announcement, usually with a published **retirement date** months out. The span between \"deprecated\" and \"retired\" is your migration window. Once retired, the model ID returns an error (on the Claude API, a `404 not_found_error`), and there is no grace period after that."
+        },
+        {
+          "type": "h3",
+          "text": "Version pinning vs auto-upgrade aliases"
+        },
+        {
+          "type": "p",
+          "md": "Most providers give you two ways to name a model, and the choice decides who controls upgrades."
+        },
+        {
+          "type": "list",
+          "items": [
+            "A **pinned version** points at one exact, frozen snapshot. On the Claude API a dated ID like `claude-haiku-4-5-20251001` is a pin: the model behind it never changes. You get total stability — and total responsibility for moving when it's deprecated.",
+            "An **alias** points at \"the current version of this model,\" and the provider repoints it over time. An alias like `claude-opus-4-8` always resolves to that model; broader family aliases can move you onto newer snapshots automatically. You get fewer manual migrations — and less control over exactly when behavior shifts."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Rule of thumb: **pin in production, test on the alias.** A pinned ID means a provider's silent refresh can never change your output between deploys. Meanwhile, point a staging environment at the newer model so you see what's coming. Whichever you choose, the retirement date is the same — pinning changes *who* pulls the trigger, not *whether* the model sunsets."
+        },
+        {
+          "type": "h3",
+          "text": "The migration eval set"
+        },
+        {
+          "type": "p",
+          "md": "The core of a safe migration is a **migration eval set**: a fixed collection of representative inputs plus the expected (or known-good) outputs for each. You run the *same* inputs through the old model and the new model and compare. This is how you catch behavior shifts that a green build would miss — the call succeeds, but the answer changed in a way that matters."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Run both models on the same inputs",
+            "columns": [
+              {
+                "title": "Old model (baseline)",
+                "items": [
+                  "Same 50–200 saved inputs",
+                  "Records current outputs",
+                  "Your reference for 'correct enough'",
+                  "Captures today's behavior before it's gone"
+                ]
+              },
+              {
+                "title": "New model (candidate)",
+                "accent": true,
+                "items": [
+                  "Exact same inputs",
+                  "Outputs compared to baseline",
+                  "Flag format / tone / accuracy drift",
+                  "Re-check token cost and latency"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "You don't need a fancy framework to start. A list of real prompts your app sends, run through both models, with the two outputs side by side, already surfaces 90% of migration surprises. Add automatic checks (does the JSON still parse? is the classification label still in the allowed set? did length blow past your cap?) and you have a repeatable gate you can run on every future migration too — closely related to [evaluating any LLM app](/learn/production-llmops/testing-deployment/testing-llm-apps)."
+        }
+      ]
+    },
+    {
+      "id": "a-worked-migration",
+      "title": "A worked migration",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Here's the shape of a migration in code. The point isn't the framework — it's that you run *both* models over the same saved inputs and diff the results before you ship."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "compare_models.py",
+          "code": "from anthropic import Anthropic\n\nclient = Anthropic()  # reads ANTHROPIC_API_KEY from the environment\n\n# Your migration eval set: real inputs your app actually sends.\nEVAL_INPUTS = [\n    \"Summarize this refund request in one sentence: ...\",\n    \"Classify the sentiment (positive/neutral/negative): ...\",\n    \"Extract the order number as JSON: ...\",\n]\n\nOLD_MODEL = \"claude-haiku-4-5\"   # the model you're migrating off\nNEW_MODEL = \"claude-sonnet-4-6\"  # the candidate replacement\n\ndef ask(model: str, prompt: str) -> str:\n    msg = client.messages.create(\n        model=model,\n        max_tokens=512,\n        messages=[{\"role\": \"user\", \"content\": prompt}],\n    )\n    return msg.content[0].text\n\nfor prompt in EVAL_INPUTS:\n    old = ask(OLD_MODEL, prompt)\n    new = ask(NEW_MODEL, prompt)\n    if old.strip() != new.strip():\n        print(\"DRIFT:\", prompt[:50])\n        print(\"  old:\", old[:120])\n        print(\"  new:\", new[:120])"
+        },
+        {
+          "type": "p",
+          "md": "A raw string comparison is just the start — most outputs *will* differ slightly and that's fine. The real value is reviewing the flagged cases: is the new answer still correct, still in the right format, still the right length? For structured outputs, parse both and compare the parsed objects, not the raw text. For judgment-style tasks, a human (or a separate model acting as a grader) decides whether the new output is as good."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Don't keep your prompts identical and hope. Prompts are tuned to a specific model's quirks. Aggressive instructions written to push an older model around can *overtrigger* on a newer one, and length or tone can shift. Budget time to re-tune the prompt for the new model, then re-run the eval — migration is prompt work, not just a string swap."
+        }
+      ]
+    },
+    {
+      "id": "the-deprecation-calendar",
+      "title": "Keep a deprecation calendar",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A sunset notice only becomes an outage when nobody reads it. The fix is boring and effective: keep a small, owned record of every model you depend on and when it retires."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Model in use",
+            "How it's referenced",
+            "Retirement date",
+            "Replacement",
+            "Migration owner"
+          ],
+          "rows": [
+            [
+              "claude-haiku-4-5",
+              "pinned, prod",
+              "watch provider notices",
+              "claude-haiku (next)",
+              "you"
+            ],
+            [
+              "claude-opus-4-8",
+              "alias, prod",
+              "n/a (current)",
+              "n/a",
+              "you"
+            ],
+            [
+              "older snapshot",
+              "pinned, batch job",
+              "published date",
+              "newer snapshot",
+              "you"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The dates and replacements come straight from the provider's model and migration docs — never from memory, since the lineup changes. Put the earliest retirement date on a real calendar with a reminder weeks ahead, so migration starts as planned work, not as a 2 a.m. page. Assigning an owner per model is what turns \"someone should look at this\" into \"this person will.\""
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Inventory.** List every model ID your code calls, including the ones buried in batch jobs and cron tasks.",
+            "**Look up the lifecycle.** For each, record whether it's active or deprecated and its retirement date from the provider's docs.",
+            "**Set reminders early.** Aim to finish migration well before the deadline, not on it — leave room for eval, prompt re-tuning, and a staged rollout.",
+            "**Re-check after every provider announcement.** New launches often come with new deprecations; update the calendar the same week."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "If you front your providers with an [LLM gateway](/learn/production-llmops/llmops-fundamentals/what-is-llm-gateway), the model name often lives in one config instead of scattered across the codebase. That makes the inventory step trivial and the swap a one-line change — see also [model routing](/learn/production-llmops/llmops-fundamentals/llm-model-routing)."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics are in place — pin in prod, keep a calendar, gate with an eval set — a few advanced concerns separate a smooth migration from a risky one."
+        },
+        {
+          "type": "p",
+          "md": "**Prompt portability.** A prompt that works beautifully on one model is not guaranteed to transfer. Newer models tend to follow instructions more literally, calibrate response length to the task, and sometimes change default formatting (for example, reaching for richer markup). Treat the prompt as part of what you're migrating: keep it under version control alongside the model ID, and re-tune and re-eval the pair together rather than assuming the old prompt carries over untouched."
+        },
+        {
+          "type": "p",
+          "md": "**Staged rollout, not a big bang.** Don't flip 100% of traffic to the new model at once. Route a small slice first, watch your [production metrics](/learn/production-llmops/observability-monitoring/llm-production-metrics) and [user feedback](/learn/production-llmops/observability-monitoring/llm-user-feedback), and ramp up only when the new model looks healthy. Keep the old model reachable until its retirement date so you can roll back instantly if something regresses — a forced migration still lets you choose *how fast* you move within the window."
+        },
+        {
+          "type": "p",
+          "md": "**Observability is your safety net.** Migration drift is often subtle: slightly worse answers, an occasional malformed output, a creep in latency or cost. Tracing and monitoring catch what an offline eval set can't, because production sees inputs you never thought to test. Tag requests with the model version so you can slice metrics by model and spot a regression the moment it appears — this is exactly what [LLM observability](/learn/production-llmops/observability-monitoring/what-is-llm-observability) is for."
+        },
+        {
+          "type": "p",
+          "md": "**Token and cost re-baselining.** A newer model can count tokens differently for the same text, which shifts cost, latency, and how much fits in the context window. Don't assume your old numbers carry over. Re-measure token counts on representative prompts with the new model, and update cost dashboards and rate-limit thresholds before you ramp traffic — not after the bill arrives."
+        },
+        {
+          "type": "p",
+          "md": "**Reduce blast radius up front.** The single most protective habit is to avoid scattering raw model IDs across your code. Centralize the model name in one place — a config value, an environment variable, or a gateway — so a migration is a controlled, one-line change you can test and roll back, not an archaeology project across dozens of files. The durable lesson: you can't stop a provider from retiring a model, but you fully control whether that retirement is a calm scheduled task or a production fire."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is the difference between a deprecated and a retired model?",
+      "a": "A *deprecated* model still works but is scheduled for removal — the provider is telling you to stop building on it and to plan a move. A *retired* model is switched off: API calls to it fail (on the Claude API, a 404 error). The gap between the deprecation announcement and the retirement date is your migration window."
+    },
+    {
+      "q": "What happens if I keep calling a model after it's retired?",
+      "a": "The request fails. There is no silent fallback to a newer model — the model ID simply no longer exists, so your app returns an error to users until you point it at an active model. That's why a retirement date is effectively an outage date for anyone who didn't migrate."
+    },
+    {
+      "q": "Should I pin a model version or use an auto-upgrade alias?",
+      "a": "Pin in production so a provider's silent refresh can't change your output between deploys, and test on the alias or newer model in staging so you see changes coming. Pinning gives you stability but makes you responsible for migrating when the version is deprecated; an alias does fewer manual migrations but gives you less control over exactly when behavior shifts. Either way, the retirement date is the same."
+    },
+    {
+      "q": "How do I migrate to a new LLM model without breaking behavior?",
+      "a": "Build a migration eval set: a fixed list of real inputs from your app. Run them through both the old and new model, compare the outputs, and review every difference for correctness, format, and length. Re-tune the prompt for the new model, roll out to a small slice of traffic first, and keep the old model reachable so you can roll back."
+    },
+    {
+      "q": "Why did my outputs change when the API call still succeeded?",
+      "a": "A successful call only means the request was valid — it says nothing about the answer. A newer model can return different tone, formatting, or wording for the same prompt. This behavior drift is exactly what a migration eval set is designed to catch, since a green build will not flag it."
+    },
+    {
+      "q": "How much warning do providers give before retiring a model?",
+      "a": "Usually months, published in the provider's model and migration documentation as a specific retirement date. The exact lead time varies by provider and model, so check the official docs rather than relying on memory, and put the earliest date on a calendar with a reminder weeks ahead."
+    }
+  ],
+  "related": [
+    "what-is-llmops",
+    "what-is-llm-gateway",
+    "llm-model-routing",
+    "what-is-llm-observability",
+    "llm-prototype-to-production",
+    "llm-production-metrics"
+  ],
+  "furtherReading": [
+    {
+      "title": "Model deprecations — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
+    },
+    {
+      "title": "Model migration guide — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/about-claude/models/migration-guide"
+    },
+    {
+      "title": "Models overview — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/about-claude/models/overview"
+    }
+  ]
+}

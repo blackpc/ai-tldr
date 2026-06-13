@@ -1,0 +1,369 @@
+{
+  "slug": "throughput-vs-latency-llm",
+  "title": "Throughput vs Latency: Tuning a Self-Hosted LLM Server",
+  "shortTitle": "Throughput vs Latency",
+  "seoTitle": "Throughput vs Latency: Tuning a Self-Hosted LLM",
+  "metaDescription": "Serving your own model means trading per-user speed against total users served. Learn how batch size, concurrency, and queueing shape latency and throughput.",
+  "keywords": [
+    "throughput vs latency llm serving",
+    "llm time to first token vs tokens per second",
+    "tune vllm concurrency batch size",
+    "max concurrent requests llm server",
+    "llm serving performance tuning"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You will understand the core trade-off in LLM serving and which knobs to turn when your server is too slow for users or too underused to be cheap.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you run your own model on an [inference server](/learn/local-open-models/inference-and-serving/what-is-inference-server), two numbers fight each other. **Latency** is how fast *one* person gets an answer. **Throughput** is how many people the server can serve *in total* per second. Push one up and you usually push the other down."
+        },
+        {
+          "type": "p",
+          "md": "Picture a coffee shop with one barista. If the barista makes each drink start-to-finish before touching the next order, every customer gets their coffee *fast* — low latency — but the line out the door barely moves, so the shop serves few people per hour. Now imagine the barista pulls four espresso shots at once and steams milk for several orders together. Each individual customer waits a little longer, but the shop pushes far more cups out the door every hour — high throughput."
+        },
+        {
+          "type": "p",
+          "md": "An LLM server works the same way. Processing requests one at a time gives each user the snappiest possible reply but wastes most of the GPU. Batching many requests together keeps the expensive GPU busy and serves more users, but each user waits slightly longer. Tuning a server is the art of choosing where on that line to sit."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "These are not opposites you can both maximize. There is a real trade-off curve, and your job as an operator is to pick the point on it that meets your users' speed expectations while keeping the GPU — the thing you are paying for — as busy as possible."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "If you call a hosted API, the provider already tuned this for you. The moment you self-host — on a rented GPU, an on-prem box, or your own cloud — the trade-off becomes *your* problem, and getting it wrong is expensive in two different ways."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Too slow for users.** If you optimize purely for throughput by cramming huge batches together, individual replies crawl. A chat UI that takes six seconds to start typing feels broken, and users leave.",
+            "**Too underused to be affordable.** A GPU that costs the same per hour whether it is 5% busy or 95% busy. If you run one request at a time to keep latency low, you may be paying for a $30k card to do $2k of work. Your cost *per answer* balloons.",
+            "**Wrong capacity planning.** Without understanding the curve, you can't answer the basic business question: \"how many GPUs do I need to serve N users at an acceptable speed?\" You either over-provision and burn money or under-provision and time out under load."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Two very different people care about the two metrics. The **user** feels latency — they only experience their own request, and they judge the product on how fast *their* answer appears. **Finance** cares about throughput — they see the monthly GPU bill divided by the number of answers served. A good operator keeps both happy at once: fast enough for the user, busy enough for the accountant."
+        },
+        {
+          "type": "p",
+          "md": "This is exactly why modern servers like [vLLM](/learn/local-open-models/inference-and-serving/vllm-explained) exist. Their headline feature, [continuous batching](/learn/local-open-models/inference-and-serving/continuous-batching), is essentially a smarter answer to this trade-off than the naive choices above."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "To tune the trade-off you first have to measure it correctly. \"Latency\" for an LLM is not one number — it has two parts that users feel very differently."
+        },
+        {
+          "type": "h3",
+          "text": "The two latencies a user actually feels"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Time to first token (TTFT).** The wait from sending the request to seeing the *first* word appear. This covers queueing plus the *prefill* step, where the model reads your whole prompt at once. Long prompts and a busy queue both make TTFT worse. This is the \"is it even working?\" feeling.",
+            "**Inter-token latency (ITL),** also called time per output token. The gap between each streamed word *after* the first. This is the *decode* step — the model generates one token at a time. If you read at ~5 words/second, you barely notice an ITL under ~50ms; above that, the text visibly stutters.",
+            "**End-to-end latency.** The total time for the full answer: TTFT + (ITL × number of output tokens). A short reply is dominated by TTFT; a long essay is dominated by ITL."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Against those sits the finance metric: **throughput**, usually measured in **output tokens per second** across *all* concurrent requests (sometimes also requests per second). A server might give one user 40 tokens/sec while delivering 2,000 tokens/sec in total across 60 users."
+        },
+        {
+          "type": "h3",
+          "text": "Why batching trades latency for throughput"
+        },
+        {
+          "type": "p",
+          "md": "A GPU is wildly parallel — it can multiply huge matrices in roughly the time it takes to multiply small ones. Running one request barely uses it. **Batching** means processing several requests' tokens together in one pass, so the GPU does far more useful work per step. That is why throughput climbs with batch size. The cost: each request now shares the GPU and waits its turn inside the batch, so per-token latency rises. The diagram below shows the whole path a request travels and where each metric is born."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "A request's journey through the server",
+            "steps": [
+              {
+                "label": "Arrive",
+                "sub": "request joins the queue"
+              },
+              {
+                "label": "Wait",
+                "sub": "queueing → grows TTFT"
+              },
+              {
+                "label": "Prefill",
+                "sub": "read prompt → finishes TTFT"
+              },
+              {
+                "label": "Decode (batched)",
+                "sub": "stream tokens → sets ITL"
+              },
+              {
+                "label": "Done",
+                "sub": "throughput counted here",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Older servers used **static batching**: gather a fixed group of requests, run them all to completion, then start the next group. The problem is that a request asking for 20 tokens finishes long before one asking for 500, but its slot stays blocked until the *longest* request in the batch is done — wasting GPU and adding latency."
+        },
+        {
+          "type": "p",
+          "md": "**Continuous batching** fixes this. The scheduler works at the *token* level: the instant any request finishes, a waiting request slots into its place mid-batch. The GPU never sits idle waiting for the slowest member, which is how vLLM and similar servers get high throughput *and* tolerable latency at the same time. Read the full mechanism in [continuous batching](/learn/local-open-models/inference-and-serving/continuous-batching)."
+        }
+      ]
+    },
+    {
+      "id": "the-knobs-you-actually-turn",
+      "title": "The knobs you actually turn",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Tuning comes down to a small set of settings. Each one moves you along the latency-vs-throughput curve. Here is what each does and which way it pushes."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Knob",
+            "What it controls",
+            "Turn it up to get…"
+          ],
+          "rows": [
+            [
+              "Max batch size / max concurrent sequences",
+              "How many requests decode together",
+              "More throughput, higher per-user latency"
+            ],
+            [
+              "Max-num-batched-tokens",
+              "Token budget per scheduler step",
+              "Higher throughput, slightly worse TTFT"
+            ],
+            [
+              "Concurrency limit (max in-flight requests)",
+              "How many requests the server accepts at once before queueing",
+              "More throughput, but a long queue inflates TTFT"
+            ],
+            [
+              "KV-cache memory (gpu-memory-utilization)",
+              "How much GPU RAM holds in-progress requests",
+              "Room for bigger batches → more throughput"
+            ],
+            [
+              "Quantization (e.g. 4-bit / 8-bit)",
+              "Model precision/size",
+              "More free memory → bigger batches, often lower latency too"
+            ],
+            [
+              "Tensor parallelism (GPUs per model)",
+              "Splitting one model across GPUs",
+              "Lower latency for big models; more hardware cost"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The single highest-leverage knob is usually the **concurrency limit**. If you let unlimited requests in, every new arrival lengthens the queue, and TTFT degrades for everyone under load. Capping concurrency and letting extra requests wait *outside* the GPU (or shedding them with a clear error) keeps the requests that *are* running fast."
+        },
+        {
+          "type": "p",
+          "md": "A subtle but important detail: KV-cache memory is the real ceiling on batch size. Every in-flight request stores its attention state (its KV cache) in GPU RAM, and that grows with the prompt and output length. Run out of KV-cache room and the server can't add more requests to the batch no matter what you set the batch size to — so freeing memory via quantization or a smaller model often raises throughput more than tweaking batch size directly. See [local LLM hardware requirements](/learn/local-open-models/running-models-locally/local-llm-hardware-requirements) for how that memory adds up."
+        }
+      ]
+    },
+    {
+      "id": "a-method-to-find-your-setting",
+      "title": "A method to find your setting",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Don't guess. The reliable way to tune is to fix a *latency target* from the user's side, then push concurrency up until you hit it — the last setting that still meets the target is your answer. The shape you are looking for is universal:"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "What happens as you raise concurrency",
+            "columns": [
+              {
+                "title": "Low concurrency (1–2)",
+                "items": [
+                  "Fastest per-user latency",
+                  "GPU mostly idle",
+                  "Throughput low",
+                  "Cost per answer high"
+                ]
+              },
+              {
+                "title": "The sweet spot",
+                "accent": true,
+                "items": [
+                  "Latency still meets target",
+                  "GPU near-fully busy",
+                  "Throughput near its peak",
+                  "Lowest cost per answer"
+                ]
+              },
+              {
+                "title": "Too high",
+                "items": [
+                  "Latency target breached",
+                  "Queue keeps growing",
+                  "Throughput flat or falling",
+                  "Requests time out"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Step by step"
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Write down a target** users will accept, e.g. \"p95 TTFT under 1s and ITL under 50ms.\" The p95 (95th-percentile) matters more than the average — the slow tail is what users complain about.",
+            "**Use realistic traffic.** Benchmark with prompt and output lengths that match your real workload. Tuning on 50-token prompts then serving 4,000-token prompts gives a useless answer.",
+            "**Sweep concurrency.** Run a load test (vLLM ships a `benchmark_serving` script; tools like `k6`, `locust`, or `vegeta` also work) at 1, 2, 4, 8, 16, 32… concurrent requests. At each level record TTFT, ITL, and total tokens/sec.",
+            "**Plot throughput vs latency.** Throughput rises with concurrency, then flattens once the GPU is saturated. Latency stays flat, then shoots up once requests start queueing.",
+            "**Pick the last point under target.** Set your concurrency limit there. You now serve the most users you can without breaking your latency promise."
+          ]
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "title": "sweep concurrency against a vLLM endpoint",
+          "code": "# vLLM's own serving benchmark, run at several concurrency levels.\n# Re-run with --max-concurrency 1, 4, 8, 16, 32 and compare the output.\nfor c in 1 4 8 16 32; do\n  echo \"=== concurrency $c ===\"\n  python benchmarks/benchmark_serving.py \\\n    --backend vllm \\\n    --model meta-llama/Llama-3.1-8B-Instruct \\\n    --dataset-name random \\\n    --random-input-len 1024 \\\n    --random-output-len 256 \\\n    --max-concurrency $c \\\n    --num-prompts 200\ndone\n# Read off: median/p99 TTFT, median ITL, and output token throughput.\n# Your sweet spot = highest $c whose p95 TTFT and ITL still meet target."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Measure tail latency (p95/p99), not just the average. A server can post a great average while 1 in 20 users waits five seconds. Those tail users are the ones who churn and file complaints, so tune to the tail."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "**Tuning on the wrong workload.** Latency and throughput depend heavily on prompt and output length. A setting that's perfect for short chat turns can fall apart for long-document summarization. Tune for the traffic you actually serve.",
+            "**No concurrency cap.** Letting unlimited requests in feels generous but punishes everyone — under a spike the queue grows without bound and TTFT becomes catastrophic. A finite cap plus graceful overflow is kinder than infinite acceptance.",
+            "**Confusing per-user and aggregate tokens/sec.** \"We get 2,000 tokens/sec!\" can mean 2,000 for one user or 40 each for fifty users. Always state whether a throughput number is per-request or server-wide.",
+            "**Ignoring KV-cache limits.** Cranking batch size past what GPU memory can hold causes preemption or out-of-memory errors, which *hurt* throughput. The memory ceiling is real and often the true bottleneck.",
+            "**Forgetting prefill vs decode are different.** A workload dominated by huge prompts (lots of prefill) tunes differently from one generating long outputs (lots of decode). The bottleneck — and the right knob — shifts between them."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Finally, remember this trade-off is specific to serious self-hosting. If you are running a single model for yourself on a laptop with [Ollama](/learn/local-open-models/running-models-locally/what-is-ollama), throughput barely matters — you are the only user, so you tune purely for *your* latency. The throughput-vs-latency balancing act only becomes central once you serve many concurrent users from shared hardware, which is the gap between [Ollama and vLLM](/learn/local-open-models/inference-and-serving/ollama-vs-vllm)."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic sweep makes sense, a few advanced techniques let you bend the curve rather than just slide along it — buying more throughput at the *same* latency, or vice versa."
+        },
+        {
+          "type": "p",
+          "md": "**Chunked prefill.** A giant prompt's prefill can monopolize a scheduler step and stall everyone else's decode, spiking ITL for active users. Modern servers split a long prefill into chunks and interleave them with ongoing decoding, smoothing latency without giving up throughput. It's often on by default; know it exists so you understand why a long prompt no longer freezes other users."
+        },
+        {
+          "type": "p",
+          "md": "**Prefix caching.** When many requests share the same long prefix — a big system prompt, a shared document, a few-shot template — the server can compute that prefix's KV cache once and reuse it. That slashes prefill work, which improves both TTFT and throughput for free. If your traffic has a common prefix, enabling this is one of the biggest easy wins."
+        },
+        {
+          "type": "p",
+          "md": "**Speculative decoding.** A small, fast \"draft\" model proposes several tokens, and the big model verifies them in one pass. When the draft is right, you get multiple tokens per expensive step, *lowering* ITL. It mainly helps latency at low-to-medium load; under heavy batching the GPU is already saturated, so the gains shrink."
+        },
+        {
+          "type": "p",
+          "md": "**Disaggregated serving.** At large scale, some systems run prefill and decode on *separate* GPU pools, because the two phases stress the hardware differently (prefill is compute-bound, decode is memory-bandwidth-bound). Splitting them lets you tune and scale each independently — overkill for most teams, but it's where the frontier is heading."
+        },
+        {
+          "type": "p",
+          "md": "The durable lesson: latency and throughput are two ends of one curve set by how the GPU is shared. You can't maximize both, but with continuous batching, the right concurrency cap, and a workload-matched benchmark you can find the point that keeps users happy and the GPU paid-for. Start from [what an inference server is](/learn/local-open-models/inference-and-serving/what-is-inference-server) if any of the serving mechanics felt fuzzy, then return here to tune."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is the difference between throughput and latency in LLM serving?",
+      "a": "Latency is how fast a single user gets their answer; throughput is how many tokens (or users) the whole server handles per second. Batching many requests together raises throughput but adds a little latency to each user, so the two trade off against each other."
+    },
+    {
+      "q": "What is time to first token vs tokens per second?",
+      "a": "Time to first token (TTFT) is the wait before the *first* word appears — it covers queueing plus the model reading your prompt. Tokens per second (or inter-token latency) is how fast words stream *after* that. Short replies are dominated by TTFT; long replies are dominated by the per-token speed."
+    },
+    {
+      "q": "How do I set max concurrent requests on an LLM server?",
+      "a": "Don't guess — sweep it. Fix a latency target (e.g. p95 TTFT under 1s), then load-test at rising concurrency (1, 2, 4, 8, 16…) using your real prompt and output lengths. The highest concurrency that still meets your target is your max-concurrency setting; beyond it, the queue grows and latency spikes."
+    },
+    {
+      "q": "Does bigger batch size always mean faster serving?",
+      "a": "It means *more total throughput*, not faster *per-user* responses — bigger batches make each user wait a bit longer. And batch size is capped by KV-cache memory: push it past what your GPU RAM holds and you get preemption or out-of-memory errors that actually reduce throughput."
+    },
+    {
+      "q": "Why is my self-hosted LLM fast for one user but slow under load?",
+      "a": "Under load, requests queue. With one user there's no queue, so TTFT is minimal. As concurrency rises past what the GPU can serve in parallel, new requests wait in line and TTFT climbs. A concurrency cap and continuous batching keep the running requests fast instead of degrading everyone."
+    },
+    {
+      "q": "How does continuous batching help the throughput-latency trade-off?",
+      "a": "Static batching blocks every slot until the slowest request in a batch finishes, wasting GPU time. Continuous batching swaps a finished request out and a waiting one in at the token level, so the GPU never idles. That gives you high throughput and tolerable latency at the same time instead of choosing one."
+    }
+  ],
+  "related": [
+    "what-is-inference-server",
+    "continuous-batching",
+    "vllm-explained",
+    "ollama-vs-vllm",
+    "local-llm-hardware-requirements"
+  ],
+  "furtherReading": [
+    {
+      "title": "vLLM Documentation",
+      "url": "https://docs.vllm.ai"
+    },
+    {
+      "title": "Efficient Memory Management for LLM Serving with PagedAttention (vLLM paper, arXiv)",
+      "url": "https://arxiv.org/abs/2309.06180"
+    },
+    {
+      "title": "Orca: A Distributed Serving System for Transformer-Based Generative Models (continuous batching, OSDI)",
+      "url": "https://www.usenix.org/conference/osdi22/presentation/yu"
+    }
+  ]
+}

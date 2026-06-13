@@ -1,0 +1,390 @@
+{
+  "slug": "handling-tool-errors-in-agents",
+  "title": "How Should Agents Handle Tool Errors and Failed Calls?",
+  "shortTitle": "Handling Tool Errors",
+  "seoTitle": "Handling Tool Errors in AI Agents: A Practical Guide",
+  "metaDescription": "Tools time out, return bad data, or reject inputs. Learn how to return LLM-friendly errors, retry safely, and stop an agent from looping on a broken tool.",
+  "keywords": [
+    "ai agent tool error handling",
+    "llm tool call failed retry",
+    "agent error message design",
+    "handling api failures in agents",
+    "agent retry loop tool",
+    "llm friendly error messages"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn how to turn tool failures into signals the model can recover from — clear error messages, safe retries, and guards against retry loops.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you give an [AI agent](/learn/ai-agents/agent-fundamentals/what-is-an-ai-agent) [tools](/learn/ai-agents/tool-use/what-is-tool-use) — a weather API, a database query, a file reader — the happy path is easy to imagine: the model calls the tool, the tool returns clean data, the model uses it. Real tools are not that polite. They time out, return rate-limit errors, reject malformed inputs, hand back empty results, or crash with a stack trace nobody planned for."
+        },
+        {
+          "type": "p",
+          "md": "Tool *error handling* is everything your code does when a tool call goes wrong instead of right. The twist that makes it different from normal programming: the caller is a language model, not a human. The model reads whatever string you send back as its next observation, then decides what to do. So an error message isn't just a log line — it's an instruction to a reasoning system that will literally act on the words you wrote."
+        },
+        {
+          "type": "p",
+          "md": "Think of the agent as a new employee phoning a help desk on your behalf. If the help desk says *\"Error 500\"* and hangs up, the employee just redials the same broken number forever. If instead it says *\"That account number has 9 digits but should have 10 — please re-check and call back,\"* the employee fixes the input and succeeds. Same failure, completely different outcome, decided entirely by how the error was phrased."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Key mindset shift: in agent systems, an error returned to the model is **input to a decision**, not the end of the road. Your job is to make failures *recoverable* — clear enough that the model can fix the call, retry it, or give up gracefully instead of spinning."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "In a normal program, an unhandled error throws an exception and stops. In an [agent loop](/learn/ai-agents/agent-fundamentals/agent-loop-explained), a badly handled error does something worse: it keeps the loop running, burning tokens and money, while the model retries a call that can never succeed. The failure path is where most agent demos quietly fall apart in production."
+        },
+        {
+          "type": "p",
+          "md": "Three concrete problems good error handling solves:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Wasted loops and runaway cost.** A model that can't tell *why* a tool failed will often just call it again — same arguments, same failure. Every retry is another full model turn you pay for, and the agent makes zero progress while the bill climbs.",
+            "**Unrecoverable failures that should have been recoverable.** Most tool errors are fixable by the model: a wrong date format, a missing required field, a query that returned nothing. If your error doesn't *say* what's fixable, the model can't fix it, and a one-line correction turns into an abandoned task.",
+            "**Dangerous repeated side effects.** If a tool that charges a card or sends an email times out, retrying blindly can double-charge or double-send. The error path is exactly where idempotency and side-effect safety have to be handled — or skipped at your peril."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who should care? Anyone shipping an agent that touches a real system. A read-only research agent that browses the web hits flaky pages and rate limits constantly. An agent that books, pays, or writes to a database faces the much harder \"did that actually happen?\" question every time a call doesn't return cleanly. The more powerful the tools, the more the failure path determines whether the agent is reliable or a liability."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Tool error handling sits at one specific point in the agent loop: the moment a tool returns. The model emitted a tool call, your runtime executed it, and now you have a result — success *or* failure. What you send back as the **tool result** (also called the observation) is what the model reasons over next. The whole skill is deciding what that result should say and what your code should do before the model ever sees it."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Where error handling lives in the loop",
+            "steps": [
+              {
+                "label": "Model",
+                "sub": "emits a tool call"
+              },
+              {
+                "label": "Execute tool",
+                "sub": "your runtime"
+              },
+              {
+                "label": "Catch outcome",
+                "sub": "success or error",
+                "accent": true
+              },
+              {
+                "label": "Decide",
+                "sub": "retry / surface / abort"
+              },
+              {
+                "label": "Tool result",
+                "sub": "observation sent back"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "The three decisions on a failure"
+        },
+        {
+          "type": "p",
+          "md": "When a call fails, your code makes one of three choices. Picking the right one for each error type is the core of the design."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Retry silently in code** — the failure is transient and not the model's fault (a network blip, a 503, a rate-limit you can wait out). Handle it inside your runtime with backoff; the model never even sees it. Best for errors the model can't act on anyway.",
+            "**Surface to the model** — the failure is something the model can fix or route around (bad arguments, no results found, a validation error). Return a clear error string as the tool result and let the model correct its next call. This is the heart of *LLM-friendly* error handling.",
+            "**Abort the task** — the failure is fatal and unrecoverable (auth revoked, a hard quota gone, a tool that's simply down). Stop the loop and report cleanly to the user or caller. Better to fail loudly than to loop forever."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Returning an error as a normal observation"
+        },
+        {
+          "type": "p",
+          "md": "A critical mechanic: when you surface an error to the model, you usually return it as an ordinary tool result, not by throwing an exception out of the whole agent. Most tool-use APIs let you mark a tool result as an error while still continuing the conversation — the model reads it, reasons, and tries again. The shape looks roughly like this:"
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "title": "an error returned as a tool result",
+          "code": "{\n  \"role\": \"tool\",\n  \"tool_call_id\": \"call_abc123\",\n  \"is_error\": true,\n  \"content\": \"ValidationError: 'date' must be YYYY-MM-DD. You sent '06/13/2026'. Retry with format like '2026-06-13'.\"\n}"
+        },
+        {
+          "type": "p",
+          "md": "Notice what that message does: it names the problem, points at the exact bad value, and tells the model what a correct call looks like. That is the difference between an error the model can recover from and one it just trips over again."
+        }
+      ]
+    },
+    {
+      "id": "bad-vs-good-errors",
+      "title": "A bad error vs a good error",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The single highest-leverage change you can make is rewriting what your tool returns on failure. Here's the same failure handled two ways. First, the lazy version — pass the raw exception straight through:"
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "title": "BAD: raw stack trace as the observation",
+          "code": "Traceback (most recent call last):\n  File \"/app/tools/db.py\", line 88, in run_query\n    cur.execute(sql, params)\npsycopg2.errors.UndefinedColumn: column \"signup_dt\" does not exist\nLINE 1: SELECT signup_dt FROM users WHERE ...\n               ^"
+        },
+        {
+          "type": "p",
+          "md": "The model now has to parse a Python traceback, guess which line matters, and infer a fix from a database internal. It often can't — so it retries the same query, or invents a different wrong column. The signal is buried in noise that means nothing to a reasoning model."
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "title": "GOOD: a model-actionable error",
+          "code": "Query failed: column 'signup_dt' does not exist on table 'users'.\nAvailable columns: id, email, created_at, plan, country.\nDid you mean 'created_at'? Fix the column name and retry."
+        },
+        {
+          "type": "p",
+          "md": "Same underlying failure, but now the path forward is obvious. The model swaps `signup_dt` for `created_at` and the next call works. Three principles turned the bad error into a good one:"
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**State what's wrong in plain language** — \"column does not exist,\" not a traceback class name.",
+            "**Show the valid options** — listing the real columns lets the model pick the right one instead of guessing.",
+            "**Suggest the next action** — \"fix the column name and retry\" tells the model this is recoverable and how."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Strip secrets and internals out of error strings before they reach the model. File paths, full SQL, connection strings, and stack frames are noise at best and a leak at worst. Translate the failure into the *domain* the model is reasoning in — tables, fields, dates — not the plumbing underneath."
+        }
+      ]
+    },
+    {
+      "id": "retries-loops-and-side-effects",
+      "title": "Retries, loops, and side-effect safety",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Surfacing a clear error invites the model to retry — which is good, until it isn't. Two failure modes show up constantly: the model loops on an error it can't fix, and a retry causes a side effect to happen twice."
+        },
+        {
+          "type": "h3",
+          "text": "Breaking the retry-loop trap"
+        },
+        {
+          "type": "p",
+          "md": "If a tool keeps failing for a reason the model *can't* change — a third-party API that's down, a permission it doesn't have — a naive agent will retry until it hits the loop limit, wasting every turn in between. You need guards in your runtime, not just hope:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Per-tool retry budget.** Track how many times a given tool has failed *in this task*. After N consecutive failures, stop returning a retry-friendly message and instead return a terminal one: \"This tool has failed 3 times and is unavailable. Do not call it again; proceed without it or report that you cannot complete this step.\"",
+            "**Detect repeated identical calls.** If the model calls the same tool with the same arguments and gets the same error twice, that's a loop signal. Tell it explicitly that repeating the call won't help and that it must change the arguments or change approach.",
+            "**A global step cap on the loop.** Independent of any single tool, cap total iterations so a misbehaving agent can never run unbounded. The cap is your last line of defense, not your first.",
+            "**Escalate to a different path.** When a tool is exhausted, nudge the model toward an alternative — another tool, asking the user, or finishing with a partial answer — rather than leaving it stuck."
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "The retry loop — and where to break it",
+            "steps": [
+              {
+                "label": "Tool call fails"
+              },
+              {
+                "label": "Return error to model"
+              },
+              {
+                "label": "Model retries"
+              },
+              {
+                "label": "Check retry budget",
+                "accent": true
+              },
+              {
+                "label": "Budget hit → terminal error"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Idempotency and double side effects"
+        },
+        {
+          "type": "p",
+          "md": "A read tool (search, get, list) is safe to retry as often as you like — running it twice changes nothing. A *write* tool (charge a card, send an email, create a record) is dangerous to retry, because a timeout doesn't tell you whether the action happened. The request may have succeeded on the server even though you never got the response."
+        },
+        {
+          "type": "p",
+          "md": "The standard fix is an **idempotency key**: the caller attaches a unique id to the operation, and the server guarantees that two requests with the same key produce one effect. Now a retry is safe — if the first attempt already went through, the second is a no-op that returns the original result. Many payment and messaging APIs support this directly; if yours doesn't, you have to make the retry decision much more carefully."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Tool type",
+            "Safe to auto-retry?",
+            "How to handle a timeout"
+          ],
+          "rows": [
+            [
+              "Read (search, get, list)",
+              "Yes",
+              "Retry with backoff; it has no side effect"
+            ],
+            [
+              "Idempotent write (with key)",
+              "Yes",
+              "Retry with the same idempotency key"
+            ],
+            [
+              "Non-idempotent write (charge, send)",
+              "No",
+              "Don't blind-retry; check status first, or surface to the model/user"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Never let the model blindly retry a non-idempotent write on a timeout. \"It didn't return\" is not the same as \"it didn't happen.\" When in doubt, query the system for the action's status before trying again — or surface the uncertainty instead of risking a double charge."
+        }
+      ]
+    },
+    {
+      "id": "practical-checklist",
+      "title": "A practical checklist for every tool",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Error handling is easiest when you build it into each tool from the start rather than bolting it on after the first incident. A simple wrapper pattern: catch everything, translate it, and decide retry-in-code vs surface-to-model right there."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "a tool wrapper that returns model-friendly errors",
+          "code": "def safe_tool(fn, args, *, max_local_retries=2):\n    for attempt in range(max_local_retries + 1):\n        try:\n            return {\"ok\": True, \"result\": fn(args)}\n        except RateLimited as e:\n            # transient + not the model's fault -> retry in code\n            if attempt < max_local_retries:\n                time.sleep(2 ** attempt)   # exponential backoff\n                continue\n            return {\"ok\": False,\n                    \"error\": \"Service is rate-limited right now. \"\n                             \"Wait and try a smaller request, or proceed without it.\"}\n        except ValidationError as e:\n            # the model can fix this -> surface a clear, actionable message\n            return {\"ok\": False,\n                    \"error\": f\"Invalid input: {e.human_message}. \"\n                             f\"Expected: {e.expected}. Fix and retry.\"}\n        except Exception:\n            # unknown/internal -> translate, never leak the trace\n            return {\"ok\": False,\n                    \"error\": \"This tool failed unexpectedly and may be \"\n                             \"unavailable. Try a different approach.\"}"
+        },
+        {
+          "type": "p",
+          "md": "Use that as a template and run each tool through a short checklist before you ship it:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Does every error path return a *string the model can act on*, never a raw trace?** Name the problem, show valid options, suggest the next step.",
+            "**Have you classified each failure** as retry-in-code, surface-to-model, or abort — and does the code actually route them differently?",
+            "**Is there a retry budget per tool and a global step cap**, so the agent can't loop forever?",
+            "**Is the tool a read or a write?** If a write, is it idempotent or guarded against double execution on timeout?",
+            "**Did you strip secrets, file paths, and internals** out of the message before it reaches the model?",
+            "**Does the \"empty result\" case return a clear message** (\"no records matched\") rather than an empty string the model misreads as a tool malfunction?"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics are solid — actionable errors, classified retries, side-effect safety — a few more advanced ideas separate a robust agent from a fragile one."
+        },
+        {
+          "type": "p",
+          "md": "**Empty and ambiguous results are errors too.** A search that returns zero rows isn't a failure in the HTTP sense, but to the model it's just as confusing as one. Return *\"No results found for that query — try broader terms or a different filter\"* instead of `[]`. The model handles a clear no-result message far better than an empty payload it has to interpret."
+        },
+        {
+          "type": "p",
+          "md": "**Partial failure in multi-step tools.** A tool that does several things internally (fetch three URLs, write two files) can half-succeed. Don't collapse that to a single \"failed.\" Report what worked and what didn't — *\"2 of 3 pages fetched; page 3 timed out\"* — so the model can keep the good results and only re-attempt the broken part."
+        },
+        {
+          "type": "p",
+          "md": "**Error design is part of tool design.** The error path isn't separate from the tool's interface — it's half of it. The same care you put into clear names, tight schemas, and good descriptions when [designing tools for LLMs](/learn/ai-agents/tool-use/designing-tools-for-llms) belongs in the failure messages too. A tight input schema also *prevents* whole classes of errors before they happen, because the model gets validation feedback earlier. See [how to design agent tools](/learn/ai-agents/tool-use/how-to-design-agent-tools) for the input side of the same coin."
+        },
+        {
+          "type": "p",
+          "md": "**Observability for the failure path.** You can't improve what you can't see. Log which tools fail, with which arguments, how often the model recovers versus loops, and where retry budgets get hit. Those traces tell you which errors need clearer wording and which tools need to be fixed, split, or removed entirely — sometimes the right answer is fewer tools, or letting the model write [code instead of calling more tools](/learn/ai-agents/tool-use/code-execution-vs-more-tools)."
+        },
+        {
+          "type": "p",
+          "md": "**The durable lesson.** A tool error is a message to a reasoning system, and the model will do exactly what your message implies. Vague errors produce loops and wasted spend; specific, actionable, side-effect-aware errors produce agents that recover on their own. Most of the reliability of an agent lives not on the happy path everyone tests, but on the failure path almost nobody does."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "How should an AI agent handle a tool call that fails?",
+      "a": "Classify the failure into one of three responses: retry silently in code (transient errors like rate limits or network blips), surface a clear error to the model (things it can fix, like bad arguments or no results), or abort the task (fatal errors like revoked auth). The key is returning the failure as a normal tool result with an actionable message, not throwing an exception that kills the whole agent."
+    },
+    {
+      "q": "Why is a raw stack trace a bad error message for an LLM?",
+      "a": "A traceback is written for a human debugger, full of file paths, internal class names, and line numbers that mean nothing to a reasoning model. The model has to guess which line matters and often retries the same broken call. A good error instead names the problem in plain language, shows valid options, and suggests the next action — turning an unrecoverable failure into a one-line fix."
+    },
+    {
+      "q": "How do I stop an agent from looping on a failing tool?",
+      "a": "Add a per-tool retry budget that returns a terminal \"do not call this again\" message after a few consecutive failures, detect repeated identical calls as a loop signal, and put a global step cap on the whole agent loop as a last resort. Without these guards, a model that can't fix an error will retry until it exhausts the loop, wasting every turn and the tokens they cost."
+    },
+    {
+      "q": "Is it safe to automatically retry a failed tool call?",
+      "a": "It depends on the tool. Read tools (search, get, list) are always safe to retry because running them twice changes nothing. Write tools that charge a card or send a message are dangerous to blind-retry, because a timeout doesn't tell you whether the action already happened. Use an idempotency key for writes, or check the action's status before retrying."
+    },
+    {
+      "q": "What does an LLM-friendly error message look like?",
+      "a": "It states what went wrong in plain language, shows the valid options (like the real column names or the expected date format), and suggests the next action (\"fix and retry\"). For example: \"column 'signup_dt' does not exist; available columns are id, email, created_at; did you mean 'created_at'?\" — instead of a raw database traceback."
+    },
+    {
+      "q": "Should an empty search result be treated as an error?",
+      "a": "Not as a hard failure, but you should still return a clear message rather than an empty list. A model reading an empty payload may misinterpret it as a tool malfunction. Returning something like \"No results found for that query — try broader terms or a different filter\" tells the model exactly how to proceed."
+    }
+  ],
+  "related": [
+    "what-is-tool-use",
+    "designing-tools-for-llms",
+    "how-to-design-agent-tools",
+    "agent-loop-explained",
+    "code-execution-vs-more-tools",
+    "react-agent-pattern"
+  ],
+  "furtherReading": [
+    {
+      "title": "Tool use (function calling) — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/tool-use"
+    },
+    {
+      "title": "Function calling — OpenAI Platform Docs",
+      "url": "https://platform.openai.com/docs/guides/function-calling"
+    },
+    {
+      "title": "Idempotency — Wikipedia",
+      "url": "https://en.wikipedia.org/wiki/Idempotence"
+    }
+  ]
+}

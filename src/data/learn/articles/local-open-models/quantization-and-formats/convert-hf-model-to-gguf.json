@@ -1,0 +1,385 @@
+{
+  "slug": "convert-hf-model-to-gguf",
+  "title": "How to Convert a Hugging Face Model to GGUF and Quantize It",
+  "shortTitle": "Convert a Model to GGUF",
+  "seoTitle": "How to Convert a Hugging Face Model to GGUF",
+  "metaDescription": "Step-by-step: take safetensors weights from Hugging Face, convert them to GGUF with llama.cpp, and quantize to Q4 or Q5 so the model runs in Ollama or LM Studio.",
+  "keywords": [
+    "convert model to gguf",
+    "convert safetensors to gguf",
+    "llama.cpp convert_hf_to_gguf",
+    "quantize model to gguf q4",
+    "make custom gguf for ollama"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You will be able to take raw Hugging Face weights and produce your own quantized GGUF file ready to run locally.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Most open models on Hugging Face ship as **safetensors** files — raw weights in full or half precision, built to run on a GPU with PyTorch. Tools like [Ollama](/learn/local-open-models/running-models-locally/what-is-ollama), LM Studio, and [llama.cpp](/learn/local-open-models/running-models-locally/what-is-llama-cpp) don't read that format. They want **GGUF**: a single self-contained file that bundles the weights, the tokenizer, and the model's metadata, ready to load on a CPU or a modest GPU."
+        },
+        {
+          "type": "p",
+          "md": "Converting to GGUF is like exporting a document to PDF. The original `.docx` is great for editing, but you hand someone a PDF when you just want it to open and look right everywhere. GGUF is that portable export: one file, no Python environment, no framework — just point your runtime at it and it runs."
+        },
+        {
+          "type": "p",
+          "md": "Why bother doing it yourself? Two common reasons. First, you [fine-tuned](/learn/local-open-models/running-models-locally/what-is-local-llm) a model and the result lives only as safetensors — no one has made a GGUF of *your* model. Second, you found a brand-new or obscure model on Hugging Face that nobody has packaged yet. In both cases you convert it once and then run it locally forever."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "GGUF (\"GPT-Generated Unified Format\") is the file format used by the llama.cpp project. To learn what's actually inside one, see [the GGUF format explained](/learn/local-open-models/quantization-and-formats/gguf-format-explained). This article is the *how* — turning weights you already have into a GGUF you can run."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "If you only ever run popular models, you may never touch conversion — communities like *TheBloke* and *bartowski* publish ready-made GGUFs within hours of a big release. But the moment you step off the beaten path, pre-made files stop existing, and converting yourself becomes the only way forward."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Your fine-tune is unique.** After training a [LoRA adapter](/learn/local-open-models/running-models-locally/what-is-local-llm) or doing a full fine-tune, the merged weights are one-of-a-kind. No public GGUF can exist — you must make it.",
+            "**The model is too new or too niche.** A research model, a smaller language variant, or a fresh release may have zero GGUF uploads. Conversion gets you running on day one instead of waiting for someone else.",
+            "**You want a specific quantization.** Public uploads cover the common sizes, but maybe you need exactly Q5_K_M to fit your VRAM, or a full FP16 file to use as a base for further work. Doing it yourself gives you every option.",
+            "**You want to verify what you run.** Converting from the original safetensors means you know exactly which weights went in — no trusting an anonymous re-upload."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The payoff is independence. Once you can run the conversion pipeline, any open-weights model on Hugging Face becomes something you can run on your own laptop — quantized to fit, packaged for [Ollama](/learn/local-open-models/running-models-locally/how-to-run-ollama), and fully offline."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The pipeline has three stages: **convert** the safetensors into an unquantized GGUF, **quantize** that GGUF down to a small size, and **import** the result into your runtime. The first stage just repackages the weights (no quality loss); the second is where you trade a little accuracy for a much smaller file."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "From Hugging Face weights to a running model",
+            "steps": [
+              {
+                "label": "Safetensors",
+                "sub": "FP16 weights from HF"
+              },
+              {
+                "label": "convert_hf_to_gguf.py",
+                "sub": "repackage → GGUF"
+              },
+              {
+                "label": "FP16 GGUF",
+                "sub": "full size, no loss"
+              },
+              {
+                "label": "llama-quantize",
+                "sub": "→ Q4_K_M / Q5_K_M"
+              },
+              {
+                "label": "Run",
+                "sub": "Ollama / LM Studio",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Step 1 — Get llama.cpp and the model"
+        },
+        {
+          "type": "p",
+          "md": "The conversion tooling ships inside the [llama.cpp](/learn/local-open-models/running-models-locally/what-is-llama-cpp) repository. Clone it, install its Python requirements, then download the model's full directory from Hugging Face — you need the `*.safetensors` files **and** the config and tokenizer files alongside them."
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "title": "clone llama.cpp and pull the model",
+          "code": "# 1. Get the converter and its Python deps\ngit clone https://github.com/ggml-org/llama.cpp\ncd llama.cpp\npip install -r requirements.txt\n\n# 2. Download the whole model repo (weights + config + tokenizer)\npip install -U \"huggingface_hub[cli]\"\nhf download mistralai/Mistral-7B-Instruct-v0.3 \\\n  --local-dir ./models/mistral-7b"
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Download the **entire** repo folder, not just the weights. The converter reads `config.json`, `tokenizer.json` / `tokenizer.model`, and the `*.safetensors` shards. Missing the tokenizer is the single most common reason conversion fails."
+        },
+        {
+          "type": "h3",
+          "text": "Step 2 — Convert to an FP16 GGUF"
+        },
+        {
+          "type": "p",
+          "md": "Run `convert_hf_to_gguf.py`, pointing it at the model folder. Always produce a full-precision GGUF first (`--outtype f16`). This file is large — roughly two bytes per parameter, so about 14 GB for a 7B model — but it's a lossless repackaging you'll quantize in the next step."
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "title": "safetensors → FP16 GGUF",
+          "code": "python convert_hf_to_gguf.py ./models/mistral-7b \\\n  --outtype f16 \\\n  --outfile ./models/mistral-7b-f16.gguf"
+        },
+        {
+          "type": "h3",
+          "text": "Step 3 — Quantize to a runnable size"
+        },
+        {
+          "type": "p",
+          "md": "The FP16 GGUF runs, but it's big and slow on most hardware. [Quantization](/learn/local-open-models/quantization-and-formats/what-is-quantization) shrinks each weight from 16 bits to roughly 4 or 5, cutting the file to a quarter of its size with only a small quality drop. Build llama.cpp once to get the `llama-quantize` tool, then run it."
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "title": "FP16 GGUF → Q4_K_M",
+          "code": "# Build the C++ tools once\ncmake -B build\ncmake --build build --config Release -j\n\n# Quantize: f16 GGUF in, Q4_K_M GGUF out\n./build/bin/llama-quantize \\\n  ./models/mistral-7b-f16.gguf \\\n  ./models/mistral-7b-Q4_K_M.gguf \\\n  Q4_K_M"
+        },
+        {
+          "type": "p",
+          "md": "`Q4_K_M` is the usual default — the best balance of size, speed, and quality for most people. `Q5_K_M` keeps a bit more accuracy for a slightly larger file. For the full menu of tradeoffs, see [Q4 vs Q8 vs FP16](/learn/local-open-models/quantization-and-formats/q4-vs-q8-vs-fp16)."
+        }
+      ]
+    },
+    {
+      "id": "choosing-a-quantization-level",
+      "title": "Choosing a quantization level",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The quantize step takes a type name like `Q4_K_M`. The number is the average bits per weight; the `_K` means a modern *k-quant* (smarter, better quality than the old methods); the trailing letter is the size tier within that level (`S` = small, `M` = medium, `L` = large). Here is how the common choices compare for a 7B model."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Type",
+            "Approx file size (7B)",
+            "Quality",
+            "Use when"
+          ],
+          "rows": [
+            [
+              "Q3_K_M",
+              "~3.5 GB",
+              "Noticeable loss",
+              "Very tight on RAM/VRAM"
+            ],
+            [
+              "Q4_K_M",
+              "~4.4 GB",
+              "Great balance",
+              "Default for almost everyone"
+            ],
+            [
+              "Q5_K_M",
+              "~5.1 GB",
+              "Near-original",
+              "You have headroom to spare"
+            ],
+            [
+              "Q6_K",
+              "~5.9 GB",
+              "Hard to tell apart",
+              "Quality matters, size doesn't"
+            ],
+            [
+              "Q8_0",
+              "~7.7 GB",
+              "Essentially lossless",
+              "Benchmarking or a base file"
+            ],
+            [
+              "F16",
+              "~14 GB",
+              "No loss",
+              "Source for further conversion"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Rule of thumb: start at **Q4_K_M**. If the model feels noticeably worse than expected and you have spare memory, move up to **Q5_K_M** or **Q6_K**. Only drop to Q3 if you genuinely can't fit anything larger. Check your budget against [local LLM hardware requirements](/learn/local-open-models/running-models-locally/local-llm-hardware-requirements) — the quantized file size is roughly the RAM you'll need, plus a little for context."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "GGUF is one of several quantization formats. It's optimized for CPU and mixed CPU/GPU running. If you have a beefy GPU and want pure-GPU speed, GPTQ or AWQ may suit better — see [GGUF vs GPTQ vs AWQ](/learn/local-open-models/quantization-and-formats/gguf-vs-gptq-vs-awq)."
+        }
+      ]
+    },
+    {
+      "id": "importing-into-ollama",
+      "title": "Importing your GGUF into Ollama",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A `.gguf` file already works directly in LM Studio (just drop it in the models folder) and in llama.cpp (`llama-cli -m file.gguf`). To use it in [Ollama](/learn/local-open-models/running-models-locally/what-is-ollama), you wrap it in a tiny text file called a **Modelfile** that tells Ollama where the weights are and how to format prompts."
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "title": "Modelfile",
+          "code": "FROM ./models/mistral-7b-Q4_K_M.gguf\n\n# The chat template this model expects\nTEMPLATE \"\"\"[INST] {{ .Prompt }} [/INST]\"\"\"\n\n# Optional defaults\nPARAMETER temperature 0.7\nPARAMETER stop \"[INST]\"\nPARAMETER stop \"[/INST]\""
+        },
+        {
+          "type": "p",
+          "md": "Then register it with one command and run it like any other model:"
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "title": "create and run the model",
+          "code": "ollama create my-mistral -f Modelfile\nollama run my-mistral \"Explain GGUF in one sentence.\""
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Get the `TEMPLATE` from the model's Hugging Face page — each family (Llama, Mistral, Qwen, Gemma) has its own chat format. The wrong template won't crash anything, but the model will answer poorly because it never sees the prompt structure it was trained on. New to Ollama? Start with [how to run Ollama](/learn/local-open-models/running-models-locally/how-to-run-ollama)."
+        }
+      ]
+    },
+    {
+      "id": "common-conversion-errors",
+      "title": "Common conversion errors",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Most failures happen in Step 2 (the convert script) and trace back to one of a handful of causes. Here's how to read the usual error messages."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "What you see",
+            "Real cause",
+            "Fix"
+          ],
+          "rows": [
+            [
+              "`Model ... is not supported` / unknown architecture",
+              "The model's architecture isn't in your llama.cpp version yet",
+              "Update llama.cpp to the latest commit; very new architectures land there first"
+            ],
+            [
+              "`FileNotFoundError` for `tokenizer.model` / `tokenizer.json`",
+              "You downloaded only the weights, not the tokenizer files",
+              "Re-download the full repo folder so config + tokenizer sit beside the shards"
+            ],
+            [
+              "`KeyError` on a config field",
+              "Mismatched or partial config; or a model needing `--remote`/trust flags",
+              "Confirm `config.json` is complete and matches the weights you pulled"
+            ],
+            [
+              "Out of memory during convert",
+              "Loading FP16 shards needs RAM ≈ model size",
+              "Convert on a machine with more RAM, or use a smaller model"
+            ],
+            [
+              "Quantized model outputs gibberish",
+              "Wrong chat template in the Modelfile, not a bad conversion",
+              "Copy the exact template from the model card"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "\"Unsupported architecture\" almost always means **out of date**, not impossible. llama.cpp adds new model families constantly. Before giving up, `git pull` the repo, reinstall `requirements.txt`, and try the convert again."
+        },
+        {
+          "type": "p",
+          "md": "If the model is a LoRA fine-tune, you usually **merge the adapter into the base weights first** (with PEFT, producing a normal safetensors model), then convert that merged model. The converter expects standard weights, not a separate adapter file."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The three-step pipeline above covers the vast majority of conversions. A few refinements matter once you're doing this seriously."
+        },
+        {
+          "type": "p",
+          "md": "**Importance-matrix (imatrix) quantization.** The plain `llama-quantize` treats every weight the same. For the smallest quants (Q2, Q3, and the `IQ` types), you can first run the model over a small calibration text to build an *importance matrix*, then pass it with `--imatrix`. This preserves the weights that matter most and noticeably improves quality at very low bit rates — worth the extra step only when you're squeezing into tiny sizes."
+        },
+        {
+          "type": "p",
+          "md": "**Keep the FP16 GGUF.** Quantizing always goes from the FP16 file, never from one quant to another. If you keep the FP16 export around, you can produce any quant later without re-running the convert script. Delete it only when you're sure you won't want a different size."
+        },
+        {
+          "type": "p",
+          "md": "**Vision and multimodal models.** A multimodal model has a separate vision projector that needs its own conversion (often a `mmproj` GGUF) on top of the language weights. The basic `convert_hf_to_gguf.py` handles the text part; check the llama.cpp docs for the model family before assuming a single file is enough."
+        },
+        {
+          "type": "p",
+          "md": "**Verify before you trust it.** After converting, run a few prompts and compare against the original model's behavior. A successful conversion that produces subtly wrong output usually means the chat template, special tokens, or a tokenizer detail didn't carry over. Conversion is mechanical, but verification is on you."
+        },
+        {
+          "type": "p",
+          "md": "From here, the natural next steps are understanding the format you just produced ([what is GGUF](/learn/local-open-models/quantization-and-formats/what-is-gguf)), the math behind the size savings ([what is quantization](/learn/local-open-models/quantization-and-formats/what-is-quantization)), and how to pick a runtime ([LM Studio vs Ollama](/learn/local-open-models/running-models-locally/lm-studio-vs-ollama)). You can even take your finished GGUF to a phone — see [run LLMs on a phone](/learn/local-open-models/running-models-locally/run-llms-on-a-phone)."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "How do I convert a safetensors model to GGUF?",
+      "a": "Clone the llama.cpp repository, install its `requirements.txt`, and download the full Hugging Face model folder (weights plus the config and tokenizer files). Then run `python convert_hf_to_gguf.py ./model-folder --outtype f16 --outfile model-f16.gguf`. That produces a full-precision GGUF, which you then quantize to a smaller size."
+    },
+    {
+      "q": "What command quantizes a GGUF to Q4?",
+      "a": "Build llama.cpp's tools, then run `llama-quantize input-f16.gguf output-Q4_K_M.gguf Q4_K_M`. The last argument is the target type — Q4_K_M is the recommended default for most models, balancing size and quality."
+    },
+    {
+      "q": "Why does my conversion fail with 'unsupported architecture'?",
+      "a": "Almost always because your copy of llama.cpp is older than the model. New architectures are added to llama.cpp frequently, so run `git pull` in the repo, reinstall the Python requirements, and try again. Only truly exotic models stay unsupported."
+    },
+    {
+      "q": "Can I make a GGUF from my own fine-tuned model?",
+      "a": "Yes — that's a main reason to do this. If you trained a LoRA adapter, first merge it into the base weights to get a standard safetensors model, then convert that with `convert_hf_to_gguf.py`. The converter expects normal merged weights, not a separate adapter."
+    },
+    {
+      "q": "How do I use a GGUF file in Ollama?",
+      "a": "Create a small Modelfile that starts with `FROM ./your-model.gguf` and includes the model's chat `TEMPLATE`, then run `ollama create my-model -f Modelfile`. After that, `ollama run my-model` works like any built-in model."
+    },
+    {
+      "q": "Do I need a GPU to convert a model to GGUF?",
+      "a": "No. Conversion and quantization run on the CPU and mainly need enough RAM to hold the model — roughly the FP16 size, about 14 GB for a 7B model. A GPU speeds up running the finished model but isn't required to produce the GGUF."
+    }
+  ],
+  "related": [
+    "what-is-gguf",
+    "gguf-format-explained",
+    "what-is-quantization",
+    "q4-vs-q8-vs-fp16",
+    "what-is-llama-cpp",
+    "what-is-ollama"
+  ],
+  "furtherReading": [
+    {
+      "title": "llama.cpp — GitHub repository",
+      "url": "https://github.com/ggml-org/llama.cpp"
+    },
+    {
+      "title": "llama.cpp — GGUF model conversion",
+      "url": "https://github.com/ggml-org/llama.cpp"
+    },
+    {
+      "title": "GGUF — Hugging Face Hub docs",
+      "url": "https://huggingface.co/docs/hub/en/gguf"
+    }
+  ]
+}

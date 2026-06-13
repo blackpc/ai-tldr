@@ -1,0 +1,346 @@
+{
+  "slug": "realtime-voice-api-explained",
+  "title": "What Is a Realtime Voice API? Speech-to-Speech Agents Explained",
+  "shortTitle": "Realtime Voice APIs",
+  "seoTitle": "What Is a Realtime Voice API? Speech Agents Explained",
+  "metaDescription": "Realtime voice APIs let you build talk-back AI agents over a streaming connection. Learn how they work, why they cut latency, and what they replace.",
+  "keywords": [
+    "realtime voice api",
+    "what is a speech to speech api",
+    "voice agent realtime model",
+    "low latency voice ai",
+    "websocket voice assistant ai"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Understand what a realtime voice API is, how streaming audio works, and why it powers natural talk-back voice agents.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A **realtime voice API** lets your app *talk* with a person the way two people talk on a phone call. You open one streaming connection, the user starts speaking, and audio flows both ways at once: their voice goes in as a continuous stream, the AI's spoken reply comes back as a continuous stream — and either side can interrupt the other mid-sentence."
+        },
+        {
+          "type": "p",
+          "md": "Contrast that with the old way of building a voice bot. You'd record the whole question, send the file to a [speech-to-text](/learn/multimodal-ai/speech-and-voice/what-is-speech-to-text) model, wait for a transcript, send that text to an LLM, wait for the written answer, send *that* to a [text-to-speech](/learn/multimodal-ai/speech-and-voice/what-is-text-to-speech) model, wait for an audio file, then finally play it. Three round trips, each one a stop-and-wait. The user sits in silence for two or three awkward seconds before anything comes out."
+        },
+        {
+          "type": "p",
+          "md": "Think of the difference between sending voice memos back and forth versus a live phone call. With voice memos, you speak, hit send, wait, get a reply, listen, then speak again — turn by turn, with a gap each time. A live call has no gaps: you hear the other person *while* they speak, you can jump in with \"wait, no —\", and they adjust instantly. A realtime voice API is the live-call version of an AI assistant."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "\"Realtime\" here means *streaming and continuous*, not just \"fast.\" The defining trait is a single persistent session where audio is processed in small chunks as it arrives, instead of one request per complete utterance. The buzzwords you'll see are **speech-to-speech**, **low-latency voice**, and **barge-in** (the ability to interrupt)."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Voice feels natural only when it's *fast*. Human conversation has a rhythm: we expect a reply within a few hundred milliseconds of finishing a sentence. Cross roughly one second of silence and the interaction stops feeling like a conversation and starts feeling like a kiosk. The whole point of a realtime voice API is to live inside that human-comfortable latency budget, which the classic stitched-together pipeline almost never can."
+        },
+        {
+          "type": "p",
+          "md": "Here are the concrete problems it solves for a builder:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Latency.** A traditional pipeline pays the full cost of each stage in series, and each stage waits for the previous one to *finish* before it starts. A realtime session overlaps the work — the model can begin understanding and even start responding before the user has stopped talking — so perceived delay drops from seconds to a few hundred milliseconds.",
+            "**Interruptions (barge-in).** Real talk is messy. People cut in, change their mind, say \"actually, never mind.\" A turn-based pipeline has no concept of this; it will keep playing a now-irrelevant answer over you. A realtime API detects that you've started speaking, stops its own audio, and listens — the single biggest thing that makes a voice agent feel alive instead of robotic.",
+            "**Tone and emotion.** When you transcribe speech to plain text first, you throw away *how* it was said — the hesitation, the sarcasm, the rising panic. A unified speech-to-speech model can hear that nuance directly and answer with matching prosody (a calm voice for a frustrated caller), because the audio never gets flattened into text.",
+            "**Fewer moving parts.** One API and one connection replace three separate services you had to wire, time, and keep in sync. Less glue code, fewer places for latency and bugs to hide."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who cares? Anyone building phone-based customer support, in-car or hands-free assistants, live language tutors, drive-through ordering, accessibility tools, or any product where a person would rather *speak* than type. If the experience has to feel like talking to a person, the turn-by-turn pipeline's silences will sink it."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A realtime voice API runs over a **persistent, bidirectional connection** — usually a WebSocket or a WebRTC session — instead of one-shot HTTP requests. \"Bidirectional\" is the key word: your app streams microphone audio *up* in tiny chunks (often 20–40 milliseconds each) while the server streams the AI's spoken reply *down* at the same time, on the same connection. Nobody waits for the other to be completely done."
+        },
+        {
+          "type": "p",
+          "md": "Because audio is flowing continuously, the system needs to figure out *when a turn ends* on its own. That job is **voice activity detection** (VAD): the server listens for a pause and decides the user has finished their thought, which triggers the model to respond. Good VAD is what makes the back-and-forth feel snappy; bad VAD either cuts people off or leaves long dead air."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Inside one realtime session",
+            "steps": [
+              {
+                "label": "Mic audio in",
+                "sub": "streamed in 20–40ms chunks"
+              },
+              {
+                "label": "VAD",
+                "sub": "detect speech / end of turn"
+              },
+              {
+                "label": "Model",
+                "sub": "understands + plans reply"
+              },
+              {
+                "label": "Audio out",
+                "sub": "streamed back as it generates"
+              },
+              {
+                "label": "Speaker",
+                "sub": "plays reply, can be interrupted",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "There are two ways the box labeled *Model* can be built, and the difference is the heart of this topic."
+        },
+        {
+          "type": "h3",
+          "text": "Approach 1 — the classic cascade (STT → LLM → TTS)"
+        },
+        {
+          "type": "p",
+          "md": "You chain three specialist models. Speech-to-text turns audio into a transcript, an LLM reads the transcript and writes a reply, and text-to-speech turns that reply back into audio. A realtime *framework* can still make this feel responsive by streaming between the stages — feeding partial transcripts to the LLM and starting TTS on the first sentence of the answer before the rest is written — but you're orchestrating three separate systems."
+        },
+        {
+          "type": "h3",
+          "text": "Approach 2 — the unified speech-to-speech model"
+        },
+        {
+          "type": "p",
+          "md": "A single model takes audio in and produces audio out directly, without a text transcript in the middle as a hard step. Because it never flattens speech to text, it keeps the tone, timing, and emotion of what was said, and it has fewer internal hops to add delay. This is the \"speech-to-speech\" or \"omni\" style of realtime model. (Most still *expose* a text transcript so you can log and read the conversation — they just don't *depend* on round-tripping through text to think.)"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Two ways to build the model in the loop",
+            "columns": [
+              {
+                "title": "Cascade (STT → LLM → TTS)",
+                "items": [
+                  "Three specialist models chained",
+                  "Transcript exists at every step",
+                  "Easy to swap or upgrade one stage",
+                  "Tone/emotion lost at the text step",
+                  "More hops = more latency to fight"
+                ]
+              },
+              {
+                "title": "Unified speech-to-speech",
+                "accent": true,
+                "items": [
+                  "One model: audio in, audio out",
+                  "No mandatory text in the middle",
+                  "Keeps tone, timing, emotion",
+                  "Fewer hops = lower latency",
+                  "Less control over each stage"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Either way, two features make the session feel human. **Partial (streaming) transcripts** mean you get words as they're recognized — useful for showing live captions or letting the model start thinking early — instead of one block of text at the end. **Barge-in handling** means when the user starts talking while the AI is speaking, the API tells you to stop playback immediately and switches to listening, so the user is never talking over a wall of robot audio."
+        }
+      ]
+    },
+    {
+      "id": "a-typical-session-flow",
+      "title": "A typical session, step by step",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Most realtime voice APIs follow the same event-based shape, whatever the vendor. You open a socket, configure the session once, then exchange small JSON or binary *events* until you hang up. The pattern looks roughly like this:"
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "title": "the event exchange (simplified)",
+          "code": "1. open WebSocket  ->  server: \"session.ready\"\n2. you send:  session.update { voice, language, instructions }\n3. loop:\n     you  -> input_audio.chunk   (mic, 20-40ms of audio)\n     server -> transcript.partial  \"how do I res...\"\n     server -> speech_started      (VAD heard the user)\n     ... user pauses ...\n     server -> speech_stopped      (end of turn)\n     server -> response.audio.chunk  (reply audio, streamed)\n     server -> transcript.partial    (text of the reply)\n     [if user talks now] you -> response.cancel  (barge-in)\n4. close WebSocket"
+        },
+        {
+          "type": "p",
+          "md": "Notice three things. Audio goes *both directions in the same loop*, not in request/response turns. The server pushes *events*, not one final answer, so your client must react to a stream. And **you** are responsible for the barge-in cancel: when your mic detects the user speaking over the reply, you send a cancel and stop playing the buffered audio you already received."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Always play received audio through a small buffer you control, never straight to the speaker as bytes arrive. When a barge-in happens you must be able to *flush and stop instantly*. If you've dumped three seconds of reply into the OS audio queue, you can't take it back — and the user hears the AI keep talking after they interrupted."
+        }
+      ]
+    },
+    {
+      "id": "when-to-use-which",
+      "title": "When to use which approach",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Unified speech-to-speech isn't automatically the right call. The cascade trades some latency and nuance for control and flexibility, and that trade is often worth it. Use this rough guide:"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Your priority",
+            "Lean toward"
+          ],
+          "rows": [
+            [
+              "Lowest possible latency, most natural feel",
+              "Unified speech-to-speech"
+            ],
+            [
+              "Tone/emotion must survive (coaching, therapy-style, support)",
+              "Unified speech-to-speech"
+            ],
+            [
+              "You need exact control over the LLM and its tools/RAG",
+              "Cascade"
+            ],
+            [
+              "You must swap languages, voices, or the brain independently",
+              "Cascade"
+            ],
+            [
+              "Strict, auditable transcripts of every word are required",
+              "Cascade (text is native there)"
+            ],
+            [
+              "A simple turn-based bot where 1–2s delay is fine",
+              "Either — even plain non-streaming works"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "A common middle path: use a unified realtime model for the *conversational* layer (so it feels alive) but give it **tools** it can call out to for facts and actions — looking up an order, checking a calendar, running a [retrieval](/learn/multimodal-ai/speech-and-voice/) step. That keeps the snappy speech-to-speech feel while letting a more controllable system handle the parts that need to be exactly right."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "If your product is fundamentally turn-based — a voicemail transcriber, a \"press the button, ask one question\" kiosk — you may not need a *realtime* API at all. Plain streaming [speech-to-text](/learn/multimodal-ai/speech-and-voice/what-is-speech-to-text) plus a normal LLM call plus [text-to-speech](/learn/multimodal-ai/speech-and-voice/what-is-text-to-speech) is simpler and cheaper. Reach for realtime when live, interruptible, back-and-forth conversation is the actual point."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Realtime voice is genuinely harder to get right than text chat, because timing bugs you can't see in a transcript ruin the *feel*. The usual traps:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Not handling barge-in.** The single most common reason a demo feels robotic. If the AI keeps talking after the user interrupts, the illusion of conversation collapses. Cancel the response and flush your audio buffer the instant your mic detects speech.",
+            "**Ignoring network jitter.** Audio is unforgiving — a 300ms hiccup is an audible glitch. Buffer a little on both ends, prefer WebRTC for unreliable networks (it's built for live media), and assume packets arrive late and out of order.",
+            "**Sloppy turn detection.** Too-aggressive VAD cuts people off mid-thought; too-lax VAD leaves long silences that feel like the AI froze. Tune the end-of-turn sensitivity for your domain, and expect to handle people who pause to think.",
+            "**Echo and feedback.** On a speakerphone, the AI hears *itself* and tries to respond to its own voice. You need echo cancellation, or the model will talk to itself in a loop.",
+            "**Forgetting it's still an LLM.** The voice layer is new, but the brain behind it can still hallucinate, refuse, or get confused — and now it's doing so out loud, in real time, with no chance for the user to re-read. Ground it and constrain it as carefully as any other LLM feature."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Realtime audio bills by the *minute of streamed audio in and out*, not by request, and an open session keeps a connection alive the whole time someone is talking (and during their pauses). A few thousand concurrent calls is a very different cost and capacity profile from a chat endpoint. Model the per-minute cost and concurrency limits before you ship."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic talk-back loop works, the interesting problems are about making it robust, controllable, and observable. A few directions worth knowing."
+        },
+        {
+          "type": "p",
+          "md": "**Tool calling mid-conversation.** The most capable voice agents don't just chat — they *do* things. While speaking, the model can pause to call a function (check an order, book a slot, query a database), then resume the conversation with the result, often with a natural filler like \"let me check that for you.\" Wiring tools into a streaming session, and deciding what the agent says *during* the wait, is where realtime voice meets agent design."
+        },
+        {
+          "type": "p",
+          "md": "**Transcripts even in speech-to-speech.** Even when no text step is required for the model to think, you almost always want a text transcript for logging, analytics, compliance, and debugging. Most realtime APIs emit one as a side channel. If your domain is regulated, treat that transcript as a first-class requirement, not an afterthought — and verify it actually matches the audio."
+        },
+        {
+          "type": "p",
+          "md": "**Speaker separation.** A unified model usually assumes one user and one assistant. The moment you have several people in a room — a meeting, a family at a drive-through — you need [speaker diarization](/learn/multimodal-ai/speech-and-voice/speaker-diarization-explained) to tell *who* said what, which most realtime voice pipelines don't do for you out of the box."
+        },
+        {
+          "type": "p",
+          "md": "**Transport choice matters more than it looks.** WebSocket is simple and works great on stable connections; WebRTC is more complex but is purpose-built for live media on lossy networks (it handles jitter, packet loss, and echo cancellation natively), which is why most phone and mobile voice products lean on it. The right transport is often the difference between \"flawless in the office\" and \"unusable on a train.\""
+        },
+        {
+          "type": "p",
+          "md": "**It's one slice of a bigger picture.** Voice is one modality among several — the same systems increasingly take images and video too. Understanding realtime voice as a streaming, interruptible session is a great on-ramp to the broader world of [multimodal AI](/learn/multimodal-ai/vision-models/what-is-multimodal-ai), where text, audio, and vision share one model. The durable lesson: a realtime voice agent lives or dies on *timing* — latency, turn-taking, and barge-in — far more than on raw model quality."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is a realtime voice API?",
+      "a": "It's an API that lets your app hold a live spoken conversation with an AI over a single, persistent streaming connection (usually a WebSocket or WebRTC). Audio flows both ways at once, the AI can start responding before you finish talking, and either side can interrupt the other — so it feels like a phone call rather than sending voice memos back and forth."
+    },
+    {
+      "q": "What's the difference between speech-to-speech and using Whisper plus TTS?",
+      "a": "A cascade of speech-to-text then an LLM then text-to-speech chains three separate models, and the spoken nuance (tone, emotion, hesitation) is lost at the text step. A unified speech-to-speech model takes audio in and produces audio out directly, with no mandatory text in the middle, so it keeps tone and has fewer hops to add latency. The cascade gives you more control over each stage; speech-to-speech usually feels faster and more natural."
+    },
+    {
+      "q": "What is barge-in in a voice agent?",
+      "a": "Barge-in is the ability to interrupt the AI while it's speaking. When the user starts talking over the reply, the API detects it, stops the AI's audio, and switches to listening. Handling barge-in well is the single biggest factor in whether a voice agent feels alive or robotic, and your client must flush its audio buffer instantly so the AI doesn't keep talking after being cut off."
+    },
+    {
+      "q": "Why do realtime voice APIs use WebSockets instead of normal HTTP?",
+      "a": "Normal HTTP is request/response: you send one thing and wait for one reply. A conversation needs audio flowing both directions continuously, with the server pushing events (partial transcripts, reply audio, turn boundaries) at any moment. A persistent bidirectional connection like a WebSocket — or WebRTC for lossy networks — keeps the session open so neither side has to wait for a fresh request."
+    },
+    {
+      "q": "Do I always need a realtime voice API for a voice bot?",
+      "a": "No. If your product is turn-based — press a button, ask one question, get one answer — plain streaming speech-to-text plus a normal LLM call plus text-to-speech is simpler and cheaper. Reach for a realtime API when live, interruptible, back-and-forth conversation with low latency is the actual point of the experience."
+    },
+    {
+      "q": "How is realtime voice billed?",
+      "a": "Typically by the minute of audio streamed in and out, not per request, and the session holds an open connection for the whole call including pauses. That makes cost and concurrency very different from a text chat endpoint, so you should model per-minute pricing and connection limits before scaling up."
+    }
+  ],
+  "related": [
+    "what-is-speech-to-text",
+    "what-is-text-to-speech",
+    "text-to-speech-ai",
+    "speaker-diarization-explained",
+    "what-is-multimodal-ai"
+  ],
+  "furtherReading": [
+    {
+      "title": "WebRTC — Official Project Site",
+      "url": "https://webrtc.org/"
+    },
+    {
+      "title": "The WebSocket API — MDN Web Docs",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API"
+    },
+    {
+      "title": "Realtime API — OpenAI Platform Docs",
+      "url": "https://platform.openai.com/docs/guides/realtime"
+    }
+  ]
+}

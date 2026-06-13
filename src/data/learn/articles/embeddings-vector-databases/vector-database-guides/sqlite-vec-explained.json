@@ -1,0 +1,360 @@
+{
+  "slug": "sqlite-vec-explained",
+  "title": "What Is sqlite-vec? Vector Search Inside SQLite",
+  "shortTitle": "sqlite-vec",
+  "seoTitle": "What Is sqlite-vec? Vector Search in SQLite",
+  "metaDescription": "sqlite-vec adds vector search to SQLite as a tiny embeddable extension. Learn how it works, its brute-force search model, and when a single file beats a server.",
+  "keywords": [
+    "what is sqlite-vec",
+    "sqlite vector search extension",
+    "sqlite-vec tutorial for beginners",
+    "embed vector search in app sqlite",
+    "sqlite-vec vs chroma"
+  ],
+  "difficulty": "beginner",
+  "oneLiner": "Learn how sqlite-vec adds embedding storage and similarity search to an ordinary SQLite file, and when that is all the vector search you need.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "SQLite is the small, serverless database that quietly runs almost everywhere — inside your phone, your browser, your car's dashboard, and countless desktop apps. It stores an entire database in a single file on disk, with no server process to install or babysit. **sqlite-vec** is a tiny extension that teaches that same little file a new trick: storing [embeddings](/learn/embeddings-vector-databases/embeddings-explained/what-are-embeddings) and searching them by *meaning* — the core job of a [vector database](/learn/embeddings-vector-databases/vector-database-guides/what-is-a-vector-database)."
+        },
+        {
+          "type": "p",
+          "md": "An embedding is just a list of numbers (a *vector*) that captures the meaning of a piece of text, image, or audio. Things with similar meaning get similar vectors. Vector search is the act of asking \"which stored vectors are closest to *this* one?\" Normally you reach for a dedicated server — Pinecone, Qdrant, Weaviate — to do that. sqlite-vec lets you do it right inside an ordinary SQLite file, with no separate service running anywhere."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like adding a spell-checker to a text editor you already have. You don't go buy a whole new program; you drop in a small plugin and suddenly the tool you trusted does one more thing. sqlite-vec is that plugin for SQLite — a single extension file that turns the database you already ship into a competent vector store."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "sqlite-vec is the successor to an earlier project called `sqlite-vss`, written by the same author, Alex Garcia. It is written in pure C with no external dependencies, which is exactly why it can run anywhere SQLite runs — including the browser via WebAssembly."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Most vector-database tutorials assume you'll run a server. For a lot of real projects, that server is overkill — and overkill has a cost: another process to deploy, monitor, secure, back up, and pay for. sqlite-vec fills the *smallest possible vector store* slot. It exists for the very common case where you have thousands to a few million vectors and just want search to work without standing up infrastructure."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Zero servers, zero ops.** There is nothing to deploy. Your vectors live in the same `.db` file as the rest of your data. Backup is copying one file. There is no network hop, no connection pool, no service that can be down at 3am.",
+            "**It runs where SQLite runs — which is everywhere.** Mobile apps, desktop apps, edge functions, serverless platforms, even inside the browser through WebAssembly. If your environment can open a SQLite file, it can do vector search.",
+            "**No new query language.** You search with plain `SQL`. The vectors live in a table; you join them to your normal tables; you filter with `WHERE`. Your existing SQL skills carry over directly.",
+            "**Tiny and embeddable.** The extension is a small C library with no dependencies. It loads in milliseconds and adds almost nothing to your app's size, which is why it suits phones and edge runtimes where a heavy server is impossible."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who should care? Anyone building local-first or on-device AI: a desktop note-taking app with semantic search, a [RAG](/learn/embeddings-vector-databases/vector-database-guides/what-is-a-vector-database) prototype you don't want to host, an offline mobile assistant, a Cloudflare or Lambda function backed by a single read-replica file. The honest test: if a *server* feels like too much machinery for your problem, sqlite-vec is probably the right size."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "sqlite-vec works through two SQLite features that have existed for years: **loadable extensions** and **virtual tables**. You load the extension once, then create a special virtual table that holds your vectors. To that virtual table, vectors look like a normal column you can `INSERT` into and `SELECT` from — but behind the scenes the extension handles the distance math."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "From text to a ranked search result",
+            "steps": [
+              {
+                "label": "Text",
+                "sub": "your documents"
+              },
+              {
+                "label": "Embed",
+                "sub": "model → vectors"
+              },
+              {
+                "label": "INSERT",
+                "sub": "into vec0 table"
+              },
+              {
+                "label": "Embed query",
+                "sub": "same model"
+              },
+              {
+                "label": "KNN search",
+                "sub": "ORDER BY distance",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Step 1 — create a vector table"
+        },
+        {
+          "type": "p",
+          "md": "You declare a virtual table using the `vec0` module the extension provides, telling it how many dimensions your vectors have (this must match your embedding model — for example, 384 or 1536). Each row will hold one vector."
+        },
+        {
+          "type": "code",
+          "lang": "sql",
+          "title": "create the vector table",
+          "code": "-- one row per document chunk, each holding a 384-dim vector\nCREATE VIRTUAL TABLE vec_chunks USING vec0(\n  embedding float[384]\n);"
+        },
+        {
+          "type": "h3",
+          "text": "Step 2 — insert your embeddings"
+        },
+        {
+          "type": "p",
+          "md": "You compute embeddings with any model you like (sqlite-vec does *not* generate them — it only stores and searches them), then insert each vector. sqlite-vec accepts vectors as a JSON array of numbers or as a compact binary blob."
+        },
+        {
+          "type": "code",
+          "lang": "sql",
+          "title": "insert a vector",
+          "code": "INSERT INTO vec_chunks(rowid, embedding)\nVALUES (1, '[0.12, -0.04, 0.88, ...]');  -- 384 numbers"
+        },
+        {
+          "type": "h3",
+          "text": "Step 3 — search by similarity"
+        },
+        {
+          "type": "p",
+          "md": "To search, you embed the user's query with the *same* model, then ask for the nearest rows. The magic is the `MATCH` operator together with `ORDER BY distance` and a `LIMIT` — this is a **k-nearest-neighbors (KNN)** query, returning the *k* closest vectors and how far each one is."
+        },
+        {
+          "type": "code",
+          "lang": "sql",
+          "title": "find the 5 most similar chunks",
+          "code": "SELECT rowid, distance\nFROM vec_chunks\nWHERE embedding MATCH '[0.10, -0.02, 0.90, ...]'  -- the query vector\nORDER BY distance\nLIMIT 5;"
+        },
+        {
+          "type": "p",
+          "md": "Under the hood, sqlite-vec does a **brute-force scan**: for each query it compares the query vector against *every* stored vector, computes the distance, and keeps the closest. There is no fancy approximate index by default. That sounds slow, but modern CPUs chew through millions of small distance calculations quickly, so for thousands to low-millions of rows it is plenty fast — often single-digit milliseconds. The trade-off is simple: exact results and zero index-tuning, in exchange for linear scaling as your data grows."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Because everything is just SQL, you can combine vector search with ordinary filters and joins in one query — `WHERE category = 'docs' AND embedding MATCH ...`. This *metadata filtering* is awkward in many standalone vector stores but trivial here, since your vectors and your relational data live in the same database."
+        }
+      ]
+    },
+    {
+      "id": "worked-example",
+      "title": "A worked example in Python",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Here is the whole loop in Python — load the extension, store three sentences as vectors, and find the closest one to a query. The only external piece is an embedding function; everything else is the standard-library `sqlite3` module plus the `sqlite-vec` package."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "tiny_sqlite_vec.py",
+          "code": "import sqlite3\nimport sqlite_vec\nfrom sqlite_vec import serialize_float32\n\n# 1) Open a normal SQLite file and load the extension.\ndb = sqlite3.connect(\"app.db\")\ndb.enable_load_extension(True)\nsqlite_vec.load(db)\ndb.enable_load_extension(False)\n\n# 2) Create the vector table (384 dims for this example model).\ndb.execute(\"CREATE VIRTUAL TABLE vec_docs USING vec0(embedding float[384])\")\n\n# 3) Embed and insert your documents.\n#    embed() is any embedding model -> list[float] of length 384.\ndocs = [\n    \"Refunds are accepted within 30 days of purchase.\",\n    \"Support hours are 9am to 6pm Eastern, weekdays.\",\n    \"Digital goods are non-refundable once downloaded.\",\n]\nfor i, text in enumerate(docs):\n    vec = embed(text)                       # -> list[float], len 384\n    db.execute(\n        \"INSERT INTO vec_docs(rowid, embedding) VALUES (?, ?)\",\n        (i, serialize_float32(vec)),        # pack into a compact blob\n    )\ndb.commit()\n\n# 4) Search: embed the query, return the 2 nearest rows.\nq = embed(\"how long do I have to return something?\")\nrows = db.execute(\n    \"\"\"SELECT rowid, distance\n         FROM vec_docs\n        WHERE embedding MATCH ?\n        ORDER BY distance\n        LIMIT 2\"\"\",\n    (serialize_float32(q),),\n).fetchall()\n\nfor rowid, distance in rows:\n    print(rowid, round(distance, 3), docs[rowid])"
+        },
+        {
+          "type": "p",
+          "md": "That is the complete pattern. `serialize_float32` simply packs the Python list into the compact binary format sqlite-vec stores most efficiently. Swap `embed()` for your real model — a local one, or an API — and you have working semantic search in a single file you can email to a colleague."
+        }
+      ]
+    },
+    {
+      "id": "sqlite-vec-vs-the-alternatives",
+      "title": "sqlite-vec vs the alternatives",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The clearest way to place sqlite-vec is against its neighbors. The decision almost always comes down to *scale* and *where the thing runs*, not to features."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Tool",
+            "Runs as",
+            "Index",
+            "Best fit"
+          ],
+          "rows": [
+            [
+              "sqlite-vec",
+              "Extension in a file",
+              "Brute-force (exact)",
+              "Thousands–low millions, on-device / edge"
+            ],
+            [
+              "[Chroma](/learn/embeddings-vector-databases/vector-database-guides/chroma-explained)",
+              "Local lib or server",
+              "Approximate (HNSW)",
+              "Quick local prototypes, dev workflows"
+            ],
+            [
+              "[pgvector](/learn/embeddings-vector-databases/vector-database-guides/pgvector-explained)",
+              "Postgres extension",
+              "Exact or approximate",
+              "Teams already on Postgres"
+            ],
+            [
+              "[Qdrant](/learn/embeddings-vector-databases/vector-database-guides/qdrant-explained) / [Pinecone](/learn/embeddings-vector-databases/vector-database-guides/pinecone-explained)",
+              "Dedicated server",
+              "Approximate (HNSW)",
+              "Millions+ vectors, heavy traffic"
+            ],
+            [
+              "[FAISS](/learn/embeddings-vector-databases/vector-database-guides/faiss-explained)",
+              "In-process library",
+              "Many index types",
+              "Research, custom in-memory search"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The most common comparison is **sqlite-vec vs Chroma**, because both target the \"just let me search locally\" crowd. Chroma is a friendly Python-first store with built-in approximate indexing and an embedding-function abstraction; it shines for fast prototypes. sqlite-vec is lower-level and SQL-native: nothing to run, your vectors sit beside your relational data, and it embeds into non-Python apps (Swift, Go, Rust, the browser) that Chroma can't reach as easily. Chroma does *approximate* search out of the box; sqlite-vec does *exact* brute-force, so its results are always precise but its cost grows linearly."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "sqlite-vec vs a dedicated vector server",
+            "columns": [
+              {
+                "title": "sqlite-vec",
+                "accent": true,
+                "items": [
+                  "Lives inside one file",
+                  "No server to run",
+                  "Exact brute-force results",
+                  "SQL filters + joins for free",
+                  "Linear cost as data grows"
+                ]
+              },
+              {
+                "title": "Dedicated server",
+                "items": [
+                  "Separate service to deploy",
+                  "Ops, scaling, monitoring",
+                  "Approximate but very fast",
+                  "Sublinear search at huge scale",
+                  "Handles millions–billions"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "For a head-to-head across all of these, see the [vector database comparison](/learn/embeddings-vector-databases/vector-database-guides/vector-db-comparison). The rule of thumb: start with sqlite-vec, and only graduate to a server when brute-force search stops being fast enough or you outgrow a single machine."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "**Mismatched dimensions.** Your `vec0` table declares a fixed dimension (e.g. `float[384]`). Every inserted vector must match it, and the dimension must equal what your embedding model outputs. Changing models usually means rebuilding the table — see [how to choose an embedding model](/learn/embeddings-vector-databases/embeddings-explained/how-to-choose-embedding-model).",
+            "**Forgetting to load the extension.** sqlite-vec is not built into SQLite. You must call `enable_load_extension` and load it on every new connection, or `vec0` won't exist and `CREATE VIRTUAL TABLE` will fail.",
+            "**Expecting it to generate embeddings.** sqlite-vec stores and searches vectors; it does not create them. You always bring your own embedding model. (Read [how text embeddings work](/learn/embeddings-vector-databases/embeddings-explained/how-text-embeddings-work) for what those numbers mean.)",
+            "**Pushing it past its scale.** Brute-force is exact but linear. At tens of millions of vectors with high query volume, full scans get slow. That is the signal to move to an approximate-index server, not to fight the tool.",
+            "**Distance is not similarity.** Queries return *distance* — smaller is closer. Don't read a small number as a low score; the nearest match has the *lowest* distance. Pick the metric (L2 or cosine) that matches how your model was trained."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Some managed or hosted SQLite environments disable loadable extensions for security. Before you build on sqlite-vec, confirm your deployment target actually permits loading C extensions — on a locked-down platform it simply won't load."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics click, a few features and nuances are worth knowing."
+        },
+        {
+          "type": "p",
+          "md": "**Binary and bit vectors for compression.** Full `float32` vectors are accurate but bulky. sqlite-vec supports lower-precision storage — `int8` quantization and even binary (1-bit) vectors — which can shrink your database many times over and speed up scans, at some cost in recall. This is a practical lever when storage or speed gets tight before you're ready to leave a single file."
+        },
+        {
+          "type": "p",
+          "md": "**Metadata and auxiliary columns.** Newer versions let you store filter columns and extra (\"auxiliary\") data directly in the `vec0` table, so a single query can do similarity search *and* metadata filtering efficiently without a separate join. Combined with ordinary SQL, this makes hybrid filtering — \"nearest vectors *where* `tenant_id = 7`\" — clean and fast."
+        },
+        {
+          "type": "p",
+          "md": "**Combining with keyword search.** SQLite already ships full-text search (the FTS5 module). Because both live in the same database, you can run FTS5 keyword search and sqlite-vec semantic search side by side and merge the results in SQL — a lightweight *hybrid search* setup with no extra infrastructure. This is one of the underrated advantages of keeping vectors inside your main database."
+        },
+        {
+          "type": "p",
+          "md": "**Where to go next.** If brute-force exact search stops scaling, your migration path is an approximate-index store like [Qdrant](/learn/embeddings-vector-databases/vector-database-guides/qdrant-explained) or, if you're already on Postgres, [pgvector](/learn/embeddings-vector-databases/vector-database-guides/pgvector-explained). To understand the vectors you're storing in the first place, read [what are embeddings](/learn/embeddings-vector-databases/embeddings-explained/what-are-embeddings) and [how embeddings are trained](/learn/embeddings-vector-databases/embeddings-explained/how-embeddings-are-trained). The durable lesson: sqlite-vec isn't a small version of a vector database so much as a *right-sized* one — for a huge share of real apps, a single file that does exact search with plain SQL is not a compromise, it's the correct answer."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is sqlite-vec?",
+      "a": "sqlite-vec is a small, dependency-free SQLite extension that adds vector storage and similarity search to an ordinary SQLite database file. You create a special `vec0` virtual table, insert embeddings into it, and query the nearest vectors with plain SQL — no separate server required."
+    },
+    {
+      "q": "Does sqlite-vec use an approximate index like HNSW?",
+      "a": "No. By default sqlite-vec does exact, brute-force k-nearest-neighbors search: it compares the query against every stored vector. That makes results precise and removes index tuning, but search time grows linearly, so it's best for thousands to low-millions of vectors rather than hundreds of millions."
+    },
+    {
+      "q": "sqlite-vec vs Chroma — which should I use?",
+      "a": "Use sqlite-vec when you want zero servers, SQL-native search, and to embed into non-Python or on-device apps; it does exact search. Use Chroma for fast Python-first prototypes with built-in approximate indexing and embedding helpers. Both target local use, but sqlite-vec is lower-level and lives inside a single file."
+    },
+    {
+      "q": "Does sqlite-vec create embeddings for me?",
+      "a": "No. sqlite-vec only stores and searches vectors — it does not generate them. You compute embeddings with your own model (local or via an API) and insert the resulting numbers, making sure their dimension matches what you declared in the `vec0` table."
+    },
+    {
+      "q": "Where can sqlite-vec run?",
+      "a": "Anywhere SQLite runs. Because it's a tiny C extension with no dependencies, it works on servers, desktops, mobile apps, serverless and edge functions, and even in the browser via WebAssembly. The main caveat is that some locked-down hosts disable loadable extensions for security."
+    },
+    {
+      "q": "How many vectors can sqlite-vec handle?",
+      "a": "It comfortably handles thousands to a few million vectors with single-digit-millisecond queries on modern hardware. Because search is brute-force and scales linearly, very large datasets (tens of millions and up) with heavy query volume are the point to consider an approximate-index vector server instead."
+    }
+  ],
+  "related": [
+    "what-is-a-vector-database",
+    "chroma-explained",
+    "pgvector-explained",
+    "vector-db-comparison",
+    "faiss-explained",
+    "what-are-embeddings"
+  ],
+  "furtherReading": [
+    {
+      "title": "sqlite-vec — GitHub repository",
+      "url": "https://github.com/asg017/sqlite-vec"
+    },
+    {
+      "title": "SQLite — Run-Time Loadable Extensions",
+      "url": "https://www.sqlite.org/loadext.html"
+    },
+    {
+      "title": "The Virtual Table Mechanism Of SQLite",
+      "url": "https://www.sqlite.org/vtab.html"
+    }
+  ]
+}

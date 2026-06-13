@@ -1,0 +1,371 @@
+{
+  "slug": "gpu-cold-start-latency",
+  "title": "GPU Cold Starts: Why Self-Hosted LLMs Are Slow on the First Request",
+  "shortTitle": "GPU Cold Starts",
+  "seoTitle": "GPU Cold Starts: Why Self-Hosted LLMs Lag at First",
+  "metaDescription": "Self-hosted and serverless GPU models can take seconds to wake up. Learn what causes cold starts, weight loading costs, and how warm pools fix latency.",
+  "keywords": [
+    "gpu cold start",
+    "llm cold start latency",
+    "serverless gpu llm",
+    "warm pool gpu",
+    "model loading time"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You'll understand why the first request to a self-hosted or serverless LLM is slow, what a cold start actually involves, and how warm pools trade cost for speed.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you call a hosted model API, the provider keeps thousands of GPUs warm and ready around the clock, so your request lands on a machine that is already loaded and waiting. You never see the startup cost. The moment you run *your own* model — on a rented GPU, a serverless GPU platform, or your own cluster — that startup cost becomes your problem. The very first request after a quiet period can take several seconds before a single token comes back. That delay is a **cold start**."
+        },
+        {
+          "type": "p",
+          "md": "Think of a food truck versus a 24-hour diner. The diner (a hosted API) always has the grill hot, so your burger starts cooking instantly. The food truck (your own GPU) parks overnight with the engine off. When the first customer of the day shows up, the driver has to start the generator, heat the grill, and unpack the ingredients before any cooking happens. Once it is running, every following order is fast — but that *first* customer waits for the whole warm-up."
+        },
+        {
+          "type": "p",
+          "md": "A cold start is the time spent getting a GPU from \"nothing running\" to \"ready to generate.\" It is not the model thinking slowly. It is the machine waking up: allocating a GPU, starting a container, copying multiple gigabytes of model weights into video memory, and initializing the GPU software stack. Once that is done, the GPU is *warm* and responds in milliseconds — until it goes idle and the cycle repeats."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Cold start is a *self-hosting* problem. If you only ever call an API like Claude or another hosted model, you do not pay this cost — the provider absorbs it by keeping a huge fleet warm. The instant you take responsibility for the GPU, you inherit the warm-up."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Cold starts sit right at the tension between two things every team wants: a low GPU bill and a fast, reliable response. You usually cannot have both at the extremes, and cold starts are where that tradeoff becomes painful."
+        },
+        {
+          "type": "p",
+          "md": "GPUs are expensive. A single high-end accelerator can cost several dollars per hour, so leaving one running 24/7 to serve a trickle of traffic feels wasteful. The obvious fix is **scale-to-zero**: shut the GPU down when no requests are coming, and spin it back up on demand. Serverless GPU platforms are built around exactly this. It saves real money — you pay only while the GPU is busy."
+        },
+        {
+          "type": "p",
+          "md": "The catch is that scale-to-zero moves the warm-up cost onto your users. Whoever sends the request that wakes the GPU waits for the whole cold start. This wrecks **tail latency** — the slow end of your latency distribution that engineers track as p95 and p99 (the 95th and 99th percentile). Your *average* response might look fine, but one user in fifty hits a cold GPU and waits 10 seconds while everyone else waits 200 milliseconds."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Interactive apps** — chatbots, copilots, search. A multi-second wait before the first word feels broken. Cold starts directly hurt [time to first token](/learn/production-llmops/cost-latency-optimization/time-to-first-token/), the metric users feel most.",
+            "**Bursty or spiky traffic** — quiet for an hour, then a flood. Every burst that triggers a scale-up event pays a cold start, and during a traffic spike that is exactly when you can least afford it.",
+            "**Autoscaling under load** — even a warm service adds GPU replicas when traffic climbs. Each *new* replica is cold, so the requests routed to it during scale-up are slow precisely when the system is busiest."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "So the question every self-hosting team faces is not \"how do I eliminate cold starts\" — you usually cannot fully — but \"how much am I willing to pay to keep GPUs warm so my users rarely feel one?\" That single tradeoff drives most of the cost-versus-latency tuning in a self-hosted [LLMOps](/learn/production-llmops/llmops-fundamentals/what-is-llmops/) stack."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A cold start is not one delay — it is a chain of steps that each take time, and you pay all of them in sequence before the model can produce a token. Understanding the chain is what lets you attack the expensive parts."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Anatomy of a GPU cold start",
+            "steps": [
+              {
+                "label": "Schedule a GPU",
+                "sub": "find / allocate hardware"
+              },
+              {
+                "label": "Start container",
+                "sub": "pull image, boot process"
+              },
+              {
+                "label": "Init CUDA",
+                "sub": "GPU driver + runtime"
+              },
+              {
+                "label": "Load weights",
+                "sub": "disk → VRAM, multi-GB"
+              },
+              {
+                "label": "Warm up",
+                "sub": "compile, first pass"
+              },
+              {
+                "label": "Ready",
+                "sub": "serve tokens",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Step 1 — getting the GPU"
+        },
+        {
+          "type": "p",
+          "md": "First the platform has to *find* a GPU to give you. If a machine is already idle in your pool, this is fast. If it has to provision a fresh node from the cloud, you wait for that node to boot — and during a capacity crunch you may even queue for a GPU to become available. This step is the most variable and the hardest to control."
+        },
+        {
+          "type": "h3",
+          "text": "Step 2 — container and image"
+        },
+        {
+          "type": "p",
+          "md": "Your model runs inside a container. If the container *image* is not already cached on that machine, it must be pulled over the network. LLM serving images are large — they bundle CUDA libraries, an inference server like vLLM or TGI, and Python dependencies — so an uncached pull of several gigabytes can dominate the cold start on its own."
+        },
+        {
+          "type": "h3",
+          "text": "Step 3 — CUDA initialization"
+        },
+        {
+          "type": "p",
+          "md": "Before any GPU work happens, the GPU software stack has to initialize: the driver, the CUDA runtime, and the framework's GPU context. This is a fixed tax of typically a second or two that you pay every time a fresh process touches the GPU."
+        },
+        {
+          "type": "h3",
+          "text": "Step 4 — loading the weights (usually the big one)"
+        },
+        {
+          "type": "p",
+          "md": "This is where most of the time goes for large models. The model's weights — often **tens of gigabytes** — must be read from disk or object storage and copied into the GPU's video memory (VRAM). A 7-billion-parameter model in half precision is about 14 GB; a 70-billion model is well over 100 GB. Your cold start here is essentially *bytes ÷ bandwidth*: if your storage delivers 1 GB/s, a 14 GB model needs roughly 14 seconds just to move. This is why bigger models cold-start slower, and why fast local storage matters so much."
+        },
+        {
+          "type": "h3",
+          "text": "Step 5 — warm-up pass"
+        },
+        {
+          "type": "p",
+          "md": "Even with weights in VRAM, the very first inference is often slower than later ones. Some kernels compile or autotune on first use, memory buffers and the [KV cache](/learn/production-llmops/cost-latency-optimization/kv-cache-explained/) get allocated, and caches fill. Engines often run a synthetic \"warm-up\" request at boot so the *user's* first real request does not absorb this."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Quick mental model: the cold start is **fixed setup (container + CUDA, a few seconds) plus weight transfer (model size ÷ storage bandwidth)**. For small models the fixed setup dominates; for large models the weight load dominates. Knowing which one you are fighting tells you what to optimize."
+        }
+      ]
+    },
+    {
+      "id": "cold-vs-warm",
+      "title": "Cold path vs warm path",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The same request can take wildly different times depending on whether it lands on a cold GPU or a warm one. Seeing the two paths side by side makes the cost of scale-to-zero obvious."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "What a request pays, by path",
+            "columns": [
+              {
+                "title": "Cold path (GPU was off)",
+                "accent": true,
+                "items": [
+                  "Schedule + boot the GPU node",
+                  "Pull container image if uncached",
+                  "Initialize CUDA from scratch",
+                  "Copy all weights into VRAM",
+                  "Run a warm-up pass",
+                  "Then finally generate"
+                ]
+              },
+              {
+                "title": "Warm path (GPU ready)",
+                "items": [
+                  "GPU already allocated",
+                  "Container already running",
+                  "CUDA context already live",
+                  "Weights already in VRAM",
+                  "Caches already primed",
+                  "Generate immediately"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Rough orders of magnitude (illustrative, not benchmarks): a warm path might serve a first token in a few hundred milliseconds, while a cold path for a mid-sized model can be **5–30 seconds** depending mostly on model size and storage speed. The gap is not the model being smarter on the warm path — it is doing identical work, minus all the setup."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "What grows the cold start",
+            "Why",
+            "Lever to pull"
+          ],
+          "rows": [
+            [
+              "Model size",
+              "More gigabytes to move into VRAM",
+              "Quantize, or use a smaller model"
+            ],
+            [
+              "Slow storage",
+              "Lower bytes/sec into VRAM",
+              "Local NVMe, faster object store"
+            ],
+            [
+              "Uncached image",
+              "Multi-GB pull over network",
+              "Pre-bake / pre-pull the image"
+            ],
+            [
+              "Fresh node provisioning",
+              "Cloud boot + scheduling",
+              "Keep warm replicas (min > 0)"
+            ],
+            [
+              "First-pass compilation",
+              "Kernels autotune on first use",
+              "Run a warm-up request at boot"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "keeping-gpus-warm",
+      "title": "Strategies to keep GPUs warm",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every mitigation is a point on the same dial: spend more to keep GPUs ready (lower latency, higher cost) or spend less and let them sleep (lower cost, occasional slow requests). Here are the standard moves, roughly from cheapest to most aggressive."
+        },
+        {
+          "type": "h3",
+          "text": "Warm pools and minimum replicas"
+        },
+        {
+          "type": "p",
+          "md": "The most direct fix: never scale fully to zero. Set a **minimum replica count** (often called `min_replicas` or a **warm pool**) so at least one GPU is always loaded and waiting. Steady traffic then almost never hits a cold start — only bursts that exceed your warm capacity do. You pay for that idle GPU even when traffic is zero, which is the price of predictable latency. This single setting is the most common cold-start fix in production."
+        },
+        {
+          "type": "h3",
+          "text": "Scale-to-zero with fast restore (snapshotting)"
+        },
+        {
+          "type": "p",
+          "md": "If you genuinely cannot afford an always-on GPU, the goal becomes making the cold start *short* rather than avoiding it. **Snapshotting** captures the process state — and sometimes GPU memory — after the model is loaded and CUDA is initialized, then restores from that snapshot instead of redoing the work from scratch. Combined with pre-cached images and weights on fast local disk, this can cut a multi-second cold start down dramatically. Several serverless GPU platforms build this in."
+        },
+        {
+          "type": "h3",
+          "text": "Make the weight load faster"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Local NVMe over remote storage.** Pulling weights from a fast local disk beats streaming them from object storage across the network. Many platforms cache weights on the node after the first load.",
+            "**Quantization.** A model stored in a smaller numeric format (for example 8-bit or 4-bit instead of 16-bit) has fewer bytes to move, so it loads — and runs — faster, at some quality cost.",
+            "**Streaming / lazy weight loading.** Some serving engines begin computing as weights arrive rather than waiting for every byte, overlapping transfer with the first forward pass."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Predictive and scheduled warming"
+        },
+        {
+          "type": "p",
+          "md": "If your traffic is predictable — busy 9-to-5, quiet overnight — you can **schedule** capacity to come up before the rush so the first real users never hit a cold node. More advanced setups warm replicas *ahead* of an anticipated spike based on traffic signals, paying for warm GPUs only around the moments you expect load."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Do not tune cold starts by eyeballing average latency — a cold start is rare, so it barely moves the mean. Watch **p95/p99** and chart latency against scale-up events. A clean average can hide a brutal tail that a fraction of your users hit on every burst."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics click, cold starts open into a set of system-design tradeoffs that interact with the rest of your serving stack. A few directions worth knowing."
+        },
+        {
+          "type": "p",
+          "md": "**Cold start is an inference-time problem, not a training one.** It is purely about getting a *serving* GPU ready to answer; it has nothing to do with how the model was trained — see [training vs inference](/learn/production-llmops/llmops-fundamentals/training-vs-inference/) for why those two phases have completely different latency and cost shapes."
+        },
+        {
+          "type": "p",
+          "md": "**Autoscaling reacts late.** Standard autoscalers add replicas *after* they observe load — but a new GPU replica is cold, so by the time it is ready the spike may be peaking or fading. This lag is why teams keep headroom (warm replicas beyond current need) and tune scale-up thresholds to trigger early. Scaling on a leading signal like queue depth, rather than a lagging one like CPU, helps the new capacity arrive before users feel the gap."
+        },
+        {
+          "type": "p",
+          "md": "**Bin-packing and model-swapping.** If you serve many models on limited GPUs, you cannot keep them all resident in VRAM. Some systems swap models in and out, which means a request for a currently-evicted model pays a cold-start-like load. The scheduling problem — which models to keep hot, which to evict — is its own optimization, and it is why dedicating GPUs to your highest-traffic models often beats a fully shared pool."
+        },
+        {
+          "type": "p",
+          "md": "**The economics rarely favor true zero.** People reach for scale-to-zero to save money, but for any service with steady daytime traffic, the math often points to a small always-warm pool plus on-demand burst capacity. Idle-GPU cost is visible on a bill; bad p99 latency costs users and trust, which is harder to see but just as real. The right answer is a deliberate point on the dial, justified by your actual traffic pattern — not the extreme that happens to be the default."
+        },
+        {
+          "type": "p",
+          "md": "Where to go next: cold starts are one slice of overall serving speed. To round out the picture, study [time to first token](/learn/production-llmops/cost-latency-optimization/time-to-first-token/) (what a warm request still pays) and the broader playbook in [how to reduce LLM latency](/learn/production-llmops/cost-latency-optimization/reduce-llm-latency/)."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is a GPU cold start for an LLM?",
+      "a": "It is the delay you pay on the first request after a GPU has been idle or shut down. The machine has to be allocated, the container started, CUDA initialized, and multiple gigabytes of model weights copied into VRAM before a single token can be generated. Once warm, the same GPU responds in milliseconds."
+    },
+    {
+      "q": "Why is the first request to a self-hosted model so slow?",
+      "a": "Because that request triggers the whole warm-up: scheduling a GPU, possibly pulling a large container image, initializing the GPU software stack, and loading the model weights into video memory. For a large model the weight load alone can take many seconds. Hosted APIs hide this by keeping their fleet permanently warm."
+    },
+    {
+      "q": "How long does loading model weights into VRAM take?",
+      "a": "Roughly the model size divided by your storage bandwidth. A 14 GB model from storage that delivers about 1 GB/s takes around 14 seconds; faster local NVMe is much quicker. This is usually the single biggest part of a cold start for large models, which is why quantization and fast local disk help so much."
+    },
+    {
+      "q": "Does scale-to-zero cause cold starts?",
+      "a": "Yes. Scaling fully to zero saves money by shutting GPUs down when idle, but it means the next request that arrives must wake a GPU from scratch and pay the full cold start. It is a direct cost-versus-latency tradeoff: you save on idle GPU time and pay with slow first requests and a worse p99."
+    },
+    {
+      "q": "How do warm pools fix cold start latency?",
+      "a": "A warm pool keeps a minimum number of GPUs always loaded and ready instead of scaling to zero. Steady traffic then lands on an already-warm GPU and never pays the cold start; only bursts beyond your warm capacity do. The cost is paying for those idle-but-ready GPUs, which buys you predictable low latency."
+    },
+    {
+      "q": "Do cold starts affect API models like Claude or GPT?",
+      "a": "No. With a hosted API the provider keeps a large GPU fleet permanently warm, so you never pay for weight loading or container spin-up. Cold starts only appear when you run the model yourself — on rented GPUs, a serverless GPU platform, or your own cluster."
+    }
+  ],
+  "related": [
+    "time-to-first-token",
+    "reduce-llm-latency",
+    "kv-cache-explained",
+    "what-is-llmops",
+    "training-vs-inference",
+    "production-llm-stack"
+  ],
+  "furtherReading": [
+    {
+      "title": "vLLM Documentation",
+      "url": "https://docs.vllm.ai/"
+    },
+    {
+      "title": "NVIDIA CUDA Toolkit Documentation",
+      "url": "https://docs.nvidia.com/cuda/"
+    },
+    {
+      "title": "Hugging Face Text Generation Inference (GitHub)",
+      "url": "https://github.com/huggingface/text-generation-inference"
+    }
+  ]
+}

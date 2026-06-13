@@ -1,0 +1,382 @@
+{
+  "slug": "dspy-optimizers-explained",
+  "title": "DSPy Optimizers Explained: How Prompts Get Compiled",
+  "shortTitle": "DSPy Optimizers",
+  "seoTitle": "DSPy Optimizers Explained: Compiling Better Prompts",
+  "metaDescription": "DSPy optimizers turn examples into tuned prompts and few-shot demos automatically. Learn how BootstrapFewShot and MIPRO compile a program into a better one.",
+  "keywords": [
+    "dspy optimizers explained",
+    "dspy bootstrapfewshot mipro",
+    "how dspy compiles prompts",
+    "dspy teleprompter tutorial",
+    "dspy optimize prompt with examples"
+  ],
+  "difficulty": "advanced",
+  "oneLiner": "Understand how DSPy's optimizers actually work — using a metric and examples to bootstrap few-shot demos and tune instructions — so you can compile a better prompt program instead of hand-tuning.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "In [DSPy](/learn/agent-frameworks/lightweight-typed-frameworks/what-is-dspy) you write a small program — a *signature* that says what goes in and out, and a *module* like `dspy.ChainOfThought` that picks a reasoning strategy. But that program ships with a *bland default prompt*. An **optimizer** is the part that takes that bland program and rewrites the prompt for you so the model actually scores well on your task. In DSPy's older docs you'll see these called **teleprompters** — same thing."
+        },
+        {
+          "type": "p",
+          "md": "The everyday analogy: think of a new hire who technically knows the job but has never seen *your* tickets. You don't rewrite their brain. Instead you hand them a folder of solved examples — *\"here's a tricky billing case and how we labeled it\"* — and a clear rubric for what counts as a good answer. After studying those, they get noticeably better. A DSPy optimizer does exactly that: it studies labeled examples against a scoring rule and bakes the best examples and instructions into the prompt. You supply the folder (a *trainset*) and the rubric (a *metric*); the optimizer does the studying."
+        },
+        {
+          "type": "p",
+          "md": "The verb DSPy uses for this is **compile**. You call `optimizer.compile(program, trainset=...)` and get back the *same* program carrying a tuned prompt under the hood. Nothing about your Python changed — only the hidden prompt strings the model sees did. That's why the DSPy pitch is *\"programming, not prompting\"*: you keep writing code, and compilation handles the prompt text."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Three words to keep straight: a **module** is your program (e.g. `ChainOfThought`); an **optimizer/teleprompter** is the thing that tunes it (e.g. `BootstrapFewShot`); **compile** is the verb that runs the optimizer over your trainset and returns the tuned module."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Most people find DSPy *signatures* and *modules* easy to grasp and then get stuck on the optimizers — they feel like magic. Understanding what the compiler is really doing is what turns DSPy from a curiosity into something you can ship. The optimizer is where the actual quality gains come from; everything else is plumbing."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**It replaces few-shot guesswork with search.** Hand-picking which examples to paste into a prompt is slow and biased toward the cases you happen to remember. An optimizer tries many combinations and keeps the ones that measurably help — it searches a space you'd never explore by hand.",
+            "**It survives model swaps.** A prompt hand-tuned for one model often degrades on the next. Because optimization is just `compile` against a metric, you point DSPy at the new model and re-run it. The search re-finds good few-shot demos and instructions for *that* model — no string rewriting.",
+            "**It makes 'better' a number, not a vibe.** Optimization forces you to define a metric. Once you have one, you stop arguing about whether a prompt edit helped and start reading a score on held-out data. That single discipline is worth more than any prompt trick."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who should care? Anyone who has built a working DSPy program and wants it to actually be *good*: people running classifiers, extraction, [RAG](/learn/rag/rag-fundamentals/what-is-rag) pipelines, or multi-step [agents](/learn/ai-agents/agent-fundamentals/what-is-an-ai-agent) where accuracy is measurable. If you only need a one-off chatbot reply, you can skip optimization entirely — modules run fine uncompiled. The optimizer earns its keep when correctness matters and you can score it."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How the compile loop works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every DSPy optimizer needs the same three ingredients, and the compile step is a loop over them. Get these three right and the rest is choosing which optimizer to run."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**A program** — your module(s), e.g. a `ChainOfThought` wrapping a signature. This is the thing being tuned.",
+            "**A trainset** — a list of `dspy.Example` objects: realistic inputs, ideally with the correct outputs (the *gold labels*). This is what the optimizer learns from.",
+            "**A metric** — a Python function `metric(example, prediction)` that returns a number (often 1.0 for correct, 0.0 for wrong, or a partial score). This is the rubric the optimizer maximizes."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Here's the part that surprises people: most optimizers generate the few-shot examples *themselves* rather than just pasting your raw labels. The optimizer runs your program on trainset inputs, watches what the model produces, scores each run with your metric, and keeps the input→output traces that scored well. Those successful traces become the few-shot demonstrations embedded in the final prompt. This trick is called **bootstrapping**: the model's own good answers become its teaching examples."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "The compile loop (bootstrapping)",
+            "steps": [
+              {
+                "label": "Pick a trainset example"
+              },
+              {
+                "label": "Run the program on it"
+              },
+              {
+                "label": "Score output with the metric"
+              },
+              {
+                "label": "Keep the trace if it scored well"
+              },
+              {
+                "label": "Assemble best traces into the prompt"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "After the loop, the optimizer assembles the winners — selected few-shot demos plus (for some optimizers) tuned instruction text — into the program's prompt and hands you back the compiled module. The diagram below shows the whole journey from a raw program to a tuned one."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Inputs → compile → tuned program",
+            "steps": [
+              {
+                "label": "Program",
+                "sub": "module + signature"
+              },
+              {
+                "label": "Trainset",
+                "sub": "examples + labels"
+              },
+              {
+                "label": "Metric",
+                "sub": "scores each output"
+              },
+              {
+                "label": "Optimizer",
+                "sub": "search loop"
+              },
+              {
+                "label": "Compiled program",
+                "sub": "tuned prompt",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "compile_dspy.py",
+          "code": "import dspy\n\n# A program: chain-of-thought over a simple signature.\nclassify = dspy.ChainOfThought(\"message -> category\")\n\n# A trainset: realistic inputs with gold labels.\ntrainset = [\n    dspy.Example(message=\"I was double charged\", category=\"billing\").with_inputs(\"message\"),\n    dspy.Example(message=\"The app keeps crashing\", category=\"technical\").with_inputs(\"message\"),\n    # ...ideally 50-300 varied examples...\n]\n\n# A metric: 1.0 if the predicted category matches the gold label.\ndef accuracy(example, prediction, trace=None):\n    return float(example.category == prediction.category)\n\n# Compile = run the optimizer's search loop over the trainset.\noptimizer = dspy.BootstrapFewShot(metric=accuracy)\ntuned = optimizer.compile(classify, trainset=trainset)\n\n# `tuned` is the same program, now carrying optimized few-shot demos.\nprint(tuned(message=\"Why is my invoice wrong?\").category)"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Notice the optimizer never asked you *which* examples to put in the prompt. It picked them by running your program and keeping what scored well on `accuracy`. Your job was to write a good metric and supply enough realistic data."
+        }
+      ]
+    },
+    {
+      "id": "bootstrapfewshot-vs-mipro",
+      "title": "BootstrapFewShot vs MIPRO",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "DSPy ships several optimizers; two names dominate the discussion. They sit at different points on the *cheap-and-simple* to *powerful-and-expensive* spectrum, and knowing which to reach for first saves a lot of wasted compute."
+        },
+        {
+          "type": "h3",
+          "text": "BootstrapFewShot — tune the examples"
+        },
+        {
+          "type": "p",
+          "md": "`BootstrapFewShot` does exactly the bootstrapping loop above: it runs your program, collects traces that pass the metric, and selects a handful as few-shot demonstrations. It mostly tunes *which examples* go in the prompt — it leaves the instruction wording roughly as written. It's cheap, fast, and a great first thing to try. A common stronger variant, `BootstrapFewShotWithRandomSearch`, generates several candidate demo sets and keeps the best-scoring one on a validation split."
+        },
+        {
+          "type": "h3",
+          "text": "MIPRO — tune the instructions too"
+        },
+        {
+          "type": "p",
+          "md": "`MIPROv2` (Multiprompt Instruction PRoposal Optimizer) goes further: it jointly optimizes *both* the instruction text *and* the few-shot examples. It uses an LLM to propose candidate instruction phrasings, pairs them with candidate demo sets, and runs a guided search (Bayesian-style) to find the combination that scores best — rather than trying everything blindly. That makes it more powerful on hard tasks, but it costs many more LLM calls to compile."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Which optimizer to reach for",
+            "columns": [
+              {
+                "title": "BootstrapFewShot",
+                "accent": true,
+                "items": [
+                  "Tunes few-shot examples",
+                  "Leaves instructions mostly as-is",
+                  "Cheap, fast to compile",
+                  "Great first attempt",
+                  "Few labels needed (~tens)"
+                ]
+              },
+              {
+                "title": "MIPROv2",
+                "items": [
+                  "Tunes instructions + examples",
+                  "LLM proposes instruction text",
+                  "Guided (Bayesian) search",
+                  "Stronger on hard tasks",
+                  "Many more LLM calls / more data"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "A sane default workflow: start with `BootstrapFewShot`, measure the lift on a held-out set, and only graduate to `MIPROv2` if you need more and can afford the compile budget. DSPy also includes `GEPA`, a reflective optimizer that reads failures in natural language and proposes improved instructions through an evolutionary search — useful when instruction wording, not example choice, is the bottleneck."
+        }
+      ]
+    },
+    {
+      "id": "good-metrics-and-trainsets",
+      "title": "What good metrics and trainsets look like",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "An optimizer is only as good as what you feed it. It blindly maximizes your metric over your data — so a weak metric or a skewed trainset produces a confidently wrong prompt. This is where almost all real effort should go."
+        },
+        {
+          "type": "h3",
+          "text": "The metric"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**For exact answers, use exact match.** Classification or extraction with a known correct label? Return `1.0` on a match, `0.0` otherwise. Simple and reliable.",
+            "**For partial credit, return a float.** If an answer can be partly right (e.g. it got 3 of 4 fields), score it proportionally so the optimizer can tell *better* from *worse*, not just *pass* from *fail*.",
+            "**For open-ended text, consider an LLM judge.** When there's no single right string, a metric can call another model to rate the answer — see [LLM evals](/learn/evaluation-safety/evaluation-basics/what-are-llm-evals). This is powerful but adds cost and noise, so validate the judge itself.",
+            "**Match the metric to the real goal.** If you optimize for exact-string equality but users only care about meaning, you'll tune toward the wrong target. The metric *is* the objective — choose it as carefully as the prompt you're trying to avoid writing."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "The trainset"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Realistic and varied beats large and clean.** Include the messy, ambiguous, edge-case inputs you actually see in production — not just the easy ones. A prompt tuned only on easy cases aces the demo and flops live.",
+            "**A few dozen is often enough to start.** `BootstrapFewShot` can show gains with tens of examples; `MIPROv2` and heavier searches benefit from more. You don't need a giant dataset to begin.",
+            "**Always hold out a separate eval set.** Compile on the trainset, but report your score on examples the optimizer never saw. Otherwise you're measuring memorization, not quality — the same overfitting trap as any ML workflow."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "If your metric and trainset are bad, optimization will faithfully make your prompt *worse* in production while the compile-time score looks great. Treat the metric and held-out eval as the real deliverable; the tuned prompt is a byproduct."
+        }
+      ]
+    },
+    {
+      "id": "when-optimization-pays-off",
+      "title": "When optimization actually pays off",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Compiling isn't free — it makes many LLM calls against your trainset, costing time and money up front. That investment pays back at inference time only under certain conditions. Use this table to decide before you spend the budget."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Situation",
+            "Optimize?",
+            "Why"
+          ],
+          "rows": [
+            [
+              "You can score outputs with a clear metric",
+              "Yes",
+              "The optimizer has a real target to climb toward."
+            ],
+            [
+              "High volume — the program runs constantly",
+              "Yes",
+              "A one-time compile cost amortizes over millions of calls."
+            ],
+            [
+              "You'll swap models or update tasks often",
+              "Yes",
+              "Re-compiling beats re-hand-tuning prompts each time."
+            ],
+            [
+              "No labeled data and no way to judge quality",
+              "No",
+              "There's nothing for the optimizer to maximize."
+            ],
+            [
+              "A one-off script or quick prototype",
+              "Probably not",
+              "Uncompiled modules already work; compile later if it matters."
+            ],
+            [
+              "The base prompt already hits your accuracy bar",
+              "No",
+              "Don't pay compile cost for a gain you don't need."
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "A practical rhythm: build with plain modules first to confirm the pipeline works, define a metric and a small eval set, measure the *uncompiled* baseline, then compile and check whether the lift justifies the cost. If you can't measure a lift, you haven't earned the right to optimize yet — go fix the metric or the data."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the metric → trainset → compile loop clicks, here's the territory worth exploring next."
+        },
+        {
+          "type": "p",
+          "md": "**Optimizing multi-stage programs end to end.** Because DSPy modules are plain Python objects, you nest them — a retrieval step feeds a [chain-of-thought](/learn/prompt-engineering/reasoning-techniques/chain-of-thought-prompting) step feeds a formatting step. The remarkable part is that one optimizer can tune the *whole pipeline* against a single end-to-end metric, propagating credit through stages you could never hand-tune in isolation. This is the main reason DSPy treats prompts as a compilation target rather than text to edit."
+        },
+        {
+          "type": "p",
+          "md": "**From prompts to weights.** Some DSPy optimizers can use your trainset to drive [fine-tuning](/learn/fine-tuning/fine-tuning-basics/what-is-fine-tuning) of the underlying model, compiling a program down into tuned weights for a smaller, cheaper model instead of (or alongside) a longer prompt. This blurs the line between prompt optimization and model training and is why DSPy bills itself as a framework for building *systems*, not just prompts."
+        },
+        {
+          "type": "p",
+          "md": "**Production realities.** Compiled prompts can get long because they embed selected demonstrations — watch your [context window](/learn/llm-fundamentals/context-windows/what-is-a-context-window) and per-call cost. Optimization is also stochastic: results vary run to run, so save and version your compiled program (DSPy can serialize it) rather than recompiling on every deploy. Re-compile deliberately when the model, the data, or the task changes — not on a whim."
+        },
+        {
+          "type": "p",
+          "md": "**The honest open problem.** Every optimizer is downstream of your metric, and turning *\"is this answer good?\"* into a reliable number is the same unsolved challenge at the heart of all [LLM evaluation](/learn/evaluation-safety/evaluation-basics/what-are-llm-evals). DSPy makes the *search* automatic; it cannot make the *objective* correct. The durable lesson: spend your effort on the metric and the held-out data, and let the optimizer handle the prompt strings. If you're still choosing tools, compare DSPy against the rest of the [lightweight, typed frameworks](/learn/agent-frameworks/lightweight-typed-frameworks/what-is-pydantic-ai) and the broader question of [whether you need a framework at all](/learn/agent-frameworks/choosing-a-framework/what-is-agent-framework)."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is a teleprompter in DSPy?",
+      "a": "Teleprompter is the older name for what DSPy now calls an optimizer. It's the component that takes your program, a trainset, and a metric, then compiles a tuned prompt — including selected few-shot examples and, for some optimizers, the instruction text. `BootstrapFewShot` and `MIPROv2` are both teleprompters/optimizers."
+    },
+    {
+      "q": "What is the difference between BootstrapFewShot and MIPRO?",
+      "a": "`BootstrapFewShot` mainly tunes *which few-shot examples* go in the prompt by running your program and keeping the traces that pass your metric; it's cheap and a good first try. `MIPROv2` also optimizes the *instruction text*, using an LLM to propose phrasings and a guided search to pair instructions with demo sets. MIPRO is stronger on hard tasks but costs many more LLM calls to compile."
+    },
+    {
+      "q": "Do I need labeled data to use a DSPy optimizer?",
+      "a": "Yes — optimizers need a trainset of example inputs and a metric to score outputs. Ideally your examples include gold labels so the metric can check correctness, though some setups score outputs without exact labels (for instance via an LLM judge). Even a few dozen realistic examples is often enough to see gains."
+    },
+    {
+      "q": "What makes a good DSPy metric?",
+      "a": "One that mirrors what you actually care about. Use exact match for classification or extraction, a float for partial credit, and an LLM judge for open-ended text. The optimizer blindly maximizes whatever the metric returns, so a metric that doesn't match the real goal will tune your prompt toward the wrong target."
+    },
+    {
+      "q": "How does DSPy compile a prompt?",
+      "a": "You call `optimizer.compile(program, trainset=...)`. The optimizer runs your program on training examples, scores each output with your metric, keeps the input→output traces that scored well, and assembles the best ones (plus tuned instructions for some optimizers) into the program's prompt. It returns the same program now carrying that optimized prompt."
+    },
+    {
+      "q": "Is running a DSPy optimizer expensive?",
+      "a": "Compilation makes many LLM calls against your trainset, so it costs time and money up front — `MIPROv2` far more than `BootstrapFewShot`. It pays off at inference time for high-volume programs or when you re-tune across model swaps, but it isn't free. Measure the lift on a held-out set to confirm it's worth the budget."
+    }
+  ],
+  "related": [
+    "what-is-dspy",
+    "what-is-pydantic-ai",
+    "what-is-instructor-library",
+    "what-is-agent-framework",
+    "agent-framework-comparison"
+  ],
+  "furtherReading": [
+    {
+      "title": "DSPy — Official Documentation",
+      "url": "https://dspy.ai"
+    },
+    {
+      "title": "stanfordnlp/dspy — Official GitHub Repository",
+      "url": "https://github.com/stanfordnlp/dspy"
+    },
+    {
+      "title": "DSPy: Compiling Declarative Language Model Calls (arXiv)",
+      "url": "https://arxiv.org/abs/2310.03714"
+    }
+  ]
+}

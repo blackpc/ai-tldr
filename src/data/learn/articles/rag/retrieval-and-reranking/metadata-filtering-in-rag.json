@@ -1,0 +1,346 @@
+{
+  "slug": "metadata-filtering-in-rag",
+  "title": "How to Use Metadata Filtering in RAG Retrieval",
+  "shortTitle": "Metadata Filtering in RAG",
+  "seoTitle": "Metadata Filtering in RAG: Narrowing Retrieval",
+  "metaDescription": "Vector similarity alone returns the wrong tenant's or wrong date's documents. Learn how metadata filters scope RAG retrieval to the right subset of data.",
+  "keywords": [
+    "metadata filtering rag",
+    "filter vector search rag",
+    "scope rag retrieval",
+    "rag access control filtering",
+    "pre-filter vs post-filter rag"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You'll learn how to attach and filter on metadata so RAG retrieves only documents from the right user, date range, or source.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "In a [RAG](/learn/rag/rag-fundamentals/what-is-rag) system, the [retriever](/learn/rag/retrieval-and-reranking/what-is-a-retriever) finds chunks whose *meaning* is closest to the question. That is powerful, but meaning is not the only thing that matters. The most relevant-sounding paragraph might belong to a different customer, an expired policy, or a document the current user is not allowed to see. Pure similarity search has no idea about any of that."
+        },
+        {
+          "type": "p",
+          "md": "**Metadata filtering** fixes this by attaching structured labels to every chunk — things like `tenant_id`, `date`, `source`, `language`, or `access_level` — and then telling the search to *only consider chunks that match a condition* before (or after) ranking by similarity. Similarity decides *which* chunk is most relevant; the filter decides *which chunks are even allowed to compete*."
+        },
+        {
+          "type": "p",
+          "md": "Think of a library with a brilliant librarian who finds the perfect book on any topic. Metadata filtering is the rule you give them first: *only look in the children's section*, or *only books published after 2020*, or *only books this member is permitted to borrow*. The librarian's skill at matching topics is unchanged. You have simply fenced off the shelves they are allowed to search."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "There is a general idea of metadata filtering in vector databases. This article is specifically about applying it inside a RAG pipeline: scoping retrieval to the right user, the right time window, the right source, and the right permissions — the filters that make a RAG app correct and safe, not just relevant."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once a RAG app leaves the demo stage and serves real users with real data, similarity alone starts returning answers that are *relevant but wrong*. Metadata filters are how you keep retrieval correct. Four cases come up again and again."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Multi-tenant isolation.** One vector store holds documents for many customers. Without a `tenant_id` filter, Customer A's question can pull back a chunk written for Customer B — a data leak, not a bad answer. This is the single most important filter in any B2B RAG app.",
+            "**Freshness and validity.** Prices, policies, and schedules change. A `date` or `valid_until` filter keeps the model from grounding its answer in a document that expired last quarter, even if that old document is the closest semantic match.",
+            "**Source and document-type scoping.** \"Answer only from the official handbook, not from draft notes\" or \"search support tickets, not marketing pages.\" A `source` or `doc_type` filter narrows retrieval to the right *kind* of content for the question.",
+            "**Access control.** Different roles see different documents. An `access_level` or `allowed_roles` filter ensures a contractor's query never retrieves an HR file or a confidential contract. Permissions enforced *at retrieval time* are far safer than hoping the model declines to repeat what it was handed."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The thread through all four: the filter encodes a rule the embedding model can never learn on its own. An embedding captures topic and tone, not ownership, recency, or permission. Those are facts *about* the document, and the only place to enforce them is the metadata you attach and query. Skip them and your RAG system is one unlucky similarity score away from a leak or a stale answer."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Metadata filtering touches two points in the pipeline. At **ingestion**, every chunk is stored with a small bag of structured fields alongside its vector. At **query time**, the request carries both the embedded question *and* a filter expression; the vector store applies the filter and ranks by similarity together."
+        },
+        {
+          "type": "h3",
+          "text": "Step 1 — attach metadata at ingestion"
+        },
+        {
+          "type": "p",
+          "md": "When you chunk and embed a document, you also record what you know about it. Keep the fields small, structured, and filterable — exact values (strings, numbers, dates, booleans), not long prose. Every vector store stores this metadata next to the vector."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "store each chunk with metadata",
+          "code": "store.add(\n    id=\"doc42-chunk3\",\n    vector=embed(chunk_text),\n    metadata={\n        \"tenant_id\": \"acme-corp\",\n        \"source\": \"handbook\",\n        \"doc_type\": \"policy\",\n        \"access_level\": \"employee\",\n        \"published\": \"2026-03-01\",   # ISO date, easy to range-filter\n        \"lang\": \"en\",\n    },\n)"
+        },
+        {
+          "type": "h3",
+          "text": "Step 2 — filter at query time"
+        },
+        {
+          "type": "p",
+          "md": "The request combines the embedded question with a filter that the current user and context determine. The store returns the top matches *that also satisfy the filter* — never the global nearest neighbors."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "scoped retrieval",
+          "code": "results = store.query(\n    vector=embed(user_question),\n    top_k=5,\n    filter={\n        \"tenant_id\": current_user.tenant_id,      # isolation — always on\n        \"access_level\": {\"$in\": current_user.roles},  # permissions\n        \"published\": {\"$gte\": \"2026-01-01\"},      # freshness\n        \"source\": \"handbook\",                     # scope\n    },\n)\n# Only chunks matching ALL conditions are ranked by similarity."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Where the filter sits in retrieval",
+            "steps": [
+              {
+                "label": "User question",
+                "sub": "+ user context"
+              },
+              {
+                "label": "Embed query",
+                "sub": "question → vector"
+              },
+              {
+                "label": "Apply filter",
+                "sub": "tenant, date, role, source",
+                "accent": true
+              },
+              {
+                "label": "Rank by similarity",
+                "sub": "top-k of the allowed set"
+              },
+              {
+                "label": "Augment + generate",
+                "sub": "grounded answer"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The filter syntax varies by store but the operators are familiar: equality, `$in` (one of a set), range comparisons (`$gte`, `$lte`) for dates and numbers, and boolean `$and` / `$or` to combine conditions. The hard part is not the syntax — it is deciding *where* in the search the filter runs, which is the next section."
+        }
+      ]
+    },
+    {
+      "id": "pre-filter-vs-post-filter",
+      "title": "Pre-filter vs post-filter",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "There are two moments a filter can run relative to the similarity search, and the choice has real consequences for both correctness and recall."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Pre-filtering** restricts the candidate set *first*, then ranks only the survivors by similarity. The result is always the true top-k *within the allowed subset*. This is what you want for correctness — a tenant or permission filter must never be bypassed.",
+            "**Post-filtering** runs the similarity search over *everything* first, takes the top-k, and *then* discards the rows that fail the filter. It is simpler for the index, but it can return fewer than k results — or even zero — because the matches it found might all get thrown away."
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Two places to apply the filter",
+            "columns": [
+              {
+                "title": "Pre-filter",
+                "accent": true,
+                "items": [
+                  "Filter first, then rank",
+                  "Always returns true top-k of allowed set",
+                  "Safe for tenant / access control",
+                  "Can be slower on naive indexes",
+                  "No silent recall loss"
+                ]
+              },
+              {
+                "title": "Post-filter",
+                "items": [
+                  "Rank first, then drop non-matches",
+                  "May return fewer than k (or zero)",
+                  "Risky for isolation if relied on alone",
+                  "Cheap to bolt on after search",
+                  "Recall depends on filter selectivity"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Post-filtering is the classic source of \"my RAG returns nothing\" bugs. If you fetch `top_k=5` and then drop the four that fail the filter, the user gets one chunk — or none — even though plenty of valid documents exist deeper in the ranking. For anything that affects *correctness or security* (tenant, permissions), pre-filter. Most production vector stores (pgvector, Pinecone, Qdrant, Weaviate, Milvus) support pre-filtering natively — use it."
+        },
+        {
+          "type": "p",
+          "md": "There is a subtle recall trade-off even with pre-filtering. Many vector indexes are *approximate* — they explore a neighborhood of the graph rather than every vector. When a filter is very selective (say it keeps only 0.1% of chunks), the approximate walk may not find enough matching neighbors and recall drops. The fixes: raise the search effort (`ef_search` / number of probes) for selective filters, or for tiny tenants fall back to an exact scan, which is fast when the allowed set is small."
+        }
+      ]
+    },
+    {
+      "id": "worked-example",
+      "title": "A worked example: scoping a support bot",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Imagine a support assistant serving many companies. Each company has public docs, internal runbooks, and per-plan articles. A logged-in support agent at *Acme* asks: \"What's the SLA for priority incidents on the Enterprise plan?\" Here is how the filter is built from context, not from the question text."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Field",
+            "Value from context",
+            "Why it's filtered"
+          ],
+          "rows": [
+            [
+              "tenant_id",
+              "acme-corp (from session)",
+              "Never show another company's data"
+            ],
+            [
+              "plan",
+              "enterprise (from account)",
+              "SLA differs per plan; wrong plan = wrong number"
+            ],
+            [
+              "access_level",
+              "agent (from role)",
+              "Internal runbooks, not just public FAQ"
+            ],
+            [
+              "published",
+              "≥ 2026-01-01",
+              "Ignore last year's superseded SLA doc"
+            ],
+            [
+              "lang",
+              "en",
+              "Match the user's interface language"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Notice that none of these values come from the user's sentence — they come from the authenticated session and account. That is the safe pattern: **derive filters from trusted context, never from the user's free text.** If you let the model or the user choose the `tenant_id`, you have handed away the very isolation the filter exists to provide."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "build the filter from session, not from the prompt",
+          "code": "def retrieve(question, session):\n    flt = {\n        \"tenant_id\": session.tenant_id,        # trusted, server-side\n        \"plan\": session.account.plan,\n        \"access_level\": {\"$in\": session.roles},\n        \"published\": {\"$gte\": \"2026-01-01\"},\n        \"lang\": session.lang,\n    }\n    return store.query(vector=embed(question), top_k=5, filter=flt)"
+        },
+        {
+          "type": "p",
+          "md": "With this filter in place, the embedding model is free to do what it is good at — matching the *meaning* of \"SLA for priority incidents\" — but it can only ever rank documents that are Acme's, Enterprise-plan, agent-visible, current, and English. Relevance and correctness are now handled by two separate, dependable mechanisms."
+        }
+      ]
+    },
+    {
+      "id": "pitfalls-and-tips",
+      "title": "Common pitfalls and practical tips",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "**Over-filtering to zero.** A filter that is too strict (exact timestamp instead of a range, an `AND` of five rare conditions) can leave nothing to retrieve. Log how many candidates survive the filter; if it is routinely near zero, loosen it or widen the date range.",
+            "**Free-text values as metadata.** Filtering on a messy field like `author = \"J. Smith \"` (trailing space, inconsistent casing) silently matches nothing. Normalize values at ingestion — lowercase, trim, use enums or IDs, not human-typed strings.",
+            "**Dates as strings that don't sort.** Store dates in a sortable form (ISO `2026-03-01` or a Unix timestamp) so range filters work. `\"March 1\"` cannot be range-compared.",
+            "**Relying on post-filter for security.** As covered above, an isolation filter applied *after* ranking can leak when combined with caching or fallbacks. Make tenant and permission filters a hard pre-filter that the query path cannot skip.",
+            "**Forgetting filters break hybrid search.** If you run [hybrid search](/learn/rag/retrieval-and-reranking/what-is-hybrid-search) (vector + keyword) or [reranking](/learn/rag/retrieval-and-reranking/what-is-reranking), the *same* metadata filter must apply to every retrieval path. A keyword branch that ignores the tenant filter reopens the leak you closed on the vector side."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Index the metadata fields you filter on most. Vector stores backed by a real database (pgvector on Postgres) let you add a normal B-tree index on `tenant_id` or `published`, which makes pre-filtering fast even on millions of rows. Treat filterable metadata like any other query column: if you filter it, index it."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The basic pattern — attach fields, pre-filter by trusted context — carries most RAG apps a long way. A few directions matter once you scale or harden the system."
+        },
+        {
+          "type": "p",
+          "md": "**Partitioning vs filtering.** For very large multi-tenant systems, a per-tenant filter on one giant index is not the only option. Some stores let you put each tenant in its own *namespace*, *collection*, or *partition*, so the search never touches other tenants' vectors at all. That gives stronger isolation and faster queries than a runtime filter, at the cost of more objects to manage. A common rule: filter for low-cardinality scopes (a handful of `doc_type` values), partition for high-cardinality isolation (thousands of tenants)."
+        },
+        {
+          "type": "p",
+          "md": "**Row-level security and per-document ACLs.** Real permission models are messier than one `access_level` field — a document might be visible to a specific list of users or groups. Storing an `allowed_groups` array in metadata and filtering with an `$in` against the user's group memberships is the usual approach. For strict compliance, push the same rule into the database's own row-level security so it holds even if the application code forgets the filter."
+        },
+        {
+          "type": "p",
+          "md": "**Selective-filter recall, revisited.** With approximate indexes (HNSW and friends), the interaction between a strict filter and the graph walk is the deepest gotcha here. If a tenant has only 50 documents inside a 50-million-vector index, the approximate search may wander through millions of *disallowed* neighbors and surface too few of the 50 that matter. Strategies include raising search effort for small allowed sets, maintaining per-tenant sub-indexes, or detecting tiny result sets and falling back to a brute-force scan over just that tenant's vectors."
+        },
+        {
+          "type": "p",
+          "md": "**Where to go next.** Metadata filtering composes with everything else in retrieval: it scopes the candidate pool that [hybrid search](/learn/rag/retrieval-and-reranking/what-is-hybrid-search) draws from and that [reranking](/learn/rag/retrieval-and-reranking/what-is-reranking) then re-scores. Understanding the full [retrieval pipeline](/learn/rag/rag-fundamentals/how-rag-pipeline-works) and the [retriever's](/learn/rag/retrieval-and-reranking/what-is-a-retriever) role makes it clear where each filter belongs. The durable lesson: keep *relevance* (embeddings) and *eligibility* (metadata) as two separate concerns, and never let the model's notion of similarity decide which documents a user is allowed to see."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is metadata filtering in RAG?",
+      "a": "It is attaching structured labels — like `tenant_id`, `date`, `source`, or `access_level` — to every chunk, then restricting retrieval to only the chunks that match a condition. Similarity search decides which chunk is most relevant; the metadata filter decides which chunks are even allowed to be considered."
+    },
+    {
+      "q": "What is the difference between pre-filtering and post-filtering in vector search?",
+      "a": "Pre-filtering restricts the candidate set first and then ranks the survivors by similarity, so it always returns the true top-k of the allowed subset. Post-filtering ranks everything first and then drops non-matching results, which can return fewer than k (or zero). Use pre-filtering for anything that affects correctness or security."
+    },
+    {
+      "q": "How do I stop a RAG system from leaking one customer's data to another?",
+      "a": "Store a `tenant_id` on every chunk at ingestion and apply it as a hard pre-filter on every query, derived from the authenticated session rather than from the user's text. For large systems, putting each tenant in its own namespace or partition gives even stronger isolation than a runtime filter."
+    },
+    {
+      "q": "Why does my filtered RAG query return no results?",
+      "a": "The two usual causes are post-filtering (results were dropped after ranking, leaving too few) and an over-strict filter (an exact date instead of a range, or too many ANDed conditions). Switch to pre-filtering and log how many chunks survive the filter; if it is near zero, loosen the conditions."
+    },
+    {
+      "q": "Does metadata filtering hurt retrieval recall?",
+      "a": "It can, with approximate indexes. When a filter is very selective, the approximate search may not find enough matching neighbors and recall drops. Raise the search effort (more probes / higher `ef_search`) for selective filters, or fall back to an exact scan when the allowed set is small."
+    },
+    {
+      "q": "Can the user choose the metadata filter values?",
+      "a": "No — never derive isolation or permission filters from user-supplied text. Build `tenant_id`, `access_level`, and similar fields from the trusted server-side session and account. Letting the prompt or user set the tenant defeats the isolation the filter exists to enforce."
+    }
+  ],
+  "related": [
+    "what-is-a-retriever",
+    "what-is-hybrid-search",
+    "what-is-reranking",
+    "how-rag-pipeline-works",
+    "what-is-rag"
+  ],
+  "furtherReading": [
+    {
+      "title": "pgvector — Postgres vector similarity search and filtering",
+      "url": "https://github.com/pgvector/pgvector"
+    },
+    {
+      "title": "Metadata filtering — Qdrant documentation",
+      "url": "https://qdrant.tech/documentation/concepts/filtering/"
+    },
+    {
+      "title": "Embeddings — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/embeddings"
+    }
+  ]
+}

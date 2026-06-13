@@ -1,0 +1,376 @@
+{
+  "slug": "clean-data-before-rag",
+  "title": "How to Clean Your Data Before Loading It Into RAG",
+  "shortTitle": "Cleaning Data for RAG",
+  "seoTitle": "How to Clean Data Before Loading It Into RAG",
+  "metaDescription": "Garbage in, garbage answers out. Learn the data-cleaning steps, like stripping boilerplate, dedup, and fixing encoding, that make or break a RAG pipeline.",
+  "keywords": [
+    "clean data for rag",
+    "rag data preprocessing",
+    "deduplicate documents rag",
+    "remove boilerplate rag",
+    "rag data quality"
+  ],
+  "difficulty": "beginner",
+  "oneLiner": "You'll get a practical checklist for cleaning messy documents so your RAG system retrieves signal instead of noise.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A [RAG system](/learn/rag/rag-fundamentals/what-is-rag) answers questions by retrieving snippets from your documents and pasting them into the prompt. That works beautifully when the documents are clean. The problem is that real documents are rarely clean. A page scraped from your help center carries a navigation bar, a cookie banner, a footer full of legal links, and a *\"Was this article helpful?\"* widget — and only one paragraph in the middle actually answers anything."
+        },
+        {
+          "type": "p",
+          "md": "**Cleaning data** means stripping all that junk before you chunk and embed. Think of it as editing a research packet for a busy colleague. If you hand them a 40-page printout where every page repeats the same header, half the pages are duplicates, and three pages are garbled from a bad photocopy, they will waste their time and miss the one fact that mattered. If instead you remove the duplicates, cut the boilerplate, and fix the smudged pages, they find the answer fast. Your retriever is that colleague."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This article is about what to do *after* extraction. Pulling raw text out of PDFs, HTML, or scans is a separate step — see [how to parse PDFs for RAG](/learn/rag/chunking-and-ingestion/parse-pdfs-for-rag). Once you have raw text, cleaning is what turns it into something worth embedding."
+        },
+        {
+          "type": "p",
+          "md": "The phrase to remember is *garbage in, garbage answers out*. No embedding model, reranker, or large language model can recover from a knowledge base full of noise. Cleaning is the least glamorous part of building RAG and one of the most decisive."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every cleaning defect hurts retrieval in a specific, measurable way. Once you see the mechanism, skipping cleaning stops feeling acceptable."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Boilerplate dilutes meaning.** When a chunk is 80% navigation links and 20% real content, its [embedding](/learn/embeddings-vector-databases/embeddings-explained/what-are-embeddings) — the vector that captures meaning — gets pulled toward the boilerplate. The chunk now looks *similar* to every other page on your site (they all share the same footer), so it surfaces for the wrong questions and ranks poorly for the right one.",
+            "**Duplicates crowd out diversity.** If the same FAQ appears on twelve near-identical pages, a top-5 retrieval can return five copies of it and zero of the *other* relevant facts. The model sees a narrow, repetitive context and misses the rest of the answer.",
+            "**Broken encoding poisons the text.** A mojibaked `â€™` where an apostrophe should be, or a `Â ` from a bad byte, changes the tokens the embedding model sees. \"Don't\" and \"Donâ€™t\" are different strings, so a clean query may never match a dirty chunk.",
+            "**Empty and low-value chunks waste your top-k.** A chunk that is just a date, a page number, or a row of `|---|---|` table dashes can still score high by accident and steal one of your few retrieval slots from a chunk that mattered.",
+            "**Messy whitespace breaks chunk boundaries.** Random line breaks from a PDF can split one sentence across two chunks, so neither chunk carries the full thought and neither embeds well."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The payoff is leverage. Cleaning happens once at ingestion, costs almost nothing at query time, and lifts the quality ceiling of *every* downstream stage — chunking, embedding, retrieval, reranking, and generation. Spend an hour here and you save yourself a week of blaming the model for a problem the data created."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Cleaning sits between extraction and chunking in the ingestion pipeline. You take raw extracted text, run it through a series of cheap transformations, and only then split it into passages and embed them. The order matters: clean first, *then* chunk, because boilerplate you leave in becomes boilerplate inside your chunks."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Where cleaning sits in ingestion",
+            "steps": [
+              {
+                "label": "Extract",
+                "sub": "raw text from PDF/HTML"
+              },
+              {
+                "label": "Clean",
+                "sub": "strip, fix, dedup",
+                "accent": true
+              },
+              {
+                "label": "Chunk",
+                "sub": "split into passages"
+              },
+              {
+                "label": "Embed",
+                "sub": "text → vectors"
+              },
+              {
+                "label": "Store",
+                "sub": "vector database"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "The five core cleaning steps"
+        },
+        {
+          "type": "p",
+          "md": "Most cleaning is a short, ordered pipeline. Each step targets one defect from the section above."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "The cleaning pipeline (run per document)",
+            "steps": [
+              {
+                "label": "Fix encoding"
+              },
+              {
+                "label": "Strip boilerplate"
+              },
+              {
+                "label": "Normalize whitespace"
+              },
+              {
+                "label": "Drop low-value blocks"
+              },
+              {
+                "label": "Deduplicate"
+              }
+            ]
+          }
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Fix encoding first.** Decode bytes with the right charset (usually UTF-8) and repair mojibake before anything else, so later steps match against correct characters.",
+            "**Strip boilerplate.** Remove navigation, headers, footers, cookie banners, share buttons, and repeated calls-to-action. For HTML, target the structural tags; for repeated text, detect lines that appear on nearly every page.",
+            "**Normalize whitespace.** Collapse runs of spaces, join lines that a PDF wrongly broke mid-sentence, and standardize newlines so paragraph boundaries are real.",
+            "**Drop low-value blocks.** Discard chunks below a minimum length, pure punctuation, lone page numbers, and empty cells — anything with no retrievable meaning.",
+            "**Deduplicate.** Remove exact and near-duplicate passages so retrieval returns variety, not copies."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "A worked cleaning pass"
+        },
+        {
+          "type": "p",
+          "md": "Here is the idea as plain Python — no framework, just standard tools. It is not production-complete, but it shows that each step is small and concrete."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "clean.py — a minimal cleaning pass",
+          "code": "import re, unicodedata, hashlib\nfrom ftfy import fix_text  # repairs mojibake / bad encodings\n\n# Lines that appear on almost every page are boilerplate.\nBOILERPLATE = {\n    \"home  products  pricing  contact\",\n    \"was this article helpful?\",\n    \"copyright 2026 acme inc. all rights reserved.\",\n}\n\ndef clean_text(raw: str) -> str:\n    # 1) Fix encoding (â€™ -> ', stray Â, etc.) and normalize Unicode.\n    text = unicodedata.normalize(\"NFKC\", fix_text(raw))\n    out = []\n    for line in text.splitlines():\n        line = re.sub(r\"\\s+\", \" \", line).strip()   # 3) normalize whitespace\n        low = line.lower()\n        if not line or low in BOILERPLATE:          # 2) strip boilerplate\n            continue\n        if len(line) < 15 and not re.search(r\"[a-zA-Z]\", line):\n            continue                                # 4) drop low-value lines\n        out.append(line)\n    return \"\\n\".join(out)\n\nseen = set()\ndef dedupe(chunks: list[str]) -> list[str]:\n    # 5) drop exact duplicates by content hash.\n    kept = []\n    for c in chunks:\n        h = hashlib.sha256(c.encode()).hexdigest()\n        if h not in seen:\n            seen.add(h)\n            kept.append(c)\n    return kept"
+        },
+        {
+          "type": "p",
+          "md": "Exact-hash dedup catches identical text. *Near*-duplicates (a page that differs by one date or one menu item) need a similarity check — see the worked example below. The principle never changes: every transformation removes a known source of retrieval noise before a single vector is computed."
+        }
+      ]
+    },
+    {
+      "id": "defects-and-fixes",
+      "title": "Defects and fixes at a glance",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When a retrieval result looks wrong, this table maps the symptom you see back to the cleaning step that prevents it. Keep it next to your ingestion code."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Defect in the data",
+            "How it hurts retrieval",
+            "The fix"
+          ],
+          "rows": [
+            [
+              "Nav bars, footers, cookie banners",
+              "Embeddings drift toward shared boilerplate; pages look falsely similar",
+              "Strip structural and repeated lines before chunking"
+            ],
+            [
+              "Near-identical pages",
+              "Top-k fills with copies; real answers crowded out",
+              "Exact + near-duplicate detection"
+            ],
+            [
+              "Mojibake (`â€™`, `Â`)",
+              "Tokens differ from the query; clean text never matches",
+              "Fix encoding first, normalize Unicode"
+            ],
+            [
+              "Empty / tiny / numeric-only chunks",
+              "Score high by accident, waste retrieval slots",
+              "Minimum-length and content filters"
+            ],
+            [
+              "Random line breaks from PDFs",
+              "Sentences split across chunks; neither embeds well",
+              "Normalize whitespace, rejoin broken lines"
+            ],
+            [
+              "Mixed languages in one chunk",
+              "Embedding meaning is muddled; weaker matches",
+              "Detect language, split or route per language"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Cleaning and [chunking](/learn/rag/chunking-and-ingestion/what-is-chunking-in-rag) are partners. Clean text gives chunking honest paragraph boundaries to work with, and well-chosen [chunk size and overlap](/learn/rag/chunking-and-ingestion/chunk-size-and-overlap) keep facts intact. Do cleaning first so chunking isn't dividing up garbage."
+        }
+      ]
+    },
+    {
+      "id": "deduplication-in-practice",
+      "title": "Deduplication in practice",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Dedup deserves its own look because near-duplicates are the sneakiest defect: each page is individually fine, but together they sabotage retrieval diversity. There are two levels."
+        },
+        {
+          "type": "h3",
+          "text": "Exact duplicates"
+        },
+        {
+          "type": "p",
+          "md": "Two passages with byte-for-byte identical text. Hash each chunk (SHA-256 of the normalized string) and keep only the first time you see a hash. Cheap, fast, and catches copy-pasted content, mirrored pages, and the same PDF ingested twice."
+        },
+        {
+          "type": "h3",
+          "text": "Near-duplicates"
+        },
+        {
+          "type": "p",
+          "md": "Two passages that say the same thing with tiny differences — a changed timestamp, a swapped menu item, a different product name in an otherwise identical template. Hashing misses these because one character flips the hash. Two standard techniques catch them:"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Technique",
+            "How it works",
+            "Good for"
+          ],
+          "rows": [
+            [
+              "MinHash + LSH",
+              "Estimates word-set overlap (Jaccard) fast across millions of docs",
+              "Large corpora, scalable batch dedup"
+            ],
+            [
+              "Embedding similarity",
+              "Flags chunks whose vectors are above a cosine threshold (e.g. 0.97)",
+              "Smaller corpora; reuses embeddings you already compute"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Don't set the near-duplicate threshold too aggressively. Two genuinely different policies can phrase things similarly. Removing a chunk that *looks* like a duplicate but carries a unique fact silently deletes knowledge from your system. Start strict (only very high similarity), inspect what you'd drop, then loosen carefully."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Cleaning can over-correct as easily as it can under-correct. The goal is removing noise, not removing signal."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Over-cleaning.** Aggressive regex that strips \"boilerplate\" can eat real content — a code snippet, a legal clause, a table that *looked* like junk. Always log and spot-check what you remove.",
+            "**Cleaning after chunking.** If you chunk first, boilerplate is already baked into each chunk's embedding. Clean the full document text first, then split.",
+            "**Lowercasing or stripping punctuation reflexively.** Old NLP habits hurt here. Modern embedding models understand case and punctuation; flattening them throws away meaning (\"US\" vs \"us\", \"3.14\" vs \"314\").",
+            "**Destroying structure that carries meaning.** Headings, list markers, and table layout help the reader and the model. Preserve them (e.g. as markdown) rather than collapsing everything to a wall of text — see [chunking code, tables, and markdown](/learn/rag/chunking-and-ingestion/chunk-code-tables-markdown).",
+            "**Deduping across documents blindly.** The same paragraph in two *different* manuals may be intentional and worth keeping per source. Track provenance so you don't merge away context."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Make cleaning **reproducible and inspectable**. Save the before/after for a sample of documents and diff them. A cleaning bug is invisible until you read what it actually did to your text."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The five-step pass above handles most corpora. As your data grows and diversifies, a few advanced concerns appear."
+        },
+        {
+          "type": "p",
+          "md": "**Boilerplate detection at scale.** Hand-listing boilerplate lines doesn't scale to thousands of templates. The robust approach is statistical: count how often each line or block appears across the corpus, and treat anything that shows up on a large fraction of pages as boilerplate. Web-scraping toolkits ship readability/main-content extractors that do this automatically — lean on them rather than writing brittle per-site rules."
+        },
+        {
+          "type": "p",
+          "md": "**Metadata is part of cleaning.** Cleaning isn't only about deleting. Attaching the right metadata — source URL, document title, section heading, date, language — lets you filter at retrieval time and lets the model cite. A clean chunk with no provenance is half-wasted; capture metadata during the same pass."
+        },
+        {
+          "type": "p",
+          "md": "**PII and safety.** If your corpus contains personal or sensitive data, ingestion is the moment to redact or tokenize it. Anything you embed and store can resurface in an answer, so handle it before it enters the vector database, not after."
+        },
+        {
+          "type": "p",
+          "md": "**Cleaning is an evaluation problem too.** You can't tell whether a cleaning change helped by eyeballing three queries. Build a small retrieval test set and measure whether the right chunks come back before and after — see [how to evaluate a RAG system](/learn/rag/rag-evaluation/how-to-evaluate-rag). Treat each cleaning rule as a hypothesis you verify, not a fact you assume."
+        },
+        {
+          "type": "p",
+          "md": "The durable lesson: cleaning is unglamorous, runs once, and quietly sets the ceiling for everything downstream. Most RAG quality problems that get blamed on the embedding model, the [retriever](/learn/rag/retrieval-and-reranking/what-is-a-retriever), or the LLM are really data problems wearing a disguise. Fix the data first, and the rest of the pipeline finally gets to do its job."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Why do I need to clean data before RAG if the LLM is smart?",
+      "a": "Because the LLM only sees the chunks your retriever puts in front of it, and retrieval runs on the raw text you embedded. Boilerplate, duplicates, and broken encoding pull embeddings off-target, so the right chunk often never reaches the model. A capable LLM can't fix context it never receives — cleaning decides what it receives."
+    },
+    {
+      "q": "Should I clean data before or after chunking?",
+      "a": "Clean first, then chunk. If you chunk before cleaning, boilerplate and noise get baked into each chunk's embedding, which is exactly what hurts retrieval. Cleaning the full document first also gives the chunker honest paragraph and sentence boundaries to split on."
+    },
+    {
+      "q": "How do I remove boilerplate like nav bars and footers from scraped pages?",
+      "a": "For HTML, use a main-content or readability extractor that targets the article body and drops structural tags (nav, header, footer, aside). For repeated text across many pages, count how often each line appears and remove lines that show up on a large fraction of pages. Avoid brittle per-site regex when a content extractor will do."
+    },
+    {
+      "q": "What's the difference between exact and near-duplicate detection?",
+      "a": "Exact dedup hashes each chunk and drops identical strings — fast and cheap. Near-dup detection catches passages that say the same thing with tiny differences (a changed date or menu item) that a hash misses; it uses MinHash/LSH at scale or embedding cosine similarity above a high threshold for smaller corpora."
+    },
+    {
+      "q": "Do I still need to lowercase text and remove stopwords for RAG?",
+      "a": "No. Those are old keyword-NLP habits. Modern embedding models understand case, punctuation, and stopwords as part of meaning, so flattening them throws away signal. Fix encoding and whitespace, strip boilerplate, and otherwise leave natural text intact."
+    },
+    {
+      "q": "How do I know if my data cleaning actually improved retrieval?",
+      "a": "Build a small evaluation set of questions with the chunks that should answer them, then measure whether retrieval surfaces those chunks before and after your cleaning change. Eyeballing a few queries isn't enough — treat each cleaning rule as a hypothesis you verify against a test set."
+    }
+  ],
+  "related": [
+    "what-is-chunking-in-rag",
+    "parse-pdfs-for-rag",
+    "chunk-size-and-overlap",
+    "chunk-code-tables-markdown",
+    "what-is-rag",
+    "build-your-first-rag-app"
+  ],
+  "furtherReading": [
+    {
+      "title": "ftfy — fix text for you (encoding repair docs)",
+      "url": "https://ftfy.readthedocs.io/"
+    },
+    {
+      "title": "Build a Retrieval Augmented Generation (RAG) App — LangChain",
+      "url": "https://docs.langchain.com/oss/python/langchain/rag"
+    },
+    {
+      "title": "Unicode normalization forms (Unicode Standard Annex #15)",
+      "url": "https://unicode.org/reports/tr15/"
+    }
+  ]
+}

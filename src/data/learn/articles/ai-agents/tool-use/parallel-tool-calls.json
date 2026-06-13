@@ -1,0 +1,402 @@
+{
+  "slug": "parallel-tool-calls",
+  "title": "What Are Parallel Tool Calls? Running Agent Tools at Once",
+  "shortTitle": "Parallel Tool Calls",
+  "seoTitle": "Parallel Tool Calls in AI Agents Explained",
+  "metaDescription": "Modern models can request several tool calls in one turn. Learn how parallel tool calling works, when it speeds agents up, and the ordering pitfalls to avoid.",
+  "keywords": [
+    "parallel tool calls llm",
+    "agent multiple tool calls one turn",
+    "parallel function calling explained",
+    "speed up ai agent tools",
+    "concurrent tool execution agent",
+    "tool call ordering dependency"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Understand how agents fire multiple tool calls in a single turn, when that genuinely speeds things up, and the dependency traps it creates.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When an [AI agent](/learn/ai-agents/agent-fundamentals/what-is-an-ai-agent) works on a task, it uses [tools](/learn/ai-agents/tool-use/what-is-tool-use) — small functions like *search the web*, *read a file*, or *look up a customer*. Normally you might picture it doing one tool at a time: ask, wait, get the result, ask again. **Parallel tool calls** let the model request *several* tools in the *same* turn, so the runtime can run them all at once instead of one after another."
+        },
+        {
+          "type": "p",
+          "md": "Picture a chef plating one dish. The slow way is strictly serial: boil the pasta, *then* (only after) start the sauce, *then* toast the bread. The fast way is parallel: the moment the order comes in, water goes on for the pasta, a pan starts the sauce, and the bread goes under the grill — all at the same time, because none of them needs the others to finish first. Parallel tool calling is the model acting like that chef: it looks at the question, sees three independent things it needs, and fires off all three requests together."
+        },
+        {
+          "type": "p",
+          "md": "The key word is *independent*. The chef can only parallelise steps that don't depend on each other — you can't slice the steak before it's cooked. A model can only safely parallelise tool calls whose inputs don't depend on another call's output. That single distinction is the whole subject of this article."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "You'll also see this called **parallel function calling** or **multi-tool use**. \"Function call\" and \"tool call\" mean the same thing here: the model emits a structured request to run a named function with arguments, and your code runs it."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every time an agent calls a tool, the slow part is usually *waiting* — for a network request, a database, an API on the other side of the world. If three lookups each take 800 milliseconds and you run them one by one, the user waits roughly 2.4 seconds plus the model's thinking time between each. Run the same three at once and the wait collapses to about 800 milliseconds: the time of the *slowest* call, not the *sum* of all of them."
+        },
+        {
+          "type": "p",
+          "md": "That speed-up compounds because of how the [agent loop](/learn/ai-agents/agent-fundamentals/agent-loop-explained) works. Each \"think → call tools → read results\" cycle costs one full model round-trip. Sequential calling forces a separate round-trip per tool: think, call A, read A, think, call B, read B. Parallel calling lets the model resolve a whole batch of independent work in a *single* round-trip — fewer model invocations, lower latency, and often lower cost, because you pay to re-send the conversation history on every turn."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Latency.** Independent I/O runs concurrently, so total wait is the slowest call, not the sum.",
+            "**Fewer turns.** One round-trip can dispatch a batch of calls instead of one, cutting the number of times you re-invoke the model.",
+            "**Lower token cost.** Every extra turn re-sends the growing conversation history; collapsing turns trims that repeated input.",
+            "**Better UX.** A research or comparison answer that gathers five sources feels instant instead of crawling source by source."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Builders care most when a task is naturally a *fan-out*: comparing several products, gathering weather for three cities, enriching a record from four separate APIs, or grading an answer against many independent checks. Whenever the work splits into parts that don't need each other, parallel tool calls turn a slow chain into one quick burst."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Parallel tool calling is a contract between two parties: the **model**, which decides *what* to call, and your **runtime** (your code or framework), which decides *how* to run it. The model never executes anything itself — it only emits requests. The concurrency is entirely your runtime's job."
+        },
+        {
+          "type": "h3",
+          "text": "Step 1 — the model emits a batch of calls"
+        },
+        {
+          "type": "p",
+          "md": "You give the model a list of tools and a question. Instead of returning one tool request, a capable model can return *multiple* tool-call requests in the same response — each with its own name and arguments, and each with a unique id so results can be matched back later. The model does this when it judges that the calls are independent and can all be answered from the current information."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "One model turn fans out into several tool calls",
+            "root": {
+              "label": "Model turn",
+              "sub": "\"compare weather in 3 cities\"",
+              "accent": true
+            },
+            "children": [
+              {
+                "label": "get_weather",
+                "sub": "city = Tokyo (id_1)"
+              },
+              {
+                "label": "get_weather",
+                "sub": "city = Paris (id_2)"
+              },
+              {
+                "label": "get_weather",
+                "sub": "city = Cairo (id_3)"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Step 2 — the runtime executes them concurrently"
+        },
+        {
+          "type": "p",
+          "md": "Your code receives the batch and runs the calls at the same time — with async tasks, threads, or a worker pool. This is ordinary concurrent programming; the model just handed you a to-do list. When every call finishes, you collect the results and send them *all back together* in the next message, each labelled with the id of the call it answers."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "The full round-trip",
+            "steps": [
+              {
+                "label": "Model",
+                "sub": "emits 3 tool calls"
+              },
+              {
+                "label": "Runtime",
+                "sub": "runs all 3 at once"
+              },
+              {
+                "label": "Results",
+                "sub": "3 outputs + ids"
+              },
+              {
+                "label": "Model",
+                "sub": "reads all, answers",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The pattern looks like this in code. The model's response carries a list of tool calls; you gather them concurrently and return one results message:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "running a batch of tool calls concurrently",
+          "code": "import asyncio\n\nasync def run_one(call):\n    fn = TOOLS[call.name]              # map name -> async function\n    result = await fn(**call.input)    # actually execute the tool\n    return {\n        \"type\": \"tool_result\",\n        \"tool_use_id\": call.id,        # match the result to its call\n        \"content\": result,\n    }\n\nasync def run_batch(tool_calls):\n    # Launch every call at once; wait for all to finish.\n    return await asyncio.gather(*(run_one(c) for c in tool_calls))\n\n# The model returned several tool_use blocks in one turn:\nresults = asyncio.run(run_batch(response.tool_calls))\n# Send ALL results back in the next message, then let the model continue."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Most agent frameworks ([LangGraph](/learn/ai-agents/agent-fundamentals/react-agent-pattern), the official SDKs, and others) do this `gather` step for you — when the model returns several tool calls, they run them concurrently by default. You usually only write the tools, not the dispatcher."
+        },
+        {
+          "type": "p",
+          "md": "Two practical rules make this reliable. First, you must return a result for **every** call the model made, each keyed by its id — skip one and the conversation is malformed. Second, the *order* you put results into the message doesn't matter, because ids do the matching; but the *content* of each must clearly correspond to its call."
+        }
+      ]
+    },
+    {
+      "id": "parallel-vs-sequential",
+      "title": "Parallel vs sequential calling",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Parallel calling is not always the right move. It only helps when the calls are independent. The moment one call needs the output of another, you're back to a sequence — and forcing it into parallel breaks the logic. Here's the contrast at a glance."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "",
+            "Parallel",
+            "Sequential"
+          ],
+          "rows": [
+            [
+              "Best for",
+              "Independent calls (fan-out)",
+              "Calls where B needs A's result"
+            ],
+            [
+              "Latency",
+              "Time of the slowest call",
+              "Sum of all calls"
+            ],
+            [
+              "Model turns",
+              "Often one batch per turn",
+              "One round-trip per call"
+            ],
+            [
+              "Example",
+              "Weather for 3 cities at once",
+              "Find a user, then fetch *their* orders"
+            ],
+            [
+              "Risk",
+              "Shared-state writes, partial failures",
+              "Slow, but simpler to reason about"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The dependency test is simple: **can you write down the arguments for call B before call A returns?** If yes, the calls are independent and can run in parallel. If B's arguments contain a value you'll only know *after* A finishes, they must run in order. \"Find the user with this email, then get that user's orders\" is sequential — you don't have the user id until the lookup returns. \"Get the weather in Tokyo, Paris, and Cairo\" is parallel — every argument is known up front."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Two shapes of work",
+            "columns": [
+              {
+                "title": "Independent → parallel",
+                "accent": true,
+                "items": [
+                  "All arguments known up front",
+                  "No call reads another's output",
+                  "Run together, wait once",
+                  "Example: gather 5 sources"
+                ]
+              },
+              {
+                "title": "Dependent → sequential",
+                "items": [
+                  "B's input comes from A's output",
+                  "Must wait for A to finish",
+                  "Run in order, wait each time",
+                  "Example: lookup → then fetch detail"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "A good model usually gets this right on its own: it parallelises the weather lookups and serialises the user-then-orders chain, because it reasons about which arguments it already has. But it can misjudge, especially with vague tool descriptions — which is exactly where the pitfalls below come from."
+        }
+      ]
+    },
+    {
+      "id": "pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Parallelism is a performance win that quietly introduces the classic hazards of concurrent programming. Four traps catch people most often."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Hidden dependencies run in parallel.** The model parallelises two calls that *looked* independent but weren't — e.g. it books a flight and a hotel at once, when the hotel choice should depend on the flight's arrival time. The fix is clearer tool descriptions and, when order truly matters, designing one tool that encodes the dependency instead of two loose ones.",
+            "**Shared-state writes collide.** Two parallel calls that both write the same record, increment the same counter, or append to the same file can race and corrupt state. Reads are usually safe to parallelise; *writes to shared state* often are not. Keep write tools idempotent or serialise them.",
+            "**Partial failures.** Three calls go out; one times out or errors while the others succeed. You must return a result for the failed call too — an error payload, not nothing — so the model can decide whether to retry, work around it, or report the gap. Dropping the failed result leaves the conversation malformed.",
+            "**Resource exhaustion.** A model that fans out twenty calls at once can blow through rate limits or open too many connections. A concurrency cap (a semaphore or a bounded worker pool) keeps a wide fan-out from overwhelming a downstream API."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Never assume parallel tool results arrive in the order you launched them. Match every result to its call by the call **id**, not by position — relying on order is a bug that only shows up under load, when a faster call returns before a slower one you started first."
+        },
+        {
+          "type": "p",
+          "md": "Most of these trace back to tool design, not the model. Tools that are independent, idempotent, and clearly described are safe to parallelise; tools that secretly share state or depend on each other are not. See [designing tools for LLMs](/learn/ai-agents/tool-use/designing-tools-for-llms) and [how to design agent tools](/learn/ai-agents/tool-use/how-to-design-agent-tools) for the patterns that make parallel-safe tools."
+        }
+      ]
+    },
+    {
+      "id": "worked-example",
+      "title": "A worked example",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Say a user asks: *\"Which of these three laptops is cheapest and in stock?\"* The agent has one tool, `lookup_product(sku)`, that returns price and stock for a single SKU. There are three SKUs and no call needs another's result — a textbook fan-out."
+        },
+        {
+          "type": "p",
+          "md": "**Sequential** path: the model calls `lookup_product` for laptop 1, waits, reads the result, calls it for laptop 2, waits, reads, then laptop 3. Three model round-trips, three serial network waits. If each lookup takes 600 ms and each model turn 700 ms, the user waits well over 3 seconds."
+        },
+        {
+          "type": "p",
+          "md": "**Parallel** path: in one turn the model emits all three `lookup_product` calls with the three SKUs. Your runtime runs them concurrently (the `gather` from earlier), returns all three results in the next message, and the model compares them and answers. The network wait is one 600 ms slice, not three; the model turns drop from three to two."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "The fan-out, end to end",
+            "steps": [
+              {
+                "label": "Question",
+                "sub": "cheapest in-stock?"
+              },
+              {
+                "label": "3 calls",
+                "sub": "one per SKU, at once"
+              },
+              {
+                "label": "3 results",
+                "sub": "price + stock each"
+              },
+              {
+                "label": "Compare",
+                "sub": "model picks one",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Now change the question to *\"How does the cheapest of these compare to last year's model?\"* Finding the cheapest is still a parallel fan-out, but the follow-up — *look up last year's version of whichever won* — is **sequential**, because you don't know which product to compare until the first batch returns. Real agents constantly mix the two: a parallel burst, then a dependent step, then maybe another burst. That mixing is the [agentic workflow](/learn/ai-agents/agent-fundamentals/agentic-workflow-patterns) the model orchestrates turn by turn."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics click, a few finer points separate a demo from a robust system."
+        },
+        {
+          "type": "p",
+          "md": "**Forcing or disabling parallelism.** Most APIs let you influence the model's behavior. You can require it to call a specific tool, force it to call *exactly one* tool per turn (disabling parallelism), or leave it free to batch. Disabling parallel calls is a useful debugging step when the model keeps parallelising things that should be sequential — it makes the agent slower but easier to reason about while you fix tool descriptions."
+        },
+        {
+          "type": "p",
+          "md": "**Streaming and ordering.** When responses stream, the model's tool calls arrive token by token, and a later call's arguments may finish before an earlier one's. Buffer until each tool-call block is complete before dispatching it, and always reconcile by id. The same applies to results: collect them all, then send the batch — don't stream results back one at a time."
+        },
+        {
+          "type": "p",
+          "md": "**Concurrency control.** A `gather` with no limit is fine for three calls and dangerous for thirty. Wrap tool execution in a bounded semaphore so a wide fan-out can't exceed your downstream rate limits or connection pool. This is invisible to the model — it's purely a property of your runtime."
+        },
+        {
+          "type": "p",
+          "md": "**Error semantics.** Decide, per tool, whether a failure should be returned to the model as an error result (so it can adapt) or should abort the whole turn. Most of the time, returning a structured error per failed call is better: the model often recovers gracefully, retrying or routing around the gap, which is one of the strengths of the [ReAct loop](/learn/ai-agents/agent-fundamentals/react-agent-pattern)."
+        },
+        {
+          "type": "p",
+          "md": "**Where this sits in the bigger picture.** Parallel tool calling is one optimisation inside the broader topic of [tool use](/learn/ai-agents/tool-use/what-is-tool-use). It pairs naturally with techniques like [code execution as a tool](/learn/ai-agents/tool-use/code-execution-vs-more-tools), where the model writes code that itself fans out work — sometimes a cleaner alternative to emitting dozens of separate tool calls. The durable lesson: the model decides *what* to run in parallel based on independence, but *safe* parallel execution is something you engineer into your tools and runtime, not something you get for free."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What are parallel tool calls in an LLM agent?",
+      "a": "They are when a model requests several tool (function) calls in a single response, so your runtime can execute them at the same time instead of one after another. The model only emits the requests; your code runs them concurrently and returns all the results together. It is the standard way to speed up tasks made of independent lookups."
+    },
+    {
+      "q": "When should an agent use parallel tool calls instead of sequential ones?",
+      "a": "Use parallel calls when the tools are independent — when you already know every call's arguments and no call needs another's output. Use sequential calls when one call's input comes from another's result (for example, find a user, then fetch that user's orders). The quick test: can you write call B's arguments before call A returns? If yes, parallelise."
+    },
+    {
+      "q": "Does parallel function calling actually make agents faster?",
+      "a": "Yes, when the work is independent I/O. Total wait drops from the sum of all calls to roughly the time of the slowest one, and you also cut the number of model round-trips, which lowers latency and token cost. It does not help — and can cause bugs — when calls depend on each other or write to shared state."
+    },
+    {
+      "q": "What happens if one of several parallel tool calls fails?",
+      "a": "You should still return a result for the failed call, but as a structured error rather than nothing, so the conversation stays well-formed. The model can then decide to retry, route around the gap, or report it. Dropping the failed result entirely usually breaks the next turn because every call id must be answered."
+    },
+    {
+      "q": "Why must I match parallel tool results by id instead of by order?",
+      "a": "Because concurrent calls can finish in any order — a faster call started second may return before a slower one started first. Each tool call carries a unique id, and each result must reference that id so the model pairs them correctly. Matching by position instead of id is a race-condition bug that only appears under load."
+    },
+    {
+      "q": "Can I turn off parallel tool calling?",
+      "a": "Usually yes. Most model APIs let you force exactly one tool call per turn, which disables parallelism. It is a handy debugging mode when the model keeps parallelising calls that should run in order — slower, but easier to reason about while you improve your tool descriptions."
+    }
+  ],
+  "related": [
+    "what-is-tool-use",
+    "how-to-design-agent-tools",
+    "agent-loop-explained",
+    "code-execution-vs-more-tools",
+    "react-agent-pattern",
+    "agentic-workflow-patterns"
+  ],
+  "furtherReading": [
+    {
+      "title": "Tool use (function calling) — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/tool-use"
+    },
+    {
+      "title": "Function calling — OpenAI Platform Docs",
+      "url": "https://platform.openai.com/docs/guides/function-calling"
+    },
+    {
+      "title": "asyncio.gather — Python documentation",
+      "url": "https://docs.python.org/3/library/asyncio-task.html"
+    }
+  ]
+}

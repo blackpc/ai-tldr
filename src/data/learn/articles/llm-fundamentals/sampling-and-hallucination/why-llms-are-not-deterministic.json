@@ -1,0 +1,338 @@
+{
+  "slug": "why-llms-are-not-deterministic",
+  "title": "Why Do LLMs Give Different Answers to the Same Prompt?",
+  "shortTitle": "Nondeterministic Outputs",
+  "seoTitle": "Why LLMs Give Different Answers to the Same Prompt",
+  "metaDescription": "Even at temperature 0, an LLM can answer differently. Learn the real sources of nondeterminism: sampling, batching, and floating-point math, plus how to reduce it.",
+  "keywords": [
+    "why do llms give different answers",
+    "are llms deterministic",
+    "llm nondeterminism temperature 0",
+    "how to make llm output reproducible",
+    "why is chatgpt not consistent"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Understand the several reasons an LLM can give different answers to the identical prompt, and why even temperature 0 doesn't fully guarantee reproducibility.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Ask an [LLM](/learn/llm-fundamentals/llm-basics/what-is-an-llm) the exact same question twice and you may get two different answers. Same prompt, same model, same settings — yet the wording, the structure, sometimes even the conclusion can shift. This isn't a bug, and it isn't the model \"changing its mind.\" It's a property of how these systems generate text, layered on top of how they actually run on real hardware."
+        },
+        {
+          "type": "p",
+          "md": "Think of asking a panel of experts to write a one-paragraph summary of the same article. Every expert read the same text and broadly agrees on the facts, but each one phrases things a little differently, and if you asked the same expert on Monday and again on Friday, even *they* wouldn't reproduce their summary word for word. The knowledge is stable; the exact output isn't. An LLM behaves the same way — it samples one of many plausible continuations each time rather than replaying a fixed script."
+        },
+        {
+          "type": "p",
+          "md": "**Determinism** means *same input, same output, every single time*. A pocket calculator is deterministic: `2 + 2` is always `4`. LLMs are usually **nondeterministic** — and, importantly, they can drift even when you turn the most obvious source of randomness all the way off. That last part surprises most people, and it's what this article is really about."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Two words to keep straight. *Deterministic* = identical output for identical input. *Reproducible* = you can get the same output again when you want it. You can have one without the other: a system can be deterministic in theory yet hard to reproduce in practice if you don't control every input."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "If you only ever chat casually with an AI, drift is harmless — a slightly different phrasing changes nothing. The moment you *build* on top of a model, it starts to matter a lot."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Testing and debugging.** If your test sends a prompt and checks the output against a fixed string, it will pass one run and fail the next — through no change in your code. You can't write a normal assertion against a moving target.",
+            "**Caching.** Many systems cache answers to identical prompts to save money and time. If the model never returns the same thing twice, naive exact-match caching never hits.",
+            "**Reproducing bugs.** A user reports \"the model gave me a wrong, dangerous answer.\" You paste the exact prompt in to investigate — and get a perfectly good answer. The bad output may be genuinely hard to reproduce, which makes it hard to fix.",
+            "**Audits and compliance.** In regulated settings (finance, healthcare, law) you may need to show *why* a system produced a specific output. \"It was a bit random\" is not a satisfying answer to an auditor.",
+            "**Evaluation.** When you compare two prompts or two models, run-to-run noise can masquerade as a real difference. You have to measure carefully to tell signal from sampling jitter."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The practical takeaway: you can't *eliminate* nondeterminism in most setups, but once you understand where it comes from, you can *reduce* it where it counts and *design around* it everywhere else. Builders who assume \"temperature 0 = fully reproducible\" get burned when a pipeline that looked stable in testing starts drifting in production."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "An LLM generates text one token (a word or word-piece) at a time. At each step it doesn't pick a single \"correct\" next token — it produces a *probability distribution* over the entire vocabulary: maybe `\"sunny\"` at 60%, `\"warm\"` at 25%, `\"clear\"` at 10%, and a long tail of less likely options. A separate step, called **sampling**, then chooses one token from that distribution. The chosen token is appended, and the whole process repeats for the next token."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "One generation step",
+            "steps": [
+              {
+                "label": "Prompt + tokens so far",
+                "sub": "the context"
+              },
+              {
+                "label": "Model forward pass",
+                "sub": "compute scores (logits)"
+              },
+              {
+                "label": "Probabilities",
+                "sub": "softmax over vocabulary"
+              },
+              {
+                "label": "Sampling",
+                "sub": "pick one token",
+                "accent": true
+              },
+              {
+                "label": "Append + repeat",
+                "sub": "until done"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Nondeterminism can creep in at two very different layers of this loop. The first is **deliberate randomness in sampling** — the obvious cause. The second is **tiny numerical differences in the model's math** — the subtle cause that survives even when you remove the first. Keeping these separate is the key idea of the whole article."
+        },
+        {
+          "type": "h3",
+          "text": "Cause 1 — sampling randomness (the obvious one)"
+        },
+        {
+          "type": "p",
+          "md": "The main dial here is [temperature](/learn/llm-fundamentals/sampling-and-hallucination/llm-temperature-explained). High temperature flattens the distribution so unlikely tokens get a real chance — more variety, more surprise. Low temperature sharpens it toward the top choices. At **temperature 0** the sampler is told to always take the single highest-probability token (called *greedy decoding*), which removes the intentional randomness. Other knobs like [top-p and top-k](/learn/llm-fundamentals/sampling-and-hallucination/top-p-vs-top-k) shape *which* tokens are even eligible before sampling picks one."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "A **seed** controls the random number generator behind sampling. Fix the seed and the same \"random\" draws repeat, so a positive-temperature run can become reproducible — *if* every other input and the underlying math also stay identical. A seed pins the dice, not the table they're rolled on."
+        },
+        {
+          "type": "h3",
+          "text": "Cause 2 — floating-point and batching (the subtle one)"
+        },
+        {
+          "type": "p",
+          "md": "Even at temperature 0, with greedy decoding, you can still see different answers. The reason lives below the model, in how the arithmetic runs on a GPU. Models do their math in **floating-point**, an approximate way of representing numbers. Floating-point addition is *not associative*: `(a + b) + c` can give a slightly different result than `a + (b + c)`. The differences are microscopic — far beyond any decimal you'd normally notice."
+        },
+        {
+          "type": "p",
+          "md": "But GPUs add up thousands of numbers in parallel, and the *order* they combine them in can change from run to run depending on how the work gets scheduled. A big driver of this is **batching**: a hosted model serves many users at once by grouping requests together, and the batch your request lands in (its size, who else is in it) shifts which arithmetic path runs. A microscopic difference in a token's score can be enough to flip which token is the new \"highest probability\" — and once one token differs, every token after it can cascade onto a completely different path."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "Why temperature 0 still drifts",
+            "root": {
+              "label": "Identical prompt, temperature 0",
+              "accent": true
+            },
+            "children": [
+              {
+                "label": "Run A: lands in a small batch",
+                "sub": "add order X → score 0.50001"
+              },
+              {
+                "label": "Run B: lands in a large batch",
+                "sub": "add order Y → score 0.49999"
+              },
+              {
+                "label": "Tie nearly flips → different top token → answers diverge"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "So temperature 0 removes the *chosen* randomness but not the *hardware* variability. Most of the time the top token wins by a comfortable margin and the output is stable; occasionally two tokens are nearly tied and a rounding difference decides it. That is why \"temperature 0\" reduces drift dramatically without fully guaranteeing it on shared infrastructure."
+        }
+      ]
+    },
+    {
+      "id": "the-sources-ranked",
+      "title": "All the sources of drift, ranked",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "It helps to see every reason an identical-looking request can produce a different answer, from the ones you control to the ones you usually don't. Several of these are *not* about the model's math at all — they're about the input changing when you didn't realize it."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Source",
+            "What changes",
+            "Can you control it?"
+          ],
+          "rows": [
+            [
+              "Temperature > 0",
+              "Sampling deliberately picks varied tokens",
+              "Yes — set temperature to 0 / low"
+            ],
+            [
+              "No fixed seed",
+              "The random draws differ each run",
+              "Yes — pin a seed (where supported)"
+            ],
+            [
+              "Server-side batching",
+              "GPU add-order shifts with batch composition",
+              "Rarely — it's the provider's scheduler"
+            ],
+            [
+              "Floating-point non-associativity",
+              "Tiny rounding differences in parallel math",
+              "No — inherent to GPU arithmetic"
+            ],
+            [
+              "Changing system prompt",
+              "The actual input is different",
+              "Yes — keep the full prompt fixed"
+            ],
+            [
+              "Model version updates",
+              "A silently upgraded model behaves differently",
+              "Partly — pin a specific model version"
+            ],
+            [
+              "Hidden context (date, tools, history)",
+              "Injected text makes the input differ",
+              "Partly — know what your stack adds"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "The last three rows fool people most often. If a provider auto-injects today's date, rotates a system prompt, or upgrades the model behind the same name, your input genuinely changed — so a different answer is *correct* behavior, not nondeterminism. Always confirm the full, exact input is identical before blaming randomness."
+        }
+      ]
+    },
+    {
+      "id": "reducing-it",
+      "title": "Practical steps to maximize reproducibility",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You usually can't reach perfect, bit-for-bit determinism against a hosted API, but you can get *much* closer. Stack these from most to least impactful."
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Set temperature to 0 (or very low).** This removes the single biggest source of variation. It won't be perfect on shared infrastructure, but it's the highest-leverage change.",
+            "**Pin a seed** if the provider exposes one. Combined with low temperature, it makes the *sampling* step reproducible.",
+            "**Pin the exact model version.** Use a specific, dated model identifier rather than a floating alias that may upgrade under you.",
+            "**Freeze the entire prompt.** Same system prompt, same examples, same ordering — and check for anything your framework injects (timestamps, retrieved chunks, tool definitions).",
+            "**Log inputs and outputs.** When you can't guarantee reproducibility, capture the exact request and response so you can investigate later without re-running.",
+            "**Test for behavior, not exact strings.** Assert that the answer contains the right facts, matches a schema, or passes a check — not that it equals one fixed paragraph."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Here's the difference in test design. A brittle test breaks on harmless rewording; a robust one survives drift while still catching real regressions."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "fragile vs robust assertions",
+          "code": "# Fragile: depends on the model producing one exact string.\n# Passes one run, fails the next even with no code change.\nassert answer == \"The capital of France is Paris.\"\n\n# Robust: checks the thing you actually care about.\nassert \"paris\" in answer.lower()\n\n# Robust for structured output: validate shape, not wording.\nimport json\ndata = json.loads(answer)\nassert data[\"capital\"] == \"Paris\"\nassert isinstance(data[\"population\"], int)"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "For evaluation specifically, run each prompt several times and look at the *distribution* of outcomes (e.g. \"passes 9 of 10 runs\"), not a single pass/fail. This turns run-to-run noise from a nuisance into a measurable quantity."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A few finer points separate a working mental model from a precise one."
+        },
+        {
+          "type": "p",
+          "md": "**Temperature 0 is not literally division by zero.** Conceptually, sampling divides the model's scores by the temperature before turning them into probabilities, and dividing by zero is undefined. In practice, implementations treat temperature 0 as a special case meaning \"always take the most likely token\" (greedy decoding). So temperature 0 is a *convention* for greedy, not a real arithmetic operation."
+        },
+        {
+          "type": "p",
+          "md": "**Greedy is not always the \"best\" answer.** Taking the single highest-probability token at every step is locally optimal but can paint the model into a corner — an early safe choice can lead to a worse overall continuation than a slightly riskier path would have. This is why some systems deliberately keep a little temperature even when they value consistency: the most *reproducible* output and the *best* output aren't always the same token sequence."
+        },
+        {
+          "type": "p",
+          "md": "**The batching effect is an active engineering frontier.** Making large-model inference *batch-invariant* — so a request yields the same result regardless of who else it's batched with — is achievable with carefully written GPU kernels that fix the reduction order, but it can cost throughput. Providers weigh that tradeoff differently, which is part of why reproducibility guarantees vary between APIs and even between a hosted API and the same model run locally on one GPU."
+        },
+        {
+          "type": "p",
+          "md": "**Determinism is independent of correctness.** A perfectly deterministic model can still confidently produce a wrong answer every time, and a nondeterministic one can be right every time in different words. Pinning down reproducibility helps you *test, audit, and debug* — it does nothing on its own to make answers more accurate. For why models produce confident-but-wrong content in the first place, see [why LLMs hallucinate](/learn/llm-fundamentals/sampling-and-hallucination/why-llms-hallucinate)."
+        },
+        {
+          "type": "p",
+          "md": "Where to go next: tune the obvious dial with [temperature](/learn/llm-fundamentals/sampling-and-hallucination/llm-temperature-explained), understand the eligibility filters with [top-p vs top-k](/learn/llm-fundamentals/sampling-and-hallucination/top-p-vs-top-k), and revisit the token-by-token generation loop in [how LLMs work](/learn/llm-fundamentals/llm-basics/how-llms-work). Together they explain not just *that* an LLM drifts, but exactly which lever moves which part of the behavior."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Are LLMs deterministic?",
+      "a": "Not by default. With temperature above 0 they sample varied tokens, so the same prompt yields different answers. Even at temperature 0 (greedy decoding) they can still drift slightly on shared hardware because of floating-point rounding and server-side batching. You can make them *much* more reproducible, but rarely perfectly so against a hosted API."
+    },
+    {
+      "q": "Why do I get different answers at temperature 0?",
+      "a": "Temperature 0 removes the deliberate randomness in sampling, but not the tiny numerical differences underneath. GPUs add up many numbers in parallel, and floating-point addition isn't associative, so the order can change with batch size and scheduling. When two candidate tokens are nearly tied, a microscopic rounding difference can flip which one wins, and the rest of the answer diverges from there."
+    },
+    {
+      "q": "What does a seed actually guarantee?",
+      "a": "A seed fixes the random number generator behind sampling, so the same \"random\" draws repeat. That makes the *sampling* step reproducible. It does not control floating-point rounding, batching, a changed prompt, or a model version update — so a seed pins the dice, not everything else around them."
+    },
+    {
+      "q": "How do I make an LLM's output reproducible?",
+      "a": "Stack the controls: set temperature to 0 or very low, pin a seed if available, pin an exact dated model version, and freeze the entire prompt including anything your framework injects. Log every request and response so you can investigate even when reproducibility isn't perfect. On shared infrastructure you'll get close to deterministic but usually not bit-for-bit identical."
+    },
+    {
+      "q": "Why is ChatGPT not consistent across runs?",
+      "a": "Several reasons can stack: a default temperature above 0, server-side batching that shifts GPU math, an injected current date or rotating system prompt that changes the real input, and silent model upgrades behind the same name. Often the input genuinely changed even though your visible question didn't — so a different answer is expected behavior, not a flaw."
+    },
+    {
+      "q": "Does nondeterminism mean the model is unreliable?",
+      "a": "No. Determinism and correctness are separate. A model can give differently-worded but equally correct answers, or it can deterministically repeat the same wrong answer. Variation in phrasing is normal; the thing to watch is whether the *substance* stays correct, which you check by testing behavior rather than exact strings."
+    }
+  ],
+  "related": [
+    "llm-temperature-explained",
+    "top-p-vs-top-k",
+    "why-llms-hallucinate",
+    "how-llms-work",
+    "what-is-an-llm",
+    "why-llms-need-gpus"
+  ],
+  "furtherReading": [
+    {
+      "title": "Token Counting and Sampling — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/token-counting"
+    },
+    {
+      "title": "Floating-point arithmetic — Wikipedia",
+      "url": "https://en.wikipedia.org/wiki/Floating-point_arithmetic"
+    },
+    {
+      "title": "The Curious Case of Neural Text Degeneration (top-p / nucleus sampling, arXiv)",
+      "url": "https://arxiv.org/abs/1904.09751"
+    }
+  ]
+}

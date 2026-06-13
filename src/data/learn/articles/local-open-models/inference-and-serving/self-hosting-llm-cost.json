@@ -1,0 +1,329 @@
+{
+  "slug": "self-hosting-llm-cost",
+  "title": "Is Self-Hosting an LLM Cheaper Than an API? The Real GPU Math",
+  "shortTitle": "Self-Hosting Cost vs API",
+  "seoTitle": "Is Self-Hosting an LLM Cheaper Than an API?",
+  "metaDescription": "Renting a GPU to serve your own model has a break-even point. Learn the cost-per-million-tokens math and the volume where self-hosting beats paying per token.",
+  "keywords": [
+    "self hosting llm cost vs api",
+    "gpu cost per million tokens",
+    "is self hosting llm cheaper",
+    "break even self hosted llm",
+    "cost to run open source llm"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You will be able to do the break-even math that decides whether self-hosting an open model actually saves money versus paying a per-token API.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you call a hosted model API, you pay per token: a tiny bill for every word in and out. When you self-host an open model, you flip that around. You rent (or buy) a GPU, load an open-weights model like a Llama or a Qwen onto it, and run your own [inference server](/learn/local-open-models/inference-and-serving/what-is-inference-server). Now you pay for *time*, not tokens — the GPU costs the same per hour whether it answers a thousand requests or sits idle."
+        },
+        {
+          "type": "p",
+          "md": "Here is the mental model. A per-token API is a **taxi**: you pay only when the meter runs, and you never worry about the car. A self-hosted GPU is a **leased car**: a flat monthly payment, plus insurance and parking, whether you drive it or leave it in the garage. For a couple of trips a month, the taxi wins easily. Drive every day and the lease gets cheaper per mile. The whole question of self-hosting cost is finding *where those two lines cross*."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "\"Open model\" does not mean \"free to run.\" The *weights* are free to download, but the **GPU that runs them is not**. A rented H100 bills by the hour around the clock. Self-hosting trades a variable per-token bill for a fixed per-hour one — and that fixed cost only pays off if you keep the GPU busy."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "If you are building anything on top of LLMs, the inference bill is often your single largest variable cost. Getting the self-host-versus-API decision wrong is expensive in both directions: pay per token at huge scale and you burn money you could have saved with your own hardware; rent a GPU for a low-traffic app and you pay for an idle machine that an API would have served for cents."
+        },
+        {
+          "type": "p",
+          "md": "The trap is that *both* sides sound obviously right depending on who is talking. \"Just use the API, hardware is a nightmare\" is true for a weekend project. \"Self-host, the open model is free\" is true for a company pushing billions of tokens a day. The only way to know which applies to *you* is to do the break-even math — and that math hinges on one number most people forget: **utilization**, the fraction of the time your rented GPU is actually doing useful work."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Cost control at scale.** Past a certain volume, a busy self-hosted GPU can serve tokens for a fraction of API list prices. That is real money once you are spending five or six figures a month.",
+            "**Privacy and control.** Some workloads (health, legal, internal code) can't leave your own infrastructure. Here cost isn't even the deciding factor — but you still need to know what you're paying for that control.",
+            "**Latency and customization.** Running your own server lets you tune batching, quantization, and which model version you serve. You own the whole [serving stack](/learn/local-open-models/inference-and-serving/what-is-inference-server).",
+            "**The hidden bill.** Self-hosting adds engineer time, idle GPUs, and redundancy that the sticker GPU price hides. Ignoring these is the most common way a \"cheaper\" self-host turns out more expensive."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How the cost math actually works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Both options are usually quoted in the same unit so you can compare them directly: **dollars per million tokens** ($/Mtok). An API just hands you that number on a pricing page. For self-hosting you have to *derive* it from two things you control: how much your GPU costs per hour, and how many tokens it can produce per hour."
+        },
+        {
+          "type": "h3",
+          "text": "The one formula that decides everything"
+        },
+        {
+          "type": "p",
+          "md": "Your self-hosted cost per million tokens is just hourly GPU cost divided by hourly token output:"
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "title": "cost per million tokens, self-hosted",
+          "code": "cost_per_Mtok = gpu_cost_per_hour / tokens_per_hour\n\nwhere:\n  tokens_per_hour = throughput_tokens_per_sec * 3600 * utilization\n\n  utilization = fraction of time the GPU is actually generating\n                (0.0 = always idle, 1.0 = busy 24/7)"
+        },
+        {
+          "type": "p",
+          "md": "Two of these are knobs you tune. **Throughput** is how many tokens per second your server squeezes out of the GPU — driven by the model size, [quantization](/learn/local-open-models/running-models-locally/local-llm-hardware-requirements), and especially [continuous batching](/learn/local-open-models/inference-and-serving/continuous-batching), which lets one GPU answer many requests at once. **Utilization** is what fraction of the hour the GPU is busy versus waiting for traffic. The diagram below shows how a fixed hourly cost becomes a per-token cost."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Turning a GPU's hourly rate into $/Mtok",
+            "steps": [
+              {
+                "label": "GPU hourly rate",
+                "sub": "e.g. $2/hr rented"
+              },
+              {
+                "label": "Throughput",
+                "sub": "tokens/sec from your server"
+              },
+              {
+                "label": "× utilization",
+                "sub": "how busy the GPU stays"
+              },
+              {
+                "label": "tokens/hour",
+                "sub": "useful output per hour"
+              },
+              {
+                "label": "$ / Mtok",
+                "sub": "rate ÷ tokens",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The punchline lives in the last two boxes. The hourly rate is *fixed*. So the more tokens you actually generate per hour, the lower your cost per token. Double your throughput with batching, or double your utilization with steady traffic, and your $/Mtok is cut in half — without touching the GPU's price tag. This is why an idle self-hosted GPU is so expensive: you are paying full rate for very few tokens."
+        },
+        {
+          "type": "h3",
+          "text": "Why batching changes the answer so much"
+        },
+        {
+          "type": "p",
+          "md": "A single request rarely keeps a big GPU busy — the GPU spends most of its time waiting on memory, not computing. [Continuous batching](/learn/local-open-models/inference-and-serving/continuous-batching) packs many in-flight requests through the GPU together, so total tokens-per-second can climb several times higher under concurrent load than for one lonely request. That means your *measured* throughput depends entirely on how you test: benchmark with one request and you'll wildly underestimate what the GPU can do, and overestimate your cost per token."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Never compute $/Mtok from single-request, batch-size-1 throughput. That's the number a quick local test gives you, and it can be many times worse than what a properly batched server like [vLLM](/learn/local-open-models/inference-and-serving/vllm-explained) achieves under real concurrent load. Use the throughput you get at realistic concurrency, or you'll talk yourself out of a setup that's actually cheap."
+        }
+      ]
+    },
+    {
+      "id": "worked-example",
+      "title": "A worked break-even example",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Let's make it concrete with round, illustrative numbers (your real numbers will differ — measure them). Say you rent one GPU for **$2.00 per hour** and, under healthy batched load, your server sustains **2,000 tokens per second** of output. Over an hour that's 2,000 × 3,600 = 7,200,000 tokens — *if the GPU stays fully busy*."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Utilization",
+            "Tokens / hour",
+            "Cost / Mtok"
+          ],
+          "rows": [
+            [
+              "100% (always busy)",
+              "7.2M",
+              "$0.28"
+            ],
+            [
+              "50% (busy half the time)",
+              "3.6M",
+              "$0.56"
+            ],
+            [
+              "20% (mostly idle)",
+              "1.44M",
+              "$1.39"
+            ],
+            [
+              "5% (a quiet app)",
+              "0.36M",
+              "$5.56"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Look what utilization does. The exact same GPU and model swings from **28 cents** to **over five dollars** per million tokens purely based on how busy you keep it. The hardware didn't change — your traffic did. This single table explains why \"is self-hosting cheaper?\" has no fixed answer: it depends almost entirely on whether you can keep the machine fed."
+        },
+        {
+          "type": "h3",
+          "text": "Now compare to an API"
+        },
+        {
+          "type": "p",
+          "md": "Suppose a hosted model you'd otherwise use charges, for illustration, **$0.60 per million tokens** (blended in + out). Drop that line onto the table above and the crossover jumps out:"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "When does each option win? (illustrative)",
+            "columns": [
+              {
+                "title": "Self-host wins",
+                "accent": true,
+                "items": [
+                  "GPU stays busy (high utilization)",
+                  "Steady, high request volume",
+                  "$/Mtok falls below API price",
+                  "You can amortize ops effort",
+                  "Privacy forces on-prem anyway"
+                ]
+              },
+              {
+                "title": "API wins",
+                "items": [
+                  "Spiky or low traffic",
+                  "GPU would sit mostly idle",
+                  "Per-token price beats your $/Mtok",
+                  "No ops/redundancy budget",
+                  "You want zero infra to manage"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "With these numbers, self-hosting beats the API only above roughly 50% utilization — below that, the idle GPU costs more per token than just paying the API. So the real break-even question isn't \"how many requests do I have?\" but \"can I keep one GPU busy enough?\" A rough rule of thumb: you generally need *sustained* traffic — enough concurrent requests to keep batches full for most of the day — before a single rented GPU pencils out cheaper than a competitively priced API."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Do this math with **your own** measured throughput and **today's** GPU and API prices, not the illustrative ones here. Spin up your server, push realistic concurrent load, read the tokens/sec your inference server reports, and divide. Five minutes of measurement beats a month of arguing from intuition."
+        }
+      ]
+    },
+    {
+      "id": "hidden-costs",
+      "title": "The hidden costs sticker prices hide",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The clean formula above assumes the GPU hourly rate is your *whole* cost. It isn't. The reason teams underestimate self-hosting is that several real costs never show up on the GPU price tag, and every one of them effectively *lowers your utilization* or *raises your hourly bill*."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Idle time between bursts.** Traffic isn't flat. Nights, weekends, and quiet hours mean the GPU is paid-for but unused. Unless you can scale down (and pay the cold-start cost of reloading the model), you're buying tokens you never generate.",
+            "**Redundancy.** One GPU is a single point of failure. Serious uptime means at least two, which roughly *doubles* your fixed cost while serving the same traffic — halving effective utilization unless load grows to match.",
+            "**Engineer time.** Someone has to set up the [serving stack](/learn/local-open-models/inference-and-serving/what-is-inference-server), keep it patched, monitor it, and get paged when it breaks. That salary cost is invisible in $/Mtok but very real, and it's often larger than the GPU bill for small teams.",
+            "**Headroom for spikes.** To avoid queueing during peaks you must provision for your *busiest* moment, which means extra idle capacity during normal load.",
+            "**Egress, storage, and the model itself.** Storing weights, moving data, and occasionally upgrading the model all add up around the edges."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "None of this means self-hosting is a bad idea — at high, steady volume it still wins decisively. It means the honest comparison adds these overheads to the GPU rate *before* you compute $/Mtok. A useful framing: the API price already bakes in the provider's redundancy, ops team, and idle capacity, spread across thousands of customers. When you self-host, you become that provider — for an audience of one."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic break-even clicks, several refinements separate a back-of-envelope guess from a decision you'd bet a budget on."
+        },
+        {
+          "type": "p",
+          "md": "**Rent vs buy.** Renting (cloud GPUs by the hour) gives flexibility and turns hardware into a pure operating cost — great while your volume is uncertain. Buying GPUs outright can be dramatically cheaper per token *if* you run them hot for years, but you now own depreciation, power, cooling, and the risk that a better chip lands next quarter. The break-even there is a separate, longer-horizon calculation."
+        },
+        {
+          "type": "p",
+          "md": "**Input vs output tokens.** APIs usually price input (prompt) tokens cheaper than output (generated) tokens, and generation is the slow part on your GPU too. A workload that's mostly long prompts with short answers has a very different economic profile from one that generates long completions. Blend your real input/output ratio into both sides of the comparison instead of using a single flat rate."
+        },
+        {
+          "type": "p",
+          "md": "**Quantization and model choice.** Serving a smaller or [quantized](/learn/local-open-models/running-models-locally/local-llm-hardware-requirements) model raises throughput and fits on cheaper GPUs, slashing your $/Mtok — sometimes at an acceptable quality cost. Choosing the right model size for the job is itself a cost lever, not just a quality one. The serving engine matters too: a throughput-focused server like [vLLM](/learn/local-open-models/inference-and-serving/vllm-explained) will give you a very different cost basis than a single-user tool like [Ollama](/learn/local-open-models/running-models-locally/what-is-ollama) (compare them in [Ollama vs vLLM](/learn/local-open-models/inference-and-serving/ollama-vs-vllm))."
+        },
+        {
+          "type": "p",
+          "md": "**Autoscaling and spot capacity.** The advanced move is to claw back utilization: autoscale the number of GPUs to follow traffic, batch aggressively, and use cheaper interruptible (spot) instances for non-urgent work. Each technique pushes effective utilization up and your cost per token down — which is the entire game. Everything in self-hosting economics, in the end, reduces to one lever: *keep the GPU you're paying for busy generating useful tokens.*"
+        },
+        {
+          "type": "p",
+          "md": "Finally, don't treat the decision as permanent. Many teams start on an API to ship fast, watch the monthly bill, and only migrate to self-hosting once volume is high and steady enough that the math clearly flips. Starting on hardware \"to save money\" before you have the traffic to fill it is the classic, expensive mistake — see [local LLM hardware requirements](/learn/local-open-models/running-models-locally/local-llm-hardware-requirements) before you commit."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Is self-hosting an LLM actually cheaper than using an API?",
+      "a": "Only above a break-even point. A rented GPU has a fixed hourly cost, so it's cheaper per token *only when you keep it busy* — typically at high, steady request volume. At low or spiky traffic the GPU sits idle and the per-token cost soars above what an API charges, so the API wins."
+    },
+    {
+      "q": "How do I calculate cost per million tokens for a self-hosted model?",
+      "a": "Divide your GPU's hourly cost by the tokens it produces per hour. Tokens per hour equals your server's tokens-per-second throughput × 3,600 × utilization (the fraction of time the GPU is actually generating). So `cost_per_Mtok = gpu_cost_per_hour / tokens_per_hour`. Use throughput measured under realistic concurrent load, not a single request."
+    },
+    {
+      "q": "Why does utilization matter so much for self-hosting cost?",
+      "a": "Because the GPU bill is fixed per hour regardless of how busy it is. The same GPU and model can cost a few cents per million tokens when fully busy and several dollars when mostly idle — purely because of how many tokens you generate per paid hour. Keeping the GPU busy is the single biggest cost lever."
+    },
+    {
+      "q": "What request volume do I need before self-hosting pays off?",
+      "a": "There's no universal number, but you generally need enough *sustained* concurrent traffic to keep one GPU's batches full for most of the day. The honest test is whether your measured cost per million tokens, at your real utilization, falls below the API's per-token price after adding ops and redundancy overhead."
+    },
+    {
+      "q": "Does batching really lower the cost per token?",
+      "a": "Yes, significantly. A single request leaves a big GPU mostly idle. [Continuous batching](/learn/local-open-models/inference-and-serving/continuous-batching) packs many requests through the GPU at once, raising tokens-per-second several times over. Since the hourly cost is fixed, higher throughput directly divides your cost per token down."
+    },
+    {
+      "q": "Is the open model itself free to run?",
+      "a": "The weights are free to download, but the GPU that runs them is not. Self-hosting replaces a per-token API bill with a per-hour GPU bill, plus hidden costs like idle time, redundancy, and engineer effort. \"Open\" means no licensing fee for the model, not zero cost to serve it."
+    }
+  ],
+  "related": [
+    "what-is-inference-server",
+    "vllm-explained",
+    "continuous-batching",
+    "ollama-vs-vllm",
+    "local-llm-hardware-requirements",
+    "what-is-local-llm"
+  ],
+  "furtherReading": [
+    {
+      "title": "vLLM Documentation",
+      "url": "https://docs.vllm.ai/"
+    },
+    {
+      "title": "Pricing — Anthropic API (per-token model pricing)",
+      "url": "https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    {
+      "title": "Ollama — GitHub",
+      "url": "https://github.com/ollama/ollama"
+    }
+  ]
+}

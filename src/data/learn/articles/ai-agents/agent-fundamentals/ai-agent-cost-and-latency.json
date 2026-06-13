@@ -1,0 +1,402 @@
+{
+  "slug": "ai-agent-cost-and-latency",
+  "title": "Why Are AI Agents So Slow and Expensive? Cost and Latency Explained",
+  "shortTitle": "Agent Cost & Latency",
+  "seoTitle": "AI Agent Cost & Latency: Why Agents Are Slow",
+  "metaDescription": "Every agent loop iteration is a fresh LLM call over a growing context. Learn what drives agent cost and latency, and the levers that bring both down.",
+  "keywords": [
+    "ai agent cost",
+    "why are ai agents slow",
+    "agent latency optimization",
+    "agent token cost growing context",
+    "reduce ai agent cost",
+    "agent loop expensive"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Understand exactly what makes agents slow and pricey — repeated calls over a growing context — and the concrete levers that cut both.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "An [AI agent](/learn/ai-agents/agent-fundamentals/what-is-an-ai-agent) doesn't answer a question in one shot. It works in a loop: think, call a tool, read the result, think again, call another tool, and repeat until the task is done. Each pass through that loop is a fresh, full call to a language model. That repetition is exactly what makes agents powerful — and it's also why they feel slow and run up a bill."
+        },
+        {
+          "type": "p",
+          "md": "Here's the everyday version. Imagine you hire a consultant who charges by the word, but with one strange rule: every time you ask a follow-up question, you must first read the *entire conversation so far* back to them, out loud, from the very beginning. The first question is cheap. By the tenth, you're re-reading nine rounds of back-and-forth before you even get to the new part. The consultant is brilliant, but the re-reading tax grows with every step — and you pay it again on every single turn."
+        },
+        {
+          "type": "p",
+          "md": "That is an agent's economics in a nutshell. A model has no memory between calls, so the agent has to re-send the whole growing history — the system prompt, every tool definition, every previous step, and every tool result — on each iteration. The work the *model* does per step is roughly constant, but the *context* it has to read keeps growing. Cost and waiting time pile up step by step."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Two separate things go up as an agent runs: **cost** (you pay per token, and the token count per step keeps climbing) and **latency** (each step is a sequential round trip you wait on). They have different causes and different fixes, so this article treats them separately."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A single chat call is cheap and fast — a fraction of a cent, a second or two. It's easy to assume an agent is just \"a few of those.\" It isn't. The loop structure changes the math in ways that surprise people the first time they see a real bill or a real latency graph."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Cost grows super-linearly, not linearly.** A 10-step task is not 10× a one-step task. Because each step re-sends all prior steps, step 10 reads roughly 10× the history step 1 did. Add up that growing context across all steps and the total token spend scales closer to the *square* of the number of steps. Double the steps and you can quadruple the cost.",
+            "**Latency is mostly waiting in line.** The steps are sequential by design — the agent can't decide its next move until it sees the last tool result. So total latency is the sum of every model call plus every tool round trip, one after another. A task that needs 8 reasoning steps waits on 8 model calls back to back.",
+            "**A small demo hides the real bill.** Agents look cheap on a two-step toy task. The cost only bites at production scale: thousands of users, long tasks, big tool outputs pasted into context. The thing that worked in the demo is the thing that quietly costs a fortune at scale."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who needs to care? Anyone shipping an agent to real users. If you're choosing a model, setting a budget, deciding how many tools to expose, or debugging why a task takes 40 seconds, the cost-and-latency profile of the loop is the thing you're actually fighting. Understanding *where* the tokens and the seconds go is the difference between an agent that scales and one that gets switched off the day finance reads the invoice."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "To see where cost and time go, follow what actually happens on a single iteration of the [agent loop](/learn/ai-agents/agent-fundamentals/agent-loop-explained). The pattern most agents use is [ReAct](/learn/ai-agents/agent-fundamentals/react-agent-pattern): reason, act with a tool, observe the result, repeat."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "One loop iteration — repeated until the task is done",
+            "steps": [
+              {
+                "label": "Send context",
+                "sub": "system + history + tools"
+              },
+              {
+                "label": "Model thinks",
+                "sub": "decides next action"
+              },
+              {
+                "label": "Call tool",
+                "sub": "API / search / code"
+              },
+              {
+                "label": "Append result",
+                "sub": "context grows"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "What you pay for on every step"
+        },
+        {
+          "type": "p",
+          "md": "Each model call bills two kinds of tokens. **Input tokens** are everything you send *in* — the system prompt, the tool definitions, the full conversation history, and the latest tool result. **Output tokens** are what the model writes *out* — its reasoning and its next tool call. Output tokens usually cost several times more per token than input tokens, but on an agent the *input* side is what explodes, because the whole history rides along on every single step."
+        },
+        {
+          "type": "p",
+          "md": "That's the core mechanism behind the growing bill: the conversation is cumulative. Step 1 sends a small context. Step 2 sends step 1's context plus step 1's output plus the first tool result. Step 5 is carrying everything from steps 1 through 4. The per-step input grows roughly linearly, and you pay it on every step — so the *running total* grows roughly with the square of the step count."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Why input tokens climb each step",
+            "steps": [
+              {
+                "label": "Step 1",
+                "sub": "~2k input tokens"
+              },
+              {
+                "label": "Step 2",
+                "sub": "~3.5k (carries step 1)"
+              },
+              {
+                "label": "Step 3",
+                "sub": "~5k (carries 1–2)"
+              },
+              {
+                "label": "Step N",
+                "sub": "history keeps growing",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "What you wait for on every step"
+        },
+        {
+          "type": "p",
+          "md": "Latency is a different story with a different cause. Two clocks dominate. First, **time-to-first-token plus generation time** for each model call — and generation gets slower as the input context grows, because the model must read more before it can write. Second, **tool round trips**: a web search, a database query, or a [code execution](/learn/ai-agents/tool-use/code-execution-vs-more-tools) call each take their own real-world time, and the agent sits idle waiting for the result before it can think again. Because the loop is sequential, these add up: total latency is the sum of every model call and every tool call, in order. Five steps means five model calls and up to five tool waits, nose to tail."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "A useful mental split: **cost** is driven mostly by *total tokens processed across all steps*; **latency** is driven mostly by *the number of sequential round trips*. Cutting tokens helps the bill; cutting steps and parallelizing tools helps the clock. Some levers help both."
+        }
+      ]
+    },
+    {
+      "id": "a-worked-cost-estimate",
+      "title": "A worked cost estimate",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Numbers make the super-linear effect concrete. Take a realistic research-style task that runs **8 loop steps**. Say the fixed overhead — system prompt plus tool definitions — is about **2,000 tokens**, and each step adds roughly **1,500 tokens** of reasoning and tool results to the history. The model outputs about **400 tokens** per step. (These are illustrative round numbers, not a benchmark; the point is the *shape*, not the exact figures.)"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Step",
+            "Input tokens sent (history + overhead)",
+            "Output tokens"
+          ],
+          "rows": [
+            [
+              "1",
+              "2,000",
+              "400"
+            ],
+            [
+              "2",
+              "3,900",
+              "400"
+            ],
+            [
+              "3",
+              "5,800",
+              "400"
+            ],
+            [
+              "4",
+              "7,700",
+              "400"
+            ],
+            [
+              "8",
+              "15,300",
+              "400"
+            ],
+            [
+              "Total (1–8)",
+              "~70,800 input",
+              "3,200 output"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Notice the trap: the task only generated about **3,200 output tokens** of actual \"work,\" but it processed nearly **71,000 input tokens** to get there — because the history was re-sent and re-read on every step. The input side is more than 20× the output side. If you priced this naively as \"8 calls of ~2k tokens each,\" you'd be off by a factor of four. That gap *is* the agent tax."
+        },
+        {
+          "type": "p",
+          "md": "Now scale it. One run is cheap. But run this agent for **10,000 users a day**, and you're processing on the order of **700 million input tokens daily** — and that's where the choice of model, and whether you cache the repeated parts, stops being a rounding error and becomes the whole budget. For how per-token pricing works, see [LLM API pricing](/learn/llm-apis/cost-caching-rate-limits/llm-api-pricing)."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Before optimizing, *measure*. Log input tokens, output tokens, and wall-clock time per step for a few real tasks. You'll almost always find one or two steps (a giant tool output, an over-long system prompt) dominating the total. Optimize the dominant cost first; guessing wastes effort on the wrong thing."
+        }
+      ]
+    },
+    {
+      "id": "the-levers-that-bring-both-down",
+      "title": "The levers that bring both down",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Good news: the same loop structure that creates the cost gives you clear, well-understood levers. Here's what to reach for, and whether each one mainly helps the **bill**, the **clock**, or both."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Lever",
+            "What it does",
+            "Helps cost?",
+            "Helps latency?"
+          ],
+          "rows": [
+            [
+              "Prompt caching",
+              "Reuse the unchanged prefix (system prompt, tools, early history) instead of re-billing it each step",
+              "Yes — big",
+              "Yes"
+            ],
+            [
+              "Smaller model for routine steps",
+              "Use a fast cheap model for simple steps, save the big model for hard reasoning",
+              "Yes — big",
+              "Yes"
+            ],
+            [
+              "Fewer steps",
+              "Better prompts and tools so the agent reaches the answer in fewer iterations",
+              "Yes",
+              "Yes — big"
+            ],
+            [
+              "Parallel tool calls",
+              "Fire independent tool calls at once instead of one at a time",
+              "No",
+              "Yes — big"
+            ],
+            [
+              "Context compaction",
+              "Summarize old history so the context stops growing without limit",
+              "Yes",
+              "Yes"
+            ],
+            [
+              "Trim tool outputs",
+              "Return only the fields the model needs, not raw dumps",
+              "Yes",
+              "Slightly"
+            ]
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Prompt caching: stop paying for the same prefix"
+        },
+        {
+          "type": "p",
+          "md": "The single biggest win for most agents. A large part of every step's input — the system prompt and the tool definitions — is *identical* on every call. [Prompt caching](/learn/llm-apis/cost-caching-rate-limits/prompt-caching-explained) lets the provider store that unchanged prefix and charge a steep discount for re-reading it, instead of full price every step. Since that prefix is re-sent on every iteration, caching it can cut a long agent's input cost dramatically and speed up time-to-first-token too, because the model skips re-processing the cached part."
+        },
+        {
+          "type": "h3",
+          "text": "Right-size the model per step"
+        },
+        {
+          "type": "p",
+          "md": "Not every step needs your most capable (and most expensive) model. Picking which tool to call, formatting a result, or deciding \"am I done?\" are often easy decisions a smaller, faster, cheaper model handles fine. Reserve the frontier model for the genuinely hard reasoning. A common pattern is a fast model driving most of the loop and a strong model brought in only for the steps that need it — this can cut both cost and latency at once."
+        },
+        {
+          "type": "h3",
+          "text": "Cut the number of steps"
+        },
+        {
+          "type": "p",
+          "md": "Because cost grows roughly with the square of step count and latency grows linearly with it, removing steps is doubly valuable. Sharper tool descriptions (see [designing tools for LLMs](/learn/ai-agents/tool-use/designing-tools-for-llms)) help the model pick the right tool the first time instead of fumbling. Sometimes the best fix is structural: if the task is really a fixed sequence, a plain [workflow beats an agent](/learn/ai-agents/agent-fundamentals/agents-vs-workflows-vs-chatbots) and skips the loop overhead entirely. Ask honestly whether you [need an agent at all](/learn/ai-agents/agent-fundamentals/do-you-need-an-agent)."
+        },
+        {
+          "type": "h3",
+          "text": "Parallelize independent tool calls"
+        },
+        {
+          "type": "p",
+          "md": "When a step needs three lookups that don't depend on each other, calling them one at a time triples the wait for no reason. Modern models can request several tool calls in one turn; run them concurrently and you pay for the *slowest* one, not the *sum*. This barely touches token cost, but it can collapse latency on tool-heavy steps."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "**Pasting raw tool output into context.** A tool that returns a 20,000-token JSON blob or a full web page poisons every *subsequent* step, since that bloat now rides along in the history forever. Extract the few fields the model needs and discard the rest before appending.",
+            "**Letting context grow without bound.** On long tasks the history can outgrow the [context window](/learn/llm-fundamentals/context-windows/what-is-a-context-window) entirely, and even before that it gets slow and noisy. [Context compaction](/learn/ai-agents/planning-and-memory/context-compaction-explained) — summarizing old steps into a short digest — keeps the loop affordable on long runs.",
+            "**Exposing too many tools.** Every tool definition is tokens on *every* step, and a long tool menu also makes the model slower and less accurate at choosing. Give the agent the smallest useful toolset.",
+            "**No per-step budget or step cap.** A buggy loop that never decides it's done will happily burn money until something stops it. Always set a maximum step count and a token budget as a safety net.",
+            "**Optimizing latency you can't perceive.** Shaving 200ms off a model call is pointless if a single tool call takes 8 seconds. Profile first, then attack the biggest contributor — usually a slow tool or an over-long context, not the model itself."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Streaming the model's output makes an agent *feel* faster without changing cost or true latency — the user sees text sooner. It's a real UX win, but don't mistake it for an actual speedup of the loop. See [LLM streaming](/learn/llm-apis/streaming-structured-outputs/llm-streaming-explained)."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics click, a few deeper ideas separate a hobby agent from a production one."
+        },
+        {
+          "type": "p",
+          "md": "**Caching only helps the stable prefix.** Prompt caching keys off an *unchanged* leading chunk of the prompt. If you shuffle tool order, edit the system prompt between calls, or inject the current timestamp at the very top, you invalidate the cache and lose the discount. Keep volatile content (the latest user message, dynamic data) at the *end* of the prompt and the stable scaffolding at the start, so the longest possible prefix stays cacheable across steps."
+        },
+        {
+          "type": "p",
+          "md": "**Batch when you don't need it live.** If an agent task isn't interactive — overnight document processing, bulk classification — many providers offer a batch mode at a large discount in exchange for slower turnaround. Latency stops mattering, so you trade it for cost. This doesn't fit a chat agent, but it's a big lever for background work."
+        },
+        {
+          "type": "p",
+          "md": "**Compaction is a tradeoff, not a free win.** Summarizing old history saves tokens but can drop a detail the agent needed three steps later. The skill is compacting *losslessly enough*: keep IDs, decisions, and open questions; discard verbose tool dumps and redundant reasoning. Test that your compaction doesn't make the agent forget its own task — see [context compaction](/learn/ai-agents/planning-and-memory/context-compaction-explained)."
+        },
+        {
+          "type": "p",
+          "md": "**Sub-agents trade tokens for parallelism and focus.** Splitting a big task across several specialized sub-agents lets them run in parallel (cutting wall-clock time) and keeps each one's context small and on-topic (cutting per-call cost and improving accuracy). The cost is coordination overhead and some duplicated setup tokens. It's a powerful pattern for large tasks, but overkill for simple ones."
+        },
+        {
+          "type": "p",
+          "md": "The durable lesson: an agent's cost and latency are *emergent properties of the loop*, not of any single model call. You won't fix them by tweaking one prompt. You fix them by shaping the loop — caching the repeated parts, sending fewer tokens, taking fewer and more parallel steps, and knowing when a plain [workflow](/learn/ai-agents/agent-fundamentals/agentic-workflow-patterns) would have done the job without a loop at all."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Why are AI agents so slow?",
+      "a": "Because an agent works as a sequential loop: it makes one model call, waits for a tool result, then makes the next call, and so on. Total latency is the sum of every model call plus every tool round trip, in order — and model calls get slower as the conversation history grows. A task needing 8 reasoning steps waits on 8 back-to-back round trips."
+    },
+    {
+      "q": "Why do AI agents cost so much more than a single chat call?",
+      "a": "A model has no memory between calls, so the agent re-sends the entire growing history — system prompt, tool definitions, every prior step, and every tool result — on every iteration. The per-step input keeps climbing, so total token spend grows roughly with the *square* of the number of steps. A 10-step task can cost far more than 10× a one-step task."
+    },
+    {
+      "q": "What is the single biggest way to reduce AI agent cost?",
+      "a": "For most agents, prompt caching. A large part of every step's input (the system prompt and tool definitions) is identical on every call, and caching lets the provider charge a steep discount to re-read that unchanged prefix instead of full price each step. Beyond that, using a smaller model for routine steps and cutting the number of steps are the next biggest levers."
+    },
+    {
+      "q": "Does using a smaller model actually help?",
+      "a": "Yes, when you use it selectively. Many loop steps — picking a tool, formatting a result, deciding whether the task is done — are easy enough for a fast, cheap model. Reserve your most capable model for the genuinely hard reasoning. Mixing a fast model for routine steps with a strong model for the hard ones cuts both cost and latency."
+    },
+    {
+      "q": "How do I make an agent feel faster without changing the model?",
+      "a": "Parallelize independent tool calls so you wait for the slowest one instead of the sum, cut the number of steps with sharper tool descriptions, and stream the output so users see text sooner. Streaming doesn't reduce real latency or cost, but it improves the perceived speed significantly."
+    },
+    {
+      "q": "Why does an agent get slower and more expensive the longer it runs?",
+      "a": "Because the conversation history is cumulative — every step appends its reasoning and tool results, and that growing context is re-sent and re-read on the next call. More input tokens per step means a bigger bill and slower generation. Context compaction (summarizing old steps) keeps the history from growing without bound."
+    }
+  ],
+  "related": [
+    "agent-loop-explained",
+    "react-agent-pattern",
+    "agents-vs-workflows-vs-chatbots",
+    "do-you-need-an-agent",
+    "what-is-an-ai-agent",
+    "code-execution-vs-more-tools"
+  ],
+  "furtherReading": [
+    {
+      "title": "Building effective agents — Anthropic",
+      "url": "https://www.anthropic.com/research/building-effective-agents"
+    },
+    {
+      "title": "Prompt caching — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching"
+    },
+    {
+      "title": "Pricing — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/about-claude/pricing"
+    }
+  ]
+}

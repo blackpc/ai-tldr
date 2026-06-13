@@ -1,0 +1,367 @@
+{
+  "slug": "max-tokens-explained",
+  "title": "What Does max_tokens Do? Output Limits and Truncated Answers",
+  "shortTitle": "max_tokens & Output Limits",
+  "seoTitle": "What Does max_tokens Do in LLM APIs?",
+  "metaDescription": "max_tokens caps how many tokens a model can generate, not how long your prompt can be. Learn why answers get cut off and how output limits differ from context.",
+  "keywords": [
+    "what does max_tokens do",
+    "max tokens vs context window",
+    "why is my llm output cut off",
+    "max output tokens explained",
+    "max_tokens api parameter"
+  ],
+  "difficulty": "beginner",
+  "oneLiner": "Understand exactly what the max_tokens setting controls, why it's separate from the context window, and why a too-low value silently chops off your answers.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you call a language model through an API, you usually pass a setting called **`max_tokens`** (some providers name it `max_output_tokens` or `max_completion_tokens`). It does one simple thing: it sets the **maximum number of [tokens](/learn/llm-fundamentals/tokens-and-tokenization/what-is-a-token) the model is allowed to generate in its reply**. Not your prompt. Not the conversation history. Just the answer the model writes back."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like handing someone a notepad with a fixed number of lines and saying *\"write your answer, but stop when you run out of lines.\"* If the answer is short, they finish early and the extra lines stay blank — no harm done. If the answer is long, they hit the last line mid-sentence and have to put the pen down, even though they had more to say. `max_tokens` is that line count. It controls how much the model can *write*, and nothing about how much you can *ask*."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "A token is roughly 3–4 characters of English, so about ¾ of a word on average. `max_tokens: 500` means *up to* roughly 375 words of output — sometimes fewer if the model finishes its thought first. The model never \"pads\" to reach the limit; the number is a ceiling, not a target."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The single most common beginner bug with LLM APIs is **an answer that gets cut off mid-sentence**. You ask for a long summary, a full code file, or a detailed list — and the response just stops. No error, no warning, no explanation. Nine times out of ten, the culprit is a `max_tokens` value that was too low to hold the whole reply."
+        },
+        {
+          "type": "p",
+          "md": "This is sneaky because it fails *silently*. The API call succeeds, you get a `200 OK`, and you get real text back — it's just incomplete. If your code blindly trusts the response, you ship truncated answers to users, feed half-written JSON into a parser that then crashes, or save a code file that's missing its closing brace. Knowing this one parameter turns a baffling \"why does it keep cutting off?\" into a one-line fix."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Correctness.** A reply chopped at the token limit can be wrong, not just short — a list missing its final items, JSON missing its closing bracket, a number that never got finished.",
+            "**Cost and speed.** You pay per output token, and generation time grows with every token produced. A `max_tokens` set far higher than you need doesn't make replies longer (the model still stops when it's done), but it *can* let a runaway model ramble — and it raises the worst-case bill and latency you've budgeted for.",
+            "**Reliability.** Setting `max_tokens` deliberately is how you guarantee a request can't run away. It's a hard safety cap on the length — and therefore the cost — of any single call."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "A good habit: set `max_tokens` a little **above** the longest valid answer you expect, then *check the stop reason* (covered below) to catch the times you guessed too low. Don't set it to the maximum \"just in case\" — that hides the truncation bug instead of revealing it."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "To see what `max_tokens` really controls, you need to remember how an LLM produces text. It works one token at a time, in a loop called [autoregressive generation](/learn/llm-fundamentals/text-generation/autoregressive-generation): it reads everything so far, predicts the [next token](/learn/llm-fundamentals/text-generation/next-token-prediction), appends it, and repeats. The loop normally ends when the model emits a special *end-of-turn* token, meaning \"I'm done.\""
+        },
+        {
+          "type": "p",
+          "md": "`max_tokens` adds a **second, independent stop condition**: a counter. Every token the model generates ticks the counter up by one. The moment it reaches your `max_tokens` value, the loop is forced to halt — whether or not the model was finished. So generation stops for one of two reasons, and which one happened is reported back to you."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "The generation loop and where max_tokens cuts in",
+            "steps": [
+              {
+                "label": "Read context",
+                "sub": "prompt + tokens so far"
+              },
+              {
+                "label": "Predict next token",
+                "sub": "one token"
+              },
+              {
+                "label": "Append it",
+                "sub": "counter += 1"
+              },
+              {
+                "label": "Stop?",
+                "sub": "end-token OR counter = max_tokens",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Two ways a reply can end"
+        },
+        {
+          "type": "p",
+          "md": "Every well-designed API tells you *why* it stopped, in a field usually called `stop_reason` or `finish_reason`. This is the field that distinguishes a complete answer from a truncated one — and most beginners never look at it."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "What happened",
+            "Anthropic `stop_reason`",
+            "OpenAI `finish_reason`",
+            "Meaning"
+          ],
+          "rows": [
+            [
+              "Model finished naturally",
+              "`end_turn`",
+              "`stop`",
+              "The whole answer is here. Safe to use."
+            ],
+            [
+              "Hit the output cap",
+              "`max_tokens`",
+              "`length`",
+              "The reply was **cut off**. There was more to say."
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "When the stop reason is `max_tokens` / `length`, the text you got back is incomplete. The fix is almost always to raise `max_tokens` and retry, or (for very long outputs) to *continue* the generation by sending the partial answer back and asking the model to keep going."
+        },
+        {
+          "type": "h3",
+          "text": "Input plus output must fit the context window"
+        },
+        {
+          "type": "p",
+          "md": "Here's the relationship that confuses everyone. `max_tokens` is **not** the [context window](/learn/llm-fundamentals/context-windows/what-is-a-context-window). The context window is the total space the model can work with — *your prompt plus its reply, added together*. `max_tokens` only reserves room inside that space for the reply. The rule the model obeys is simple:"
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "title": "the budget rule",
+          "code": "input tokens (prompt + history)  +  max_tokens (reserved for reply)\n   must be  <=  the model's context window"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "Context window = input + output",
+            "root": {
+              "label": "Context window",
+              "sub": "total token budget"
+            },
+            "children": [
+              {
+                "label": "Input tokens",
+                "sub": "prompt + chat history"
+              },
+              {
+                "label": "Output tokens",
+                "sub": "capped by max_tokens",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "So a giant prompt *steals* room from the reply. If a model has a 200k-token window and your prompt is 199k tokens long, only about 1k tokens are left for the answer — no matter what number you put in `max_tokens`. Some APIs will reject the call if `input + max_tokens` exceeds the window; others quietly give the reply whatever space remains. Either way, the two limits are different jobs: the **context window** is total memory, `max_tokens` is the **output cap** carved out of it."
+        }
+      ]
+    },
+    {
+      "id": "a-worked-example",
+      "title": "A worked example",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Let's see truncation happen and then catch it. We ask for a long list with a deliberately tiny cap, then read the stop reason instead of trusting the text."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "detect a truncated reply",
+          "code": "from anthropic import Anthropic\n\nclient = Anthropic(api_key=\"sk-ant-...\")\n\nmsg = client.messages.create(\n    model=\"claude-sonnet-4-6\",\n    max_tokens=30,                       # deliberately too small\n    messages=[{\n        \"role\": \"user\",\n        \"content\": \"List 20 popular programming languages, one per line.\",\n    }],\n)\n\nprint(msg.content[0].text)               # only the first few languages!\nprint(\"stop_reason:\", msg.stop_reason)   # -> 'max_tokens'  (it was cut off)\n\n# The fix: this answer is INCOMPLETE. Don't use it as-is.\nif msg.stop_reason == \"max_tokens\":\n    print(\"Reply was truncated — raise max_tokens and retry.\")"
+        },
+        {
+          "type": "p",
+          "md": "With `max_tokens=30`, the model only manages a handful of languages before the counter forces it to stop, and `stop_reason` comes back as `\"max_tokens\"`. Bump the value to, say, `300`, and the same call finishes all 20 with `stop_reason` of `\"end_turn\"` — the signal that the answer is whole. The same idea works on any provider; only the field names change:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "the same check, OpenAI-style",
+          "code": "# OpenAI uses 'max_completion_tokens' and 'finish_reason'\nif resp.choices[0].finish_reason == \"length\":\n    print(\"Reply was truncated — raise the output cap and retry.\")"
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "If you're parsing structured output (JSON, code), a truncated reply is *especially* dangerous: it's often not just short but **invalid** — a JSON object with no closing brace will crash `json.loads`. Always check the stop reason before parsing, and treat a length-based stop as a failed call, not a successful one."
+        }
+      ]
+    },
+    {
+      "id": "max-tokens-vs-context-window",
+      "title": "max_tokens vs context window vs token limit",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Three terms get tangled together constantly. They sound similar but mean different things, and mixing them up is the root of most \"why is my output cut off?\" confusion."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Three limits, three jobs",
+            "columns": [
+              {
+                "title": "max_tokens",
+                "accent": true,
+                "items": [
+                  "Caps the OUTPUT only",
+                  "You set it per request",
+                  "Too low → reply cut off",
+                  "A ceiling, never a target",
+                  "Reserves room for the reply"
+                ]
+              },
+              {
+                "title": "Context window",
+                "items": [
+                  "Total INPUT + OUTPUT space",
+                  "Fixed by the model",
+                  "Too small → can't fit it all",
+                  "The whole working memory",
+                  "max_tokens lives inside it"
+                ]
+              },
+              {
+                "title": "Max output limit",
+                "items": [
+                  "Provider's hard cap on output",
+                  "Fixed by the model/API",
+                  "You can't exceed it",
+                  "Often < context window",
+                  "Upper bound for max_tokens"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "A subtle but important point: many models have a **separate maximum output limit** that is *smaller* than their full context window. A model might accept a 200,000-token input but only ever generate up to, say, a few thousand or tens of thousands of output tokens in one call. So you cannot ask for an output longer than that hard cap even if the context window looks huge — the input space and the output space are not interchangeable. Check your provider's docs for both numbers."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Question you're really asking",
+            "Which limit answers it"
+          ],
+          "rows": [
+            [
+              "\"Why did my answer stop mid-sentence?\"",
+              "`max_tokens` was too low (or you hit the model's output cap)"
+            ],
+            [
+              "\"Why did my huge prompt get rejected?\"",
+              "Input + `max_tokens` exceeded the **context window**"
+            ],
+            [
+              "\"Can this model write a 50-page document in one call?\"",
+              "Limited by the model's **max output limit**, not the context window"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics click, a few finer points are worth knowing — especially as models add features that change *what* counts as an output token."
+        },
+        {
+          "type": "p",
+          "md": "**`max_tokens` counts every output token, including ones you can't see.** With reasoning or \"thinking\" models, the hidden chain-of-thought the model generates before its visible answer also consumes output tokens, and on many providers it counts against `max_tokens`. If you set the cap too low, the model can burn the whole budget *thinking* and run out of room before it writes the final answer — leaving you with an empty or truncated visible reply. For reasoning models, budget generously."
+        },
+        {
+          "type": "p",
+          "md": "**It interacts with stop sequences.** If you also pass `stop` sequences, generation ends at whichever trigger comes first — the stop sequence, the natural end-of-turn token, or the `max_tokens` counter. Your `stop_reason` field tells you which one won, which is handy for debugging unexpected endings."
+        },
+        {
+          "type": "p",
+          "md": "**Sampling settings don't change the cap.** Choices like temperature, [greedy decoding vs sampling](/learn/llm-fundamentals/text-generation/greedy-decoding-vs-sampling), or top-p affect *which* tokens get picked, never *how many* are allowed. `max_tokens` sits outside the sampling logic entirely — it's just the counter on the generation loop."
+        },
+        {
+          "type": "p",
+          "md": "**Defaults bite.** Some SDKs default `max_tokens` to a small value (or require you to set it explicitly), so a brand-new integration can truncate replies until you raise it. If your first API calls keep cutting off and you never set the parameter, the default is the first thing to check."
+        },
+        {
+          "type": "p",
+          "md": "**Continuation for very long outputs.** When you genuinely need more text than a single call's output cap allows, the standard pattern is to take the truncated reply, append it to the conversation, and ask the model to continue. You stitch the pieces together client-side. This is how people generate long documents that exceed the per-call output limit — many small, capped calls instead of one impossible giant one."
+        },
+        {
+          "type": "p",
+          "md": "The durable mental model: a language model has a fixed desk (the **context window**) that holds both your question and its answer; `max_tokens` is how much of that desk you've set aside for the answer, capped by whatever maximum the model itself allows. Set it too low and the answer gets shoved off the edge mid-sentence — so set it with intent, and *always read the stop reason* to know whether what you got back is the whole thing."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What does max_tokens do in an LLM API?",
+      "a": "It sets the maximum number of tokens the model is allowed to *generate* in its reply. It does not limit your prompt length — only the output. If the model reaches that limit before finishing, the reply is cut off mid-sentence and the stop reason comes back as `max_tokens` (or `length` on OpenAI)."
+    },
+    {
+      "q": "Is max_tokens the same as the context window?",
+      "a": "No. The context window is the total space for your input *and* the output combined; `max_tokens` only caps the output portion. The rule is: input tokens + max_tokens must fit within the context window. A very large prompt leaves less room for the reply regardless of your `max_tokens` value."
+    },
+    {
+      "q": "Why is my LLM output getting cut off?",
+      "a": "Almost always because `max_tokens` is set too low to hold the full answer, so the model is forced to stop early. Check the response's `stop_reason`/`finish_reason` field — if it's `max_tokens` or `length`, the reply was truncated. Raise the limit and retry, or continue the generation for very long outputs."
+    },
+    {
+      "q": "What value should I set for max_tokens?",
+      "a": "Set it a bit above the longest valid answer you realistically expect, not at the model's maximum \"just in case.\" Setting it too high doesn't make replies longer (the model still stops when it's done) but it raises your worst-case cost and latency, and it hides truncation bugs. Then check the stop reason to catch the times you guessed too low."
+    },
+    {
+      "q": "Does a higher max_tokens make the model write longer answers?",
+      "a": "Not directly. `max_tokens` is a ceiling, not a target — the model stops as soon as it finishes its thought, even if the cap is much higher. To get longer answers you change the prompt (ask for more detail); to *allow* a long answer to complete without being cut off, you make sure the cap is high enough."
+    },
+    {
+      "q": "Do reasoning model thinking tokens count against max_tokens?",
+      "a": "On many providers, yes — the hidden chain-of-thought a reasoning model generates consumes output tokens that count toward `max_tokens`. If the cap is too low, the model can spend its whole budget thinking and run out of room for the visible answer, so reasoning models need a generous `max_tokens`. Check your provider's docs for the exact behavior."
+    }
+  ],
+  "related": [
+    "next-token-prediction",
+    "autoregressive-generation",
+    "greedy-decoding-vs-sampling",
+    "how-does-chatgpt-work",
+    "what-is-an-llm"
+  ],
+  "furtherReading": [
+    {
+      "title": "Messages API reference — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/api/messages"
+    },
+    {
+      "title": "Context windows — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/context-windows"
+    },
+    {
+      "title": "OpenAI API reference — Chat Completions",
+      "url": "https://platform.openai.com/docs/api-reference/chat"
+    }
+  ]
+}

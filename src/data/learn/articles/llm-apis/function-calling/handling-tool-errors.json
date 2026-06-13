@@ -1,0 +1,373 @@
+{
+  "slug": "handling-tool-errors",
+  "title": "How to Return Tool Errors to an LLM So It Recovers Gracefully",
+  "shortTitle": "Returning Tool Errors",
+  "seoTitle": "Returning Tool Errors to an LLM for Graceful Recovery",
+  "metaDescription": "When your tool fails, how you report it back shapes what the model does next. Learn to format tool errors so the LLM retries, fixes inputs, or stops.",
+  "keywords": [
+    "return tool error to llm",
+    "function calling error handling",
+    "is_error tool result",
+    "llm retry failed tool call",
+    "tool result error message format"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn how to feed a failed tool's result back to the model so it self-corrects — retrying, fixing bad arguments, or backing off — instead of looping forever.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you give a [language model](/learn/llm-fundamentals/llm-basics/what-is-an-llm) tools through [function calling](/learn/llm-apis/function-calling/what-is-function-calling), it doesn't run the tool itself. It *asks* your code to run it. The model emits a request like *call `get_weather` with city = \"Paris\"*, your code runs the function, and you hand the result back so the model can keep going. Most tutorials show only the sunny path: the tool works, you return the answer, everyone's happy."
+        },
+        {
+          "type": "p",
+          "md": "But tools fail. The weather API times out. The city name is misspelled. The user's account doesn't exist. **Handling tool errors** is about what you put in that result block *when the tool didn't work* — and how the wording of that error shapes what the model does next."
+        },
+        {
+          "type": "p",
+          "md": "Think of the model as a smart colleague on the phone who can't see your screen. You're their hands: they ask you to look something up, you go do it, and you report back. If the lookup fails, *how you describe the failure* changes their next move. Say \"that customer ID doesn't exist\" and they'll re-check the ID. Say \"the database is down, try again in a moment\" and they'll wait and retry. Say nothing useful — just \"error\" — and they'll guess, loop, or give up. The error message is your half of the conversation, and the model acts on it literally."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The key idea: a failed tool call is **not** the end of the turn. You feed the failure back as a normal tool result, and the model decides whether to retry, fix its inputs, or stop. Your job is to make that decision easy and correct."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "In a real agent, tool calls fail constantly — networks blip, inputs are malformed, rate limits trigger, permissions are missing. If you don't handle these failures deliberately, a few bad things happen."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**The whole turn crashes.** If your code throws an exception when a tool fails and you never send a result back, the conversation just dies. The model is left waiting for an answer that never comes, and your app surfaces a stack trace instead of a graceful recovery.",
+            "**The model can self-correct — but only if you let it.** A model that called a tool with a bad argument can usually fix it on the next try, *if* you tell it what was wrong. Swallowing the error and returning fake-success data throws away that ability and produces confidently wrong answers.",
+            "**Errors can cost real money and loops.** A model that keeps retrying a tool that will never succeed burns tokens and time on every loop. Phrasing the error so the model knows *whether* a retry could help is what stops a runaway loop.",
+            "**Failures are where agents feel broken or robust.** Anyone can demo the happy path. The difference between a toy and a product is what happens when the third tool call in a chain returns a 500."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "So this is not an edge case you bolt on later. The error path is half of every tool integration, and treating it as a first-class design surface is what makes an agent dependable."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The mechanism is the same result block you already use for success — with one difference: you mark it as an error. In the Messages API you return a `tool_result` block, set `is_error` to `true`, and put a plain-language description in the `content`. The model reads that text exactly like any other tool output and reasons about what to do next."
+        },
+        {
+          "type": "h3",
+          "text": "The error round-trip"
+        },
+        {
+          "type": "p",
+          "md": "Every tool call, success or failure, follows the same loop. The error case just changes what goes in the result."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "A failed tool call, fed back for recovery",
+            "steps": [
+              {
+                "label": "Model calls tool",
+                "sub": "get_order(id=\"99\")"
+              },
+              {
+                "label": "Your code runs it",
+                "sub": "throws / returns error"
+              },
+              {
+                "label": "You catch it",
+                "sub": "build an error result"
+              },
+              {
+                "label": "Return tool_result",
+                "sub": "is_error: true + message",
+                "accent": true
+              },
+              {
+                "label": "Model reads error",
+                "sub": "retries, fixes, or stops"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Concretely, when a tool throws, you don't crash — you catch the exception and send a result block flagged as an error. Here is the shape in Python with the Anthropic SDK:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "returning a tool error to the model",
+          "code": "# `block` is a tool_use block from the model's last response.\ntry:\n    result_text = run_tool(block.name, block.input)\n    tool_result = {\n        \"type\": \"tool_result\",\n        \"tool_use_id\": block.id,\n        \"content\": result_text,\n    }\nexcept Exception as e:\n    # The tool failed. Report it back instead of crashing.\n    tool_result = {\n        \"type\": \"tool_result\",\n        \"tool_use_id\": block.id,\n        \"content\": f\"Error: {e}. Check the order ID and try again.\",\n        \"is_error\": True,\n    }\n\n# Append as the next user turn and call the model again.\nmessages.append({\"role\": \"assistant\", \"content\": response.content})\nmessages.append({\"role\": \"user\", \"content\": [tool_result]})"
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "`is_error: true` is a hint to the model that this call did not succeed, not a special control signal. The model still just reads the `content` text — so the *words* in that message are what actually drive its next action. A truthful, specific message matters more than the flag."
+        },
+        {
+          "type": "h3",
+          "text": "Why the wording steers the model"
+        },
+        {
+          "type": "p",
+          "md": "Because the model only sees the text you write, the error message is a tiny prompt. \"Invalid date format, expected YYYY-MM-DD\" tells the model exactly how to fix its own argument and retry. A bare \"400 Bad Request\" tells it almost nothing, so it guesses. The model can't see your logs, your stack trace, or your API docs — it sees the sentence you chose. Write that sentence for the reader who has to act on it."
+        }
+      ]
+    },
+    {
+      "id": "three-kinds-of-failure",
+      "title": "Three kinds of failure, three responses",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Not every failure deserves the same message. The most useful thing you can do is decide which of three buckets a failure falls into, because each one implies a different next move for the model."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Failure type",
+            "Example",
+            "What the model should do",
+            "How to phrase it"
+          ],
+          "rows": [
+            [
+              "**Validation / bad input**",
+              "Misspelled city, missing field, out-of-range value",
+              "Fix the argument and retry",
+              "Say what was wrong and what's expected: \"Unknown city 'Pariss'. Provide a valid city name.\""
+            ],
+            [
+              "**Transient / temporary**",
+              "Timeout, rate limit, 503, network blip",
+              "Wait briefly, then retry the same call",
+              "Signal it's temporary and retryable: \"Service timed out. This is temporary — try again.\""
+            ],
+            [
+              "**Permanent / unrecoverable**",
+              "Record doesn't exist, no permission, feature unsupported",
+              "Stop retrying; tell the user or try another path",
+              "Be clear it won't change: \"Order 99 does not exist. Do not retry; ask the user to confirm the order number.\""
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The phrasing column is the whole game. For a **validation** error, name the field and the valid format so the model can correct itself. For a **transient** error, use words like *temporary* and *try again* so a retry feels right. For a **permanent** error, say *do not retry* explicitly — otherwise a capable model may loop, convinced it can fix something it can't."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "One failure, three branches",
+            "root": {
+              "label": "Tool failed"
+            },
+            "children": [
+              {
+                "label": "Bad input?",
+                "sub": "→ explain the fix, invite retry"
+              },
+              {
+                "label": "Temporary?",
+                "sub": "→ mark retryable, invite retry",
+                "accent": true
+              },
+              {
+                "label": "Permanent?",
+                "sub": "→ say 'do not retry', stop"
+              }
+            ]
+          }
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "You don't always know the category from the exception alone. A clean way to decide: map known HTTP statuses (429 / 5xx → transient; 400 / 404 / 403 → validation or permanent) and default everything else to a cautious, non-retryable message. When unsure, lean toward *don't retry* — a stuck loop is worse than one missed retry."
+        }
+      ]
+    },
+    {
+      "id": "guarding-against-loops",
+      "title": "Guarding against infinite tool-error loops",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The scariest failure mode is the loop: the model calls a tool, it errors, the model retries, it errors again, forever. Good error wording reduces this, but **wording alone is not a guarantee** — you also need a hard limit in your own code. The model is inside your agent loop, and the loop is yours to bound."
+        },
+        {
+          "type": "p",
+          "md": "Two cheap guardrails handle almost all of it:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Cap total iterations.** Count how many times you've gone around the call-tool-then-call-model loop and stop at a ceiling (say 8 or 10). When you hit it, send a final message telling the model it's out of attempts, or just end the turn and report to the user.",
+            "**Count repeated failures per tool.** If the *same* tool fails N times in a row (often with the same arguments), stop offering retries. Either drop that tool for the rest of the turn or return a permanent-style error that says \"this has failed repeatedly; do not call it again.\""
+          ]
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "a bounded agent loop",
+          "code": "MAX_STEPS = 10\nconsecutive_errors = 0\n\nfor step in range(MAX_STEPS):\n    response = call_model(messages)\n    if response.stop_reason != \"tool_use\":\n        break  # model is done\n\n    results = []\n    for block in tool_use_blocks(response):\n        try:\n            out = run_tool(block.name, block.input)\n            consecutive_errors = 0\n            results.append(ok_result(block.id, out))\n        except Exception as e:\n            consecutive_errors += 1\n            msg = str(e)\n            if consecutive_errors >= 3:\n                msg += \" This tool has failed repeatedly. Do not retry it.\"\n            results.append(error_result(block.id, msg))\n\n    messages.append({\"role\": \"assistant\", \"content\": response.content})\n    messages.append({\"role\": \"user\", \"content\": results})\nelse:\n    # Loop exhausted without the model finishing.\n    notify_user(\"The agent could not complete this task.\")"
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Never let the model's behavior be the *only* thing standing between you and an infinite loop. Models are good at taking the hint to stop, but a bug, an adversarial input, or an unlucky run can still spin. The iteration cap in your code is the real safety net; the error wording is what makes hitting that cap rare."
+        }
+      ]
+    },
+    {
+      "id": "writing-good-error-messages",
+      "title": "Writing tool error messages the model can use",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Since the error message is effectively a mini-prompt aimed at the model, a few habits make it far more useful."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Be specific about the cause.** \"Field `start_date` is missing\" beats \"invalid input.\" Name the field, the value, and the constraint.",
+            "**State the fix or the next step.** \"Use format YYYY-MM-DD\" or \"ask the user for a valid email\" turns an error into an instruction.",
+            "**Signal retryability explicitly.** The words *temporary*, *try again*, *do not retry*, and *permanent* are read literally. Use them on purpose.",
+            "**Keep it short and plain.** A long stack trace wastes tokens and buries the one fact that matters. One or two clear sentences is usually enough.",
+            "**Don't leak secrets or noise.** Raw internal errors can contain connection strings, tokens, or PII. Translate the exception into a clean message instead of dumping it verbatim."
+          ]
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Weak message",
+            "Better message",
+            "Why"
+          ],
+          "rows": [
+            [
+              "`Error`",
+              "`Order 99 not found. Do not retry; confirm the ID with the user.`",
+              "Names the cause and tells the model to stop"
+            ],
+            [
+              "`400 Bad Request`",
+              "`Invalid date '13/40'. Use YYYY-MM-DD.`",
+              "Lets the model fix its own argument"
+            ],
+            [
+              "`Exception: ETIMEDOUT`",
+              "`Weather service timed out. This is temporary — try again.`",
+              "Marks it retryable in plain words"
+            ],
+            [
+              "full stack trace",
+              "`Database unavailable. This is temporary — retry shortly.`",
+              "Short, safe, actionable"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "A quick test for any tool error message: *would a competent assistant who can't see your code know what to do after reading this sentence?* If not, add the missing fact — the field name, the valid format, or the word \"permanent.\""
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics are solid, a few subtler points separate a robust agent from a fragile one."
+        },
+        {
+          "type": "p",
+          "md": "**Partial failures in parallel tool calls.** A model can request several tools in one turn. Some may succeed and some may fail. Return *all* the results in the next message — successful ones as normal results, failed ones flagged with `is_error` — each matched to its own `tool_use_id`. Don't drop the failures or abort the whole batch; the model needs the complete picture to decide what to do, and a missing result for any requested tool will break the turn."
+        },
+        {
+          "type": "p",
+          "md": "**`is_error` vs. a structured error in the content.** Marking `is_error: true` is the clean way to say \"this call failed.\" But you can *also* return a successful result whose content describes a domain-level problem — for example, a `search` tool that legitimately found nothing returns `is_error: false` with content \"No results found.\" Reserve the error flag for actual tool *failures*; use ordinary results for valid-but-empty or negative outcomes. Blurring the two confuses the model about whether retrying could help."
+        },
+        {
+          "type": "p",
+          "md": "**Retries inside your code vs. retries by the model.** Some transient failures are best retried silently in your own tool function (with backoff) before you ever tell the model — the model shouldn't have to manage a flaky network. Reserve model-visible retries for cases where the model can *change something*: fix an argument, pick a different tool, or ask the user. A good rule: if a retry with the *same* inputs might work, handle it in code; if it needs a *different* input, surface it to the model."
+        },
+        {
+          "type": "p",
+          "md": "**Untrusted error content.** Tool results — including error messages — are data, not commands. If a tool's output (or an error string built from external data) contains text that looks like instructions, the model may be tempted to follow it. This is a flavor of [prompt injection](/learn/prompt-engineering/prompt-injection-security/what-is-prompt-injection). Build error messages from your own templated strings, not by blindly interpolating remote responses."
+        },
+        {
+          "type": "p",
+          "md": "**Tool design reduces errors at the source.** Many tool errors are avoidable. Clear parameter descriptions, `enum` constraints on fields with fixed options, and strict schema validation stop the model from sending bad inputs in the first place — see [tool-calling best practices](/learn/llm-apis/function-calling/tool-calling-best-practices) and [defining function schemas](/learn/llm-apis/function-calling/defining-function-schemas). The fewer ways a tool can be called wrong, the fewer error messages you have to write. Errors and good schemas are two halves of the same reliability story: schemas prevent failures, and well-worded errors recover from the ones that slip through."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "How do I return a tool error to an LLM?",
+      "a": "Send the failure back as a normal tool result instead of crashing. In the Anthropic Messages API, return a `tool_result` block with the matching `tool_use_id`, set `is_error` to `true`, and put a short, plain-language description in the `content`. The model reads that text and decides whether to retry, fix its input, or stop."
+    },
+    {
+      "q": "What does is_error do in a tool result?",
+      "a": "It flags to the model that the tool call did not succeed. It is a hint, not a control signal — the model still just reads the `content` text and reasons about it. So the wording of your error message matters more than the flag itself; the flag plus a clear message is the right combination."
+    },
+    {
+      "q": "How do I stop an LLM from retrying a failed tool forever?",
+      "a": "Use two guardrails. In your error message, say explicitly whether a retry could help (\"this is temporary, try again\" vs. \"do not retry\"). And in your own code, cap the total number of agent-loop iterations and count consecutive failures per tool, stopping when you hit a ceiling. The code cap is the real safety net; the wording just makes hitting it rare."
+    },
+    {
+      "q": "Should I retry a failed tool in my code or let the model retry?",
+      "a": "Retry in your own code (with backoff) when the *same* inputs might work next time — like a flaky network or a brief timeout. Surface the error to the model when a retry needs *different* inputs — a corrected argument, a different tool, or input from the user. The model should only manage retries it can actually influence."
+    },
+    {
+      "q": "How should I phrase a tool error message for an LLM?",
+      "a": "Be specific about the cause, state the fix or next step, and signal retryability in plain words. \"Invalid date '13/40'. Use YYYY-MM-DD.\" lets the model self-correct; \"Order not found. Do not retry; confirm the ID with the user.\" tells it to stop. Keep it to one or two sentences and never dump raw stack traces or secrets."
+    },
+    {
+      "q": "What happens if some tool calls succeed and others fail in the same turn?",
+      "a": "Return all of them in the next message, each matched to its own `tool_use_id` — successful ones as normal results and failed ones flagged with `is_error`. Don't drop the failures or abort the whole batch; the model needs every requested tool's result to continue, and a missing one will break the turn."
+    }
+  ],
+  "related": [
+    "what-is-function-calling",
+    "tool-calling-best-practices",
+    "defining-function-schemas",
+    "llm-api-errors",
+    "multi-turn-conversations"
+  ],
+  "furtherReading": [
+    {
+      "title": "Tool use (function calling) — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview"
+    },
+    {
+      "title": "Handling stop reasons — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons"
+    },
+    {
+      "title": "Function calling — OpenAI API docs",
+      "url": "https://platform.openai.com/docs/guides/function-calling"
+    }
+  ]
+}

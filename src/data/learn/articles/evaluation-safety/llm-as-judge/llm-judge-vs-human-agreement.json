@@ -1,0 +1,358 @@
+{
+  "slug": "llm-judge-vs-human-agreement",
+  "title": "Judge-Human Agreement: Measuring If Your LLM Judge Is Trustworthy",
+  "shortTitle": "Judge vs Human Agreement",
+  "seoTitle": "Judge-Human Agreement: Measuring If Your LLM Judge Is Trustworthy",
+  "metaDescription": "Before you trust an LLM judge, measure how often it agrees with humans. Learn agreement metrics like Cohen's kappa and what counts as 'good enough'.",
+  "keywords": [
+    "judge human agreement",
+    "cohen's kappa llm judge",
+    "inter-rater agreement evaluation",
+    "validate llm judge metric",
+    "judge reliability"
+  ],
+  "difficulty": "advanced",
+  "oneLiner": "You'll understand how to quantify whether an LLM judge agrees with human graders, and what agreement scores are acceptable.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "An [LLM judge](/learn/evaluation-safety/llm-as-judge/llm-as-a-judge-explained) is a language model you ask to grade other model outputs — *is this answer correct?*, *which of these two replies is better?*, *does this response follow the rubric?* It is fast and cheap, so you can run it on thousands of examples. But there is one nagging question you can never skip: **can you actually trust its verdicts?**"
+        },
+        {
+          "type": "p",
+          "md": "The honest way to answer that is to compare the judge against the thing it is standing in for — human graders. You collect a set of examples that real people have already scored, run your judge on the same examples, and count how often the two agree. That single comparison is **judge-human agreement**. It turns a vague feeling (\"the judge seems reasonable\") into a number you can defend."
+        },
+        {
+          "type": "p",
+          "md": "Here is the everyday analogy. Imagine you hire an automated essay grader and want to know if it is any good. You don't just read three of its grades and nod. You take a stack of essays an experienced teacher already marked, feed the same stack to the machine, and line up the two columns of grades. If the machine matches the teacher on 9 essays out of 10, you start to trust it. If it matches on 5 out of 10 — no better than a coin flip — you throw it out. Measuring judge-human agreement is exactly that side-by-side comparison, made rigorous."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This article is about the **metric** — how to express agreement as a trustworthy number. The companion topic, calibrating a judge, is about the **process** of fixing a judge when that number is too low. Measure first; calibrate second."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A judge you haven't validated is a measuring stick of unknown length. Every benchmark, A/B test, and \"model B is 4% better\" claim you build on top of it inherits its errors silently. If the judge is biased toward longer answers, your whole leaderboard quietly rewards verbosity. If it is too lenient, you ship regressions thinking you improved. Agreement is the audit that catches this before it poisons every downstream decision."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**It tells you whether to trust the judge at all.** Below a certain agreement level, the judge is adding noise, not signal — you are better off with humans or a simpler [code-based check](/learn/evaluation-safety/evaluation-basics/code-vs-model-graded-evals).",
+            "**It lets you compare judge setups objectively.** A new prompt, a stronger model, a different rubric — each is a candidate judge. Agreement is the score that decides which one to keep, the same way you would compare any two systems.",
+            "**It exposes which tasks the judge can and can't handle.** A judge might hit 90% agreement on \"is this factually correct?\" but only 60% on \"is this tactful?\". Measuring per-task tells you where the judge is safe and where a human still has to sit in.",
+            "**It sets honest expectations.** Even two careful humans don't agree perfectly. Knowing the human-human ceiling stops you from chasing an impossible 100% and from blaming the judge for genuine ambiguity in the task."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "This is the same discipline as the rest of [LLM evaluation](/learn/evaluation-safety/evaluation-basics/what-are-llm-evals): you don't ship a metric you haven't checked against ground truth. The difference is that here the \"system under test\" is the grader itself."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How agreement is measured",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The recipe is short. You need a [golden set](/learn/evaluation-safety/evaluation-basics/golden-dataset-llm-testing) of examples with **trusted human labels**, you run the judge on those same examples, and then you compute one or more agreement statistics over the two columns of labels."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Validating a judge against humans",
+            "steps": [
+              {
+                "label": "Sample examples",
+                "sub": "representative slice"
+              },
+              {
+                "label": "Human labels",
+                "sub": "the ground truth"
+              },
+              {
+                "label": "Run the judge",
+                "sub": "same examples"
+              },
+              {
+                "label": "Align the two columns",
+                "sub": "judge vs human"
+              },
+              {
+                "label": "Agreement score",
+                "sub": "kappa, %, correlation",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Raw agreement: the obvious number"
+        },
+        {
+          "type": "p",
+          "md": "The simplest metric is **raw (or percent) agreement**: out of N examples, on how many did the judge and the human give the same verdict? If they match on 85 of 100, raw agreement is 85%. It is easy to compute and easy to explain — and on its own it is *dangerously* misleading, for a reason we get to in a moment."
+        },
+        {
+          "type": "h3",
+          "text": "Cohen's kappa: agreement beyond chance"
+        },
+        {
+          "type": "p",
+          "md": "**Cohen's kappa** (the Greek letter κ) is the standard fix. It asks: how much better than *random guessing* do the two graders agree? Suppose 90% of your examples are \"pass\". A judge that blindly stamps \"pass\" on everything will agree with the human 90% of the time — while knowing nothing. Kappa subtracts out that chance agreement so a lazy judge scores near zero."
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "title": "the kappa formula in words",
+          "code": "kappa = (observed agreement  -  agreement expected by chance)\n        ---------------------------------------------------\n        (        1            -  agreement expected by chance)\n\nkappa =  1.0  perfect agreement\nkappa =  0.0  no better than chance\nkappa <  0.0  worse than chance (systematic disagreement)"
+        },
+        {
+          "type": "p",
+          "md": "You almost never compute kappa by hand. A few lines with `scikit-learn` give you both the raw and the chance-corrected number, which is exactly the pair you want to report together."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "raw agreement vs Cohen's kappa",
+          "code": "from sklearn.metrics import cohen_kappa_score, accuracy_score\n\n# Aligned, same order: each example graded by a human and the judge.\nhuman = [\"pass\", \"pass\", \"fail\", \"pass\", \"pass\", \"fail\", \"pass\", \"pass\"]\njudge = [\"pass\", \"pass\", \"pass\", \"pass\", \"pass\", \"fail\", \"pass\", \"pass\"]\n\nraw   = accuracy_score(human, judge)      # fraction that match\nkappa = cohen_kappa_score(human, judge)   # chance-corrected\n\nprint(f\"raw agreement: {raw:.0%}\")        # 88%\nprint(f\"Cohen's kappa: {kappa:.2f}\")      # ~0.62 — much less rosy\n\n# Same 88% raw agreement, but kappa is lower because most labels\n# are \"pass\": agreeing on the easy majority is cheap.\n"
+        },
+        {
+          "type": "p",
+          "md": "Notice the gap. **88% raw agreement** sounds great; the **0.62 kappa** tells the sober truth that much of that 88% was free, because most answers were \"pass\" anyway. Reporting only the raw number is how teams convince themselves a weak judge is strong."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Pick the statistic that matches your judge's output. **Binary or category verdicts** (pass/fail, A/B/tie) → Cohen's kappa. **Ordinal scores** like a 1–5 rubric → weighted kappa or Spearman correlation, so being off by one point hurts less than being off by four. **More than two human graders** → Krippendorff's alpha or Fleiss' kappa."
+        }
+      ]
+    },
+    {
+      "id": "why-raw-agreement-lies",
+      "title": "Why raw agreement lies on imbalanced data",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "This is the single most important idea in the article, so it gets its own section. Raw agreement is inflated by **class imbalance** — when one label dominates your dataset. The more lopsided the labels, the more meaningless a high raw-agreement number becomes."
+        },
+        {
+          "type": "p",
+          "md": "Walk through a concrete case. You evaluate a support bot and 95% of its replies are actually \"good\". You build a judge that, by some bug, always answers \"good\" no matter what. It will agree with your human graders 95% of the time. By raw agreement it looks near-perfect. By kappa it scores **0.0**, because it has demonstrated zero ability to tell good from bad — it just rode the majority class."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Same 95% raw agreement, opposite verdicts",
+            "columns": [
+              {
+                "title": "Lazy judge (always \"good\")",
+                "items": [
+                  "Raw agreement: 95%",
+                  "Cohen's kappa: ~0.0",
+                  "Catches zero bad replies",
+                  "Useless, looks great"
+                ]
+              },
+              {
+                "title": "Real judge",
+                "accent": true,
+                "items": [
+                  "Raw agreement: 95%",
+                  "Cohen's kappa: ~0.70",
+                  "Catches most bad replies",
+                  "Trustworthy"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Two judges, the *same* raw agreement, wildly different worth. Kappa is what separates them. The practical rule: whenever your labels are imbalanced — and in real eval sets they almost always are, because most outputs pass — **never report raw agreement without a chance-corrected number beside it.**"
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "A judge can also score a misleadingly *low* kappa if your sample has almost no examples of the rare class. If only 2 of 200 examples are \"fail\", a single disagreement on them swings kappa hard. Make sure your validation sample contains enough of every class to measure — oversample the rare cases on purpose if you must."
+        }
+      ]
+    },
+    {
+      "id": "what-counts-as-good-enough",
+      "title": "What counts as 'good enough'",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "There is no universal pass mark, but the research literature uses a widely-cited rough scale for kappa. Treat these as **soft guidance, not law** — what's acceptable depends on how costly a wrong verdict is in your application."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Cohen's kappa",
+            "Common interpretation",
+            "What to do"
+          ],
+          "rows": [
+            [
+              "below 0.20",
+              "Slight / poor",
+              "Don't trust the judge — fix the prompt, rubric, or use humans"
+            ],
+            [
+              "0.20 – 0.40",
+              "Fair",
+              "Usable only for rough, low-stakes signal; keep humans in the loop"
+            ],
+            [
+              "0.40 – 0.60",
+              "Moderate",
+              "Okay for many internal evals; spot-check disagreements"
+            ],
+            [
+              "0.60 – 0.80",
+              "Substantial",
+              "Good — typical target for a production judge"
+            ],
+            [
+              "0.80 – 1.00",
+              "Almost perfect",
+              "Excellent; verify it isn't overfit to your test set"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "A common, defensible target for a production judge is **kappa ≥ 0.6 to 0.8** on the task it will grade. But the number that matters even more is the next one."
+        },
+        {
+          "type": "h3",
+          "text": "The human ceiling: you can't beat people who disagree with each other"
+        },
+        {
+          "type": "p",
+          "md": "Here is the humbling part. Humans don't agree with *each other* perfectly either. On a clear-cut task like \"is this email spam?\", two careful graders might hit 0.9 kappa. On a fuzzy, subjective one like \"is this answer *tactful*?\", two reasonable humans might only reach 0.5 — because the task genuinely is ambiguous."
+        },
+        {
+          "type": "p",
+          "md": "That **human-human agreement is your ceiling.** If two of your own annotators only agree at kappa 0.55, it is unfair — and impossible — to demand 0.85 from your judge. The right framing is *relative*: a judge that agrees with humans about as well as humans agree with each other is effectively as good as a human grader for that task. So always measure human-human agreement first, then judge your judge against that bar, not against a fantasy of 1.0."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "stack",
+            "title": "Read agreement bottom-up",
+            "layers": [
+              {
+                "label": "Judge vs human ≈ human vs human",
+                "sub": "judge is as good as a person — ship it",
+                "accent": true
+              },
+              {
+                "label": "Human vs human agreement",
+                "sub": "the realistic ceiling for this task"
+              },
+              {
+                "label": "Chance agreement",
+                "sub": "what kappa subtracts away (κ = 0)"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic kappa-against-humans check is in place, a few subtleties separate a careful evaluation from a naive one."
+        },
+        {
+          "type": "p",
+          "md": "**Measure per task and per slice, not just overall.** A single global kappa hides everything. A judge can be excellent at grading factual accuracy and useless at grading tone, or strong on English and weak on code. Break agreement down by task type, difficulty, and answer length, and you'll find the pockets where the judge fails — which is also where its [biases](/learn/evaluation-safety/llm-as-judge/llm-judge-biases) and other [pitfalls](/learn/evaluation-safety/llm-as-judge/llm-judge-pitfalls) hide."
+        },
+        {
+          "type": "p",
+          "md": "**Pairwise judging needs its own treatment.** If your judge does [pairwise comparison](/learn/evaluation-safety/llm-as-judge/pairwise-vs-rubric-judging) (\"which answer is better, A or B?\"), agreement means *do the judge and human pick the same winner?* — with a third \"tie\" category. Watch out for position bias: a judge that favors whichever answer it sees first will look agreeable only because your humans happened to see the same order. Always swap A and B and check the verdict is stable before you trust the agreement number."
+        },
+        {
+          "type": "p",
+          "md": "**Don't average away disagreement — read it.** The examples where judge and human split are the most informative rows in your whole dataset. Often they reveal a vague rubric (the humans disagree there too), a genuine judge blind spot, or a mislabeled golden example. Triaging disagreements by hand is the fastest way to improve both the judge and your ground truth."
+        },
+        {
+          "type": "p",
+          "md": "**Beware overfitting your judge to the validation set.** If you tweak the judge's prompt over and over until kappa on one fixed set looks great, you have tuned to that set, not to the task. Hold out a fresh, unseen set of human-labeled examples for the final agreement number, exactly as you would for any model — see [building an eval suite](/learn/evaluation-safety/evaluation-basics/how-to-build-eval-suite)."
+        },
+        {
+          "type": "p",
+          "md": "**Agreement isn't the only lens.** When verdicts are scores rather than categories, correlation (Spearman or Pearson) tells you whether the judge *ranks* outputs like a human even if its absolute numbers drift. Confusion matrices show *which* mistakes the judge makes (too lenient? too harsh?). And for large public leaderboards, aggregated human preference like [Chatbot Arena](/learn/evaluation-safety/benchmarks-leaderboards/chatbot-arena-explained) is the gold-standard human signal that automated judges are ultimately validated against. The throughline across all of it: an LLM judge is only worth what its agreement with people says it is, so measure that number before you build anything on top of it."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is a good Cohen's kappa for an LLM judge?",
+      "a": "A common production target is kappa between 0.6 and 0.8 (\"substantial\" agreement) on the task the judge grades. But the more important comparison is against human-human agreement on the same task: if your own annotators only reach 0.6, a judge that also reaches ~0.6 is effectively as reliable as a person."
+    },
+    {
+      "q": "Why not just use raw percent agreement?",
+      "a": "Because it is inflated by class imbalance. If 95% of answers are \"good\", a judge that always says \"good\" hits 95% raw agreement while detecting nothing. Cohen's kappa subtracts out that chance agreement, so a lazy judge scores near 0. Always report a chance-corrected number alongside the raw percentage."
+    },
+    {
+      "q": "How many human-labeled examples do I need to validate a judge?",
+      "a": "Enough to estimate agreement stably and to contain a meaningful number of every class, including the rare one. A few hundred examples is a typical starting point for a binary task; very imbalanced tasks need more, or deliberate oversampling of the rare class, so a single disagreement doesn't swing the score."
+    },
+    {
+      "q": "What if my human graders disagree with each other?",
+      "a": "That is normal and important — it sets the ceiling. Measure human-human agreement first (Cohen's kappa for two graders, Fleiss' kappa or Krippendorff's alpha for more). Your judge can't be expected to beat that ceiling; aim for it to match human-human agreement, not to reach a perfect 1.0."
+    },
+    {
+      "q": "Which agreement metric should I use for 1–5 rubric scores?",
+      "a": "Use weighted Cohen's kappa or a rank correlation like Spearman, not plain kappa. These treat being off by one point as a smaller error than being off by four, which matches how ordinal scores actually work. Plain (unweighted) kappa treats every disagreement as equally wrong, which is too harsh for graded scales."
+    },
+    {
+      "q": "Does high judge-human agreement mean the judge has no bias?",
+      "a": "No. Overall agreement can hide biases that show up only in specific slices — favoring longer answers, the first option in a pairwise test, or a particular style. Break agreement down by task, answer length, and position, and inspect the disagreements, to surface biases a single global number conceals."
+    }
+  ],
+  "related": [
+    "llm-as-a-judge-explained",
+    "llm-judge-pitfalls",
+    "llm-judge-biases",
+    "pairwise-vs-rubric-judging",
+    "llm-eval-metrics-explained",
+    "golden-dataset-llm-testing"
+  ],
+  "furtherReading": [
+    {
+      "title": "cohen_kappa_score — scikit-learn documentation",
+      "url": "https://scikit-learn.org/stable/modules/generated/sklearn.metrics.cohen_kappa_score.html"
+    },
+    {
+      "title": "Cohen's kappa — Wikipedia",
+      "url": "https://en.wikipedia.org/wiki/Cohen%27s_kappa"
+    },
+    {
+      "title": "Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena (arXiv)",
+      "url": "https://arxiv.org/abs/2306.05685"
+    }
+  ]
+}

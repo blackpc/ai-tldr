@@ -1,0 +1,341 @@
+{
+  "slug": "lora-target-modules",
+  "title": "Which Layers Should LoRA Target? Picking Target Modules",
+  "shortTitle": "LoRA Target Modules",
+  "seoTitle": "LoRA Target Modules: Which Layers to Adapt",
+  "metaDescription": "LoRA only adapts the layers you point it at. Learn what target modules are, why attention vs MLP layers matter, and the safe defaults for most models.",
+  "keywords": [
+    "lora target modules explained",
+    "which layers to apply lora",
+    "lora attention vs mlp layers",
+    "lora target modules default",
+    "q_proj v_proj lora",
+    "all linear layers lora"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn what LoRA's target_modules setting actually controls and how choosing attention-only versus all-linear layers trades quality against training cost.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "[LoRA](/learn/fine-tuning/lora-and-peft/what-is-lora) (low-rank adaptation) fine-tunes a giant model by freezing its original weights and training a tiny pair of extra matrices alongside them. But here's the part most tutorials skip over: LoRA does not get applied to the *whole* model. It only attaches its little trainable adapters to the specific layers you point it at. That setting is called **target modules** — in code, the `target_modules` argument."
+        },
+        {
+          "type": "p",
+          "md": "Think of a transformer as a long building with dozens of identical floors, and each floor has a handful of named rooms — the *query* room, the *key* room, the *value* room, the *output* room, and a couple of big *MLP* rooms. LoRA is like hiring a renovation crew that can only work in the rooms you list on the work order. List two rooms per floor and the job is cheap and fast. List every room and you get a deeper renovation, but it costs more time and memory. The rooms you *don't* list stay exactly as they were."
+        },
+        {
+          "type": "p",
+          "md": "So `target_modules` is the work order. It answers a single question: *which of the model's linear layers get a LoRA adapter, and which are left untouched?* Beginners usually copy a default list from a blog post without knowing what it controls — which is exactly the knob this article opens up."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "\"Module\" is just PyTorch's word for a named sub-layer of the network. LoRA can only target **linear** modules (also called projection or `Linear` layers) — the matrix-multiply layers. It cannot adapt things like layer-norm or embeddings through the normal `target_modules` path."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Target modules is the quiet knob that decides three things at once: how much memory training takes, how many parameters you train, and — crucially — *what the adapter is even capable of learning*. Two people can run \"the same\" LoRA fine-tune on the same data and get very different results purely because one targeted attention layers only and the other targeted everything."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**It sets the parameter budget.** Every module you add multiplies the number of trainable adapter weights. Attention-only might train ~0.1% of the model; all-linear-layers can be several times that. More trainable parameters means more GPU memory for optimizer states and gradients.",
+            "**It bounds what can be learned.** An adapter can only reshape the layers it's attached to. If a task needs the model to store or recall *new facts*, the MLP layers matter a lot — and skipping them leaves quality on the table no matter how high you set the [rank](/learn/fine-tuning/lora-and-peft/lora-rank-and-alpha).",
+            "**It's a silent failure mode.** If you fat-finger a module name, PEFT may attach *zero* adapters and happily train nothing, or attach far fewer than you expected. The run completes, the loss barely moves, and nothing errors out. Knowing the right names saves hours of confusion."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "This is distinct from rank and alpha. Rank controls how *expressive* each adapter is; target modules control *how many* adapters there are and *where* they sit. You tune them together, but they answer different questions — and getting target modules wrong can't be rescued by cranking rank."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Inside one transformer block there are two big sub-blocks: **self-attention** and the **MLP** (also called the feed-forward network). Each is built from named linear projections, and those names are what you put in `target_modules`. The exact strings vary by model family, but the Llama-style naming is the one you'll see most often:"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Module name",
+            "Sub-block",
+            "What it does"
+          ],
+          "rows": [
+            [
+              "`q_proj`",
+              "Attention",
+              "Builds the **query** — what each token is looking for"
+            ],
+            [
+              "`k_proj`",
+              "Attention",
+              "Builds the **key** — how each token advertises itself"
+            ],
+            [
+              "`v_proj`",
+              "Attention",
+              "Builds the **value** — the content a token passes along"
+            ],
+            [
+              "`o_proj`",
+              "Attention",
+              "Mixes the attention output back into the stream"
+            ],
+            [
+              "`gate_proj`",
+              "MLP",
+              "Gates which features the feed-forward layer amplifies"
+            ],
+            [
+              "`up_proj`",
+              "MLP",
+              "Projects up into the wide hidden dimension"
+            ],
+            [
+              "`down_proj`",
+              "MLP",
+              "Projects back down to the model dimension"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "LoRA wraps each targeted module: the frozen original weight `W` stays put, and a trainable low-rank pair `B·A` is added in parallel. At every targeted layer the output becomes `W·x + (B·A)·x`. Modules you don't target keep just `W·x` — no adapter, nothing to train."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "One transformer block — pick which projections get an adapter",
+            "root": {
+              "label": "Transformer block",
+              "sub": "repeated N times"
+            },
+            "children": [
+              {
+                "label": "q_proj",
+                "sub": "attention",
+                "accent": true
+              },
+              {
+                "label": "k_proj",
+                "sub": "attention"
+              },
+              {
+                "label": "v_proj",
+                "sub": "attention",
+                "accent": true
+              },
+              {
+                "label": "o_proj",
+                "sub": "attention"
+              },
+              {
+                "label": "gate_proj",
+                "sub": "MLP"
+              },
+              {
+                "label": "up_proj",
+                "sub": "MLP"
+              },
+              {
+                "label": "down_proj",
+                "sub": "MLP"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The historical default, going back to the original LoRA paper, was to target **only `q_proj` and `v_proj`** — the query and value projections. The authors found that adapting just those two gave most of the benefit for the least cost on the tasks they tested. For years, copy-pasted configs carried that default forward (the accent boxes above)."
+        },
+        {
+          "type": "p",
+          "md": "The now-common practice is the opposite: target **all linear layers**, attention *and* MLP. The QLoRA work popularized this — applying LoRA to every linear projection closed the gap with full fine-tuning more reliably than the query/value-only recipe. Modern tooling even gives you a shortcut for it:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "two ends of the spectrum in PEFT",
+          "code": "from peft import LoraConfig\n\n# Historical default: attention query + value only. Cheapest.\ncfg_minimal = LoraConfig(\n    r=8, lora_alpha=16,\n    target_modules=[\"q_proj\", \"v_proj\"],\n)\n\n# Common modern recipe: every attention + MLP projection.\ncfg_all = LoraConfig(\n    r=8, lora_alpha=16,\n    target_modules=[\n        \"q_proj\", \"k_proj\", \"v_proj\", \"o_proj\",\n        \"gate_proj\", \"up_proj\", \"down_proj\",\n    ],\n)\n\n# Shortcut: let PEFT find every Linear layer for you.\ncfg_auto = LoraConfig(r=8, lora_alpha=16, target_modules=\"all-linear\")"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "`target_modules=\"all-linear\"` tells PEFT to discover and adapt every eligible `Linear` layer automatically, so you don't have to know the exact names for each architecture. It's the safest starting point when you're unsure."
+        }
+      ]
+    },
+    {
+      "id": "attention-vs-mlp",
+      "title": "Attention vs. MLP: what each one buys you",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The single most useful mental model: **attention layers move information around; MLP layers store and transform it.** That split is why your choice of target modules changes *what the adapter can learn*, not just how big it is."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "What targeting each group tends to help with",
+            "columns": [
+              {
+                "title": "Attention (q/k/v/o)",
+                "accent": true,
+                "items": [
+                  "Adjusts what tokens attend to",
+                  "Good for style, format, routing of focus",
+                  "Cheapest — fewest, smaller matrices",
+                  "The original q_proj/v_proj default lives here"
+                ]
+              },
+              {
+                "title": "MLP (gate/up/down)",
+                "items": [
+                  "Where most knowledge is thought to live",
+                  "Helps the model absorb new facts/behaviors",
+                  "The biggest matrices — most of the params",
+                  "Skipping these often caps task quality"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "A rough rule of thumb: if your fine-tune is about *behavior, tone, or following a format*, attention-heavy targeting may be enough. If it's about *teaching the model new domain content or knowledge*, you almost certainly want the MLP layers in the list too — that's where research suggests most factual capacity sits. When in doubt, target all linear layers; it's the more robust default and the cost is usually worth it."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "More target modules is not free. Adding the three MLP projections roughly triples the trainable parameters versus query/value-only, because those matrices are the largest in the block. That's more GPU memory and a slightly slower step — the central trade-off of this knob."
+        }
+      ]
+    },
+    {
+      "id": "finding-the-right-names",
+      "title": "Finding the right module names",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The names `q_proj`, `gate_proj`, and so on are **Llama/Mistral conventions, not universal**. GPT-2-style models name their packed attention projection `c_attn`; some architectures fuse query/key/value into a single `qkv_proj`; others use `query`, `key`, `value`. If you target a name the model doesn't have, PEFT attaches no adapter there — silently."
+        },
+        {
+          "type": "p",
+          "md": "Never guess. Print the model and read the actual module names before you write your config:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "inspect a model's linear layers",
+          "code": "import torch\nfrom transformers import AutoModelForCausalLM\n\nmodel = AutoModelForCausalLM.from_pretrained(\"your/model-id\")\n\n# List every Linear module's name — these are valid target_modules.\nfor name, module in model.named_modules():\n    if isinstance(module, torch.nn.Linear):\n        print(name)\n# e.g. model.layers.0.self_attn.q_proj\n#      model.layers.0.mlp.gate_proj\n# PEFT matches on the suffix, so \"q_proj\" hits all layers at once."
+        },
+        {
+          "type": "p",
+          "md": "PEFT matches each entry against the *end* of every module's full name, so a single short string like `q_proj` applies the adapter to that projection in **every** transformer block at once. After building your adapted model, always sanity-check that you trained what you intended:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "verify the adapter actually attached",
+          "code": "from peft import get_peft_model\n\npeft_model = get_peft_model(model, cfg_all)\n\n# Prints trainable params and the % of the model they represent.\n# If this is ~0% or far lower than expected, your names are wrong.\npeft_model.print_trainable_parameters()"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "If `print_trainable_parameters()` reports a suspiciously tiny percentage (or zero), your `target_modules` names almost certainly don't match the architecture. This one line catches the most common LoRA configuration mistake."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics click, a few finer points separate a working config from a well-tuned one."
+        },
+        {
+          "type": "p",
+          "md": "**Target modules and rank interact.** Spreading the same parameter budget across more modules at low rank often beats piling rank onto just two modules. If you switch from query/value-only to all-linear, you can usually *lower* the [rank](/learn/fine-tuning/lora-and-peft/lora-rank-and-alpha) and keep a similar total parameter count. They're separate knobs, but you tune them as a pair."
+        },
+        {
+          "type": "p",
+          "md": "**QLoRA changes the calculus, not the choice.** With [QLoRA](/learn/fine-tuning/lora-and-peft/what-is-qlora) the base model is quantized to 4-bit, which slashes its memory footprint — and the adapters stay in higher precision. Because the frozen weights cost so little now, targeting all linear layers is cheap enough that it became the standard QLoRA recipe. The module choice is the same; the memory headroom is different."
+        },
+        {
+          "type": "p",
+          "md": "**Some layers are usually left out on purpose.** The output/`lm_head` and token-embedding layers are typically *not* LoRA-targeted by default. Adapting them can help in narrow cases (for example, teaching a model new tokens), but it adds a lot of parameters and risks destabilizing training, so it's an advanced, deliberate move — not part of `all-linear`."
+        },
+        {
+          "type": "p",
+          "md": "**It's an empirical decision, so evaluate.** There is no module list that's optimal for every task. The honest workflow is to start from a sensible default (all-linear, or query/value-only if you're memory-bound), then [evaluate the fine-tuned model](/learn/fine-tuning/fine-tuning-basics/evaluate-fine-tuned-model) on a held-out set and compare. Treat target modules as something you *test*, not something you copy and trust. For the bigger picture of how LoRA fits among other approaches, see [full fine-tuning vs. PEFT](/learn/fine-tuning/fine-tuning-basics/full-fine-tuning-vs-peft)."
+        },
+        {
+          "type": "p",
+          "md": "The durable lesson: `target_modules` is not boilerplate. It's the line that decides which parts of the model your adapter can reshape — and for any fine-tune that needs to learn real content, leaving the MLP layers out is the most common way to quietly leave quality on the table."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What are target modules in LoRA?",
+      "a": "Target modules are the specific linear layers in a model that LoRA attaches its trainable adapters to. LoRA does not modify the whole network — only the modules you list in the `target_modules` setting get an adapter, and everything else stays frozen. Common choices are the attention projections (`q_proj`, `k_proj`, `v_proj`, `o_proj`) and the MLP projections (`gate_proj`, `up_proj`, `down_proj`)."
+    },
+    {
+      "q": "Which layers should I apply LoRA to?",
+      "a": "A robust default is to target all linear layers — both attention and MLP — which you can do with `target_modules=\"all-linear\"` in PEFT. The older, cheaper default was query and value only (`q_proj`, `v_proj`). Use the minimal set if you're memory-constrained or only changing style/format; use all-linear when the model needs to learn new domain content."
+    },
+    {
+      "q": "What's the difference between q_proj and v_proj LoRA and all-linear-layers LoRA?",
+      "a": "`q_proj`/`v_proj` only adapts two attention projections per block, which is the cheapest setup and was the original LoRA paper's default. All-linear-layers adds the key, output, and MLP projections too, training several times more parameters. All-linear is more expensive but usually matches full fine-tuning more closely, especially when the task requires absorbing new knowledge."
+    },
+    {
+      "q": "Do attention or MLP layers matter more for LoRA?",
+      "a": "They do different jobs. Attention layers control what tokens focus on — useful for style, format, and behavior. MLP layers are where most of the model's stored knowledge lives, so they matter most when you're teaching new facts or domain content. Skipping the MLP layers often caps task quality no matter how high you set the rank."
+    },
+    {
+      "q": "How do I find the right target_modules names for my model?",
+      "a": "Don't guess — the names depend on the architecture (Llama uses `q_proj`, GPT-2 uses `c_attn`, others fuse them into `qkv_proj`). Load the model and iterate over its modules, printing the name of every `torch.nn.Linear`. Then after building the PEFT model, call `print_trainable_parameters()` to confirm the adapters actually attached and the trainable percentage looks right."
+    }
+  ],
+  "related": [
+    "what-is-lora",
+    "lora-rank-and-alpha",
+    "what-is-qlora",
+    "full-fine-tuning-vs-peft",
+    "evaluate-fine-tuned-model"
+  ],
+  "furtherReading": [
+    {
+      "title": "LoRA: Low-Rank Adaptation of Large Language Models (arXiv)",
+      "url": "https://arxiv.org/abs/2106.09685"
+    },
+    {
+      "title": "LoRA — Hugging Face PEFT docs",
+      "url": "https://huggingface.co/docs/peft/main/en/conceptual_guides/lora"
+    },
+    {
+      "title": "QLoRA: Efficient Finetuning of Quantized LLMs (arXiv)",
+      "url": "https://arxiv.org/abs/2305.14314"
+    }
+  ]
+}

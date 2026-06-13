@@ -1,0 +1,335 @@
+{
+  "slug": "parse-streaming-responses",
+  "title": "How to Parse a Streaming LLM Response: Events, Deltas, and Reassembly",
+  "shortTitle": "Parsing Stream Events",
+  "seoTitle": "How to Parse a Streaming LLM Response: Deltas & Events",
+  "metaDescription": "A stream arrives as event chunks, not finished text. Learn the event types, how to reassemble deltas into a full message, and how to read the final usage.",
+  "keywords": [
+    "parse streaming llm response",
+    "sse delta chunks llm",
+    "reassemble streamed tokens",
+    "message_delta content_block_delta",
+    "read usage from streamed response"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn the actual event shapes a stream emits and how to accumulate deltas into a complete message, capture the stop reason, and read final token usage.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you call an LLM normally, you wait for the whole answer, then read it. **Streaming** flips that: the model sends its answer in many small pieces as it writes them, so you can show text the instant it appears. That's why a chat UI types out a reply word by word instead of freezing for ten seconds. If the idea of streaming itself is new to you, start with [What is LLM streaming](/learn/llm-apis/streaming-structured-outputs/llm-streaming-explained) — this article is the next step: how to actually *read* the pieces."
+        },
+        {
+          "type": "p",
+          "md": "Here's the catch the intro glosses over. A stream is **not** a series of bigger-and-bigger versions of the final text. It's a sequence of typed **events**, and most of them carry a tiny fragment called a **delta** — the new characters since the last event. The full message only exists once *you* glue the deltas back together in order. The provider hands you a flipbook, one frame at a time; the finished picture is something you assemble."
+        },
+        {
+          "type": "p",
+          "md": "Think of a sports commentator on the radio. They don't read you the final match report — they narrate as it happens: *\"the match has started\"* (an opening event), then *\"...he passes... to the winger... who shoots...\"* (a run of small updates), then *\"and that's full time, final score two-one\"* (a closing event with the totals). You, the listener, hold the running picture in your head. Parsing a stream is exactly that job: catch each fragment, append it in the right place, and watch for the bookend events that tell you a section started, a section ended, and the whole thing is done."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Most providers stream over **Server-Sent Events (SSE)** — a long-lived HTTP response where each chunk is a line like `event: <type>` followed by `data: <json>`. The official SDKs parse that wire format for you and hand back already-decoded event objects, which is what you'll use 95% of the time."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "If you only ever call the non-streaming endpoint, you never touch any of this — you get one finished object and read `.content`. So why learn the event-by-event mechanics at all? Because the moment your output is more than a sentence or two, streaming stops being optional, and once you stream, you own the reassembly."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Perceived speed.** A user staring at a blank screen for eight seconds feels slow; the same eight seconds feels fast if words start appearing in 300ms. Streaming doesn't make the model faster — it makes the *wait* visible and tolerable.",
+            "**Avoiding timeouts on long outputs.** Big responses (long reports, large code files, high `max_tokens`) can take longer than a single HTTP request is allowed to stay open. Streaming keeps bytes flowing the whole time, so the connection never looks idle and times out. For large `max_tokens` this isn't a nicety — it's the only reliable way to get the response.",
+            "**Reacting before the model finishes.** Want to stop generation the instant the model emits a stop phrase, update a progress bar, or start running a tool the moment its arguments are complete? You can only do that if you're reading the stream as it arrives.",
+            "**Capturing the metadata correctly.** Token usage and the `stop_reason` (why the model stopped) don't arrive in the deltas — they live on specific framing events. If you reassemble text but ignore those, you lose your cost accounting and your ability to tell *\"finished normally\"* from *\"got cut off at the token limit.\"*"
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The failure mode for a builder who skips the details is subtle: the demo works (you concatenate text deltas, it looks fine), then production breaks. A tool call's arguments arrive as fragments and you `JSON.parse` a half-written string. A response hits `max_tokens` and you treat the truncated text as complete. Usage reads as zero because you looked at the wrong event. Understanding the event lifecycle is what turns *\"it worked on my screen\"* into *\"it works.\"*"
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every stream follows the same shape: a message opens, one or more **content blocks** are streamed (each block opens, fills with deltas, and closes), then the message closes with final metadata. Content blocks are the key idea — a single reply can contain several (a thinking block, then a text block, then a tool-call block), and each one is streamed independently with its own `index`."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "The event lifecycle of one streamed message",
+            "steps": [
+              {
+                "label": "message_start",
+                "sub": "empty message + usage seed"
+              },
+              {
+                "label": "content_block_start",
+                "sub": "a block opens (index N)"
+              },
+              {
+                "label": "content_block_delta",
+                "sub": "fragments, repeated",
+                "accent": true
+              },
+              {
+                "label": "content_block_stop",
+                "sub": "that block is done"
+              },
+              {
+                "label": "message_delta",
+                "sub": "stop_reason + final usage"
+              },
+              {
+                "label": "message_stop",
+                "sub": "stream ends"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "The event types, and what each one carries"
+        },
+        {
+          "type": "p",
+          "md": "These are the Anthropic Messages API event names; other providers use different labels but the same six roles. Learn the *roles* and you can read any provider's stream."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Event",
+            "Fires",
+            "What you do with it"
+          ],
+          "rows": [
+            [
+              "`message_start`",
+              "Once, first",
+              "Grab the message shell. Its `usage` already has `input_tokens`; `output_tokens` is still ~0 here."
+            ],
+            [
+              "`content_block_start`",
+              "Each block opens",
+              "Note the block's `index` and `type` (text, tool_use, thinking). Initialize a buffer for it."
+            ],
+            [
+              "`content_block_delta`",
+              "Many times",
+              "The workhorse. Append `delta.text` (text), or `delta.partial_json` (tool args), to the buffer for that `index`."
+            ],
+            [
+              "`content_block_stop`",
+              "Each block closes",
+              "That block's content is now complete. Safe to `JSON.parse` accumulated tool args here."
+            ],
+            [
+              "`message_delta`",
+              "Near the end",
+              "Carries the top-level `stop_reason` and the final cumulative `usage.output_tokens`."
+            ],
+            [
+              "`message_stop`",
+              "Once, last",
+              "The stream is over. Nothing more will arrive."
+            ]
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Reassembly: append by index, in arrival order"
+        },
+        {
+          "type": "p",
+          "md": "The whole job is: keep one buffer per block `index`, and on every `content_block_delta` append the fragment to the matching buffer. Text deltas are plain strings — concatenate them. Tool-call deltas are *partial JSON* strings — concatenate the fragments and only parse the result once the block stops. Never parse a tool call's arguments mid-stream; the JSON is incomplete until `content_block_stop`."
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "title": "what the deltas look like for a tool call (conceptual)",
+          "code": "content_block_start   {type: tool_use, name: get_weather, index: 0}\ncontent_block_delta   {partial_json: \"{\\\"ci\"}\ncontent_block_delta   {partial_json: \"ty\\\": \\\"Par\"}\ncontent_block_delta   {partial_json: \"is\\\"}\"}\ncontent_block_stop    -> now join: {\"city\": \"Paris\"}  ->  JSON.parse"
+        },
+        {
+          "type": "p",
+          "md": "Notice the JSON arrives split across fragments at arbitrary points — `{\"ci` ... `ty\": \"Par` ... `is\"}`. Any single fragment is unparseable on its own. This is the single most common streaming bug: calling the JSON parser on a delta instead of on the joined, completed string."
+        },
+        {
+          "type": "code",
+          "lang": "typescript",
+          "title": "raw event handling with the SDK stream",
+          "code": "const stream = client.messages.stream({\n  model: \"claude-opus-4-8\",\n  max_tokens: 1024,\n  messages: [{ role: \"user\", content: \"Weather in Paris?\" }],\n  tools: [getWeatherTool],\n});\n\nconst textByIndex: Record<number, string> = {};\nconst jsonByIndex: Record<number, string> = {};\nlet stopReason: string | null = null;\n\nfor await (const event of stream) {\n  switch (event.type) {\n    case \"content_block_start\":\n      textByIndex[event.index] = \"\";\n      jsonByIndex[event.index] = \"\";\n      break;\n    case \"content_block_delta\":\n      if (event.delta.type === \"text_delta\")\n        textByIndex[event.index] += event.delta.text;         // append text\n      else if (event.delta.type === \"input_json_delta\")\n        jsonByIndex[event.index] += event.delta.partial_json; // append tool args\n      break;\n    case \"content_block_stop\":\n      // tool args are complete now — safe to parse\n      if (jsonByIndex[event.index])\n        console.log(JSON.parse(jsonByIndex[event.index]));\n      break;\n    case \"message_delta\":\n      stopReason = event.delta.stop_reason;                    // why it stopped\n      break;\n  }\n}"
+        }
+      ]
+    },
+    {
+      "id": "where-usage-and-stop-reason-live",
+      "title": "Where usage and stop_reason live",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "This trips up almost everyone the first time. In a **non-streamed** call you get one object with `stop_reason` and a complete `usage` block sitting right there at the top level. In a **stream**, those same two values are split across the framing events — and `usage` is split across *two* events. Read the wrong one and you'll log zero tokens or a missing stop reason."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Same data, two delivery models",
+            "columns": [
+              {
+                "title": "Non-streamed call",
+                "accent": true,
+                "items": [
+                  "`response.stop_reason` — present immediately",
+                  "`response.usage.input_tokens` — present",
+                  "`response.usage.output_tokens` — present (final)",
+                  "Read `.content[0].text` for the answer",
+                  "Everything in one object"
+                ]
+              },
+              {
+                "title": "Streamed call",
+                "items": [
+                  "`stop_reason` arrives on `message_delta`",
+                  "`input_tokens` arrives on `message_start`",
+                  "`output_tokens` is final on `message_delta`",
+                  "Reassemble text from `content_block_delta`s",
+                  "Spread across framing events"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Input tokens** are known up front — the prompt is already counted — so they ride on `message_start`. At that point `output_tokens` is still near zero because nothing has been generated yet.",
+            "**Output tokens** keep growing as the model writes, so the final count lands on `message_delta` at the end. That same `message_delta` carries the top-level `stop_reason`.",
+            "**`stop_reason`** tells you *why* generation ended: `end_turn` (finished naturally), `max_tokens` (hit your limit — output is truncated, treat it as incomplete), `tool_use` (the model wants to call a tool), `stop_sequence` (hit a stop string), or `refusal`. Branch on this before trusting the reassembled text."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "If you don't actually need the individual events — you just want the finished message after streaming for the timeout protection — let the SDK do the reassembly. Run the loop (or skip iterating entirely) and call the final-message helper: it returns one complete object with `content`, `stop_reason`, and a fully-summed `usage`, exactly like a non-streamed response."
+        },
+        {
+          "type": "code",
+          "lang": "typescript",
+          "title": "let the helper reassemble everything for you",
+          "code": "const stream = client.messages.stream({\n  model: \"claude-opus-4-8\",\n  max_tokens: 4096,\n  messages: [{ role: \"user\", content: \"Write a short poem.\" }],\n});\n\n// (optionally iterate events here to render tokens live)\n\nconst message = await stream.finalMessage();\nconsole.log(message.content[0].text);      // full text, reassembled\nconsole.log(message.stop_reason);          // e.g. \"end_turn\"\nconsole.log(message.usage.output_tokens);  // final, summed"
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "**Parsing tool JSON mid-stream.** Each `input_json_delta` is a *fragment*. Calling `JSON.parse` on one (or on a half-built buffer) throws. Concatenate every `partial_json` for that block, then parse once at `content_block_stop`.",
+            "**Treating a `max_tokens` stop as a complete answer.** If `stop_reason` is `max_tokens`, the model was cut off. The text looks finished but isn't. Check the stop reason before using the result; raise `max_tokens` and retry if needed.",
+            "**Ignoring the block `index`.** A reply can interleave multiple content blocks. If you dump every text delta into one global string without keying by `index`, you'll merge a thinking block, a text block, and tool arguments into nonsense. Buffer per index.",
+            "**Reading `output_tokens` from `message_start`.** It's ~0 there. The real output count is on `message_delta` at the end (or summed for you by the final-message helper).",
+            "**Hand-rolling the SSE parser.** Splitting the raw byte stream on newlines, handling partial lines, decoding `data:` JSON, and re-joining multi-line events is fiddly and easy to get wrong. The official SDK already does it — iterate the SDK stream and switch on `event.type` instead.",
+            "**Forgetting errors can arrive mid-stream.** A connection can drop or the API can emit an error event after some text already streamed. Wrap the loop in error handling and decide what to do with the partial output you've collected so far."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic lifecycle clicks, a few more nuances separate a toy parser from a production one."
+        },
+        {
+          "type": "p",
+          "md": "**Streaming with tool use is a loop, not a single pass.** When a stream ends with `stop_reason: \"tool_use\"`, you've reassembled the tool name and its (now-complete) JSON arguments, but the turn isn't over. You execute the tool, append the result to the conversation, and stream *again*. The model's final answer comes in the next stream. So tool-call reassembly feeds an outer agentic loop — parse the arguments at `content_block_stop`, run the tool, send the result back, repeat until `stop_reason` is `end_turn`."
+        },
+        {
+          "type": "p",
+          "md": "**Thinking blocks stream too.** When [adaptive thinking](/learn/llm-apis/streaming-structured-outputs/llm-streaming-explained) is on, the model's reasoning arrives as its own content block before the answer block — with `thinking_delta` fragments instead of `text_delta`. Treat it like any other block (buffer by index), but render it differently in your UI (a collapsed \"thinking…\" panel) or not at all. The point is: don't assume every block is text. Switch on the block's `type`, and on the delta's `type`, so a thinking or tool block doesn't get mistaken for the answer."
+        },
+        {
+          "type": "p",
+          "md": "**Structured outputs and streaming coexist.** If you constrain the model to a JSON schema, the response still streams as `text_delta` fragments that happen to assemble into valid JSON. You can show progress, but you generally can't parse the JSON until the block completes — same rule as tool arguments. For when to use schema-constrained output, see [structured outputs explained](/learn/llm-apis/streaming-structured-outputs/structured-outputs-explained) and [JSON mode vs structured outputs](/learn/llm-apis/streaming-structured-outputs/json-mode-vs-structured-outputs)."
+        },
+        {
+          "type": "p",
+          "md": "**Backpressure and UI batching.** Tokens can arrive faster than a browser can repaint. Updating the DOM on every single delta causes jank. Buffer a few fragments (or update on a short timer) before re-rendering. On the server side, if you're relaying the stream to a client, make sure your framework flushes each chunk rather than buffering the whole response — otherwise you've reintroduced the very latency streaming was meant to remove."
+        },
+        {
+          "type": "p",
+          "md": "**Raw HTTP, when you have no SDK.** If you must consume the SSE wire format directly, the contract is: lines come as `event: <type>` then `data: <json>`, events are separated by blank lines, and a single logical event's `data` can span multiple `data:` lines that you concatenate. Read the body as a stream, split on double newlines, parse each `data` payload as JSON, and dispatch on the `type` field — the same six roles from the lifecycle above. It's doable, but reach for the SDK first; hand-rolling the framing is where most raw-HTTP streaming bugs live. The durable lesson across every provider and language: a stream is fragments plus framing — append the fragments by index, and read your metadata off the framing events, not the deltas."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is the difference between a content_block_delta and a message_delta?",
+      "a": "A `content_block_delta` carries a small fragment of *content* — a piece of text (`text_delta`), a piece of tool-call JSON (`input_json_delta`), or reasoning (`thinking_delta`) — and fires many times as the model writes. A `message_delta` fires near the end and carries *message-level* metadata: the top-level `stop_reason` and the final cumulative `output_tokens`. One is the body, the other is the closing summary."
+    },
+    {
+      "q": "How do I reassemble streamed tokens into the full message?",
+      "a": "Keep one buffer per content-block `index`. On every `content_block_delta`, append `delta.text` (for text) or `delta.partial_json` (for tool arguments) to the buffer matching that index. The concatenation of all text deltas in order *is* the full text. For tool arguments, wait until `content_block_stop`, then `JSON.parse` the joined string. Or skip all of this and call the SDK's final-message helper, which reassembles everything for you."
+    },
+    {
+      "q": "Where do I read token usage from a streamed response?",
+      "a": "Usage is split across two events. `input_tokens` arrives on `message_start` (the prompt is already counted), where `output_tokens` is still near zero. The final `output_tokens` arrives on `message_delta` at the end. If you use the SDK's final-message helper, it sums these into one `usage` object for you, just like a non-streamed call."
+    },
+    {
+      "q": "Why does JSON.parse fail on a streamed tool call?",
+      "a": "Because each `input_json_delta` is only a *fragment* of the arguments JSON, split at arbitrary points like `{\"ci` then `ty\": \"Par`. No single fragment — and no partial buffer — is valid JSON until the block is complete. Concatenate every `partial_json` fragment for that block and parse the result only after `content_block_stop` fires."
+    },
+    {
+      "q": "How do I know if a streamed response was cut off?",
+      "a": "Check the `stop_reason` on the `message_delta` event (or on the final reassembled message). `end_turn` means it finished naturally; `max_tokens` means it hit your output limit and the text is truncated — treat it as incomplete and retry with a higher `max_tokens` if you need the rest. `tool_use` means the model wants to call a tool and the turn continues."
+    },
+    {
+      "q": "Do I have to parse Server-Sent Events myself?",
+      "a": "Almost never. The official SDKs parse the SSE wire format and hand you decoded event objects to switch on by `type`. Only parse raw SSE yourself if you're working in a language or environment without an SDK — and even then, the framing (multi-line `data:`, blank-line separators) is fiddly enough that an SDK is strongly preferred."
+    }
+  ],
+  "related": [
+    "llm-streaming-explained",
+    "structured-outputs-explained",
+    "json-mode-vs-structured-outputs",
+    "how-to-call-llm-api",
+    "sdk-vs-raw-http",
+    "llm-api-errors"
+  ],
+  "furtherReading": [
+    {
+      "title": "Streaming Messages — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/streaming"
+    },
+    {
+      "title": "Server-Sent Events — MDN Web Docs",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events"
+    },
+    {
+      "title": "anthropic-sdk-typescript (streaming helpers)",
+      "url": "https://github.com/anthropics/anthropic-sdk-typescript"
+    }
+  ]
+}

@@ -1,0 +1,333 @@
+{
+  "slug": "what-is-hyde-rag",
+  "title": "What Is HyDE? Hypothetical Document Embeddings Explained",
+  "shortTitle": "HyDE",
+  "seoTitle": "What Is HyDE? Hypothetical Document Embeddings",
+  "metaDescription": "HyDE answers the query first, then embeds that fake answer to retrieve real docs. Learn why this counterintuitive trick can improve RAG retrieval, and its risks.",
+  "keywords": [
+    "what is hyde rag",
+    "hypothetical document embeddings",
+    "hyde retrieval technique",
+    "improve retrieval hyde",
+    "hyde vs query rewriting"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You'll learn how HyDE generates a hypothetical answer and embeds it to find real documents that match the answer, not the question.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "In a normal [RAG](/learn/rag/rag-fundamentals/what-is-rag) system you turn the user's *question* into an [embedding](/learn/embeddings-vector-databases/embeddings-explained/what-are-embeddings) — a list of numbers that captures its meaning — and search a [vector database](/learn/embeddings-vector-databases/similarity-search-indexing/what-is-semantic-search) for the document chunks whose embeddings sit closest to it. That works, but it has a hidden flaw: a *question* and an *answer* rarely look alike. \"How long do I have to return a jacket?\" and \"Refunds on physical items are accepted within 30 days of purchase\" share almost no words, and even their meanings sit in slightly different neighborhoods of the embedding space."
+        },
+        {
+          "type": "p",
+          "md": "**HyDE** — short for **Hypothetical Document Embeddings** — fixes this with a move that sounds backwards the first time you hear it. Instead of embedding the question, you first ask a language model to *write a fake answer* to it, then embed **that** and search with it. The fake answer is invented and might be wrong, but it doesn't matter: it looks like a real document, so it lands near real documents in the embedding space. You retrieve actual chunks that resemble the answer, not the question."
+        },
+        {
+          "type": "p",
+          "md": "Think of a librarian searching the stacks. If you tell them only \"I have a question about returns,\" they wander. But if you say \"I think the answer is something like *you can return physical items within about a month*,\" they instantly walk to the right shelf — even though your guess wasn't exactly right. HyDE hands the search engine a *plausible answer to match against* instead of a bare question."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "HyDE comes from the 2022 paper \"Precise Zero-Shot Dense Retrieval without Relevance Labels\" by Luyu Gao and colleagues. The key insight: answers resemble answers. Generate a hypothetical answer, embed it, and let *document-to-document* similarity do the retrieving instead of *question-to-document* similarity."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Retrieval is the make-or-break stage of any RAG system. If the correct chunk never lands in the top results, no language model can recover — it answers from whatever junk it was handed. HyDE attacks one specific, common cause of bad retrieval: the **question-answer gap**."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Short, vague queries.** Real users type three-word questions: \"refund window jacket?\" There's barely any signal to embed. A generated hypothetical answer is a full, fluent paragraph packed with the vocabulary and phrasing real documents use — far more to match on.",
+            "**Vocabulary mismatch.** A user asks about \"giving back a purchase\"; the manual says \"return\" and \"refund.\" Pure question embedding can miss this. A model writing a hypothetical answer naturally uses the document's own words, closing the gap.",
+            "**Zero-shot retrieval with no training data.** HyDE's original selling point: it improves retrieval on a brand-new domain *without* fine-tuning the embedding model on labeled query-document pairs. You get better recall for free, using only a language model you already have."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who should care? Anyone whose [retriever](/learn/rag/retrieval-and-reranking/what-is-a-retriever) returns plausible-but-wrong chunks on short or oddly-worded questions, especially in a domain where you have no labeled data to fine-tune embeddings. HyDE is a cheap, drop-in upgrade: it changes *what you embed*, not your vector database, your chunks, or your final-answer prompt. You can bolt it onto an existing pipeline in an afternoon and measure whether recall improves."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "HyDE inserts exactly one extra step in front of your normal retrieval: a quick language-model call that drafts a hypothetical answer. Everything downstream — the embedding model, the vector search, the final generation — stays the same."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "HyDE — the extra step is the first box",
+            "steps": [
+              {
+                "label": "User question",
+                "sub": "short, maybe vague"
+              },
+              {
+                "label": "Generate",
+                "sub": "LLM drafts a fake answer",
+                "accent": true
+              },
+              {
+                "label": "Embed",
+                "sub": "embed the fake answer"
+              },
+              {
+                "label": "Search",
+                "sub": "find similar real chunks"
+              },
+              {
+                "label": "Generate answer",
+                "sub": "RAG over real chunks"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Step by step, here's what changes versus plain RAG:"
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Draft a hypothetical document.** Send the question to a language model with a prompt like *\"Write a short passage that answers this question.\"* The model produces a confident, document-shaped paragraph. It may contain factual errors — that is expected and, surprisingly, usually fine.",
+            "**Embed the draft, not the question.** Run that hypothetical answer through your normal embedding model to get a query vector.",
+            "**Search as usual.** Ask the vector database for the chunks closest to that vector. Because the draft *looks like an answer*, the closest chunks tend to be real passages that answer the same question.",
+            "**Generate the real answer.** Throw the hypothetical draft away. Feed only the *retrieved real chunks* plus the original question to the model for the grounded final answer — exactly as in standard RAG."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "The hypothetical document is used **only** for retrieval. Never let it leak into the final answer — it is unverified and possibly hallucinated. Its single job is to be a better search query; the user must only ever see an answer grounded in retrieved *real* documents."
+        },
+        {
+          "type": "p",
+          "md": "Here is the whole technique in a few lines of Python. Notice that only the `retrieve` function differs from a normal pipeline — and within it, only the first three lines are new."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "hyde_retrieval.py",
+          "code": "from anthropic import Anthropic\n\nclient = Anthropic(api_key=\"sk-ant-...\")\n\ndef hypothetical_answer(question):\n    # Ask the model to DRAFT a plausible answer. It may be wrong;\n    # we only use it as a richer search query, never as the result.\n    prompt = (\n        \"Write a short, factual-sounding passage that could answer \"\n        f\"this question. Do not hedge.\\n\\nQuestion: {question}\"\n    )\n    msg = client.messages.create(\n        model=\"claude-haiku-4-5\",   # small + fast is fine here\n        max_tokens=200,\n        messages=[{\"role\": \"user\", \"content\": prompt}],\n    )\n    return msg.content[0].text\n\ndef retrieve(question, k=5):\n    draft = hypothetical_answer(question)   # <-- the HyDE step\n    query_vec = embed([draft])[0]           # embed the DRAFT, not the question\n    return vector_db.search(query_vec, k=k) # same search as plain RAG\n\nchunks = retrieve(\"how long to return a jacket?\")\n# ...then run normal RAG: stuff `chunks` + the question into the final prompt"
+        },
+        {
+          "type": "p",
+          "md": "A common refinement is to generate **several** hypothetical answers (say three or four), embed each, and average the vectors. Averaging smooths out the noise: if one draft veers off into a wrong direction, the others pull the query vector back toward the consensus. You can also append the *original question's* embedding to the mix so a badly hallucinated draft can't drag the search completely off-topic."
+        }
+      ]
+    },
+    {
+      "id": "worked-example",
+      "title": "A worked example",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Suppose your knowledge base contains this real chunk:"
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "title": "a real chunk in the vector database",
+          "code": "Physical items may be returned within 30 days of the original\npurchase date for a full refund. Items must be unused and in\noriginal packaging. Digital goods are non-refundable once downloaded."
+        },
+        {
+          "type": "p",
+          "md": "Now the user types a terse, casual question. Watch how the two strategies compare on what actually gets embedded and searched:"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Stage",
+            "Plain query embedding",
+            "HyDE"
+          ],
+          "rows": [
+            [
+              "User question",
+              "\"can i give back a jacket?\"",
+              "\"can i give back a jacket?\""
+            ],
+            [
+              "What gets embedded",
+              "the 5-word question",
+              "a drafted answer: \"Yes, physical clothing items like jackets can usually be returned within about a month of purchase for a refund, provided they're unused.\""
+            ],
+            [
+              "Vocabulary overlap with the chunk",
+              "low — no \"return,\" \"refund,\" or \"30 days\"",
+              "high — \"returned,\" \"refund,\" \"purchase,\" \"unused\" all appear"
+            ],
+            [
+              "Likely rank of the correct chunk",
+              "buried or missed",
+              "near the top"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Notice the draft got the detail slightly wrong — it guessed \"about a month\" when the policy says 30 days. **That error never reaches the user.** The draft only steered the search to the right shelf; the final answer is generated from the retrieved real chunk, which states the exact 30-day rule. This is the heart of why HyDE tolerates hallucination: a *roughly* correct answer is already shaped like the real document, and shape is all the embedding needs."
+        }
+      ]
+    },
+    {
+      "id": "hyde-vs-query-rewriting",
+      "title": "HyDE vs query rewriting",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "HyDE is easy to confuse with **query rewriting**, its close sibling. Both put a language model in front of retrieval, but they produce different things and fix different problems. Keeping them straight helps you pick the right tool."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Two ways an LLM can improve the query",
+            "columns": [
+              {
+                "title": "HyDE",
+                "accent": true,
+                "items": [
+                  "Writes a full hypothetical ANSWER",
+                  "Embeds the answer, searches by similarity",
+                  "Closes the question-vs-answer gap",
+                  "Best for dense / semantic retrieval",
+                  "Risk: a wrong draft steers search off"
+                ]
+              },
+              {
+                "title": "Query rewriting",
+                "items": [
+                  "Rewrites the QUESTION (clearer, expanded)",
+                  "Embeds or keyword-searches the new question",
+                  "Fixes vague, ambiguous, or multi-part queries",
+                  "Works for keyword and semantic retrieval",
+                  "Risk: rewrite drifts from user intent"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The clean way to remember it: **query rewriting improves the *question*; HyDE replaces the question with a guessed *answer*.** They're not mutually exclusive — you can rewrite an ambiguous question first, then apply HyDE to the cleaned-up version. And both are different again from a [reranker](/learn/rag/retrieval-and-reranking/what-is-reranking), which acts *after* retrieval to re-score candidates rather than changing what you search with."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls and when to skip it",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "HyDE is a sharp tool, not a default. It has a real failure mode and a real cost, and on some queries it actively hurts. Know when not to reach for it."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**The hypothetical answer is confidently wrong.** If the model drafts a plausible-but-misdirected answer, the embedding points at the wrong region and you retrieve confidently irrelevant chunks. This is most dangerous on niche or proprietary topics the model knows nothing about — exactly the domains where you reached for RAG in the first place.",
+            "**Exact-match queries.** For an error code, a product SKU, a person's name, or a precise quote, you want the *literal string*, not a paraphrased answer. HyDE can blur these. Pair it with keyword search — see [hybrid search](/learn/rag/retrieval-and-reranking/what-is-hybrid-search) and [BM25](/learn/rag/retrieval-and-reranking/what-is-bm25) — so exact matches still surface.",
+            "**Added latency and cost.** Every query now needs an extra LLM call before retrieval even starts. Generating several drafts multiplies that. On a high-traffic system this is a measurable tax — use a small, fast model for the draft.",
+            "**No evaluation.** Whether HyDE helps depends entirely on your corpus and your queries. \"It felt better\" is not data. Measure retrieval recall with and without HyDE on a real question set before shipping it."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "A safe default for production: run HyDE **alongside** plain retrieval and keyword search, then merge the candidate lists with [reciprocal rank fusion](/learn/rag/retrieval-and-reranking/reciprocal-rank-fusion) and a [reranker](/learn/rag/retrieval-and-reranking/what-is-reranking). That way a bad hypothetical can't sink the query on its own — the other retrievers act as a safety net."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic idea clicks, a few nuances separate a demo from a system you'd trust in production."
+        },
+        {
+          "type": "p",
+          "md": "**HyDE shines exactly where embedding models are weakest: zero-shot, out-of-domain retrieval.** The original paper's whole point was matching or beating fine-tuned retrievers *without any labeled query-document pairs*. If you've already fine-tuned a strong domain embedding model on your own data, the question-answer gap is smaller and HyDE's benefit shrinks — sometimes to nothing. The honest takeaway: HyDE is most valuable when you *can't* train a good retriever, and least valuable when you already have one."
+        },
+        {
+          "type": "p",
+          "md": "**Tune the draft to your documents.** A hypothetical answer should resemble the *form* of your chunks. If your knowledge base is terse API reference, prompting the model to write a flowery essay creates a mismatch. Steer the draft's style and length toward what actually lives in your index — that alignment, more than the draft's factual accuracy, drives retrieval quality."
+        },
+        {
+          "type": "p",
+          "md": "**It composes with the rest of the retrieval stack.** HyDE changes only the query vector, so it stacks cleanly with [hybrid search](/learn/rag/retrieval-and-reranking/what-is-hybrid-search), fusion, and a [cross-encoder reranker](/learn/rag/retrieval-and-reranking/cross-encoder-vs-bi-encoder). A strong modern pipeline often looks like: rewrite or HyDE the query → run dense + BM25 retrieval in parallel → fuse the lists → rerank the top candidates → generate. HyDE is one knob among several, not a replacement for the others."
+        },
+        {
+          "type": "p",
+          "md": "**The deeper lesson is about asymmetry.** Most retrieval pain comes from comparing two things of different shapes — a short question against long answers. HyDE's trick is to make both sides the same shape (answer-vs-answer) before comparing. That framing recurs across retrieval research: whenever query and document look too different, ask whether you can transform one to resemble the other. The most reliable way to learn whether it helps you is still the unglamorous one — build an evaluation set and measure recall, because on retrieval, intuition is frequently wrong."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is HyDE in RAG?",
+      "a": "HyDE stands for Hypothetical Document Embeddings. Instead of embedding the user's question to search a vector database, you first ask a language model to write a plausible (possibly wrong) answer, then embed *that* and search with it. Because the draft looks like a real document, it tends to retrieve real chunks that answer the same question."
+    },
+    {
+      "q": "Why does embedding a fake answer improve retrieval?",
+      "a": "Because answers resemble answers. A question and the document that answers it often share little vocabulary and sit in different parts of the embedding space, so question-to-document search can miss the right chunk. A hypothetical answer is shaped like a real document, so document-to-document similarity finds matching passages more reliably — even when the draft has minor factual errors."
+    },
+    {
+      "q": "Doesn't HyDE introduce hallucinations into the answer?",
+      "a": "No, if you implement it correctly. The hypothetical document is used only as a search query and is thrown away after retrieval. The final answer is generated from the *retrieved real chunks*, never from the draft. The user only ever sees an answer grounded in actual documents."
+    },
+    {
+      "q": "What is the difference between HyDE and query rewriting?",
+      "a": "Query rewriting improves the *question* — making it clearer, expanding it, or splitting a multi-part query. HyDE replaces the question with a guessed *answer* and searches with that. They fix different problems and can even be combined: rewrite an ambiguous question first, then apply HyDE to the cleaned-up version."
+    },
+    {
+      "q": "When should I not use HyDE?",
+      "a": "Skip or de-emphasize it for exact-match queries like error codes, SKUs, or names, where you want the literal string — pair it with keyword search instead. It also helps less if you already have a strong fine-tuned embedding model, and it adds an extra LLM call (latency and cost) on every query. On niche topics the model knows nothing about, a wrong draft can steer retrieval the wrong way."
+    },
+    {
+      "q": "Does HyDE work without any training data?",
+      "a": "Yes — that's its original appeal. HyDE was designed for zero-shot dense retrieval, improving results on a new domain using only a language model and an off-the-shelf embedding model, with no labeled query-document pairs required for fine-tuning."
+    }
+  ],
+  "related": [
+    "what-is-a-retriever",
+    "what-is-reranking",
+    "what-is-hybrid-search",
+    "what-is-bm25",
+    "what-is-rag",
+    "cross-encoder-vs-bi-encoder"
+  ],
+  "furtherReading": [
+    {
+      "title": "Precise Zero-Shot Dense Retrieval without Relevance Labels (HyDE, arXiv)",
+      "url": "https://arxiv.org/abs/2212.10496"
+    },
+    {
+      "title": "Embeddings — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/embeddings"
+    },
+    {
+      "title": "Hypothetical Document Embeddings (HyDE) — LangChain",
+      "url": "https://docs.langchain.com/oss/python/langchain/retrieval"
+    }
+  ]
+}

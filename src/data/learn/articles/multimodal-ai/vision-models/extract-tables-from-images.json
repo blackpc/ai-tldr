@@ -1,0 +1,354 @@
+{
+  "slug": "extract-tables-from-images",
+  "title": "How to Extract Tables and Structured Data from Images",
+  "shortTitle": "Extracting Tables from Images",
+  "seoTitle": "Extract Tables from Images with Vision Models",
+  "metaDescription": "Vision models can turn screenshots and scanned tables into clean JSON or CSV. Learn the prompting patterns, schema tricks, and pitfalls that work.",
+  "keywords": [
+    "extract table from image ai",
+    "image to json vision model",
+    "structured data extraction from screenshots",
+    "vision model table to csv",
+    "parse invoice with llm vision"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn the prompting and schema patterns that turn a screenshot of a table into reliable structured JSON or CSV.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You have a screenshot of a pricing table, a scanned invoice, or a photo of a spreadsheet. The numbers are right there on the screen, but they're trapped in *pixels* — your code can't loop over them, sum a column, or load them into a database. You need to turn that picture back into real data: rows, columns, and cells you can use."
+        },
+        {
+          "type": "p",
+          "md": "A [vision-language model](/learn/multimodal-ai/vision-models/what-is-vision-language-model) can do this. You send it the image plus an instruction like *\"return this table as JSON,\"* and it reads the layout, recognizes the text, and hands back structured data. Unlike a traditional [OCR](/learn/multimodal-ai/vision-models/ocr-with-vision-models) engine, which dumps a flat stream of characters, a vision model *understands* that this is a table — it knows which cell belongs under which header and which row goes with which label."
+        },
+        {
+          "type": "p",
+          "md": "Think of the difference between a photocopier and a careful assistant. A photocopier reproduces marks on a page without understanding any of it. The assistant looks at the same table and tells you, *\"Row three, the 'Quantity' column, says 12.\"* This article is about getting that second behavior reliably — not just *can the model read the text*, but *how do I get clean, validated, structured output I can trust*."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "\"Structured data\" here means a predictable shape — usually **JSON** (objects and arrays) or **CSV** (rows of comma-separated values) — where every field has a known name and place, so the next program can read it without guessing."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Enormous amounts of useful data exist only as images: scanned invoices, receipts, lab reports, bank statements, product spec sheets, screenshots from dashboards that have no export button, and PDFs that are really just pictures of pages. For decades, getting that data into a system meant either a person retyping it by hand or a brittle, rules-based OCR pipeline that broke the moment a layout changed."
+        },
+        {
+          "type": "p",
+          "md": "Vision models change the economics. One model, prompted well, can handle invoices from a hundred different vendors with a hundred different layouts — no template per vendor, no fragile coordinate rules. That flexibility is exactly why builders care:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Accounts payable.** Read an invoice image and emit `{ vendor, invoice_number, line_items, total }` straight into your accounting system.",
+            "**Data migration.** A client hands you 5,000 scanned forms. A vision model turns them into a database table overnight instead of a temp agency over a month.",
+            "**Analytics from screenshots.** A metric lives only on a vendor's dashboard with no API. Screenshot it, extract the table, track it over time.",
+            "**Document processing at scale.** Receipts, shipping manifests, medical results — anywhere the source of truth is a picture of a grid."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "But there's a catch that makes this harder than it looks, and it's the whole reason this article goes deeper than \"can it read text.\" A vision model is a *generative* model: when it's unsure what a smudged cell says, it doesn't error out — it writes down a plausible guess. A traditional OCR engine that can't read a digit might give you a blank or a garbage character you can spot. A vision model can silently emit `1,240` where the real value was `1,248`, and the output looks perfectly clean. Catching those silent errors is a core skill, and we cover it below."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Under the hood, a vision model splits your image into patches, converts those patches into tokens, and processes them in the same sequence as your text prompt — the same machinery covered in [how vision models see](/learn/multimodal-ai/vision-models/how-vision-models-see). From the model's point of view, the image and your instruction are one continuous input. That's why *prompting* matters so much here: the picture and the request are read together."
+        },
+        {
+          "type": "p",
+          "md": "The end-to-end flow for table extraction has four stages:"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "From pixels to validated data",
+            "steps": [
+              {
+                "label": "Image in",
+                "sub": "screenshot / scan / photo"
+              },
+              {
+                "label": "Send + schema",
+                "sub": "image + target shape"
+              },
+              {
+                "label": "Model extracts",
+                "sub": "reads layout → JSON"
+              },
+              {
+                "label": "Validate",
+                "sub": "parse, check, retry",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The two stages that decide whether you get usable data are stage two (telling the model the *exact* shape you want) and stage four (verifying what came back). Most teams that struggle have skipped one or both."
+        },
+        {
+          "type": "h3",
+          "text": "Step 1 — Give the model a target schema, not a vague ask"
+        },
+        {
+          "type": "p",
+          "md": "The single biggest quality lever is telling the model the precise output structure *before* it answers. If you ask \"extract the table,\" the model invents its own field names, drops columns it thinks are unimportant, and formats numbers inconsistently across calls. If you hand it a schema, you constrain it to fill in *your* shape."
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "title": "the instruction the model sees",
+          "code": "Extract the table in this image as JSON matching exactly this shape:\n\n{\n  \"rows\": [\n    { \"item\": string, \"qty\": integer, \"unit_price\": number, \"total\": number }\n  ]\n}\n\nRules:\n- Use null for any cell that is blank or unreadable. Never guess.\n- Numbers must be plain digits: no currency symbols, no thousands separators.\n- Return ONLY the JSON object, nothing else."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The line *\"use null for any cell you cannot read — never guess\"* is the highest-leverage sentence in the whole prompt. It gives the model permission to admit uncertainty instead of inventing a value, which is exactly the silent-error problem from the last section."
+        },
+        {
+          "type": "h3",
+          "text": "Step 2 — Use the API's structured-output feature when it exists"
+        },
+        {
+          "type": "p",
+          "md": "Asking for JSON in prose works, but the model can still wrap it in commentary or a code fence you have to strip. Major APIs offer a stronger guarantee: **tool use** (also called function calling) or a JSON-schema mode, where you declare the schema as a formal spec and the model is forced to return data that fits it. The model literally cannot return a field you didn't define or omit a required one."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "extract_table.py — schema-constrained extraction via tool use",
+          "code": "import base64, json\nfrom anthropic import Anthropic\n\nclient = Anthropic()\n\nwith open(\"invoice.png\", \"rb\") as f:\n    img_b64 = base64.standard_b64encode(f.read()).decode()\n\n# Declare the exact shape as a tool the model must call.\ntable_tool = {\n    \"name\": \"record_table\",\n    \"description\": \"Record every row of the table in the image.\",\n    \"input_schema\": {\n        \"type\": \"object\",\n        \"properties\": {\n            \"rows\": {\n                \"type\": \"array\",\n                \"items\": {\n                    \"type\": \"object\",\n                    \"properties\": {\n                        \"item\": {\"type\": \"string\"},\n                        \"qty\": {\"type\": [\"integer\", \"null\"]},\n                        \"unit_price\": {\"type\": [\"number\", \"null\"]},\n                        \"total\": {\"type\": [\"number\", \"null\"]},\n                    },\n                    \"required\": [\"item\"],\n                },\n            }\n        },\n        \"required\": [\"rows\"],\n    },\n}\n\nmsg = client.messages.create(\n    model=\"claude-sonnet-4-6\",\n    max_tokens=2000,\n    tools=[table_tool],\n    tool_choice={\"type\": \"tool\", \"name\": \"record_table\"},\n    messages=[{\n        \"role\": \"user\",\n        \"content\": [\n            {\"type\": \"image\", \"source\": {\n                \"type\": \"base64\", \"media_type\": \"image/png\", \"data\": img_b64}},\n            {\"type\": \"text\", \"text\":\n                \"Record the table. Use null for any unreadable cell; never guess.\"},\n        ],\n    }],\n)\n\n# The result is already a Python dict in your schema — no string parsing.\ntable = next(b.input for b in msg.content if b.type == \"tool_use\")\nprint(json.dumps(table, indent=2))"
+        },
+        {
+          "type": "p",
+          "md": "For the mechanics of attaching the image bytes — base64 vs. URL, media types, size limits — see [send images to an LLM API](/learn/multimodal-ai/vision-models/send-images-to-llm-api). For multi-page documents, [send PDFs to an LLM API](/learn/multimodal-ai/vision-models/send-pdfs-to-llm-api) covers passing whole files at once."
+        }
+      ]
+    },
+    {
+      "id": "validation-and-verification",
+      "title": "Verifying the output (the step everyone skips)",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Getting back valid JSON is *not* the same as getting back *correct* data. The JSON can parse perfectly and still contain a hallucinated cell. Because the model never throws an error on uncertainty, **you** have to be the error detector. The good news: most silent mistakes are catchable with cheap, deterministic checks in your own code — no second AI call needed."
+        },
+        {
+          "type": "h3",
+          "text": "Cheap checks that catch most errors"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Row count.** Count the visible rows yourself (or ask the model for a count separately) and compare. A dropped or duplicated row is the most common failure.",
+            "**Type and range checks.** A `qty` of 99999 or a negative `unit_price` is almost certainly a misread digit. Flag anything outside sane bounds for review.",
+            "**Arithmetic cross-checks.** If the table has `qty`, `unit_price`, and `total`, verify `qty * unit_price == total` for each row. A mismatch points straight at the misread cell. Same for a totals row that should equal the sum of its column.",
+            "**Required fields.** If `item` is empty on a row, the model probably split or merged something wrong.",
+            "**Null rate.** A sudden spike in `null` values (with the *never-guess* prompt) tells you the image quality dropped — a useful signal, not a failure."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Never push extracted numbers into a system of record (accounting, billing, medical) without at least the arithmetic and range checks. A clean-looking `$1,240.00` that should be `$1,248.00` will pass a human's glance but fail `qty * unit_price`."
+        },
+        {
+          "type": "h3",
+          "text": "When the stakes are high"
+        },
+        {
+          "type": "p",
+          "md": "For critical pipelines, add a confirmation layer. Ask the model to return a per-cell `confidence` flag, or run the same image twice (or through two different models) and compare — cells that disagree go to a human. This costs more, but routing only the *uncertain* rows to a person is far cheaper than checking every row, and far safer than checking none."
+        }
+      ]
+    },
+    {
+      "id": "tricky-layouts",
+      "title": "Handling tricky layouts",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Clean, simple grids are easy. Real-world tables fight back. Here's how the common hard cases behave and what to do about each."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Layout problem",
+            "What goes wrong",
+            "What to do"
+          ],
+          "rows": [
+            [
+              "**Merged cells** (one value spanning several rows)",
+              "The model either repeats the value on every row or leaves the extra rows blank — inconsistently.",
+              "Decide your rule explicitly in the prompt: \"if a cell is merged across rows, repeat its value on each row.\""
+            ],
+            [
+              "**Multi-line cells** (text wrapping inside one cell)",
+              "The wrapped line gets read as a new, mostly-empty row.",
+              "Tell the model the table's column headers up front so it knows the true row boundaries."
+            ],
+            [
+              "**Multi-page tables**",
+              "Headers repeat on each page; rows get duplicated or lost across page breaks.",
+              "Extract page by page, then stitch in code. Pass the header names so later pages map to the same fields."
+            ],
+            [
+              "**Rotated or skewed scans**",
+              "Text recognition accuracy drops sharply.",
+              "De-rotate the image before sending. Vision models tolerate small skew but not a sideways page."
+            ],
+            [
+              "**Dense / tiny tables**",
+              "Distant cells get misaligned; column-to-header mapping drifts.",
+              "Crop to the table and upsize. Resolution directly drives accuracy — see [image token cost](/learn/multimodal-ai/vision-models/image-token-cost) for the size/cost tradeoff."
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The throughline: **the cleaner and more explicit the input, the better the output.** A tightly cropped, upright, readable image of a single table beats a wide-angle photo of a whole page every time. Preprocessing the image is often a bigger win than tweaking the prompt."
+        }
+      ]
+    },
+    {
+      "id": "why-free-text-drifts",
+      "title": "Why free-text extraction drifts (and schema fixes it)",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "It's worth understanding *why* a target schema helps so much, because it explains a class of bugs that confuse beginners. When you ask for output in free text, two runs on the *same* image can disagree:"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Free-text ask vs. schema-constrained ask",
+            "columns": [
+              {
+                "title": "\"Extract the table\"",
+                "items": [
+                  "Field names vary run to run",
+                  "Columns silently dropped",
+                  "Numbers formatted inconsistently",
+                  "Prose wrapped around the data",
+                  "Hard to parse downstream"
+                ]
+              },
+              {
+                "title": "Schema / tool-use ask",
+                "accent": true,
+                "items": [
+                  "Exact field names, every time",
+                  "Missing cell → null, not dropped",
+                  "Number types enforced",
+                  "Pure data, no commentary",
+                  "Parses on the first try"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "A generative model picks the next token from a probability distribution, so an open-ended request leaves many equally-likely ways to format the answer. Each run can take a different path. A schema collapses that freedom: there's exactly one valid place for each value, so the model spends its effort *reading the cells* instead of *deciding how to present them*. You convert an unstable creative task into a stable fill-in-the-blanks task — which is what you actually wanted."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic extract-and-validate loop works, a few directions are worth knowing as you move toward production."
+        },
+        {
+          "type": "p",
+          "md": "**Vision model vs. dedicated OCR vs. hybrid.** Vision models shine at *understanding* — messy layouts, mixed languages, inferring which header a value belongs to. Classic OCR engines (and document-understanding models) can be cheaper and more deterministic for clean, high-volume forms. A strong production pattern is hybrid: run fast OCR to get raw text and coordinates, then let a vision model assemble the structure and resolve ambiguity. The broader tradeoff is covered in [LLM OCR and document understanding](/learn/multimodal-ai/vision-models/llm-ocr-document-understanding)."
+        },
+        {
+          "type": "p",
+          "md": "**Cost and resolution.** Bigger images mean more tokens and more money per call, but shrinking the image too far makes small digits unreadable. There's a sweet spot per document type — find it by measuring accuracy at a few resolutions, not by guessing. Cropping to just the table region both cuts cost and raises accuracy, since the model isn't spending tokens on margins and logos."
+        },
+        {
+          "type": "p",
+          "md": "**Batching and idempotency.** For thousands of documents, process them through a queue, store the raw image alongside the extracted JSON, and keep the model id and prompt version with each result. When you improve the prompt, you can re-run only the low-confidence items. Treat extraction as reproducible: same image plus same prompt plus same model should give you a record you can audit later."
+        },
+        {
+          "type": "p",
+          "md": "**The honest limits.** No vision model reads a smudged, low-resolution, badly-scanned table at 100% accuracy — neither does a human. The realistic goal is not zero errors but *zero silent errors*: every cell the model is unsure about should be flagged, not invented. Get that right with the never-guess prompt plus arithmetic and row-count checks, and you can safely automate the easy 95% while routing the hard 5% to a person. That blend — automate the confident cases, escalate the uncertain ones — is how reliable document pipelines are actually built."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "How do I extract a table from an image into JSON with an AI model?",
+      "a": "Send the image to a vision-language model along with an instruction that specifies the exact JSON shape you want, including field names and types. The most reliable approach is the API's tool-use or JSON-schema mode, which forces the output to match your schema. Always add the rule *\"use null for any unreadable cell, never guess\"* and validate the result before trusting it."
+    },
+    {
+      "q": "Why does the model sometimes return wrong numbers that look correct?",
+      "a": "A vision model is generative: when a cell is blurry it writes a plausible guess instead of erroring out, so a misread `1,248` can come back as a clean-looking `1,240`. This is why output that parses as valid JSON can still be factually wrong. Catch it with deterministic checks like row counts, type/range limits, and arithmetic cross-checks (for example, `qty * unit_price == total`)."
+    },
+    {
+      "q": "Should I ask for JSON in the prompt or use structured output / function calling?",
+      "a": "Use the API's structured-output or tool-use feature whenever it's available. Asking for JSON in plain prose works but the model can wrap it in commentary or a code fence you have to strip, and field names can drift between runs. A formal schema forces every response into the same shape, so it parses on the first try and you can't get unexpected or missing fields."
+    },
+    {
+      "q": "How do I handle a table that spans multiple pages?",
+      "a": "Extract each page separately, passing the column header names so every page maps to the same fields, then stitch the rows together in your own code. Trying to extract a long multi-page table in one shot tends to duplicate the repeated headers and lose rows across page breaks. For passing a whole document at once, see the article on sending PDFs to an LLM API."
+    },
+    {
+      "q": "Is a vision model better than traditional OCR for tables?",
+      "a": "They're good at different things. A vision model understands layout and can infer which value belongs to which header, which is great for messy or varied documents. Traditional OCR can be cheaper and more deterministic for clean, high-volume forms. Many production systems combine both: fast OCR for raw text, then a vision model to assemble and validate the structure."
+    },
+    {
+      "q": "How do I improve extraction accuracy on a low-quality scan?",
+      "a": "Fix the image before sending it: de-rotate skewed pages, crop to just the table, and upscale tiny text so digits are legible. Resolution directly drives accuracy, so a tight, upright crop usually helps more than any prompt tweak. Then keep the *never-guess* rule so genuinely unreadable cells come back as null instead of invented values."
+    }
+  ],
+  "related": [
+    "ocr-with-vision-models",
+    "llm-ocr-document-understanding",
+    "send-images-to-llm-api",
+    "what-is-vision-language-model",
+    "send-pdfs-to-llm-api",
+    "image-token-cost"
+  ],
+  "furtherReading": [
+    {
+      "title": "Vision — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/vision"
+    },
+    {
+      "title": "Tool use (function calling) — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/tool-use"
+    },
+    {
+      "title": "Vision — OpenAI API docs",
+      "url": "https://platform.openai.com/docs/guides/vision"
+    }
+  ]
+}

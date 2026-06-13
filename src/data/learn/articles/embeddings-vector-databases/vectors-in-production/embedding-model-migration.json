@@ -1,0 +1,340 @@
+{
+  "slug": "embedding-model-migration",
+  "title": "How to Switch Embedding Models Without Breaking Search",
+  "shortTitle": "Switching Embedding Models",
+  "seoTitle": "How to Switch Embedding Models Without Breaking Search",
+  "metaDescription": "Upgrading your embedding model means re-embedding everything - old and new vectors can't be compared. Learn how to migrate safely with dual-write and backfill.",
+  "keywords": [
+    "switch embedding models safely",
+    "re-embed everything new model",
+    "embedding model migration strategy",
+    "can you mix embeddings from different models",
+    "backfill embeddings during upgrade"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Understand why you cannot mix vectors from two different embedding models and learn the dual-write, backfill, and cutover playbook for migrating safely.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "An [embedding model](/learn/embeddings-vector-databases/embeddings-explained/what-are-embeddings) turns each piece of text into a list of numbers — a vector — that captures its meaning. Your [semantic search](/learn/embeddings-vector-databases/similarity-search-indexing/what-is-semantic-search) works because chunks about similar topics produce vectors that sit close together. Every stored vector in your database was created by *one specific model*."
+        },
+        {
+          "type": "p",
+          "md": "**Embedding model migration** is the job of swapping that model for a newer or better one. The catch that surprises most builders: you cannot just point your code at the new model and carry on. Every vector you already stored was written in the *old model's private language*, and the new model speaks a different one. To keep search working, you have to **re-embed everything** — run all your documents through the new model and rebuild the index from scratch."
+        },
+        {
+          "type": "p",
+          "md": "Here's an everyday analogy. Imagine a library where every book's location is decided by a secret filing scheme that only one librarian understands. Searching works because you ask *that same librarian* where to look. Now you hire a new librarian with a better scheme. If you ask the new librarian to find a book using the old librarian's shelf numbers, they point you to the wrong shelf every time. The fix is not to translate the numbers — it's to re-file every book under the new scheme before you let the new librarian answer questions. Re-embedding is that re-filing."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This is different from keeping your index *in sync* with a changing source (a document was edited, so its vector is stale). Migration is about changing the **model itself** — which invalidates *every* vector at once, even for documents that never changed."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Embedding models improve fast, and a better model usually means visibly better search: more relevant results, better handling of long or multilingual text, sometimes lower cost per token. So upgrading is tempting and often worth it. The danger is that a naive upgrade fails *silently*."
+        },
+        {
+          "type": "p",
+          "md": "If you flip the embedding model in your code but leave the old vectors in the database, nothing crashes. There's no error, no exception, no red log line. Queries still return *some* results — they're just wrong. The new query vector is being compared against old vectors from an incompatible space, so the \"nearest\" neighbors are essentially noise. Your search quietly degrades to near-random, and you may not notice until users complain that the answers got worse."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Silent corruption.** No crash means no alert. Relevance just rots, which is the worst kind of bug to catch in production.",
+            "**Dimension mismatches.** Many new models output a different vector length than the old one (say 1536 vs 1024). If the dimensions differ, the database often *does* throw an error on write or query — which is annoying, but at least honest.",
+            "**It's all-or-nothing.** You can't migrate \"half\" your documents and compare across the two halves. A query vector is only meaningful against vectors from the same model.",
+            "**Re-embedding has a real cost.** Running millions of chunks through an embedding API takes time and money, and you need a plan that doesn't take search offline while it runs."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Anyone running a [RAG](/learn/rag/rag-fundamentals/what-is-rag) system, a recommendation engine, or any vector search in production will hit this the first time they want to adopt a newer embedding model. Knowing the safe playbook before you start saves you from a corrupted index and an awkward incident review."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "To understand *why* you must re-embed, you need one fact: each embedding model defines its own **vector space**. The numbers only have meaning relative to all the other numbers that same model produces. Two models can both turn the word \"refund\" into a vector, but those two vectors live in different coordinate systems. The distance between them is meaningless — it doesn't tell you the words are similar or different, it tells you nothing at all."
+        },
+        {
+          "type": "p",
+          "md": "There is no reliable way to \"convert\" old vectors into the new space. People sometimes hope for a translation matrix, but in practice it's lossy and not worth it — re-embedding from the original text is both simpler and correct. So the mechanism of a migration is: keep the *source text*, run it all through the new model, and build a fresh index."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Why old and new vectors can't be compared",
+            "columns": [
+              {
+                "title": "Old model space",
+                "items": [
+                  "\"refund\" → [0.12, -0.44, ...]",
+                  "1024 dimensions",
+                  "Distances meaningful here",
+                  "Only vs other old vectors"
+                ]
+              },
+              {
+                "title": "New model space",
+                "accent": true,
+                "items": [
+                  "\"refund\" → [-0.71, 0.08, ...]",
+                  "1536 dimensions",
+                  "Distances meaningful here",
+                  "Only vs other new vectors"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "The safe migration playbook"
+        },
+        {
+          "type": "p",
+          "md": "The standard zero-downtime approach is **build the new index alongside the old one, then cut over atomically**. You never compare across the two. The five steps:"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Embedding model migration — dual-write + backfill + cutover",
+            "steps": [
+              {
+                "label": "New index",
+                "sub": "fresh collection, new dims"
+              },
+              {
+                "label": "Dual-write",
+                "sub": "new docs → both models"
+              },
+              {
+                "label": "Backfill",
+                "sub": "re-embed all old docs"
+              },
+              {
+                "label": "Verify",
+                "sub": "compare quality side by side"
+              },
+              {
+                "label": "Cutover",
+                "sub": "queries → new index",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Create a separate index/collection for the new model.** Never overwrite the old one in place. The new one has the new model's dimension and its own configuration. The old index keeps serving live traffic the whole time.",
+            "**Turn on dual-write.** From now on, every *new or updated* document gets embedded by **both** models and written to **both** indexes. This keeps the new index from falling behind while you backfill the history.",
+            "**Backfill the existing documents.** Run a batch job that pulls every document from your source of truth, embeds it with the new model, and writes it to the new index. This is the slow, expensive part — design it to be resumable.",
+            "**Verify quality.** Run your evaluation set against both indexes and compare. Only proceed if the new index is at least as good. This is your safety gate.",
+            "**Cut over, then keep a rollback path.** Switch query traffic to the new index in one flip (a config flag or feature toggle). Keep the old index around for a while so you can switch back instantly if something looks wrong."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The reason this works with zero downtime: the **old index serves every query** right up until the cutover, and the **new index is fully built and verified** before it takes a single real query. There is never a moment where queries hit a half-filled or mixed index."
+        }
+      ]
+    },
+    {
+      "id": "worked-example",
+      "title": "A worked example: backfill that's safe to re-run",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The backfill is the riskiest step because it's long-running. The golden rule is **make it resumable and idempotent** — if it crashes at 60%, you restart and it continues, and re-processing a document that already moved over does no harm. Below is the shape of a backfill that re-embeds documents into a new collection in batches, tracking progress so a restart picks up where it left off."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "backfill.py — re-embed into the new index, resumable",
+          "code": "from new_embed import embed_new   # the NEW embedding model\n\nBATCH = 256\n\ndef backfill(start_after=None):\n    \"\"\"Re-embed all docs into the new collection. Resumable by doc id.\"\"\"\n    cursor = start_after\n    while True:\n        # Pull a page of docs from your SOURCE OF TRUTH (DB, not the\n        # old vector index) ordered by a stable key like the doc id.\n        docs = source.fetch_page(after=cursor, limit=BATCH)\n        if not docs:\n            break\n\n        texts = [d.text for d in docs]\n        vectors = embed_new(texts)        # NEW model -> new-dim vectors\n\n        # Upsert by id, so re-running a batch overwrites cleanly\n        # (idempotent). The new collection has the NEW dimension.\n        new_index.upsert([\n            {\"id\": d.id, \"vector\": v, \"metadata\": d.metadata}\n            for d, v in zip(docs, vectors)\n        ])\n\n        cursor = docs[-1].id\n        checkpoint.save(cursor)           # so a crash can resume here\n        print(f\"backfilled up to {cursor}\")\n\nif __name__ == \"__main__\":\n    backfill(start_after=checkpoint.load())"
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Embed from your **source of truth** (the original text), not by reading vectors out of the old index. You can't turn old vectors back into text, and you want the new model to see the real content. Keep the raw text — this is exactly why you store it alongside every vector."
+        },
+        {
+          "type": "p",
+          "md": "Two practical numbers to plan around: embedding APIs charge per token, so estimate `total_tokens × price_per_token` before you start; and they rate-limit, so a few-million-chunk backfill may run for hours. Batch your requests, respect the rate limit, and checkpoint often."
+        }
+      ]
+    },
+    {
+      "id": "strategies-compared",
+      "title": "In-place vs blue-green migration",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "There are two broad ways to run the cutover. The **blue-green** approach (a second index, then an atomic flip) is what the playbook above describes and what most teams should use. The **in-place** approach overwrites the same index as you go. It's simpler to set up but risky, because for a while the index holds a mix of old and new vectors — and mixed vectors mean broken search."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "",
+            "Blue-green (new index)",
+            "In-place (overwrite)"
+          ],
+          "rows": [
+            [
+              "Search during migration",
+              "Old index, fully correct",
+              "Mixed vectors → degraded"
+            ],
+            [
+              "Rollback",
+              "Instant — flip back",
+              "Hard — old data gone"
+            ],
+            [
+              "Storage needed",
+              "~2× during migration",
+              "1×"
+            ],
+            [
+              "Different dimensions OK",
+              "Yes — separate config",
+              "Usually blocked by the DB"
+            ],
+            [
+              "Risk",
+              "Low",
+              "High"
+            ],
+            [
+              "Best for",
+              "Production search",
+              "Tiny / disposable indexes"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The blue-green cost is real but temporary: you pay for roughly double the vector storage until you delete the old index after a successful cutover. For anything user-facing, that's a cheap insurance premium against silently corrupting search. Only reach for in-place when the index is small enough to rebuild from scratch in minutes and nobody depends on it being up."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "**Mixing models in one index.** The cardinal sin. Even one batch embedded by the wrong model pollutes results. Keep each index single-model, always.",
+            "**Forgetting the query path.** You re-embedded all documents but left the *query* still using the old model. Now queries and documents are in different spaces — same corruption, just from the other side. Switch the query embedding at the exact moment you cut over.",
+            "**Ignoring dimension changes downstream.** A new dimension may break a hardcoded vector size, an index configuration, or a database column type. Check every place the dimension is assumed.",
+            "**No verification gate.** Cutting over because the backfill *finished* is not the same as cutting over because the new index is *better*. Always compare on an evaluation set first.",
+            "**Deleting the old index too early.** Keep it for a grace period after cutover so rollback is one flip away. Delete it only once the new index has been healthy in production for a while.",
+            "**A non-resumable backfill.** A multi-hour job with no checkpoint that dies at hour three means starting over and paying twice. Make it resumable from day one."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Re-using the *same* embedding model but at a different output dimension (some models let you truncate, e.g. Matryoshka-style) is still a migration — the vectors aren't comparable across dimensions, so treat it exactly like a model swap."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**Shadow traffic before cutover.** Beyond an offline evaluation set, you can send a copy of real production queries to *both* indexes and log the results without showing the new ones to users. Comparing live behavior catches problems your eval set never anticipated, and it builds confidence before the flip."
+        },
+        {
+          "type": "p",
+          "md": "**Versioning and metadata.** Stamp each vector (or each index) with the model name and version in its [metadata](/learn/embeddings-vector-databases/vectors-in-production/vector-metadata-filtering). When something looks off months later, you'll know exactly which model produced which vectors — and a future you attempting the *next* migration will thank you."
+        },
+        {
+          "type": "p",
+          "md": "**Hybrid search softens the blow.** If your system blends vector search with keyword search ([hybrid search](/learn/embeddings-vector-databases/vectors-in-production/hybrid-search-explained)), the keyword half keeps working regardless of which embedding model you're on. It won't make a half-migrated index correct, but it makes overall relevance more robust during and after a transition."
+        },
+        {
+          "type": "p",
+          "md": "**Don't migrate on a whim.** Each migration is real work and real cost, so it should clear a bar: a measurably better model on *your* data, a meaningful cost reduction, or a needed capability (longer context, more languages). Use a held-out evaluation set to decide — and revisit [how to choose an embedding model](/learn/embeddings-vector-databases/embeddings-explained/how-to-choose-embedding-model) so the model you migrate *to* is one you won't want to leave in six months."
+        },
+        {
+          "type": "p",
+          "md": "**Where to go next.** If you're also deciding *where* the vectors live, see [how to choose a vector database](/learn/embeddings-vector-databases/vectors-in-production/how-to-choose-vector-database) — some make blue-green migrations easier with aliases that let you swap which index a name points to atomically. And if dimensions are the part biting you, [embedding dimensions explained](/learn/embeddings-vector-databases/embeddings-explained/embedding-dimensions-explained) covers why different models produce different lengths and what that costs."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Can you mix embeddings from different models in one database?",
+      "a": "No. Each model produces vectors in its own private coordinate space, so distances between vectors from two different models are meaningless. Mixing them gives near-random search results with no error to warn you. Each index must use exactly one embedding model for both documents and queries."
+    },
+    {
+      "q": "Do I really have to re-embed everything to switch embedding models?",
+      "a": "Yes. There's no reliable way to convert old vectors into the new model's space, so you must run every document's original text through the new model and rebuild the index. This is why you should always keep the source text stored alongside each vector."
+    },
+    {
+      "q": "What happens if I just change the model and keep the old vectors?",
+      "a": "Search degrades silently. If the dimensions match, queries still return results — but they're essentially noise, because the new query vector is being compared against old, incompatible vectors. If the dimensions differ, the database usually throws an error on write or query instead."
+    },
+    {
+      "q": "How do I migrate embedding models with zero downtime?",
+      "a": "Use a blue-green approach: build a new index for the new model, dual-write new documents to both indexes, backfill all existing documents into the new index, verify quality against an evaluation set, then cut over query traffic in one atomic flip. Keep the old index for a grace period so you can roll back instantly."
+    },
+    {
+      "q": "Why do different embedding models have different vector dimensions?",
+      "a": "The dimension is a design choice baked into each model's architecture — one model might output 1024 numbers per text, another 1536 or 3072. A different dimension is one more reason old and new vectors aren't comparable, and it can break code or index configs that assume a fixed size."
+    },
+    {
+      "q": "How much does re-embedding a large corpus cost?",
+      "a": "Embedding APIs charge per token, so estimate total tokens times the per-token price before you start. The other cost is time: rate limits mean a multi-million-chunk backfill can run for hours, so batch your requests and checkpoint progress so a crash can resume rather than restart."
+    }
+  ],
+  "related": [
+    "how-to-choose-embedding-model",
+    "embedding-dimensions-explained",
+    "how-to-choose-vector-database",
+    "hybrid-search-explained",
+    "vector-metadata-filtering",
+    "what-are-embeddings"
+  ],
+  "furtherReading": [
+    {
+      "title": "Embeddings — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/embeddings"
+    },
+    {
+      "title": "Embeddings — OpenAI Platform Docs",
+      "url": "https://platform.openai.com/docs/guides/embeddings"
+    },
+    {
+      "title": "Sentence Transformers documentation",
+      "url": "https://www.sbert.net/"
+    }
+  ]
+}

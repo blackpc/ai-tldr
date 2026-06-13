@@ -1,0 +1,332 @@
+{
+  "slug": "chat-templates-and-loss-masking",
+  "title": "Chat Templates and Loss Masking in Fine-Tuning",
+  "shortTitle": "Chat Templates & Loss Masking",
+  "seoTitle": "Chat Templates and Loss Masking Explained",
+  "metaDescription": "Getting the chat template or loss mask wrong quietly ruins a fine-tune. Learn how special tokens frame turns and why you train only on the assistant's reply.",
+  "keywords": [
+    "chat template fine-tuning",
+    "loss masking fine-tuning",
+    "train only on completions",
+    "special tokens chat format",
+    "fine-tuning prompt template mismatch",
+    "mask user tokens training"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn the two formatting details that silently break fine-tunes: matching the model's exact chat template and masking the loss so it trains only on the assistant turn.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you [fine-tune](/learn/fine-tuning/fine-tuning-basics/what-is-fine-tuning) a chat model, you hand it example conversations and say *write replies like these*. But a model doesn't see a tidy conversation with neat \"User\" and \"Assistant\" bubbles. It sees one long string of tokens. So two formatting details decide whether your training data actually teaches what you think it does: the **chat template** and the **loss mask**."
+        },
+        {
+          "type": "p",
+          "md": "A **chat template** is the exact wrapping a model expects around each turn — the special tokens and role markers that say \"a user message starts here\" and \"the assistant's reply starts here.\" Every model family has its own template, baked in during its own training. Use the wrong one and the model is reading a format it was never taught to recognize."
+        },
+        {
+          "type": "p",
+          "md": "**Loss masking** decides *which* tokens the model is graded on while it learns. In a chat example, you only want it to learn how to produce the **assistant's** reply — not how to produce the user's question. Masking the loss means you tell the trainer: ignore the prompt tokens, only score the answer tokens. (You'll also hear this called *train on completions only*.)"
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "An everyday analogy: imagine teaching someone to write replies to customer emails. The chat template is the **company letterhead and the \"Dear …\" / \"Regards …\" scaffolding** — get it wrong and every letter looks off. Loss masking is **grading only the body they wrote**, not the incoming email they were responding to. You don't dock points for the question; you grade the answer."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "These two details share a nasty property: get them wrong and **nothing crashes**. Training runs to completion, the loss curve goes down, the run looks healthy — and then the model behaves slightly (or badly) wrong, and you have no obvious clue why. They are two of the most common *silent* fine-tuning bugs."
+        },
+        {
+          "type": "h3",
+          "text": "Why the chat template matters"
+        },
+        {
+          "type": "p",
+          "md": "A model learned during its own alignment to recognize one specific layout of role markers. That layout is part of how it \"knows\" where its turn begins and what voice to speak in. If you train on a different layout — say, you invent your own `### User:` / `### Assistant:` scheme, or you borrow another model's tokens — you fight against everything the base model already learned. Worse is a **train/inference mismatch**: you fine-tune with one template, then serve the model with a different one. At inference the model sees a frame it was never trained on for *this* task and produces garbled, run-on, or never-stopping output."
+        },
+        {
+          "type": "h3",
+          "text": "Why loss masking matters"
+        },
+        {
+          "type": "p",
+          "md": "If you train on *every* token — prompt included — you are spending part of the model's learning budget teaching it to predict the **user's** words. That's almost never what you want. You don't want the model to learn to write user questions; you want it to write great answers *given* those questions. Training on the prompt dilutes the signal, can make the model echo or hallucinate user-style text, and on tiny datasets it can meaningfully hurt quality. Masking focuses every gradient where it belongs: on the reply."
+        },
+        {
+          "type": "p",
+          "md": "Both bugs hit hardest on small, high-quality datasets — exactly the regime most people fine-tune in. With a few hundred examples you can't afford to waste signal or confuse the model about its own format."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Start from how a chat example becomes training data. You write conversations as a list of role/content messages. A **chat template** turns that list into one flat string of tokens by inserting the model's special markers. Then the trainer builds a **label mask** the same length as the token sequence, marking each token as either *learn from this* or *ignore this*."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "From messages to a masked training example",
+            "steps": [
+              {
+                "label": "Messages",
+                "sub": "role + content list"
+              },
+              {
+                "label": "Apply chat template",
+                "sub": "insert special tokens"
+              },
+              {
+                "label": "Tokenize",
+                "sub": "string → token ids"
+              },
+              {
+                "label": "Build loss mask",
+                "sub": "ignore prompt, keep reply",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "What a chat template actually inserts"
+        },
+        {
+          "type": "p",
+          "md": "Different model families use different markers, but the idea is the same: tokens that name each role and tokens that signal where a turn ends. Here is the *shape* of a formatted two-turn conversation (illustrative, not any one model's exact tokens):"
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "title": "a templated conversation (illustrative)",
+          "code": "<|system|>\nYou are a helpful support agent.\n<|end|>\n<|user|>\nWhat's the refund window?\n<|end|>\n<|assistant|>\nPhysical items can be returned within 30 days.\n<|end|>"
+        },
+        {
+          "type": "p",
+          "md": "Those `<|user|>`, `<|assistant|>`, and end-of-turn markers are **special tokens** — single tokens in the model's vocabulary, not literal text it spells out letter by letter. That's why you can't just type your own role labels and expect the same behavior: the real markers are atoms the model was trained to recognize. The fix is to never hand-build this string. Use the tokenizer's built-in chat template (in the Hugging Face ecosystem, `tokenizer.apply_chat_template(...)`), which produces the exact format the model expects."
+        },
+        {
+          "type": "h3",
+          "text": "How the loss mask is built"
+        },
+        {
+          "type": "p",
+          "md": "After tokenizing, the trainer creates a `labels` array aligned with the tokens. Prompt tokens (system + user, plus the role markers leading into the assistant turn) get a special **ignore value** — in PyTorch the cross-entropy loss skips any label equal to `-100`. The assistant's reply tokens keep their real ids. The model still *reads* the whole prompt as context; it's just never **graded** on predicting those tokens."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Same tokens, two different label masks",
+            "columns": [
+              {
+                "title": "Train on everything (usually wrong)",
+                "items": [
+                  "Prompt tokens → graded",
+                  "Reply tokens → graded",
+                  "Model learns to predict user text too",
+                  "Diluted signal, can echo prompts"
+                ]
+              },
+              {
+                "title": "Loss masking (completions only)",
+                "accent": true,
+                "items": [
+                  "Prompt tokens → ignored (-100)",
+                  "Reply tokens → graded",
+                  "Model only learns to answer",
+                  "All signal on the assistant turn"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Here's the masking idea in a few lines. Once the assistant turn's character span is known, anything before it becomes `-100`:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "build a completion-only loss mask",
+          "code": "# token_ids: the full templated, tokenized conversation\n# reply_start: index of the first ASSISTANT-reply token\n#              (everything before it is prompt/markers)\nIGNORE = -100\nlabels = token_ids.copy()\nlabels[:reply_start] = [IGNORE] * reply_start\n\n# Cross-entropy with ignore_index=-100 skips the masked positions,\n# so gradients flow ONLY from the assistant's reply tokens.\nloss = cross_entropy(logits, labels, ignore_index=IGNORE)"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "You rarely write this by hand. Trainers like Hugging Face TRL's `SFTTrainer` expose a *train-on-completions* option (e.g. a completion-only collator), and managed APIs handle masking for you when you submit messages in their chat format. The point is to **understand what's happening** so you can spot it when it's wrong."
+        }
+      ]
+    },
+    {
+      "id": "the-template-mismatch-bug",
+      "title": "The classic template-mismatch bug",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The single most common silent failure is a **train/inference template mismatch**. You fine-tune with one wrapping, then your serving stack applies a different one (or none). The model now sees a frame it doesn't recognize for this task, and the symptoms are weirdly specific:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**It never stops.** The model keeps generating — answering its own follow-up questions, inventing a new user turn — because the end-of-turn token it learned isn't where it expects it.",
+            "**Wrong voice or role confusion.** Replies drift into user-style phrasing, or the model restates the question instead of answering it.",
+            "**Format collapse on the first token.** Output starts with stray markers or whitespace because the prompt didn't end exactly where training said the reply begins.",
+            "**Great eval loss, bad real output.** Loss looked fine because it was measured with the *training* template; production uses another one."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Rule of thumb: the string you train on and the string you serve must be produced by the **same template function**. If you fine-tune model X, use X's own tokenizer and chat template at *both* training and inference. Don't mix a Llama template with a Mistral model, and don't hand-roll role markers on one side only."
+        },
+        {
+          "type": "h3",
+          "text": "A quick way to catch it"
+        },
+        {
+          "type": "p",
+          "md": "Before launching a run, print one fully-formatted, tokenized example and *read it*. Decode it back to text and confirm: the special tokens are real single tokens (not spelled-out characters), there's exactly one end-of-turn marker per turn, and the assistant reply begins right where your mask says it does. Five minutes of eyeballing here saves a wasted training run."
+        }
+      ]
+    },
+    {
+      "id": "single-turn-vs-multi-turn",
+      "title": "Masking single-turn vs multi-turn chats",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "With one user turn and one assistant reply, masking is simple: ignore everything up to the reply, grade the reply. Multi-turn conversations need a small decision."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Setup",
+            "What to grade",
+            "What to ignore"
+          ],
+          "rows": [
+            [
+              "Single turn",
+              "The one assistant reply",
+              "System + user + all markers"
+            ],
+            [
+              "Multi-turn, grade all assistant turns",
+              "Every assistant reply in the chat",
+              "Every user turn + system"
+            ],
+            [
+              "Multi-turn, grade last turn only",
+              "Only the final assistant reply",
+              "All earlier turns (used as context)"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Grading *all* assistant turns is usually the right default — each reply is a valid training target, and you get more learning signal from one conversation. Grading only the last turn makes sense when earlier turns are fixed context you don't want the model to imitate. Either way, **user turns are always masked out**. The one mistake to avoid is masking the special tokens that *end* the assistant turn: the model must learn to emit its stop token, or it won't know when to stop at inference time."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Keep the assistant turn's **end-of-turn / stop token inside the graded region.** It's part of the reply the model needs to produce. Mask it out and your fine-tune may forget how to stop — a frequent cause of run-on generations."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics click, a few finer points separate a clean fine-tune from a flaky one."
+        },
+        {
+          "type": "p",
+          "md": "**Tokenization boundaries are subtle.** Whether a leading space or newline attaches to the prompt token or the first reply token can shift your mask by one position. An off-by-one mask either leaks a prompt token into the graded region or drops the reply's first token from it. This is exactly why you should trust the tokenizer's own template and offset mapping rather than splitting strings yourself."
+        },
+        {
+          "type": "p",
+          "md": "**Generation prompts.** Templates often have an `add_generation_prompt` flag that appends the opening assistant marker (so the model knows it's its turn) without any reply text. You want that **on** at inference time and handled correctly at training time — the reply must start immediately after that marker, and your mask boundary must line up with it."
+        },
+        {
+          "type": "p",
+          "md": "**System prompts and packing.** If you fine-tune with a particular system prompt, keep using it (or a compatible one) at inference. And if you *pack* multiple short conversations into one sequence for efficiency, make sure attention and masks don't let one example bleed into the next — every example needs its own clean prompt/reply boundary."
+        },
+        {
+          "type": "p",
+          "md": "**Does masking always help?** For most supervised fine-tuning, completion-only masking is the safe default and often improves results, especially with little data. On very large, diverse datasets the gap can shrink. Treat it as a default you justify changing, not a knob to flip blindly — and confirm the effect when you [evaluate the fine-tuned model](/learn/fine-tuning/fine-tuning-basics/evaluate-fine-tuned-model)."
+        },
+        {
+          "type": "p",
+          "md": "**It's mostly a data-prep concern.** Templates and masks are decided when you build the dataset and configure the trainer, not in the model architecture. They sit right next to your other [dataset preparation](/learn/fine-tuning/fine-tuning-basics/fine-tuning-dataset-prep) choices and apply whether you do a full fine-tune or a parameter-efficient one like [LoRA](/learn/fine-tuning/lora-and-peft/what-is-lora) — the mask logic is identical; only *which* weights update changes. Get these two details right and you remove a whole class of silent failures before they ever start."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is a chat template in fine-tuning?",
+      "a": "A chat template is the model-specific way of wrapping a conversation into one token string — the special tokens and role markers (system / user / assistant) plus end-of-turn tokens. Each model family has its own. In the Hugging Face ecosystem you apply it with `tokenizer.apply_chat_template(...)` rather than building the string by hand."
+    },
+    {
+      "q": "What does loss masking mean in fine-tuning?",
+      "a": "Loss masking tells the trainer which tokens to learn from. You mask out (ignore) the prompt tokens — system and user turns — and grade only the assistant's reply, so the model learns to *answer* rather than to predict the user's words. In PyTorch this is done by setting masked labels to `-100`, which cross-entropy skips."
+    },
+    {
+      "q": "What does 'train on completions only' mean?",
+      "a": "It's the same idea as loss masking: you compute the training loss only over the completion (the assistant's reply), not over the prompt. The model still reads the full prompt as context, but gradients flow only from the reply tokens, focusing all the learning signal on the output you actually want."
+    },
+    {
+      "q": "Why does my fine-tuned model never stop generating?",
+      "a": "The two usual culprits are a chat-template mismatch between training and inference, or masking out the assistant turn's end-of-turn/stop token during training. Make sure you use the same template at train and serve time, and keep the stop token inside the graded (unmasked) region so the model learns to emit it."
+    },
+    {
+      "q": "What happens if I use the wrong chat template?",
+      "a": "The model sees a format it wasn't trained to recognize, which causes run-on output, role confusion, or stray markers at the start of replies. The most damaging version is a train/inference mismatch — training looks healthy (loss drops) but real output is broken because production uses a different template."
+    },
+    {
+      "q": "Should I mask all assistant turns or just the last one in a multi-turn chat?",
+      "a": "Grading all assistant turns is the usual default — each reply is a valid target and you get more signal per conversation. Grade only the last turn when earlier turns are fixed context you don't want the model to imitate. Either way, user turns are always masked out."
+    }
+  ],
+  "related": [
+    "fine-tuning-dataset-prep",
+    "what-is-fine-tuning",
+    "fine-tuning-hyperparameters",
+    "what-fine-tuning-changes",
+    "evaluate-fine-tuned-model",
+    "what-is-lora"
+  ],
+  "furtherReading": [
+    {
+      "title": "Chat Templates — Hugging Face Transformers docs",
+      "url": "https://huggingface.co/docs/transformers/main/en/chat_templating"
+    },
+    {
+      "title": "Supervised Fine-tuning Trainer (SFTTrainer) — Hugging Face TRL",
+      "url": "https://huggingface.co/docs/trl/en/sft_trainer"
+    },
+    {
+      "title": "torch.nn.functional.cross_entropy (ignore_index) — PyTorch docs",
+      "url": "https://pytorch.org/docs/stable/generated/torch.nn.functional.cross_entropy.html"
+    }
+  ]
+}

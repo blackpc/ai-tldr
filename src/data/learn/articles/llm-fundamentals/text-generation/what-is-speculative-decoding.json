@@ -1,0 +1,348 @@
+{
+  "slug": "what-is-speculative-decoding",
+  "title": "What Is Speculative Decoding? Making LLMs Generate Faster",
+  "shortTitle": "Speculative Decoding",
+  "seoTitle": "What Is Speculative Decoding? Faster LLM Generation",
+  "metaDescription": "Speculative decoding uses a small draft model to guess ahead, then a big model to verify, generating several tokens per step. Learn how it speeds up inference.",
+  "keywords": [
+    "what is speculative decoding",
+    "speculative decoding explained",
+    "draft model speculative decoding",
+    "how to make llm inference faster",
+    "speculative sampling llm"
+  ],
+  "difficulty": "advanced",
+  "oneLiner": "Understand the clever trick where a small 'draft' model guesses several tokens ahead and a big model verifies them in one shot, often doubling generation speed for free.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A large language model writes one token (roughly a word-piece) at a time. To produce each token, the whole multi-billion-parameter network runs once — a single *forward pass*. This step-by-step style is called [autoregressive generation](/learn/llm-fundamentals/text-generation/autoregressive-generation), and it's the main reason big models feel slow: a hundred output tokens means a hundred full passes through the model, one after another."
+        },
+        {
+          "type": "p",
+          "md": "**Speculative decoding** is a trick to skip a lot of that waiting *without changing the answer at all*. The idea: keep a tiny, fast \"draft\" model alongside the big one. The draft model rapidly guesses the next few tokens. Then the big model checks all of those guesses in a *single* forward pass. Whatever it agrees with, it keeps for free; the first guess it disagrees with, it corrects. Repeat. On a good run you produce three, four, or five tokens for roughly the cost of one big-model step."
+        },
+        {
+          "type": "p",
+          "md": "Here's the everyday version. A senior editor (the big model) writes carefully and slowly, weighing every word. An eager junior (the draft model) scribbles ahead: *\"The capital of France is Paris, a city...\"*. The editor doesn't write from scratch — they read the junior's sentence in one glance, nod at the part that's right, cross out the first wrong word, and continue from there. The junior is cheap and quick; the editor is the one who guarantees quality. You get the editor's writing at closer to the junior's speed."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The key promise: the final text is **identical** to what the big model would have produced on its own. Speculative decoding changes *how fast* tokens come out, never *which* tokens come out. It is an optimization on top of normal decoding, not a different way of choosing words."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Generating text with a large model is *memory-bound*, not compute-bound. For every token, the GPU has to read all of the model's weights out of memory to do the math — and that reading is the slow part (this is one reason [LLMs need GPUs](/learn/llm-fundamentals/llm-basics/why-llms-need-gpus) with very fast memory). The painful detail is that checking *one* token and checking *several* tokens in a single pass cost almost the same, because either way you've already paid to load the weights. The GPU spends most of a forward pass waiting on memory, with compute to spare."
+        },
+        {
+          "type": "p",
+          "md": "Speculative decoding exploits exactly that spare compute. Instead of verifying one token per expensive pass, you verify a whole batch of *proposed* tokens in one pass — using capacity that was otherwise idle. If the cheap draft guesses well, you turn many slow sequential steps into far fewer, and latency drops sharply."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Latency.** Users feel the time-to-each-token. Cutting the number of big-model passes makes streaming responses visibly snappier — often roughly 2x faster, sometimes more, depending on the task.",
+            "**Cost and throughput.** Fewer big-model passes per response means a server can handle more requests with the same hardware. For a high-volume API, that is real money.",
+            "**No quality tradeoff.** Most speed tricks (smaller models, aggressive quantization, heavy caching) trade some accuracy for speed. Speculative decoding's headline feature is that, done correctly, it does not. The output distribution is provably unchanged."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "This is why it now ships inside production serving engines (vLLM, TensorRT-LLM, llama.cpp and others) and behind many commercial APIs. It is one of the few \"free lunch\" optimizations in LLM inference — *if* you can find a draft model that agrees with the big one often enough."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The loop has two players: a small **draft model** and the large **target model** (the one whose output you actually want). Each round does *draft → verify → accept*, and any rejected guess is repaired so the result stays exactly correct."
+        },
+        {
+          "type": "h3",
+          "text": "Step 1 — Draft: guess a few tokens ahead"
+        },
+        {
+          "type": "p",
+          "md": "Starting from the text so far, the cheap draft model runs its normal autoregressive loop for a short burst — say 4 tokens. Because it's small, those 4 quick passes are far cheaper than even one pass of the big model. The draft also records the probability it assigned to each token it picked; the verifier will need those numbers."
+        },
+        {
+          "type": "h3",
+          "text": "Step 2 — Verify: one big pass checks them all"
+        },
+        {
+          "type": "p",
+          "md": "Now the magic. You feed the original text *plus all 4 drafted tokens* into the target model as a single sequence, and run **one** forward pass. Thanks to the way attention works, that one pass produces the target model's own [logits](/learn/llm-fundamentals/text-generation/logits-explained) — its predicted next-token distribution — at *every* position at once. So in a single big-model step you learn what the target model *would* have said at each of the drafted spots, all in parallel. This parallel check is the whole reason the trick pays off."
+        },
+        {
+          "type": "h3",
+          "text": "Step 3 — Accept or correct (and stay exact)"
+        },
+        {
+          "type": "p",
+          "md": "Walk the drafted tokens left to right and compare each against the target model's distribution at that position. Each token is accepted with a probability set by *how much the target model agreed with the draft*. The moment one token is rejected, you stop, discard the rest of the draft, and sample one replacement token from a corrected distribution. This accept/reject rule (\"speculative sampling\") is carefully designed so the tokens you keep follow **exactly** the target model's own distribution — no bias is introduced."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "The draft-then-verify loop",
+            "steps": [
+              {
+                "label": "Draft model proposes",
+                "sub": "guess next ~4 tokens, fast"
+              },
+              {
+                "label": "Target model verifies",
+                "sub": "ONE pass scores all positions"
+              },
+              {
+                "label": "Accept matching prefix",
+                "sub": "keep agreed tokens free"
+              },
+              {
+                "label": "Correct first mismatch",
+                "sub": "resample one token, exact"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Crucially, even in the worst case — the draft is rejected immediately — you still produce at least one valid token from that big-model pass (the corrected one). So you can never go *slower* in tokens-per-pass than plain decoding; speculative decoding only ever wins or breaks even on big-model passes. The diagram below traces a concrete round."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "One round — draft \"is Paris a city\", 3 of 4 accepted",
+            "steps": [
+              {
+                "label": "Context",
+                "sub": "\"The capital of France\""
+              },
+              {
+                "label": "Draft proposes",
+                "sub": "is / Paris / a / city"
+              },
+              {
+                "label": "Verify in 1 pass",
+                "sub": "agree: is, Paris, a"
+              },
+              {
+                "label": "Reject + correct",
+                "sub": "\"city\" → \"located\""
+              },
+              {
+                "label": "Output 4 tokens",
+                "sub": "is Paris a located",
+                "accent": true
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "choosing-a-draft-model",
+      "title": "Choosing a draft model",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The whole method lives or dies on the **acceptance rate** — the fraction of drafted tokens the target model keeps. The best draft model is one that is both *cheap* and *closely aligned* with the target, because every rejected token is wasted draft work and a missed speedup."
+        },
+        {
+          "type": "p",
+          "md": "Two forces pull against each other. A bigger draft model agrees with the target more often (higher acceptance) but costs more to run each guess. A tinier draft is nearly free but gets rejected more. The sweet spot is usually a small model from the *same family* as the target — for example a 1B-parameter draft for a 70B-parameter target — so they were trained similarly and tend to predict the same easy tokens."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Draft choice",
+            "Acceptance rate",
+            "Draft cost",
+            "Net effect"
+          ],
+          "rows": [
+            [
+              "Tiny model (e.g. 1B for a 70B)",
+              "Moderate",
+              "Very low",
+              "Usually the best balance"
+            ],
+            [
+              "Mid-size same-family model",
+              "High",
+              "Higher",
+              "Wins only if target is huge"
+            ],
+            [
+              "Unrelated/badly-matched model",
+              "Low",
+              "Any",
+              "Can be slower than no draft"
+            ],
+            [
+              "No separate model (self-draft)",
+              "Varies",
+              "Near zero",
+              "Avoids serving two models"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Where do you get a matched draft? A few common patterns: pick a smaller official model in the same family; distill one specifically to imitate the target; or skip the separate model entirely and have the target model predict several tokens at once via extra lightweight \"heads\" — the approach popularized by **Medusa** and refined by **EAGLE**. Self-drafting is attractive because you serve only one set of weights."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Acceptance depends on the *content*, not just the models. Predictable text — boilerplate, code formatting, repeated phrases — gets accepted in long runs, so speedups are largest there. Highly creative or surprising output accepts less. Measure the real acceptance rate on *your* traffic before promising a number."
+        }
+      ]
+    },
+    {
+      "id": "where-it-fits",
+      "title": "Where it fits among decoding ideas",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Beginners often lump several different \"decoding\" topics together. They live at different layers, and speculative decoding sits *on top of* the others rather than replacing them."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Three different questions about generation",
+            "columns": [
+              {
+                "title": "How is ONE token chosen?",
+                "items": [
+                  "[Greedy vs sampling](/learn/llm-fundamentals/text-generation/greedy-decoding-vs-sampling)",
+                  "Temperature, top-p, top-k",
+                  "Decides which token, not speed"
+                ]
+              },
+              {
+                "title": "How are tokens produced in sequence?",
+                "items": [
+                  "[Autoregressive generation](/learn/llm-fundamentals/text-generation/autoregressive-generation)",
+                  "One pass per token, in order",
+                  "The default, baseline loop"
+                ]
+              },
+              {
+                "title": "How do we make that loop FASTER?",
+                "accent": true,
+                "items": [
+                  "Speculative decoding",
+                  "Draft guesses, target verifies",
+                  "Speed only — same output"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Read it left to right. *Greedy vs sampling* is about **which** token you pick at one position. *Autoregressive generation* is the **order** — one token at a time, each feeding the next. Speculative decoding accelerates that loop while preserving whatever sampling setting you chose: if you run the target at temperature 0.7, the accepted tokens still follow the temperature-0.7 distribution. It is orthogonal to those choices, which is exactly why it can be a drop-in speedup."
+        },
+        {
+          "type": "p",
+          "md": "It is also distinct from speedups that *do* change the math — like [quantization](/learn/llm-fundamentals/llm-basics/why-llms-need-gpus) or distilling a smaller model to serve directly. Those trade some accuracy for speed. Speculative decoding's defining property is that the target model still has the final say on every token, so quality is identical."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic loop clicks, the interesting questions are about squeezing out more acceptance and handling real serving conditions. A few directions worth knowing."
+        },
+        {
+          "type": "p",
+          "md": "**How many tokens to draft?** The draft length is a tunable knob. Draft too few and you under-use the parallel verify pass; draft too many and you waste effort on guesses that get rejected past the first mismatch. Some systems make this *adaptive*, drafting more when recent acceptance has been high and backing off when it's low."
+        },
+        {
+          "type": "p",
+          "md": "**Tree-based / multi-candidate drafting.** Instead of one linear guess, draft a small *tree* of alternative continuations and verify many candidate paths in the same pass (the idea behind Medusa and EAGLE). More of the verify pass's spare compute gets used, so acceptance — and thus speedup — rises. The cost is more complex bookkeeping in the verifier."
+        },
+        {
+          "type": "p",
+          "md": "**Lookup / n-gram drafting.** For repetitive output (long code blocks, copying text from the prompt), you can skip the draft *model* entirely and propose tokens by simple string lookup from context. It's almost free and accepts extremely well on copy-heavy text — a cheap complement to model-based drafting."
+        },
+        {
+          "type": "p",
+          "md": "**Batching tension.** Speculative decoding shines most when the GPU is *underused* — small batches, low traffic, latency-sensitive single requests. When a server is already running large batches, the spare compute that the trick relies on is gone, so the win shrinks. Production engines weigh this and sometimes switch speculation off under heavy load."
+        },
+        {
+          "type": "p",
+          "md": "**Exactness, restated.** The reason teams trust this in production is the proof behind speculative sampling: the accept/reject rule reproduces the target model's exact output distribution, token for token. So you debate *speed and complexity*, never *correctness*. The honest open problems are practical — finding or training a well-matched draft, choosing draft length, and keeping acceptance high across varied real traffic. If you want the foundations underneath it, revisit [next-token prediction](/learn/llm-fundamentals/text-generation/next-token-prediction) and [how LLMs work](/learn/llm-fundamentals/llm-basics/how-llms-work); the speedup only makes sense once those are second nature."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is speculative decoding in simple terms?",
+      "a": "It's a way to make a large language model generate text faster without changing the output. A small, fast \"draft\" model guesses the next several tokens, and the big model checks all those guesses in a single pass, keeping the ones it agrees with. You get multiple tokens for roughly the cost of one big-model step."
+    },
+    {
+      "q": "Does speculative decoding change the model's output or hurt quality?",
+      "a": "No. The accept/reject rule (speculative sampling) is designed so the tokens you keep follow exactly the big model's own distribution. The final text is identical to what plain decoding would have produced — only the speed changes, not the answer."
+    },
+    {
+      "q": "How much faster is speculative decoding?",
+      "a": "It varies with the task and how well the draft model matches the target, but a rough 2x speedup is common, sometimes more on predictable text like code or boilerplate. The gain comes from the acceptance rate: the more drafted tokens the big model keeps, the bigger the win."
+    },
+    {
+      "q": "What is a draft model in speculative decoding?",
+      "a": "The draft model is the small, cheap model that guesses the next few tokens before the large target model verifies them. The best draft is fast yet closely aligned with the target — usually a tiny model from the same family — so the target accepts most of its guesses."
+    },
+    {
+      "q": "How is speculative decoding different from greedy decoding or sampling?",
+      "a": "Greedy decoding and sampling decide *which* token to pick at a single position. Speculative decoding doesn't change that choice at all — it's a way to run the whole generation loop faster while preserving whatever sampling setting you use. It sits on top of normal autoregressive generation as a speed optimization."
+    },
+    {
+      "q": "When does speculative decoding not help?",
+      "a": "It relies on spare GPU compute, so the benefit shrinks when the server is already running large batches at full utilization. It also helps less on highly unpredictable, creative output, where the draft model gets rejected often and the acceptance rate falls."
+    }
+  ],
+  "related": [
+    "autoregressive-generation",
+    "next-token-prediction",
+    "greedy-decoding-vs-sampling",
+    "logits-explained",
+    "why-llms-need-gpus"
+  ],
+  "furtherReading": [
+    {
+      "title": "Fast Inference from Transformers via Speculative Decoding (arXiv)",
+      "url": "https://arxiv.org/abs/2211.17192"
+    },
+    {
+      "title": "Accelerating Large Language Model Decoding with Speculative Sampling (arXiv)",
+      "url": "https://arxiv.org/abs/2302.01318"
+    },
+    {
+      "title": "Speculative Decoding — vLLM docs",
+      "url": "https://docs.vllm.ai/en/latest/features/spec_decode.html"
+    }
+  ]
+}

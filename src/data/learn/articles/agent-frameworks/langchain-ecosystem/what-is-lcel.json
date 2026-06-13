@@ -1,0 +1,350 @@
+{
+  "slug": "what-is-lcel",
+  "title": "What Is LCEL? LangChain Expression Language Explained",
+  "shortTitle": "LCEL",
+  "seoTitle": "What Is LCEL? LangChain Expression Language Guide",
+  "metaDescription": "LCEL lets you compose LangChain steps with the pipe operator into runnables that stream, batch, and run async for free. Learn the syntax and why it exists.",
+  "keywords": [
+    "what is lcel",
+    "langchain expression language tutorial",
+    "lcel pipe operator runnable",
+    "lcel streaming batching async",
+    "langchain runnable explained"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Understand LangChain Expression Language — how the pipe operator composes runnables and gives you streaming, batching, and async out of the box — so LangChain code finally reads cleanly.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "If you have used [LangChain](/learn/agent-frameworks/langchain-ecosystem/what-is-langchain), you have seen the pipe character (`|`) show up in code like `prompt | model | parser`. That single symbol is **LCEL**, the **LangChain Expression Language**. It is not a new programming language — it is a way of *gluing small steps together* into one callable chain, using the same `|` you might know from a Unix shell."
+        },
+        {
+          "type": "p",
+          "md": "Think of a kitchen assembly line. One station chops the vegetables, the next one cooks them, the last one plates the dish. Each station does one job and hands its output to the next. LCEL lets you wire your AI steps the same way: a prompt template formats the input, the model generates text, and a parser cleans up the result. You connect them left to right with `|`, and the whole line becomes a single thing you can run."
+        },
+        {
+          "type": "p",
+          "md": "The pieces you connect are called **runnables**. A runnable is any object that knows how to take an input and produce an output. Prompt templates, chat models, output parsers, and even plain Python functions can all be runnables. LCEL is simply the rule that says: *if both sides are runnables, `left | right` builds a new runnable that feeds the output of `left` into `right`.*"
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The name has two halves. \"LangChain\" is the framework; \"Expression Language\" means you *express* a chain as a small, declarative formula instead of writing the plumbing by hand. The `|` operator is borrowed from the shell pipe and from Python's own `__or__` — LangChain just overloads it for runnables."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Before LCEL, gluing LangChain steps together meant writing imperative Python: call the prompt, pass its output to the model, await the model, hand the result to a parser, and repeat. That code worked, but it was verbose, hard to read, and — the painful part — you got *nothing for free*. If you wanted streaming, you rewrote it. If you wanted to process 100 inputs at once, you rewrote it again. If you wanted an async version for your web server, a third rewrite."
+        },
+        {
+          "type": "p",
+          "md": "LCEL solves this by making composition declarative and giving every chain a **shared interface**. The moment you build a chain with `|`, that chain automatically supports a fixed set of methods, no extra work from you:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**`invoke`** — run the chain once on a single input and get a single output.",
+            "**`stream`** — get the output token-by-token as the model produces it, so a chat UI can show words appearing live instead of freezing on a spinner.",
+            "**`batch`** — run the chain on a list of inputs at once, with parallelism handled for you.",
+            "**`ainvoke` / `astream` / `abatch`** — the async versions of all of the above, so the same chain drops straight into an async web framework like FastAPI without a rewrite."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "This is the real reason LCEL exists. You describe *what* the chain does once, and you get streaming, batching, and async behavior *for the whole chain* automatically — LangChain figures out how to push data through it efficiently. For anyone building a production app, that removes a huge class of boilerplate and a huge class of bugs."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "A practical bonus: because chains share one interface, you can swap one piece for another (a different model, a different parser) without touching the rest of the pipeline. The shape of the chain stays the same; only one runnable changes."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "At its core, LCEL is one rule applied over and over: **the output of the step on the left becomes the input of the step on the right.** When you write `a | b | c`, LangChain builds a `RunnableSequence` — a chain that runs `a`, feeds its result into `b`, feeds *that* result into `c`, and returns the final value."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "prompt | model | parser",
+            "steps": [
+              {
+                "label": "Input dict",
+                "sub": "{\"topic\": \"the moon\"}"
+              },
+              {
+                "label": "PromptTemplate",
+                "sub": "fills in the prompt"
+              },
+              {
+                "label": "ChatModel",
+                "sub": "generates a reply"
+              },
+              {
+                "label": "OutputParser",
+                "sub": "text → clean value",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Each box above is a runnable. The prompt template takes a dictionary and returns a formatted prompt; the model takes that prompt and returns a message; the parser takes the message and returns a plain string (or structured data). The `|` between them is what wires the boxes into a pipeline."
+        },
+        {
+          "type": "h3",
+          "text": "A minimal chain"
+        },
+        {
+          "type": "p",
+          "md": "Here is the whole idea in a few lines. Notice there is no loop, no manual `await`, no glue code — just three runnables joined by `|`."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "minimal_lcel.py",
+          "code": "from langchain_anthropic import ChatAnthropic\nfrom langchain_core.prompts import ChatPromptTemplate\nfrom langchain_core.output_parsers import StrOutputParser\n\nprompt = ChatPromptTemplate.from_template(\n    \"Explain {topic} to a 10-year-old in two sentences.\"\n)\nmodel = ChatAnthropic(model=\"claude-sonnet-4-6\")\nparser = StrOutputParser()\n\n# Compose three runnables into one chain.\nchain = prompt | model | parser\n\n# Run it once.\nprint(chain.invoke({\"topic\": \"the moon\"}))\n\n# Same chain, streamed token-by-token — no rewrite.\nfor piece in chain.stream({\"topic\": \"black holes\"}):\n    print(piece, end=\"\", flush=True)\n\n# Same chain, run on many inputs at once.\nprint(chain.batch([{\"topic\": \"rain\"}, {\"topic\": \"tides\"}]))"
+        },
+        {
+          "type": "p",
+          "md": "The key insight: `chain` is itself a runnable. You built it from three smaller runnables, and the result behaves exactly like one. That is why you can call `invoke`, `stream`, and `batch` on it — the interface is the same all the way up."
+        },
+        {
+          "type": "h3",
+          "text": "Branching and reshaping data"
+        },
+        {
+          "type": "p",
+          "md": "Real chains rarely flow in one straight line. You often need to keep the original input *and* add something computed from it, or run two things side by side. LCEL has two small helpers for this. **`RunnableParallel`** (which you can write as a plain dictionary) runs several runnables on the same input at the same time and collects their outputs into a dict. **`RunnablePassthrough`** simply forwards its input unchanged, which lets you carry a value past a step that does not need to touch it."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "parallel_and_passthrough.py",
+          "code": "from langchain_core.runnables import RunnableParallel, RunnablePassthrough\n\n# A retriever is also a runnable: question -> relevant documents.\n# Build a {context, question} dict, then feed it to a prompt | model chain.\nsetup = RunnableParallel(\n    context=retriever,                 # runs the retriever on the question\n    question=RunnablePassthrough(),     # forwards the question unchanged\n)\n\nrag_chain = setup | prompt | model | parser\nprint(rag_chain.invoke(\"What is our refund window?\"))"
+        },
+        {
+          "type": "p",
+          "md": "This pattern — fan out to gather context, then merge back into a single prompt — is exactly how a [RAG](/learn/rag/rag-fundamentals/what-is-rag) chain is built in LangChain. `RunnableParallel` does the fan-out; the `|` does the merge-and-generate."
+        }
+      ]
+    },
+    {
+      "id": "the-runnable-interface",
+      "title": "The runnable interface in one place",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Everything in LCEL boils down to the runnable interface. Once you internalize this small table, most LangChain code stops looking mysterious — you are just composing objects that all speak the same handful of methods."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Method",
+            "Input → Output",
+            "Use it for"
+          ],
+          "rows": [
+            [
+              "`invoke`",
+              "one input → one output",
+              "a single request, the default"
+            ],
+            [
+              "`stream`",
+              "one input → a stream of chunks",
+              "live chat UIs, showing tokens as they arrive"
+            ],
+            [
+              "`batch`",
+              "list of inputs → list of outputs",
+              "processing many items with built-in parallelism"
+            ],
+            [
+              "`ainvoke`",
+              "one input → one output (async)",
+              "async web servers; non-blocking calls"
+            ],
+            [
+              "`astream`",
+              "one input → async stream",
+              "streaming inside async frameworks"
+            ],
+            [
+              "`abatch`",
+              "list → list (async)",
+              "high-throughput async pipelines"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "You define a chain once with `|`, and all six of these come along automatically. You never implement `stream` or `batch` yourself — LangChain derives them from how the runnables are wired. That is the whole payoff of LCEL: write the *what* once, get all the execution modes for free."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "A plain Python function can join a chain too. Wrap it with `RunnableLambda(my_func)` (or just pass the function where a runnable is expected) and it becomes a step like any other — handy for small transforms between the bigger pieces."
+        }
+      ]
+    },
+    {
+      "id": "lcel-vs-langgraph",
+      "title": "LCEL vs LangGraph: which one?",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The most common confusion is *when to reach for LCEL and when to reach for [LangGraph](/learn/agent-frameworks/langchain-ecosystem/what-is-langgraph)*. They are not competitors — they cover different shapes of work, and you will often use both."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Pick by the shape of your control flow",
+            "columns": [
+              {
+                "title": "LCEL",
+                "accent": true,
+                "items": [
+                  "Data flows one direction: A → B → C",
+                  "No loops, no going back",
+                  "Stateless: each call is independent",
+                  "Prompt chains, RAG pipelines, parsers",
+                  "Reads like a formula"
+                ]
+              },
+              {
+                "title": "LangGraph",
+                "items": [
+                  "Flow can loop, branch, and revisit",
+                  "The model decides what runs next",
+                  "Stateful: carries memory across steps",
+                  "Agents, multi-step tool use, human-in-the-loop",
+                  "Reads like a flowchart of nodes + edges"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The simple rule of thumb: if your logic is a **straight pipeline** that runs front to back, LCEL is the cleanest tool. If your logic has **cycles** — an agent that thinks, calls a tool, looks at the result, and decides whether to try again — you have outgrown a linear chain and want LangGraph's graph of nodes and edges. LCEL pipelines frequently appear *inside* LangGraph nodes: each node does a linear step, and the graph wires the looping logic around them. For a deeper side-by-side, see [LangChain vs LangGraph](/learn/agent-frameworks/langchain-ecosystem/langchain-vs-langgraph)."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "LCEL is small but has a few sharp edges that trip up newcomers. Most errors come from a mismatch between what one runnable *outputs* and what the next one *expects* as input."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Type mismatches between steps.** The output of the left runnable must match the input the right one expects. A prompt template wants a dict; a model wants a prompt/messages; a parser wants a model message. Pipe them in the wrong order and you get a confusing error. Read chains as a contract: each `|` is a handoff, and both sides must agree on the shape.",
+            "**Forgetting the parser.** A chat model returns a message *object*, not a string. If you forget `| StrOutputParser()` and try to use the result as plain text, you will be poking at an object's `.content` everywhere. Add the parser to get clean output.",
+            "**Confusing `RunnableParallel` with a sequence.** A dict in an LCEL chain means \"run all of these on the *same* input, in parallel\" — not \"run them one after another.\" If you expected sequential behavior, you need `|`, not a dict.",
+            "**Over-piping simple logic.** LCEL is elegant, but plain Python is sometimes clearer. If a step is just an `if` or a loop with no need for streaming or batching, a normal function may read better than forcing it into a runnable.",
+            "**Reaching for LCEL when you need a loop.** If you find yourself trying to make a chain call itself or branch back, stop — that is a graph, not a pipeline. Move to LangGraph rather than fighting the linear model."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "When a chain throws a cryptic error, debug it one step at a time: call `.invoke` on the *first* runnable alone, inspect its output, then add the next step and run again. The break is almost always at the handoff where one step's output stopped matching the next step's expected input. The [LangSmith](/learn/agent-frameworks/langchain-ecosystem/what-is-langsmith) tracer shows the input and output of every step in the chain, which makes this trivial."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The basics — `|`, runnables, `RunnableParallel`, `RunnablePassthrough` — cover the large majority of real chains. A few more capabilities are worth knowing once the fundamentals click."
+        },
+        {
+          "type": "p",
+          "md": "**Configuration and fallbacks.** Runnables carry methods like `.with_config(...)` to set things such as tags and timeouts, and `.with_fallbacks([...])` to fail over to a backup runnable if the primary one errors — for example, retrying with a second model when the first is rate-limited. Because these live on the shared interface, they work on any chain you build."
+        },
+        {
+          "type": "p",
+          "md": "**Binding arguments.** `.bind(...)` lets you lock in arguments to a runnable ahead of time — for instance, binding tool definitions or a `stop` sequence to a model so every call through the chain uses them, without threading those values through the input each time."
+        },
+        {
+          "type": "p",
+          "md": "**Streaming intermediate steps.** Beyond `stream`, there is `astream_events`, which emits a structured event for every step as the chain runs — when the retriever starts, when the model produces a token, when a parser finishes. This is how production apps drive rich UIs that show *what the chain is doing*, not just the final tokens."
+        },
+        {
+          "type": "p",
+          "md": "**Where LCEL sits in the bigger picture.** LCEL is the composition layer for linear work inside the broader LangChain ecosystem. Around it sit LangGraph for stateful, looping [agents](/learn/ai-agents/agent-fundamentals/what-is-an-ai-agent/) and LangSmith for tracing and evaluation. A real application usually mixes all three: LCEL chains for the straight-line pieces, a LangGraph graph for the control flow, and LangSmith watching the whole thing. The durable lesson is the mental model — *everything is a runnable, and `|` connects runnables* — because once that clicks, you can read almost any LangChain code at a glance."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What does LCEL stand for in LangChain?",
+      "a": "LCEL stands for **LangChain Expression Language**. It is the syntax that lets you compose LangChain steps (called runnables) into a chain using the pipe operator `|`, for example `prompt | model | parser`. It is not a separate language — it is a declarative way to wire runnables together in Python."
+    },
+    {
+      "q": "What is a runnable in LCEL?",
+      "a": "A runnable is any object that takes an input and produces an output through a shared interface (`invoke`, `stream`, `batch`, and their async versions). Prompt templates, chat models, output parsers, retrievers, and wrapped Python functions are all runnables. When you join runnables with `|`, the resulting chain is *also* a runnable, which is why composition works uniformly."
+    },
+    {
+      "q": "What does the pipe operator `|` do in LangChain?",
+      "a": "The `|` operator composes two runnables into a sequence: it feeds the output of the left runnable directly into the right runnable as its input. So `a | b | c` runs `a`, passes the result to `b`, passes that to `c`, and returns the final output — the same left-to-right flow as a Unix shell pipe."
+    },
+    {
+      "q": "Do I get streaming and batching for free with LCEL?",
+      "a": "Yes. Any chain built with LCEL automatically supports `invoke`, `stream`, `batch`, and the async `ainvoke`/`astream`/`abatch` — you do not implement them yourself. You describe the chain once, and LangChain derives all the execution modes from how the runnables are wired."
+    },
+    {
+      "q": "When should I use LCEL instead of LangGraph?",
+      "a": "Use LCEL when your logic is a straight, one-directional pipeline with no loops — prompt chains, RAG pipelines, and parsing flows. Use LangGraph when you need cycles, branching, or persistent state, such as an agent that calls tools and decides whether to try again. They are complementary: LCEL chains often run inside LangGraph nodes."
+    },
+    {
+      "q": "What are RunnableParallel and RunnablePassthrough?",
+      "a": "`RunnableParallel` (which you can write as a plain dict) runs several runnables on the *same* input at once and collects their outputs into a dictionary. `RunnablePassthrough` forwards its input unchanged, which is useful for carrying a value past a step that does not need to modify it — together they let you reshape and branch data inside a chain."
+    }
+  ],
+  "related": [
+    "what-is-langchain",
+    "what-is-langgraph",
+    "langchain-vs-langgraph",
+    "what-is-langsmith"
+  ],
+  "furtherReading": [
+    {
+      "title": "LangChain Expression Language (LCEL) — LangChain Docs",
+      "url": "https://python.langchain.com/docs/concepts/lcel/"
+    },
+    {
+      "title": "Runnable interface — LangChain Docs",
+      "url": "https://python.langchain.com/docs/concepts/runnables/"
+    },
+    {
+      "title": "LangChain — GitHub",
+      "url": "https://github.com/langchain-ai/langchain"
+    }
+  ]
+}

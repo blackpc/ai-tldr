@@ -1,0 +1,418 @@
+{
+  "slug": "llm-slo-error-budget",
+  "title": "SLOs for LLM Apps: Setting Latency and Quality Error Budgets",
+  "shortTitle": "SLOs & Error Budgets",
+  "seoTitle": "SLOs for LLM Apps: Latency & Quality Error Budgets",
+  "metaDescription": "Learn how to define service level objectives for nondeterministic LLM apps — latency, availability, and quality budgets — and how error budgets guide releases.",
+  "keywords": [
+    "llm slo",
+    "llm error budget",
+    "slo for ai apps",
+    "latency slo llm",
+    "quality slo llm"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You'll understand how to set measurable service-level objectives for an LLM app, including the tricky case of a quality SLO on nondeterministic output.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "An **SLO** — a *service level objective* — is a promise you make about how good your service has to be, written as a number you can check. \"The page loads in under one second 99% of the time\" is an SLO. It is the difference between a vague goal (\"the app should feel fast\") and a target you can measure, alert on, and argue about with real data."
+        },
+        {
+          "type": "p",
+          "md": "An **error budget** is the flip side of that promise. If your objective is 99.9% success, then 0.1% of requests are *allowed* to fail. That 0.1% is your budget — a small allowance of failure you can spend. As long as you have budget left, you can ship new features fast. When you run out, you stop shipping and fix reliability instead. The budget turns a fuzzy argument (\"are we stable enough to release?\") into a simple yes/no."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like a monthly data plan on your phone. You get a fixed amount of data (the budget). Stream all you want early in the month, but if you burn through it by the 20th, you're throttled until it resets. SLOs and error budgets give your LLM app the same self-discipline: move fast while you have headroom, slow down when you've spent it."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This thinking comes from **SRE** (Site Reliability Engineering), the discipline Google popularised for running large systems. The twist for LLM apps is that one of your objectives — *quality* — can't be checked with a simple pass/fail like a normal HTTP request. That's the interesting part of this article."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Most teams start with a dashboard: latency charts, token counts, error rates. Dashboards are necessary but not enough. A chart tells you *what happened*; it does not tell you whether that's **acceptable**, and it does not tell anyone what to *do* about it. A wiggly p95 latency line at 3am means nothing without a target drawn across it that says \"above this, we have failed our users.\""
+        },
+        {
+          "type": "p",
+          "md": "SLOs fix three concrete problems that hit every LLM product as it grows."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Endless 'is this good enough?' debates.** Without a target, every latency spike or quality complaint becomes a judgement call. With an SLO, the answer is arithmetic: are we above or below the number? The team stops arguing and starts measuring.",
+            "**Feature speed vs. reliability tug-of-war.** Product wants to ship; on-call wants stability. An error budget resolves this *automatically*: budget left means ship freely, budget gone means freeze and fix. Nobody has to win the argument every sprint.",
+            "**Nondeterministic quality.** A normal API either returns 200 or it doesn't. An LLM can return a perfectly valid HTTP 200 containing a wrong, rambling, or unsafe answer. Your monitoring can be all green while users are furious. A *quality* SLO is the only thing that catches this class of failure."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "If you're moving an app from demo to real traffic — see [from prototype to production](/learn/production-llmops/llmops-fundamentals/llm-prototype-to-production) — SLOs are how you decide the thing is actually ready, and how you keep it honest afterwards. They sit on top of your [observability](/learn/production-llmops/observability-monitoring/what-is-llm-observability) stack and give the raw numbers a purpose."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Three terms do all the work, and they nest inside each other. Get these straight and the rest is detail."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Term",
+            "What it is",
+            "Example"
+          ],
+          "rows": [
+            [
+              "SLI",
+              "*Service Level Indicator* — a raw metric you measure",
+              "p95 time-to-first-token = 1.4s"
+            ],
+            [
+              "SLO",
+              "*Objective* — the target the SLI must hit",
+              "p95 TTFT under 2s, 99% of the time"
+            ],
+            [
+              "Error budget",
+              "The allowed shortfall, derived from the SLO",
+              "1% of requests may breach 2s per 30 days"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "You **measure** an SLI, you **set a target** to turn it into an SLO, and the gap between 100% and that target **is** your error budget. The flow is always the same loop."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "From raw metric to release decision",
+            "steps": [
+              {
+                "label": "Pick SLIs",
+                "sub": "latency, availability, quality"
+              },
+              {
+                "label": "Set SLOs",
+                "sub": "target + time window"
+              },
+              {
+                "label": "Measure",
+                "sub": "real production traffic"
+              },
+              {
+                "label": "Track budget",
+                "sub": "how much failure is left"
+              },
+              {
+                "label": "Decide",
+                "sub": "ship or freeze",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "The three SLIs every LLM app should pick"
+        },
+        {
+          "type": "p",
+          "md": "Don't track fifty metrics as SLOs. Pick a small handful that reflect what users actually feel. For LLM apps, three families cover almost everything."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Latency.** For streaming chat, the metric users feel is **time-to-first-token (TTFT)** — how long until words start appearing — plus **tokens-per-second** for how fast they flow after. For batch or tool-style calls, total response time. Always use a percentile (p95 or p99), never an average; one slow request hidden behind a fast average is exactly the request that annoys a user.",
+            "**Availability.** The share of requests that complete successfully — not a 5xx error, not a timeout, not a provider outage. Because you depend on an upstream model API, this folds in your provider's reliability too, which is why teams add [provider failover](/learn/production-llmops/llmops-fundamentals/llm-provider-failover) to protect this SLO.",
+            "**Quality.** The hard one. The share of responses that are actually *good* — correct, on-topic, safe, well-formatted. You can't check this on every request cheaply, so you **sample**: score a slice of traffic and treat that as your estimate."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Measuring a quality SLO when there's no 'correct'"
+        },
+        {
+          "type": "p",
+          "md": "Latency and availability are objective — a stopwatch and a status code settle them. Quality has no status code. The standard approach is to build a **quality SLI** from one or more cheap proxies and sample it, rather than trying to grade every single response by hand."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "Sources that feed one quality SLI",
+            "root": {
+              "label": "Quality SLI",
+              "accent": true
+            },
+            "children": [
+              {
+                "label": "LLM-as-judge",
+                "sub": "auto-score sampled outputs"
+              },
+              {
+                "label": "User feedback",
+                "sub": "thumbs up/down, edits"
+              },
+              {
+                "label": "Hard checks",
+                "sub": "valid JSON, no refusal"
+              },
+              {
+                "label": "Human review",
+                "sub": "small expert-graded set"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "An **LLM-as-judge** uses a separate model call to grade outputs against a rubric (\"is this answer faithful to the retrieved context? yes/no\"). It's noisy and imperfect, but cheap and runs continuously. **Implicit user feedback** — thumbs, copy clicks, edits, retries, abandonment — is a powerful signal because it reflects real satisfaction; see [collecting user feedback](/learn/production-llmops/observability-monitoring/llm-user-feedback). **Hard checks** are deterministic rules you *can* run on every response: did it return valid JSON, did it refuse when it shouldn't have, did it leak a system prompt. You blend these into a single number, like \"94% of sampled responses pass quality,\" and set your SLO against it."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Your quality SLI is an *estimate from a sample*, so it has a margin of error. A reading of 95% from 200 sampled requests is not the same as a true 95%. Don't tune releases on tiny day-to-day wiggles inside that noise band — react to sustained trends, not single data points."
+        }
+      ]
+    },
+    {
+      "id": "worked-example",
+      "title": "A worked example: budgeting a support chatbot",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Suppose you run a customer-support assistant doing 100,000 requests over a 30-day window. Here's a realistic, deliberately *not-too-strict* SLO set. Note that the quality target is lower than the latency target — that's correct, because some imperfect answers are unavoidable and chasing 99.9% quality would freeze you forever."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "SLI",
+            "SLO target",
+            "Error budget (per 30 days)"
+          ],
+          "rows": [
+            [
+              "p95 time-to-first-token",
+              "< 2.0s for 99% of requests",
+              "1,000 requests may exceed 2s"
+            ],
+            [
+              "Availability",
+              "99.5% complete successfully",
+              "500 requests may fail"
+            ],
+            [
+              "Quality (sampled judge + thumbs)",
+              "92% of sampled responses pass",
+              "8% may fail quality"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Now watch the budget do its job. Say you ship a new prompt template on day 10. Over the next three days your sampled quality SLI drops from 94% to 89% — below the 92% target. You are now **burning quality budget faster than the month allows**. The error-budget policy kicks in automatically:"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "What a burned budget changes",
+            "columns": [
+              {
+                "title": "Budget healthy",
+                "accent": true,
+                "items": [
+                  "Ship features freely",
+                  "Experiment with prompts/models",
+                  "Take measured risks",
+                  "On-call sleeps"
+                ]
+              },
+              {
+                "title": "Budget exhausted",
+                "items": [
+                  "Freeze risky releases",
+                  "Roll back the bad change",
+                  "All hands on reliability/quality",
+                  "Raise alert + review policy"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The point is that *nobody had to hold a meeting to decide whether to roll back*. The number crossed the line, the policy said \"freeze,\" the team reverted the prompt, quality recovered, and releases resumed. That's the entire value of an error budget: it converts a political decision into an agreed-in-advance rule."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "burn_rate.py — the only math you really need",
+          "code": "# Over a 30-day window with a 99% availability SLO:\nTOTAL_REQUESTS   = 100_000\nSLO_TARGET       = 0.99           # allow 1% to fail\nBUDGET           = TOTAL_REQUESTS * (1 - SLO_TARGET)   # = 1000 failures\n\n# So far this month:\nelapsed_fraction = 10 / 30         # we're a third into the window\nfailures_so_far  = 700\n\n# How much budget *should* be spent by now vs. how much actually is?\nexpected_spend = BUDGET * elapsed_fraction      # 333 by day 10\nburn_rate      = failures_so_far / expected_spend\n\nprint(f\"Budget: {BUDGET:.0f} failures/month\")\nprint(f\"Spent {failures_so_far} of {BUDGET:.0f} \"\n      f\"({failures_so_far / BUDGET:.0%}) by day 10\")\nprint(f\"Burn rate: {burn_rate:.1f}x expected\")\n\n# burn_rate > 1 means you'll run out before the window resets.\nif burn_rate > 2:\n    print(\"ALERT: burning >2x too fast — freeze releases\")"
+        },
+        {
+          "type": "p",
+          "md": "**Burn rate** — how fast you're spending the budget compared to the steady pace that would just barely last the window — is the signal worth alerting on. A burn rate of 1x means you'll finish the month exactly on budget. A burn rate of 10x means you'll be out in three days, and that deserves a page in the middle of the night. Slow burns (1–2x) deserve a ticket, not a page."
+        }
+      ]
+    },
+    {
+      "id": "dashboards-vs-slos",
+      "title": "Dashboards vs. SLOs: charts are not targets",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "It's worth being blunt about how an SLO differs from the monitoring you probably already have. They use the same underlying [production metrics](/learn/production-llmops/observability-monitoring/llm-production-metrics), but they answer different questions."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "A dashboard tells you…",
+            "An SLO tells you…"
+          ],
+          "rows": [
+            [
+              "What the latency is right now",
+              "Whether that latency is acceptable"
+            ],
+            [
+              "That quality dipped on Tuesday",
+              "Whether the dip breached your promise"
+            ],
+            [
+              "The error rate over time",
+              "How much failure you have left to spend"
+            ],
+            [
+              "Nothing about what to do next",
+              "Exactly when to freeze or ship"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "A dashboard is a window; an SLO is a contract. The dashboard shows you the weather, the SLO is the agreement about when you're allowed to go outside. You need both — the chart to diagnose *why* a budget is burning, the SLO to decide *whether to act*. The mistake is shipping a wall of beautiful charts and calling it monitoring while no one has ever written down what \"good\" means as a number."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Practical starting point: pick **one** SLI per family (one latency, one availability, one quality), set deliberately loose targets you're already meeting, and run them for a month before tightening. An SLO you're constantly breaching is just an alarm that everyone learns to ignore."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "SLOs are simple to describe and easy to get wrong. The failure modes are predictable."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Targets that are too strict.** A 99.99% quality SLO on nondeterministic output is fantasy. You'll breach it constantly, the error budget will always be empty, and the team will stop trusting the whole system. Set targets you can actually meet, then tighten slowly.",
+            "**Averaging latency.** An average hides the slow tail. If your mean TTFT is 800ms but your p99 is 9 seconds, real users are suffering and your average says everything's fine. Always SLO on a percentile.",
+            "**A quality SLI nobody validated.** If your LLM-as-judge disagrees with human reviewers, your quality SLO measures the judge's opinion, not real quality. Spot-check the judge against humans periodically and recalibrate.",
+            "**An error budget with no consequences.** A budget you never enforce is a number on a slide. If burning it doesn't actually freeze releases, it changes no behaviour and you've built theatre. The policy — what happens when it's gone — is the whole point.",
+            "**Counting provider outages against your team unfairly.** If your model provider has a regional incident, that hits availability through no fault of your code. Decide in advance how upstream failures count, and lean on [failover](/learn/production-llmops/llmops-fundamentals/llm-provider-failover) and a [gateway](/learn/production-llmops/llmops-fundamentals/what-is-llm-gateway) to protect the budget."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic latency / availability / quality trio is running, a few refinements separate a toy SLO from one a serious team relies on."
+        },
+        {
+          "type": "p",
+          "md": "**Per-route and per-tier SLOs.** A single global SLO averages your easy and hard traffic together and hides problems. A retrieval-grounded FAQ answer and an open-ended reasoning task have very different achievable quality and latency. Split SLOs by endpoint, by model tier, or by customer plan so a slow, hard route doesn't silently drag down — or get masked by — a fast, easy one. This pairs naturally with [model routing](/learn/production-llmops/llmops-fundamentals/llm-model-routing), where different requests already go to different models."
+        },
+        {
+          "type": "p",
+          "md": "**Multi-window burn-rate alerts.** The mature pattern (from Google's SRE workbook) uses two windows at once: a short window to catch fast, severe burns quickly, and a long window to confirm a slow burn is real and not noise. This gives you pages that fire fast on genuine emergencies without crying wolf on every transient blip — especially important for a sampled, noisy quality SLI."
+        },
+        {
+          "type": "p",
+          "md": "**Cost as a soft SLO.** LLM apps have a fourth dimension classic web services don't: spend. Tokens cost money, and a runaway prompt or a model swap can quietly 5x your bill. Many teams track cost-per-request the same way they track latency — with a target and an alert — even if it isn't a hard release-gating SLO. It lives next to the others in your [observability](/learn/production-llmops/observability-monitoring/what-is-llm-observability) and [tracing](/learn/production-llmops/observability-monitoring/llm-tracing-explained) tooling."
+        },
+        {
+          "type": "p",
+          "md": "**The hard, honest part stays hard.** A quality SLO is only ever as trustworthy as the SLI behind it, and grading nondeterministic text is an unsolved problem you manage rather than solve. Your judge drifts, user feedback is biased toward the angry and the delighted, and a new model version can shift the meaning of \"good\" overnight. The durable discipline is the loop itself: define what good means as a number, measure it on real traffic, spend the budget while you have it, and stop when you don't. That habit — targets and consequences, not just charts — is what turns a flashy demo into a service people can depend on."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is an SLO for an LLM app?",
+      "a": "An SLO (service level objective) is a measurable target for how good your LLM service must be, such as \"p95 time-to-first-token under 2 seconds, 99% of the time\" or \"92% of sampled responses pass a quality check.\" It turns vague goals like \"fast and reliable\" into specific numbers you can measure, alert on, and use to gate releases."
+    },
+    {
+      "q": "How is an error budget different from an SLO?",
+      "a": "The SLO is the target (e.g. 99.5% success); the error budget is the failure it *permits* — the remaining 0.5%. If your SLO allows 99.5% over 100,000 requests, your budget is 500 failed requests. You spend that budget shipping features and taking risks; when it runs out, you freeze releases and fix reliability."
+    },
+    {
+      "q": "How do you set a quality SLO when LLM output isn't pass/fail?",
+      "a": "You build a quality SLI from cheap proxies — an LLM-as-judge that scores sampled outputs against a rubric, implicit user feedback (thumbs, edits, retries), and deterministic hard checks (valid JSON, no improper refusal) — then sample traffic rather than grading every response. You blend those into one number like \"94% of sampled responses pass\" and set your SLO against it, remembering it's an estimate with a margin of error."
+    },
+    {
+      "q": "What latency metric should an LLM SLO use?",
+      "a": "For streaming chat, use time-to-first-token (TTFT) — how long until words start appearing — plus tokens-per-second for flow. For batch or tool calls, use total response time. Always pick a percentile such as p95 or p99 rather than an average, because averages hide the slow tail of requests that actually frustrate users."
+    },
+    {
+      "q": "What is burn rate and why does it matter?",
+      "a": "Burn rate is how fast you're spending your error budget compared to the steady pace that would just barely last the whole time window. A burn rate of 1x finishes the month on budget; 10x means you'll be out in days. High burn rates are what you alert on — fast severe burns deserve a page, slow burns deserve a ticket."
+    },
+    {
+      "q": "Aren't dashboards enough — why add SLOs?",
+      "a": "Dashboards show what's happening but never say whether it's acceptable or what to do about it. An SLO draws a line across the chart that defines failure, and the error-budget policy defines the consequence (freeze or ship). Charts diagnose; SLOs decide. You need both, but a wall of charts with no targets isn't really monitoring."
+    }
+  ],
+  "related": [
+    "what-is-llm-observability",
+    "llm-production-metrics",
+    "llm-user-feedback",
+    "llm-tracing-explained",
+    "llm-prototype-to-production",
+    "llm-provider-failover"
+  ],
+  "furtherReading": [
+    {
+      "title": "Google SRE Book — Service Level Objectives",
+      "url": "https://sre.google/sre-book/service-level-objectives/"
+    },
+    {
+      "title": "Google SRE Workbook — Alerting on SLOs (burn rate)",
+      "url": "https://sre.google/workbook/alerting-on-slos/"
+    },
+    {
+      "title": "Service level objective — Wikipedia",
+      "url": "https://en.wikipedia.org/wiki/Service-level_objective"
+    }
+  ]
+}

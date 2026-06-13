@@ -1,0 +1,365 @@
+{
+  "slug": "langgraph-persistence-checkpointers",
+  "title": "LangGraph Persistence: Checkpointers and Memory",
+  "shortTitle": "Persistence & Checkpointers",
+  "seoTitle": "LangGraph Persistence: Checkpointers & Memory",
+  "metaDescription": "LangGraph checkpointers save graph state so agents can pause, resume, time-travel, and remember across sessions. Learn how persistence and threads work.",
+  "keywords": [
+    "langgraph checkpointer",
+    "langgraph persistence tutorial",
+    "langgraph memory across sessions",
+    "langgraph thread state resume",
+    "langgraph human in the loop persistence"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn how LangGraph's checkpointers persist graph state — enabling pause/resume, human-in-the-loop approvals, time-travel debugging, and memory that survives across sessions.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "[LangGraph](/learn/agent-frameworks/langchain-ecosystem/what-is-langgraph) lets you build an agent as a *graph*: nodes do work, edges decide what runs next, and a shared **state** object flows between them. By default that state lives only in memory. The moment the run ends — or your server restarts, or the process crashes — the state is gone. The agent has no memory of what just happened."
+        },
+        {
+          "type": "p",
+          "md": "**Persistence** fixes that. A **checkpointer** is a small piece you plug into the graph that saves a snapshot of the state after *every* step. Each snapshot is a **checkpoint**. Because the full state is on disk, the graph can stop in the middle, wait for hours or days, and then pick up *exactly* where it left off — same variables, same position in the graph, as if no time had passed."
+        },
+        {
+          "type": "p",
+          "md": "Think of a long board game you play across several evenings. When you stop, you photograph the board — every piece, whose turn it is, the score. Next time you set the board back up from the photo and continue. The checkpointer is that photographer; the checkpoint is the photo; and a **thread** is one ongoing game, kept separate from every other game on the shelf."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Two words to keep straight: a **checkpointer** is the *mechanism* that saves state (you choose one — in-memory, SQLite, Postgres). A **thread** is one *conversation or run*, identified by a `thread_id`. One checkpointer can hold thousands of threads, each with its own independent history of checkpoints."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Persistence is the line between a demo and a product. A graph with no checkpointer is a one-shot script: it runs start to finish in a single call and forgets everything. Almost every real agent needs to do something that single call can't."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Memory across sessions.** A user chats today, comes back tomorrow, and the agent still remembers the conversation. You load the same `thread_id` and the prior messages and state are right there — no need to re-send the whole history yourself.",
+            "**Human-in-the-loop.** Before the agent sends an email, charges a card, or merges code, you want a person to approve. Persistence lets the graph *pause* mid-run, hand control back to your app, and *resume* later with the human's decision folded in.",
+            "**Crash recovery.** A long, multi-step agent (research, then summarize, then file a report) might run for minutes. If step 3 of 5 crashes, you don't restart from scratch — you resume from the last checkpoint, keeping the work already done.",
+            "**Time-travel debugging.** Because every step is saved, you can rewind to any past checkpoint, inspect exactly what the state was, change an input, and re-run *from there*. That makes flaky agent bugs reproducible.",
+            "**Fault-tolerant background jobs.** A worker can pick up a thread, advance it a few steps, save, and let another worker continue. State lives in the store, not in one process's memory."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "This is also what people mean when they say LangGraph is \"production-grade\" while a plain LangChain chain is more of a pipeline. The conceptual difference — nodes, edges, and state — is covered in [what is LangGraph](/learn/agent-frameworks/langchain-ecosystem/what-is-langgraph) and [LangChain vs LangGraph](/learn/agent-frameworks/langchain-ecosystem/langchain-vs-langgraph). The persistence layer described here is what turns those concepts into something you can ship."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You attach a checkpointer when you compile the graph. After that, *invoking* the graph requires a `thread_id` so LangGraph knows which conversation this run belongs to. With those two things in place, the save-and-resume behavior is automatic — you don't call \"save\" yourself."
+        },
+        {
+          "type": "h3",
+          "text": "The save loop"
+        },
+        {
+          "type": "p",
+          "md": "Each time a node finishes, LangGraph writes a checkpoint: the full state, *which node ran*, and *what comes next* (the \"next\" pointer). On the following invocation with the same `thread_id`, LangGraph reads the latest checkpoint, restores the state, and continues from the saved position. State updates are reducers applied on top of the previous checkpoint, not blind overwrites — so message lists *append* rather than replace."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "Run a node → checkpoint → run the next node",
+            "steps": [
+              {
+                "label": "Load latest checkpoint",
+                "sub": "for this thread_id"
+              },
+              {
+                "label": "Run next node",
+                "sub": "node updates state"
+              },
+              {
+                "label": "Apply reducers",
+                "sub": "merge into state"
+              },
+              {
+                "label": "Save checkpoint",
+                "sub": "state + next pointer"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Threads keep runs separate"
+        },
+        {
+          "type": "p",
+          "md": "Every invocation passes a config like `{\"configurable\": {\"thread_id\": \"user-42\"}}`. All checkpoints for that id form one thread. Use a *new* id for a fresh conversation; reuse an *existing* id to continue one. The checkpointer is a single store fanning out to many independent thread histories."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "One checkpointer, many threads",
+            "root": {
+              "label": "Checkpointer",
+              "sub": "SQLite / Postgres",
+              "accent": true
+            },
+            "children": [
+              {
+                "label": "thread user-42",
+                "sub": "checkpoints c1→c2→c3"
+              },
+              {
+                "label": "thread user-99",
+                "sub": "checkpoints c1→c2"
+              },
+              {
+                "label": "thread job-7",
+                "sub": "checkpoints c1→…→c8"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Here is the whole pattern in code. Notice there is no explicit save — compiling *with* a checkpointer and invoking *with* a `thread_id` is all it takes."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "persistent_graph.py",
+          "code": "from langgraph.graph import StateGraph, MessagesState, START, END\nfrom langgraph.checkpoint.memory import InMemorySaver\n\ndef chat_node(state: MessagesState):\n    # ... call your LLM, return new messages ...\n    return {\"messages\": [(\"assistant\", \"Hi, I remember you.\")]}\n\nbuilder = StateGraph(MessagesState)\nbuilder.add_node(\"chat\", chat_node)\nbuilder.add_edge(START, \"chat\")\nbuilder.add_edge(\"chat\", END)\n\n# 1) Attach a checkpointer at compile time.\ngraph = builder.compile(checkpointer=InMemorySaver())\n\n# 2) Every call carries a thread_id.\nconfig = {\"configurable\": {\"thread_id\": \"user-42\"}}\n\ngraph.invoke({\"messages\": [(\"user\", \"Hello\")]}, config)\n# Later — same thread_id — and prior messages are still in state:\ngraph.invoke({\"messages\": [(\"user\", \"What did I just say?\")]}, config)\n\n# Inspect the saved state at any time:\nsnapshot = graph.get_state(config)\nprint(snapshot.values)   # the state dict\nprint(snapshot.next)     # which node would run next"
+        }
+      ]
+    },
+    {
+      "id": "choosing-a-checkpointer",
+      "title": "Choosing a checkpointer",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "LangGraph ships several checkpointer backends. They all expose the same interface, so you can develop against one and deploy against another by swapping a single line. The difference is *where* the checkpoints are stored and *how long* they survive."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Checkpointer",
+            "Stored where",
+            "Survives restart?",
+            "Best for"
+          ],
+          "rows": [
+            [
+              "`InMemorySaver`",
+              "Process RAM",
+              "No",
+              "Tests, notebooks, quick demos"
+            ],
+            [
+              "`SqliteSaver`",
+              "A local `.db` file",
+              "Yes (single machine)",
+              "Local apps, prototypes, single-server tools"
+            ],
+            [
+              "`PostgresSaver`",
+              "A Postgres database",
+              "Yes (shared)",
+              "Production, multiple servers/workers"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The rule of thumb: `InMemorySaver` for throwaway runs, `SqliteSaver` when you want persistence on one machine with zero setup, and `PostgresSaver` once multiple processes must share the same threads. Each has a synchronous and an async variant (for example an async Postgres saver) — pick the one matching how you call the graph."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "`InMemorySaver` is *not* persistence in the durable sense — it only keeps state alive within one running process. It is perfect for learning the API, but if you ship it expecting memory to survive a deploy, every restart wipes every user's history. Move to SQLite or Postgres before production."
+        }
+      ]
+    },
+    {
+      "id": "pausing-for-human-approval",
+      "title": "A worked example: pause for human approval",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The most common reason people reach for persistence is human-in-the-loop: stop the agent before a risky action, let a person decide, then continue. Persistence is what makes the *pause* possible — the state has to be saved while you wait for the human, who might take a minute or a day."
+        },
+        {
+          "type": "p",
+          "md": "Inside a node you call `interrupt(...)`. That throws a special signal: LangGraph saves a checkpoint and returns control to your app, with the run frozen exactly there. When you're ready, you invoke the graph again on the *same thread* with a `Command(resume=...)` carrying the human's answer, and execution continues from the interrupt as if the function never stopped."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Interrupt, wait, resume",
+            "steps": [
+              {
+                "label": "Agent runs",
+                "sub": "reaches risky step"
+              },
+              {
+                "label": "interrupt()",
+                "sub": "checkpoint saved"
+              },
+              {
+                "label": "App shows human",
+                "sub": "approve / reject"
+              },
+              {
+                "label": "Command(resume=…)",
+                "sub": "same thread_id"
+              },
+              {
+                "label": "Agent continues",
+                "sub": "from the interrupt",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "human_approval.py",
+          "code": "from langgraph.types import interrupt, Command\n\ndef send_email_node(state):\n    draft = state[\"draft\"]\n    # Pause and surface the draft to a human. Execution stops here;\n    # the checkpointer has saved everything.\n    decision = interrupt({\"action\": \"send_email\", \"draft\": draft})\n    if decision == \"approve\":\n        actually_send(draft)\n        return {\"status\": \"sent\"}\n    return {\"status\": \"cancelled\"}\n\nconfig = {\"configurable\": {\"thread_id\": \"ticket-88\"}}\n\n# First invocation runs until interrupt(), then returns.\ngraph.invoke({\"draft\": \"Hi, your refund is approved.\"}, config)\n\n# ...minutes or days later, after a human clicked Approve in your UI...\ngraph.invoke(Command(resume=\"approve\"), config)   # picks up where it paused"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Because the pause is just a checkpoint, the waiting human costs you nothing — no process sits blocked, no memory is held. Your server can restart, scale down, or hand the thread to a different worker entirely. When the approval arrives, *any* process with access to the checkpointer can resume the thread."
+        }
+      ]
+    },
+    {
+      "id": "time-travel-and-inspection",
+      "title": "Time-travel and inspecting history",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Because every step is a saved checkpoint, the whole run is a replayable timeline. Three methods give you the controls."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**`get_state(config)`** — read the *current* snapshot for a thread: the state values and the `next` pointer (which node would run next).",
+            "**`get_state_history(config)`** — list *every* past checkpoint for the thread, newest first. Each entry has a `checkpoint_id` you can target.",
+            "**`update_state(config, values)`** — edit the saved state by hand, e.g. to fix a bad value before resuming, or to inject a human correction."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "To time-travel, grab a `checkpoint_id` from the history and pass it in the config. The next invocation resumes from *that* point instead of the latest one — so you can branch the run, try a different input, and compare outcomes without disturbing the original timeline."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "time_travel.py",
+          "code": "# Walk the full history of a thread.\nfor snap in graph.get_state_history(config):\n    print(snap.config[\"configurable\"][\"checkpoint_id\"], \"->\", snap.next)\n\n# Pick an earlier checkpoint and resume FROM it (a new branch).\nrewind = {\"configurable\": {\n    \"thread_id\": \"user-42\",\n    \"checkpoint_id\": \"<an-old-checkpoint-id>\",\n}}\ngraph.invoke(None, rewind)   # re-runs forward from that saved point"
+        },
+        {
+          "type": "p",
+          "md": "This is the feature that makes agent debugging tractable. Pair it with tracing in [LangSmith](/learn/agent-frameworks/langchain-ecosystem/what-is-langsmith) and you can both *see* why a run went wrong and *replay* it from before the mistake."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics click, a few distinctions and edge cases separate a toy setup from a robust one."
+        },
+        {
+          "type": "p",
+          "md": "**Short-term vs long-term memory.** Checkpointers give *thread-scoped* (short-term) memory: state that belongs to one conversation. They do **not** automatically share knowledge *across* threads. For that, LangGraph adds a separate **Store** (often `InMemoryStore` in dev, a Postgres-backed store in production) keyed by a namespace and key — use it to remember facts about a user that should persist across all their conversations. Threads forget each other; the Store is how you remember a user between threads."
+        },
+        {
+          "type": "p",
+          "md": "**Database setup.** Persistent backends need their tables created once. SQLite and Postgres savers expose a `setup()` call (or run it for you on first use) that creates the schema. In production, run that migration step as part of deploy rather than relying on first-request creation, so the very first user doesn't race the schema build."
+        },
+        {
+          "type": "p",
+          "md": "**State growth and serialization.** Every checkpoint stores the *whole* state. If your state holds a giant message history or large blobs, checkpoints get heavy and writes slow down. Keep state lean: store IDs or references, not megabytes of raw text; trim or summarize long message lists; and remember that whatever you put in state must be serializable to be saved."
+        },
+        {
+          "type": "p",
+          "md": "**LangGraph Platform.** The hosted/deployment layer builds on exactly this persistence model — it manages a Postgres-backed checkpointer, threads, and the Store for you, and exposes them over an API, so you don't operate the database yourself. The mental model you've learned here is the same; the platform just runs it."
+        },
+        {
+          "type": "p",
+          "md": "**Where to go next.** Persistence is one pillar of why teams pick LangGraph over a hand-rolled loop; the broader tradeoffs live in [agent framework comparison](/learn/agent-frameworks/choosing-a-framework/agent-framework-comparison) and [choosing an agent framework](/learn/agent-frameworks/choosing-a-framework/choose-agent-framework). If you're weighing whether you even need a framework's persistence at all, [building an agent without a framework](/learn/agent-frameworks/choosing-a-framework/agent-without-framework) is a useful contrast — you'll find yourself reinventing exactly the checkpoint loop described above."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is a checkpointer in LangGraph?",
+      "a": "A checkpointer is the component that saves a snapshot (a *checkpoint*) of your graph's state after every step. You attach one when compiling the graph. With a checkpointer in place, a run can pause, survive a restart, and resume from exactly where it stopped. Common backends are `InMemorySaver`, `SqliteSaver`, and `PostgresSaver`."
+    },
+    {
+      "q": "What is a thread_id in LangGraph and why do I need it?",
+      "a": "A `thread_id` identifies one conversation or run. All checkpoints for the same id form a single thread with its own independent history. You pass it in the config (`{\"configurable\": {\"thread_id\": \"...\"}}`) on every invocation: reuse an id to continue a conversation, use a new id to start a fresh one."
+    },
+    {
+      "q": "How does LangGraph remember conversations across sessions?",
+      "a": "Persistence handles it automatically. When a user returns, you invoke the graph with their existing `thread_id`, and LangGraph loads the latest checkpoint — including prior messages — so the agent continues with full context. You don't re-send the history yourself; you just point at the same thread."
+    },
+    {
+      "q": "Which checkpointer should I use in production?",
+      "a": "Use `PostgresSaver` (or its async variant) when multiple servers or background workers must share the same threads. `SqliteSaver` is fine for a single-machine app, and `InMemorySaver` is only for tests and demos because it loses everything on restart."
+    },
+    {
+      "q": "How do human-in-the-loop approvals work with persistence?",
+      "a": "Inside a node you call `interrupt(...)`, which saves a checkpoint and returns control to your app with the run frozen. After a human decides, you invoke the graph again on the same thread with `Command(resume=...)`, and it continues from the interrupt. The pause holds no process or memory — any worker can resume it later."
+    },
+    {
+      "q": "Do checkpointers give long-term memory across different users or conversations?",
+      "a": "No. Checkpointers give thread-scoped (short-term) memory — they don't share state between threads. For cross-thread memory, like remembering facts about a user across all their conversations, use LangGraph's separate Store, which is keyed by namespace and key."
+    }
+  ],
+  "related": [
+    "what-is-langgraph",
+    "langchain-vs-langgraph",
+    "what-is-langsmith",
+    "what-is-langchain",
+    "agent-framework-comparison"
+  ],
+  "furtherReading": [
+    {
+      "title": "Persistence — LangGraph Docs",
+      "url": "https://langchain-ai.github.io/langgraph/concepts/persistence/"
+    },
+    {
+      "title": "Human-in-the-loop — LangGraph Docs",
+      "url": "https://langchain-ai.github.io/langgraph/concepts/human_in_the_loop/"
+    },
+    {
+      "title": "LangGraph — GitHub",
+      "url": "https://github.com/langchain-ai/langgraph"
+    }
+  ]
+}

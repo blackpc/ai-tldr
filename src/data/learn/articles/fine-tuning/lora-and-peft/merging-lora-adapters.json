@@ -1,0 +1,352 @@
+{
+  "slug": "merging-lora-adapters",
+  "title": "How to Merge a LoRA Adapter Back Into the Base Model",
+  "shortTitle": "Merging LoRA Adapters",
+  "seoTitle": "How to Merge LoRA Adapters Into the Base Model",
+  "metaDescription": "After training a LoRA you can keep it as a separate adapter or merge it into the weights. Learn the trade-offs, the quality gotcha with QLoRA, and how to deploy.",
+  "keywords": [
+    "merge lora adapter into base model",
+    "lora merge and unload",
+    "keep lora separate vs merged",
+    "deploy lora adapter",
+    "qlora merge quality loss",
+    "lora adapter inference"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Decide whether to keep your LoRA as a hot-swappable adapter or bake it into the weights, and avoid the precision pitfall that silently degrades merged QLoRA models.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you fine-tune a model with [LoRA](/learn/fine-tuning/lora-and-peft/what-is-lora), you don't change the original model at all. You train a tiny set of extra weights — the **adapter** — that sits beside the frozen base model and nudges its behavior. A finished LoRA adapter is often just a few megabytes, while the base model it rides on can be tens of gigabytes."
+        },
+        {
+          "type": "p",
+          "md": "Once training is done, you face a simple fork in the road. Do you keep the adapter as a *separate file* that loads on top of the base model at runtime, or do you **merge** it permanently into the base weights to produce one standalone model? Merging means adding the adapter's learned changes back into the original numbers, so the result behaves exactly like the fine-tuned model but is a single, ordinary checkpoint again — no adapter file required."
+        },
+        {
+          "type": "p",
+          "md": "Think of the base model as a printed book and the LoRA adapter as a stack of sticky notes with your corrections. *Keeping them separate* is like handing someone the book plus the notes: flexible, because you can peel the notes off or swap in a different set, but the reader has to hold both. *Merging* is like printing a brand-new edition with every correction baked into the text: cleaner to hand out, but now the corrections are locked in and you can't easily pull them back off."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "In code, merging is usually one call — `model.merge_and_unload()` in Hugging Face PEFT. \"Merge\" folds the adapter math into the weights; \"unload\" removes the now-redundant adapter layers so you're left with a plain model."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The choice between *keep separate* and *merge* is not cosmetic — it decides how you deploy, how fast inference runs, and how easily you can serve many fine-tunes at once. Picking wrong can cost you latency, memory, or a maintenance headache later."
+        },
+        {
+          "type": "p",
+          "md": "Keeping the adapter separate is what makes LoRA so cheap to operate at scale. You load the big base model **once** into GPU memory and attach small adapters on top. A single GPU holding one 13B base model can serve dozens of different fine-tunes — one per customer, per language, per task — by swapping multi-megabyte adapters instead of loading multiple multi-gigabyte models. That is the entire economic argument for adapters in production."
+        },
+        {
+          "type": "p",
+          "md": "Merging matters when you want the *opposite*: a single, self-contained model with zero runtime overhead. The adapter adds a little extra math to every forward pass, and a merged model removes it — the fine-tuned weights are now just the model's weights. You also get a checkpoint you can hand to any tool that doesn't understand adapters: a plain GGUF for llama.cpp, an export to ONNX, or an upload to a hub where users expect one ready-to-run model."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Latency-sensitive single model.** Merge it. One model, no adapter layers, fastest possible forward pass.",
+            "**Many fine-tunes, one base.** Keep separate. Load the base once, hot-swap adapters per request — far less memory than N merged models.",
+            "**Export to a format that ignores adapters** (GGUF, ONNX, some serving runtimes). Merge first, then convert.",
+            "**Still iterating / stacking adapters.** Keep separate so you can swap, combine, or retrain without touching the base."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "LoRA never trains a full weight matrix. For a target layer with weight matrix `W`, it learns two small matrices, `A` and `B`, whose product is the *change* you want — usually scaled by a constant. The effective fine-tuned weight is simply the original plus that learned change:"
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "title": "the core LoRA equation",
+          "code": "W_finetuned = W_base + (alpha / r) * (B @ A)\n\n  W_base   : the frozen original weight matrix (large)\n  A, B     : the trained low-rank matrices (small)\n  r        : the LoRA rank\n  alpha    : the LoRA scaling factor\n  B @ A    : the low-rank update, same shape as W_base"
+        },
+        {
+          "type": "p",
+          "md": "When you **keep the adapter separate**, the runtime computes `B @ A` and adds its effect during every forward pass — the base weights stay untouched on disk and in memory. When you **merge**, you compute that update once, add it directly into `W_base`, and throw the adapter away. The result is a normal weight matrix that already contains the fine-tuning. (See [LoRA rank and alpha](/learn/fine-tuning/lora-and-peft/lora-rank-and-alpha) for what `r` and `alpha` actually do.)"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Two deployment paths after training",
+            "columns": [
+              {
+                "title": "Keep separate (base + adapter)",
+                "accent": true,
+                "items": [
+                  "Base loaded once, adapters attached on top",
+                  "Swap / stack adapters at runtime",
+                  "Tiny files to ship (megabytes)",
+                  "Slight per-call compute overhead",
+                  "Serve many fine-tunes on one GPU"
+                ]
+              },
+              {
+                "title": "Merge (one standalone model)",
+                "items": [
+                  "Adapter folded into the weights",
+                  "Fixed behavior, no swapping",
+                  "Full-size checkpoint to ship (gigabytes)",
+                  "No adapter overhead — fastest path",
+                  "Works in tools that ignore adapters"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "The merge in code"
+        },
+        {
+          "type": "p",
+          "md": "In the Hugging Face PEFT library the whole operation is two lines. You load the base model, attach the trained adapter, then call merge and unload to get back a plain model you can save."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "merge_lora.py",
+          "code": "from transformers import AutoModelForCausalLM, AutoTokenizer\nfrom peft import PeftModel\n\nbase = AutoModelForCausalLM.from_pretrained(\n    \"meta-llama/Llama-3.1-8B\",\n    torch_dtype=\"bfloat16\",   # load in full/16-bit precision to merge cleanly\n)\n\n# Attach the trained LoRA adapter on top of the base.\nmodel = PeftModel.from_pretrained(base, \"./my-lora-adapter\")\n\n# Fold B@A into the base weights, then drop the adapter layers.\nmerged = model.merge_and_unload()\n\n# Now it is an ordinary model — save it like any checkpoint.\nmerged.save_pretrained(\"./my-merged-model\")\nAutoTokenizer.from_pretrained(\"meta-llama/Llama-3.1-8B\").save_pretrained(\"./my-merged-model\")"
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Notice the base is loaded in `bfloat16`, not 4-bit. That detail is the single most common merge mistake — the next section explains exactly why it matters."
+        }
+      ]
+    },
+    {
+      "id": "the-qlora-precision-gotcha",
+      "title": "The QLoRA precision gotcha",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "If you trained with [QLoRA](/learn/fine-tuning/lora-and-peft/qlora-explained), there is a quality trap that catches almost everyone the first time. QLoRA loads the base model in **4-bit** to save memory, then trains a normal-precision adapter on top. That's great for training — but it changes what \"merge\" means."
+        },
+        {
+          "type": "p",
+          "md": "Your adapter (`A` and `B`) was trained against the *dequantized* values the 4-bit base unpacks to at runtime. If you merge that adapter straight into a model that is still stored in 4-bit, the framework has to round the merged result back down to 4-bit. The adapter's careful small corrections get crushed by that re-quantization, and the merged model can come out noticeably worse than the adapter felt during training — sometimes badly enough to look broken."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "**Never merge a QLoRA adapter into a 4-bit base.** Load the base in 16-bit (`bfloat16` or `float16`), merge into *that*, and save the 16-bit merged model. Re-quantize afterwards if you need a small model. Merge in high precision first, quantize last."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Safe QLoRA merge order",
+            "steps": [
+              {
+                "label": "QLoRA adapter",
+                "sub": "trained in 4-bit setup"
+              },
+              {
+                "label": "Reload base in 16-bit",
+                "sub": "bfloat16 / float16"
+              },
+              {
+                "label": "merge_and_unload()",
+                "sub": "fold adapter at high precision"
+              },
+              {
+                "label": "Save 16-bit model",
+                "sub": "full-precision merged weights",
+                "accent": true
+              },
+              {
+                "label": "Quantize (optional)",
+                "sub": "GGUF / AWQ / GPTQ last"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The rule generalizes: **merge in the highest precision you can afford, and quantize as the very last step.** Every rounding stage you do *after* the merge loses a little of what the adapter learned, so you want as few of them as possible — ideally just one, at the end, when the fine-tuning is already locked in."
+        }
+      ]
+    },
+    {
+      "id": "keep-vs-merge-decision",
+      "title": "Keep separate vs merge: a decision table",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "There's no universally right answer — it depends on how many fine-tunes you serve and what runs them. This table covers the cases you'll actually hit."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Your situation",
+            "Recommended",
+            "Why"
+          ],
+          "rows": [
+            [
+              "One fine-tune, latency matters",
+              "Merge",
+              "Removes adapter overhead; simplest deployment"
+            ],
+            [
+              "Dozens of fine-tunes, one base",
+              "Keep separate",
+              "Load base once, swap tiny adapters per request"
+            ],
+            [
+              "Exporting to GGUF / ONNX",
+              "Merge",
+              "Those formats expect a single plain checkpoint"
+            ],
+            [
+              "Still experimenting or stacking adapters",
+              "Keep separate",
+              "Swap, combine, retrain without touching the base"
+            ],
+            [
+              "Trained with QLoRA",
+              "Merge in 16-bit",
+              "Avoid the re-quantization quality loss"
+            ],
+            [
+              "Sharing a ready-to-run model publicly",
+              "Merge",
+              "Users expect one model, not base + adapter to assemble"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Keeping the adapter separate is rarely the *wrong* long-term call — it's the more reversible option. You can always merge a saved adapter later, but you can't cleanly extract an adapter back out of a merged model. When unsure, ship the adapter and merge only when a concrete need appears."
+        }
+      ]
+    },
+    {
+      "id": "merging-multiple-adapters",
+      "title": "Merging and stacking multiple adapters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Because each LoRA update is just `B @ A` added to the base, you can in principle add *several* adapters to the same model — a math adapter plus a translation adapter, say. PEFT supports combining adapters with weights so each contributes a chosen amount, and you can merge that blend down into one model."
+        },
+        {
+          "type": "p",
+          "md": "But stacking is not free magic. Each adapter was trained alone, so adding two together can have them step on each other — one may dominate, or the combination may behave worse than either does by itself. Treat any merged blend as a new model that needs its own [evaluation](/learn/fine-tuning/fine-tuning-basics/evaluate-fine-tuned-model), not as a guaranteed sum of skills."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Serve separately, route per request** — keep adapters apart and pick one based on the task. Cleanest when behaviors shouldn't mix.",
+            "**Combine then merge** — blend adapters with weights into one model when you genuinely want both behaviors at once, then evaluate the result.",
+            "**Re-train on combined data** — often the most reliable path: instead of merging two adapters, fine-tune one new adapter on data covering both skills."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "If you only ever need one behavior at a time, don't merge multiple adapters at all. Keep them as separate files and load whichever the incoming request needs — simpler, and each stays independently testable and updatable."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic merge is comfortable, a few subtler points separate a clean deployment from a flaky one."
+        },
+        {
+          "type": "p",
+          "md": "**Always evaluate the merged model, not just the adapter.** Numbers can drift slightly during the merge — most often from precision changes, occasionally from a config mismatch. Run your eval set against the *merged* checkpoint before shipping it. \"The adapter looked good in training\" is not the same as \"the deployed model is good.\""
+        },
+        {
+          "type": "p",
+          "md": "**Match dtype and config across the round trip.** Load the base for merging in the same architecture and a precision at least as high as you'll deploy at. Mismatched `torch_dtype`, a different base revision, or a wrong target-module list can silently produce a model that loads fine but answers worse. Pin the exact base model version you trained against."
+        },
+        {
+          "type": "p",
+          "md": "**Dynamic adapter serving is now a first-class feature.** Modern serving stacks (such as vLLM's multi-LoRA support) load one base model and hot-swap many adapters per request at near-merged speed. This narrows the old latency gap and makes \"keep separate\" attractive even when you care about throughput — you get the memory savings *and* fast inference, so don't assume merging is automatically faster in a real serving setup."
+        },
+        {
+          "type": "p",
+          "md": "**Merging is a tool, not a finish line.** It's reversible only in the sense that you kept the original adapter file — so archive your adapters even after you merge. From here, the natural next steps are deciding [when to fine-tune at all](/learn/fine-tuning/fine-tuning-basics/when-to-fine-tune), comparing [full fine-tuning vs PEFT](/learn/fine-tuning/fine-tuning-basics/full-fine-tuning-vs-peft), and getting the [rank and alpha](/learn/fine-tuning/lora-and-peft/lora-rank-and-alpha) right *before* you train, since no merge can fix an under-trained adapter."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Should I merge my LoRA adapter or keep it separate?",
+      "a": "Merge when you want one self-contained model — a single fine-tune where latency matters, or an export to a format that ignores adapters (GGUF, ONNX). Keep it separate when you serve many fine-tunes on one base model, since you can load the base once and hot-swap tiny adapters per request. When unsure, keep it separate: you can always merge later, but you can't cleanly extract an adapter back out of a merged model."
+    },
+    {
+      "q": "What does merge_and_unload() do in PEFT?",
+      "a": "It folds the LoRA update (`B @ A`, scaled by alpha over r) directly into the base model's weight matrices, then removes the now-redundant adapter layers. The result is a plain Hugging Face model that behaves like the fine-tuned version but has no adapter attached, so you can save and serve it as an ordinary checkpoint."
+    },
+    {
+      "q": "Why does merging a QLoRA adapter lose quality?",
+      "a": "QLoRA trains the adapter against a base model stored in 4-bit. If you merge into a base that is still 4-bit, the merged result gets re-quantized to 4-bit and the adapter's small corrections are rounded away. Fix it by loading the base in 16-bit (bfloat16 or float16), merging into that, saving the 16-bit model, and only quantizing afterwards as the final step."
+    },
+    {
+      "q": "Does keeping a LoRA adapter separate slow down inference?",
+      "a": "Slightly, because the runtime computes the adapter's extra math (`B @ A`) on every forward pass instead of having it baked into the weights. The overhead is small, and modern serving stacks like vLLM's multi-LoRA support make adapter swapping nearly as fast as a merged model while saving a lot of memory."
+    },
+    {
+      "q": "Can I merge multiple LoRA adapters into one model?",
+      "a": "Yes — PEFT can combine several adapters with weights and merge the blend into one model. But adapters trained separately can interfere, so the combination may behave worse than either alone. Always evaluate the merged blend as a new model, and consider re-training a single adapter on combined data as a more reliable alternative."
+    },
+    {
+      "q": "Do I need the base model to use a merged LoRA model?",
+      "a": "No. After merging, the fine-tuning lives inside the model's own weights, so the merged checkpoint is fully standalone and runs anywhere a normal model runs. You only need the separate base model when you keep the adapter as its own file and attach it at runtime."
+    }
+  ],
+  "related": [
+    "what-is-lora",
+    "qlora-explained",
+    "lora-rank-and-alpha",
+    "full-fine-tuning-vs-peft",
+    "evaluate-fine-tuned-model",
+    "when-to-fine-tune"
+  ],
+  "furtherReading": [
+    {
+      "title": "PEFT — LoRA documentation (Hugging Face)",
+      "url": "https://huggingface.co/docs/peft/main/en/conceptual_guides/lora"
+    },
+    {
+      "title": "QLoRA: Efficient Finetuning of Quantized LLMs (arXiv)",
+      "url": "https://arxiv.org/abs/2305.14314"
+    },
+    {
+      "title": "LoRA: Low-Rank Adaptation of Large Language Models (arXiv)",
+      "url": "https://arxiv.org/abs/2106.09685"
+    },
+    {
+      "title": "Multi-LoRA serving — vLLM documentation",
+      "url": "https://docs.vllm.ai/en/latest/features/lora.html"
+    }
+  ]
+}

@@ -1,0 +1,369 @@
+{
+  "slug": "multi-hop-rag",
+  "title": "What Is Multi-Hop RAG? Answering Questions That Need Several Steps",
+  "shortTitle": "Multi-Hop RAG",
+  "seoTitle": "What Is Multi-Hop RAG? Multi-Step Retrieval",
+  "metaDescription": "Some questions can't be answered from one chunk. Multi-hop RAG retrieves, reasons, and retrieves again. Learn how iterative retrieval handles complex queries.",
+  "keywords": [
+    "multi-hop rag",
+    "multi-step retrieval",
+    "iterative rag",
+    "complex question answering rag",
+    "multi-hop question answering"
+  ],
+  "difficulty": "advanced",
+  "oneLiner": "You'll understand how multi-hop RAG chains several retrieve-and-reason steps to answer questions a single lookup can't.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Plain [RAG](/learn/rag/rag-fundamentals/what-is-rag) does one lookup: it takes your question, finds the most relevant chunks, and hands them to the model. That works beautifully when the answer sits in a single passage. But some questions need you to find one fact *before* you even know what to look up next."
+        },
+        {
+          "type": "p",
+          "md": "Take a question like: *\"Who is the CEO of the company that makes the GPUs our training cluster runs on?\"* You can't answer that in one search. First you have to learn **which** GPUs the cluster uses, then learn **which company** makes them, then look up **who runs that company**. Three lookups, and each one depends on the answer to the one before it. A single retrieval has no idea the second and third questions even exist."
+        },
+        {
+          "type": "p",
+          "md": "**Multi-hop RAG** (also called *iterative* or *multi-step* retrieval) handles exactly this. Instead of *retrieve once, then answer*, it loops: **retrieve, reason about what's still missing, retrieve again** — repeating until it has every fact the answer needs. Each pass is a \"hop.\""
+        },
+        {
+          "type": "p",
+          "md": "Picture a detective, not a librarian. A librarian fetches the one book you asked for and is done. A detective pulls a thread, reads it, realizes it points to a new suspect, goes back to the files for *that* person, and keeps going until the chain of clues is complete. Multi-hop RAG turns your retriever into the detective."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "\"Hop\" comes from the question-answering literature: a *single-hop* question is answerable from one piece of evidence, a *multi-hop* question chains two or more pieces together. The retrieval loop is what walks those hops one at a time."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once a RAG demo leaves the \"what's our refund window?\" stage and meets real user questions, single-shot retrieval starts failing in a way that's hard to debug: the model gives a confident, wrong answer, and the retrieved chunks *look* relevant — they just weren't the chunks that mattered."
+        },
+        {
+          "type": "p",
+          "md": "The root cause is that the first search only sees the **original wording** of the question. If a key entity in the answer is never named in the question, its chunk has nothing to match against, so it's never retrieved. Multi-hop RAG fixes this by letting later searches use facts discovered in earlier ones."
+        },
+        {
+          "type": "h3",
+          "text": "The kinds of questions that need it"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Bridge questions** — the answer hinges on an intermediate entity the question never names. *\"What's the capital of the country that won the 2018 World Cup?\"* You must find the winner (France) before you can look up its capital.",
+            "**Comparison questions** — you need facts about two or more things, then a comparison. *\"Which of our three cloud providers has the strictest data-retention policy?\"* requires retrieving each policy separately.",
+            "**Aggregation questions** — the answer combines evidence scattered across many documents. *\"How many of last quarter's incidents were caused by the same root component?\"*",
+            "**Temporal / causal chains** — *\"What changed in the deploy that came right before the outage?\"* needs you to find the outage time first, then the deploy before it."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "If your users ask anything beyond fact-lookup — questions with the words *\"that,\" \"which,\" \"compared to,\"* or *\"because\"* doing real work — single-shot RAG will quietly underperform, and adding more chunks to the prompt won't save it. The missing fact was never retrieved in the first place; you can't rerank your way to a chunk you never fetched."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Multi-hop RAG wraps a normal retrieve-and-generate step inside a controller loop. After each retrieval, the system asks itself a single question: *do I now have enough to answer?* If yes, it generates the final answer. If no, it forms a **new, more specific query** from what it just learned and searches again."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "The multi-hop retrieval loop",
+            "steps": [
+              {
+                "label": "Plan next query",
+                "sub": "what's still missing?"
+              },
+              {
+                "label": "Retrieve",
+                "sub": "top-k chunks for this hop"
+              },
+              {
+                "label": "Read + reason",
+                "sub": "extract the new fact"
+              },
+              {
+                "label": "Enough to answer?",
+                "sub": "yes → exit · no → loop"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Three pieces do the work, and the loop is just glue between them:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**A controller** decides whether to keep going and what to search for next. Usually this is the LLM itself, prompted to inspect what it has and name the next sub-question.",
+            "**A retriever** runs each hop's search against your vector store or index — the same retriever a one-shot system uses, just called repeatedly.",
+            "**A working memory** (sometimes called the *scratchpad* or *accumulated context*) carries the facts gathered so far from one hop into the next, so each query can build on the last."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Decompose, or follow the thread"
+        },
+        {
+          "type": "p",
+          "md": "There are two common shapes for the loop, and real systems blend them:"
+        },
+        {
+          "type": "p",
+          "md": "**Up-front decomposition.** Before any search, the LLM breaks the question into ordered sub-questions, then answers them in sequence, feeding each answer into the next query. This works when the structure is clear from the start (comparisons, aggregations)."
+        },
+        {
+          "type": "p",
+          "md": "**Follow-the-thread (interleaved).** The system searches, reads what came back, and only *then* decides the next query based on what it found — because you often can't know the second question until you've answered the first. This is the more powerful and more general pattern; the influential *self-ask* and *IRCoT* approaches both interleave retrieval with the model's own chain of reasoning."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Always cap the loop. Set a maximum number of hops (3–5 is common) and stop early the moment the controller says it can answer. Without a hard limit, a confused controller will retrieve forever, and your latency and token bill grow with every hop."
+        },
+        {
+          "type": "h3",
+          "text": "A sketch of the loop in code"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "multi_hop.py (sketch)",
+          "code": "def multi_hop_answer(question, retriever, llm, max_hops=4):\n    facts = []                      # working memory across hops\n    query = question\n\n    for hop in range(max_hops):\n        chunks = retriever.search(query, k=4)   # one retrieval per hop\n        facts.extend(chunks)\n\n        # Controller: is the gathered evidence enough yet?\n        decision = llm.ask(\n            f\"Question: {question}\\n\"\n            f\"Evidence so far:\\n{format(facts)}\\n\\n\"\n            \"If you can now answer, reply DONE. \"\n            \"Otherwise reply with the single next thing to look up.\"\n        )\n\n        if decision.strip().startswith(\"DONE\"):\n            break\n        query = decision               # next hop searches for the gap\n\n    return llm.ask(\n        f\"Answer using ONLY this evidence:\\n{format(facts)}\\n\\n\"\n        f\"Question: {question}\"\n    )"
+        },
+        {
+          "type": "p",
+          "md": "That's the entire idea: a `for` loop, a retriever called inside it, and an LLM acting as the controller that decides when to stop. Everything sophisticated — better stopping rules, deduplicating evidence, reranking across hops — is a refinement of this skeleton."
+        }
+      ]
+    },
+    {
+      "id": "worked-example",
+      "title": "A worked example, hop by hop",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Let's trace a real bridge question through the loop. The knowledge base is a company wiki, and the question is: **\"Which team owns the service that caused the longest outage last quarter?\"** Notice the answer (a team) is never mentioned in the question — you have to discover the outage and the service first."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Three hops to one answer",
+            "steps": [
+              {
+                "label": "Hop 1",
+                "sub": "find the longest outage"
+              },
+              {
+                "label": "Hop 2",
+                "sub": "find its affected service"
+              },
+              {
+                "label": "Hop 3",
+                "sub": "find that service's owning team",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Hop",
+            "Query sent to retriever",
+            "Fact learned",
+            "Next gap"
+          ],
+          "rows": [
+            [
+              "1",
+              "longest outage last quarter",
+              "INC-204 lasted 6h12m",
+              "which service did INC-204 hit?"
+            ],
+            [
+              "2",
+              "INC-204 affected service",
+              "the Payments API went down",
+              "who owns the Payments API?"
+            ],
+            [
+              "3",
+              "Payments API owning team",
+              "owned by the Billing team",
+              "none — ready to answer"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Each query is built from the previous hop's answer, which is why no single search could have done it. A one-shot retriever searching *\"which team owns the service that caused the longest outage\"* would match chunks about teams, services, and outages all at once — a blurry mix — and very likely never surface the specific INC-204 → Payments API → Billing chain. The loop walks the chain one verified link at a time, and the final answer can cite all three source chunks, which makes it [easy to add citations](/learn/rag/advanced-rag/add-citations-to-rag)."
+        }
+      ]
+    },
+    {
+      "id": "multi-hop-vs-agentic-rag",
+      "title": "Multi-hop RAG vs agentic RAG",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "These two terms get used almost interchangeably, and they overlap heavily — but they answer different questions. **Multi-hop RAG describes the *retrieval loop*: search, reason, search again.** **[Agentic RAG](/learn/rag/advanced-rag/what-is-agentic-rag) describes the broader *framing*: give the model retrieval as one tool among several and let it drive.** Multi-hop is, in effect, the simplest agentic RAG, where the only tool is search."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Same family, different scope",
+            "columns": [
+              {
+                "title": "Multi-hop RAG",
+                "accent": true,
+                "items": [
+                  "Scope: the retrieval loop only",
+                  "One tool — search — called repeatedly",
+                  "Goal: gather all evidence a hard question needs",
+                  "Loop driven by 'what fact is still missing?'"
+                ]
+              },
+              {
+                "title": "Agentic RAG",
+                "items": [
+                  "Scope: the whole tool-using system",
+                  "Many tools — search, calculator, code, APIs",
+                  "Goal: complete a task, of which retrieval is part",
+                  "Loop driven by 'what action moves me forward?'"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Practically: if your system *only* searches a knowledge base, just over and over, you're doing multi-hop RAG. The moment it can also call a calculator, hit a live API, or run code between searches, it's an agent and the multi-hop retrieval is one behavior inside it. Build the multi-hop loop first — it's the part that makes complex question-answering work — and reach for the full agentic setup only when one tool genuinely isn't enough."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Multi-hop RAG adds power and, with it, new ways to fail. Almost all of them come from the loop itself — the part a single-shot system doesn't have."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Error compounding.** A wrong fact in hop 1 poisons every hop after it. If the controller misreads INC-204's service, hops 2 and 3 confidently chase the wrong team. Early mistakes are the most expensive — verify intermediate facts before building on them.",
+            "**Runaway loops.** A controller that never feels \"sure enough\" keeps retrieving. Always cap hops and add an explicit stop condition; treat hitting the cap as a *failure* signal, not a quiet success.",
+            "**Latency and cost stack up.** Each hop is at least one retrieval plus one LLM call, run in sequence. A 4-hop answer can be 4× slower and pricier than single-shot. Reserve multi-hop for questions that truly need it — route simple lookups to plain RAG.",
+            "**Context bloat.** Accumulating every chunk from every hop floods the final prompt with noise. Keep a tight working memory: store the extracted *fact*, not the whole raw chunk, and dedupe across hops.",
+            "**Decomposing a question that didn't need it.** Forcing a simple lookup through a multi-hop loop wastes calls and can introduce errors. The controller should be allowed to answer in one hop when one hop is enough."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Every retrieved chunk is untrusted input, and multi-hop multiplies the exposure: a poisoned document fetched in an early hop can steer *which queries* later hops run, not just what the final answer says. Treat retrieved text as data, never as instructions, on every single hop."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The sketch above is the naive multi-hop loop. The research and production work beyond it is all about making the loop *stop at the right time*, *trust the right facts*, and *not cost a fortune*."
+        },
+        {
+          "type": "p",
+          "md": "**Better stopping and verification.** Instead of trusting the controller's gut, you can score whether the gathered evidence actually entails an answer, or have a separate verifier check each intermediate fact before the next hop builds on it. *Self-RAG*-style approaches train the model to emit reflection tokens — judging relevance and support as it goes — which gives the loop a more principled stop signal than a raw yes/no."
+        },
+        {
+          "type": "p",
+          "md": "**Query planning vs interleaving, revisited.** Decomposing everything up front is fast and parallelizable but brittle when the structure isn't knowable in advance; interleaving is robust but strictly sequential and slower. Mature systems detect which mode a question needs — run independent sub-questions in *parallel* (a comparison of three policies), and reserve the sequential thread-following loop for genuine bridge questions."
+        },
+        {
+          "type": "p",
+          "md": "**Where structure helps more than loops.** When questions routinely span many documents through named relationships, a [knowledge-graph approach (GraphRAG)](/learn/rag/advanced-rag/what-is-graphrag) can answer in one structured traversal what would otherwise take many vector hops. And [hybrid retrieval](/learn/rag/advanced-rag/hybrid-rag-explained) matters *more* in multi-hop, because intermediate facts are often exact strings — an incident ID, a service name, an SKU — that keyword search nails and pure semantic search can miss."
+        },
+        {
+          "type": "p",
+          "md": "**Knowing when not to.** Multi-hop is a cost you pay per question. If your traffic is overwhelmingly single-fact lookups, a router that sends easy questions to plain RAG and only the hard ones into the loop beats running everything multi-hop — see [when not to use RAG](/learn/rag/rag-fundamentals/when-not-to-use-rag) for the broader cost calculus. The durable lesson: multi-hop RAG buys you reasoning over *several* facts, but it inherits every weakness of single-shot retrieval and adds compounding errors and latency on top, so spend it only where a single lookup genuinely can't reach the answer."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is multi-hop RAG?",
+      "a": "Multi-hop RAG is a retrieval-augmented generation pattern that answers complex questions by retrieving evidence in several steps instead of one. After each retrieval it reasons about what's still missing, forms a new query, and searches again, repeating until it has every fact the answer needs. Each step is called a hop."
+    },
+    {
+      "q": "How is multi-hop RAG different from regular RAG?",
+      "a": "Regular RAG does a single retrieval: it searches once with the original question and answers from those chunks. Multi-hop RAG loops — it can run several searches, where each query is built from facts discovered in the previous step. This lets it answer questions whose key entity is never named in the original question."
+    },
+    {
+      "q": "What is the difference between multi-hop RAG and agentic RAG?",
+      "a": "Multi-hop RAG describes the retrieval loop specifically — search, reason, search again — using one tool: retrieval. Agentic RAG is the broader framing where the model is given many tools (search, calculator, APIs, code) and decides which to use. Multi-hop RAG is essentially the simplest agentic RAG, where the only available action is to search again."
+    },
+    {
+      "q": "When should I use multi-hop retrieval?",
+      "a": "Use it for questions that need several facts chained together: bridge questions (find one entity to look up another), comparisons across documents, aggregation over many sources, and causal or temporal chains. For simple single-fact lookups, plain single-shot RAG is faster and cheaper, so a router that sends only hard questions into the loop works best."
+    },
+    {
+      "q": "What are the downsides of multi-hop RAG?",
+      "a": "It is slower and more expensive because each hop adds at least one retrieval plus one LLM call, run in sequence. It also compounds errors — a wrong fact early on misleads every later hop — and can loop indefinitely without a hop cap. Reserve it for questions that genuinely can't be answered in one retrieval."
+    },
+    {
+      "q": "How many hops does multi-hop RAG use?",
+      "a": "Most systems cap the loop at around 3 to 5 hops and stop early as soon as the controller decides it has enough evidence to answer. A hard cap is essential: without one, a confused controller can keep retrieving, and latency and token cost grow with every hop."
+    }
+  ],
+  "related": [
+    "what-is-agentic-rag",
+    "what-is-graphrag",
+    "hybrid-rag-explained",
+    "add-citations-to-rag",
+    "what-is-rag",
+    "when-not-to-use-rag"
+  ],
+  "furtherReading": [
+    {
+      "title": "Measuring and Narrowing the Compositionality Gap in Language Models (Self-Ask, arXiv)",
+      "url": "https://arxiv.org/abs/2210.03350"
+    },
+    {
+      "title": "Interleaving Retrieval with Chain-of-Thought Reasoning (IRCoT, arXiv)",
+      "url": "https://arxiv.org/abs/2212.10509"
+    },
+    {
+      "title": "Self-RAG: Learning to Retrieve, Generate, and Critique (arXiv)",
+      "url": "https://arxiv.org/abs/2310.11511"
+    },
+    {
+      "title": "Query Transformations — LangChain Docs",
+      "url": "https://docs.langchain.com/oss/python/langchain/retrieval"
+    }
+  ]
+}

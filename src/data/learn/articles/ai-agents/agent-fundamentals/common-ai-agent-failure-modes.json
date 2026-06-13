@@ -1,0 +1,341 @@
+{
+  "slug": "common-ai-agent-failure-modes",
+  "title": "Why Do AI Agents Fail? The Most Common Failure Modes",
+  "shortTitle": "Agent Failure Modes",
+  "seoTitle": "Why AI Agents Fail: Common Failure Modes Explained",
+  "metaDescription": "Agents loop forever, hallucinate tool calls, lose the thread, and snowball errors. Learn the most common agent failure modes and how to spot each one early.",
+  "keywords": [
+    "why do ai agents fail",
+    "ai agent failure modes",
+    "agent infinite loop problem",
+    "agent error snowball",
+    "llm agent hallucinated tool call",
+    "agent reliability problems"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Recognize the recurring ways agents break — loops, derailment, hallucinated actions, and compounding errors — so you can design around them before they bite.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "An [AI agent](/learn/ai-agents/agent-fundamentals/what-is-an-ai-agent) is a language model put in a loop: it reads a goal, picks an action, calls a tool, reads the result, and repeats until the job is done. That loop is what makes agents powerful — and it's also exactly where they break. A single chatbot reply can only be a little wrong. An agent makes dozens of decisions in a row, and a small mistake early on can quietly poison every step that follows."
+        },
+        {
+          "type": "p",
+          "md": "Think of an agent like a brand-new intern you've handed a to-do list and a company laptop, then left alone for an hour. Most of the time they do fine. But sometimes they get stuck refreshing the same broken page forever, or they wander off the task and start \"organizing the shared drive,\" or they confidently email a customer using a phone number they invented. None of these are exotic bugs. They are the *predictable* ways an autonomous worker goes wrong when no one is watching each step."
+        },
+        {
+          "type": "p",
+          "md": "This article is a field guide to those predictable failures. For each one you'll get the **symptom** (what you actually see in the logs), the **cause** (why the loop produces it), and a **one-line mitigation** you can reach for. The goal isn't to scare you off agents — it's to let you recognize each failure on sight so you design around it before it reaches a user."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Most agent failures are not the model \"being dumb.\" They're emergent: each individual step looks reasonable, but the *sequence* drifts. That's why they're hard to catch in a quick demo and easy to hit in production."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A regular LLM call is a single transaction: prompt in, answer out. If it's wrong, you see the wrong answer and move on. An agent is different because **errors compound**. The output of step 3 becomes the input to step 4, so a mistake doesn't just produce one bad result — it becomes the foundation everything after it is built on."
+        },
+        {
+          "type": "p",
+          "md": "That changes the math in two uncomfortable ways:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Reliability multiplies down, not up.** If each step is 95% reliable, a 10-step task is only about 60% reliable end-to-end (0.95 to the 10th power). Add more autonomy and the success rate *drops*, even though every individual step looks solid.",
+            "**Failures cost real money and time.** A chatbot that loops just annoys someone. An agent that loops burns tokens on every iteration, and an agent with tools can send emails, charge cards, delete files, or run code. The blast radius is bigger because the agent can *act*, not just talk.",
+            "**The bugs hide until scale.** A loop or a goal drift might happen on 1 in 50 runs. You'll never see it in a five-minute demo, and then it shows up the day real traffic arrives."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "So why care as a builder? Because the difference between a flashy agent demo and an agent you can actually ship is almost entirely about *handling these failure modes*. Knowing the catalog tells you where to put guardrails, what to log, and what to measure — long before you reach for [agent evaluation](/learn/rag/rag-evaluation/how-to-evaluate-rag) and reliability work. Many teams discover, after fighting these for a while, that a simpler [workflow beats an open-ended agent](/learn/ai-agents/agent-fundamentals/agents-vs-workflows-vs-chatbots) for the task at hand — and [knowing when you actually need an agent](/learn/ai-agents/agent-fundamentals/do-you-need-an-agent) is itself a mitigation."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works: where the loop breaks",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "To see *why* agents fail, look at the loop itself. Every iteration the agent does roughly four things: **observe** the current state, **think** about what to do, **act** by calling a tool, and read the **result**. This is the [ReAct pattern](/learn/ai-agents/agent-fundamentals/react-agent-pattern) — reason, then act — and it underpins most agents today. Each stage has its own characteristic way of going wrong."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "The agent loop — and where each failure enters",
+            "steps": [
+              {
+                "label": "Observe",
+                "sub": "context lost / poisoned"
+              },
+              {
+                "label": "Think",
+                "sub": "goal drift / overconfidence"
+              },
+              {
+                "label": "Act",
+                "sub": "hallucinated or bad tool call"
+              },
+              {
+                "label": "Result",
+                "sub": "error snowballs into next step"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Read the diagram as a circle. A bad **result** feeds straight back into the next **observe**, which is the mechanism behind every compounding failure: nothing resets between iterations, so whatever went wrong stays in the context and shapes the next decision. Two structural facts make this worse."
+        },
+        {
+          "type": "h3",
+          "text": "The context window keeps filling up"
+        },
+        {
+          "type": "p",
+          "md": "Every observation, thought, and tool result gets appended to the conversation. On a long task the context grows until early instructions — including the *original goal* — get buried far from the model's most recent attention, or fall out of the window entirely. This is the root cause of **goal drift** and **context loss**: the agent isn't ignoring you, it literally can no longer see what you asked for."
+        },
+        {
+          "type": "h3",
+          "text": "The model can't tell a real tool from a plausible one"
+        },
+        {
+          "type": "p",
+          "md": "When an agent calls a tool, it's *generating* the call — the tool name and arguments are predicted text, just like any other output. If the schema is fuzzy or the situation is unfamiliar, the model will happily emit a call to a tool that doesn't exist, or pass an argument it invented. That's a **hallucinated tool call**, and it comes from the same place as any other hallucination: the model producing the most likely-looking continuation rather than a verified fact. Clear, well-described [tool definitions](/learn/ai-agents/tool-use/designing-tools-for-llms) are the first line of defense."
+        },
+        {
+          "type": "p",
+          "md": "Keep this loop in mind for the rest of the article: every failure mode below is just one of these four stages misbehaving, then feeding the mistake forward."
+        }
+      ]
+    },
+    {
+      "id": "the-failure-catalog",
+      "title": "The failure catalog",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Here are the recurring failure modes, each with the symptom you'll see, the cause, and a quick mitigation. Most real incidents are a combination of two or three of these."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Failure mode",
+            "Symptom you see",
+            "One-line mitigation"
+          ],
+          "rows": [
+            [
+              "Infinite / repetitive loop",
+              "Same tool called with the same args over and over; tokens climb, nothing changes",
+              "Hard cap on steps; detect repeated actions and force a different move or stop"
+            ],
+            [
+              "Goal drift (derailment)",
+              "Agent starts on task, ends up doing something adjacent or unrelated",
+              "Re-inject the original goal each step; keep tasks short and scoped"
+            ],
+            [
+              "Hallucinated tool call",
+              "Calls a tool that doesn't exist, or passes invented / malformed arguments",
+              "Validate every call against the schema; return a clear error, don't crash"
+            ],
+            [
+              "Error snowball",
+              "One wrong result early; every later step builds on the mistake",
+              "Validate intermediate results; let the agent verify before continuing"
+            ],
+            [
+              "Context loss",
+              "Forgets earlier facts, constraints, or what it already tried",
+              "Summarize / compact history; store key facts in external memory"
+            ],
+            [
+              "Overconfidence",
+              "States made-up facts firmly; never says \"I'm not sure\" or asks for help",
+              "Tell it to admit uncertainty and escalate; require evidence for claims"
+            ],
+            [
+              "Premature success",
+              "Declares the task done when it isn't",
+              "Define an explicit done-check the agent must pass, not its own say-so"
+            ]
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Loops: the classic resource burner"
+        },
+        {
+          "type": "p",
+          "md": "The single most common failure. The agent calls a search tool, doesn't like the result, calls it again with a nearly identical query, doesn't like *that*, and repeats. Because the loop has no natural stopping point, it spins until something external stops it. Sometimes it alternates between two states forever (\"now I'll check the file\" → \"now I'll edit the file\" → \"now I'll check the file\"). The fix is unglamorous but essential: a maximum step count, plus loop detection that notices when the last few actions are identical and breaks the pattern."
+        },
+        {
+          "type": "h3",
+          "text": "Goal drift: slowly forgetting the assignment"
+        },
+        {
+          "type": "p",
+          "md": "You ask the agent to \"book a meeting room for Tuesday.\" Three tool calls in, it's reading the office Wi-Fi policy because a search result mentioned it. Each individual step followed logically from the last — it just lost the thread of the *overall* goal. As the context fills, the original instruction drifts out of focus. The cheapest mitigation is to restate the goal in the prompt on every iteration so it's always recent, and to break big tasks into smaller, well-scoped sub-tasks with clear [workflow structure](/learn/ai-agents/agent-fundamentals/agentic-workflow-patterns)."
+        },
+        {
+          "type": "h3",
+          "text": "Error snowball: the most expensive one"
+        },
+        {
+          "type": "p",
+          "md": "An agent reads a number wrong on step 2 — say it parses a date as the wrong year. Every subsequent step uses that wrong year, and the agent reasons *flawlessly* on top of bad data, producing a confident, fully-wrong final answer. This is the failure that turns a tiny slip into a disaster, and it's why intermediate-result validation matters more than getting any single step perfect. Catch the mistake at step 2 and the whole chain is saved."
+        }
+      ]
+    },
+    {
+      "id": "spotting-them-in-practice",
+      "title": "Spotting and limiting them in practice",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You can't fix what you can't see, and most of these failures are invisible unless you log the full loop. The two non-negotiables are **tracing** every step (the thought, the exact tool call, the raw result) and putting **hard limits** around the loop so a runaway run is bounded, not unbounded."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "A guarded agent step",
+            "steps": [
+              {
+                "label": "Agent proposes action",
+                "sub": "tool + args (generated)"
+              },
+              {
+                "label": "Validate",
+                "sub": "schema check, allow-list"
+              },
+              {
+                "label": "Check budget",
+                "sub": "step / time / token cap",
+                "accent": true
+              },
+              {
+                "label": "Execute or stop",
+                "sub": "run tool, or halt safely"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Notice that the guards sit *between* the agent deciding and the tool running — never trust the proposed call blindly. Here's the shape of a minimal guarded loop in pseudocode; the exact API doesn't matter, the structure does."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "guarded_loop.py — the bare-minimum safety rails",
+          "code": "MAX_STEPS = 12\nrecent_actions = []\n\nfor step in range(MAX_STEPS):\n    action = agent.next_action(goal, history)  # the model proposes a tool call\n\n    # 1) Loop guard: same action three times in a row -> break out\n    recent_actions.append((action.tool, action.args))\n    if recent_actions[-3:].count(recent_actions[-1]) == 3:\n        history.append(\"You are repeating yourself. Try a different approach or stop.\")\n        continue\n\n    # 2) Hallucination guard: the tool must exist and the args must validate\n    if action.tool not in TOOLS:\n        history.append(f\"No such tool '{action.tool}'. Available: {list(TOOLS)}\")\n        continue\n    ok, err = validate_args(TOOLS[action.tool], action.args)\n    if not ok:\n        history.append(f\"Invalid arguments: {err}\")  # let the agent self-correct\n        continue\n\n    # 3) Run it, then feed the result back in\n    result = TOOLS[action.tool](**action.args)\n    history.append(result)\n\n    # 4) Goal guard: re-state the goal so it never drifts out of context\n    history.append(f\"Reminder, the goal is still: {goal}\")\n\n    if agent.believes_done(goal, history) and done_check(goal, history):\n        break\nelse:\n    escalate_to_human(goal, history)  # hit the step cap without finishing"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Returning a clear error string to the agent (instead of crashing) is one of the highest-leverage habits in agent building. A good error message — \"no such tool X, available tools are Y and Z\" — lets the model self-correct on the next turn instead of failing the whole run."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Tool results are untrusted input. A web page or document the agent fetches can contain hidden instructions aimed at the model — that's [prompt injection](/learn/prompt-engineering/prompt-injection-security/what-is-prompt-injection), and on an agent with real tools it can turn a forgotten error into a security incident. Treat everything the agent reads as data, never as commands."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The catalog above covers the everyday failures. As your agents get more capable, a few subtler problems surface — and the mitigations get more architectural than a single guard clause."
+        },
+        {
+          "type": "p",
+          "md": "**Compounding reliability is a hard ceiling, not a bug to squash.** No amount of prompt tweaking makes a 20-step agent as reliable as a 2-step one. The durable fix is structural: shorten the loop. Break a long autonomous run into smaller, verifiable stages, or replace the open-ended agent with a fixed [workflow](/learn/ai-agents/agent-fundamentals/agentic-workflow-patterns) where you control the path. Fewer decisions means fewer places to derail."
+        },
+        {
+          "type": "p",
+          "md": "**Context management becomes its own discipline.** On long tasks you can't just keep appending — the window fills and goal drift sets in. Real systems summarize old turns, compact tool outputs, and push durable facts into external memory the agent can query, so the working context stays small and on-topic. The art is deciding what to keep verbatim, what to summarize, and what to offload."
+        },
+        {
+          "type": "p",
+          "md": "**The narrow-tools tradeoff.** More tools means more surface area for hallucinated or wrong calls; the model has more options to confuse. Teams often find that fewer, [well-designed tools](/learn/ai-agents/tool-use/how-to-design-agent-tools) — or even giving the agent a [code-execution environment instead of a dozen narrow tools](/learn/ai-agents/tool-use/code-execution-vs-more-tools) — reduces the decision space and the error rate at once."
+        },
+        {
+          "type": "p",
+          "md": "**Multi-agent setups multiply the failure modes.** When agents call other agents, every problem here can occur at each level *and* between them: agents talk past each other, duplicate work, or pass along a snowballed error as if it were a verified fact. Each hand-off is a fresh place for context to be lost. Add coordination overhead before you add a second agent."
+        },
+        {
+          "type": "p",
+          "md": "The honest summary: agents fail in predictable ways because the loop that gives them power also lets small mistakes compound. You'll never reach zero failures, so the real skill is making failures *cheap and visible* — bounded by step limits, caught by validation, surfaced by tracing, and escalated to a human when the agent is out of its depth. Treat the catalog above as a design checklist, not a list of bugs to fear."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Why do AI agents get stuck in infinite loops?",
+      "a": "The agent loop has no natural stopping point — the model keeps proposing actions until something tells it to stop. If a tool result doesn't satisfy it, it often retries a nearly identical action, or oscillates between two states forever. The standard fixes are a hard maximum step count and loop detection that spots repeated identical actions and forces a different move or halts."
+    },
+    {
+      "q": "What is an error snowball in an AI agent?",
+      "a": "It's when a small mistake early in the loop becomes the input to every later step, so the agent reasons correctly on top of bad data and produces a confident, fully-wrong result. A misread date or number on step 2 can corrupt the entire run. Validating intermediate results — not just the final answer — is the main defense."
+    },
+    {
+      "q": "Why does my agent call tools that don't exist?",
+      "a": "Tool calls are generated text: the model predicts the tool name and arguments the way it predicts any other output, so an unfamiliar situation or a vague tool description can make it emit a call to a nonexistent tool or invent arguments. Validate every call against the tool schema and return a clear error message (\"no such tool X\") so the agent can self-correct on the next turn instead of crashing."
+    },
+    {
+      "q": "Why does my agent forget the original goal partway through a task?",
+      "a": "Every observation and tool result gets appended to the context, so on a long task the original instruction drifts far from the model's recent attention or falls out of the window entirely — this is goal drift. Re-inject the goal into the prompt on each iteration so it stays recent, and break big tasks into smaller, scoped sub-tasks."
+    },
+    {
+      "q": "How do I make an AI agent more reliable?",
+      "a": "Shorten the loop and add guardrails. Reliability multiplies down with each step, so fewer steps means fewer chances to fail — break long runs into verifiable stages or use a fixed workflow. Then trace every step, cap steps and tokens, validate tool calls, and escalate to a human when the agent is stuck."
+    },
+    {
+      "q": "Are agent failures the same as LLM hallucinations?",
+      "a": "Hallucination is one ingredient, not the whole story. A hallucinated tool call is the same mechanism as any other hallucination — the model generating a plausible-looking continuation. But most agent failures (loops, goal drift, error snowballs, context loss) are emergent properties of running a model in a loop, where individually reasonable steps drift off course over time."
+    }
+  ],
+  "related": [
+    "what-is-an-ai-agent",
+    "agent-loop-explained",
+    "react-agent-pattern",
+    "agents-vs-workflows-vs-chatbots",
+    "do-you-need-an-agent",
+    "how-to-design-agent-tools"
+  ],
+  "furtherReading": [
+    {
+      "title": "Building effective agents — Anthropic",
+      "url": "https://www.anthropic.com/research/building-effective-agents"
+    },
+    {
+      "title": "ReAct: Synergizing Reasoning and Acting in Language Models (arXiv)",
+      "url": "https://arxiv.org/abs/2210.03629"
+    },
+    {
+      "title": "Tool use (function calling) — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/tool-use"
+    }
+  ]
+}

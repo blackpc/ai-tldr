@@ -1,0 +1,354 @@
+{
+  "slug": "serving-multiple-loras",
+  "title": "Serving Many LoRA Adapters From One Base Model",
+  "shortTitle": "Multi-LoRA Serving",
+  "seoTitle": "Serving Multiple LoRA Adapters From One Model",
+  "metaDescription": "One base model in GPU memory can serve hundreds of LoRA adapters at once. Learn how multi-LoRA serving works, why it's cheap, and where it breaks down.",
+  "keywords": [
+    "serve multiple lora adapters",
+    "multi-lora serving explained",
+    "lora hot swapping inference",
+    "one base model many adapters",
+    "lora per tenant fine-tuning",
+    "dynamic lora loading"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Understand how keeping one base model resident and swapping tiny adapters lets a single GPU serve dozens of fine-tuned variants at near-zero extra cost.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A [LoRA adapter](/learn/fine-tuning/lora-and-peft/what-is-lora) is a tiny set of extra weights that nudges a frozen base model toward one specific job — your support tone, a customer's house style, a niche legal task. The base model might be tens of gigabytes; the adapter is usually a few megabytes. **Multi-LoRA serving** is the trick of loading the heavy base model into GPU memory *once* and then attaching different lightweight adapters on the fly, so a single GPU can act like dozens or hundreds of separately fine-tuned models."
+        },
+        {
+          "type": "p",
+          "md": "Picture a print shop with one huge printing press. The press is expensive and you only own one. But you have a drawer full of small stencils, one per client. To print a job you don't buy a new press — you just clip the right stencil over the press and run the page. Swap the stencil, print the next client's job on the same press. The press is the base model; each stencil is a LoRA adapter; the swap is nearly free."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This only works because of *how* LoRA is built. A LoRA adapter is a separate, additive correction — the base weights are never modified. That separability is exactly what lets you keep one base resident and snap adapters in and out. A [fully fine-tuned](/learn/fine-tuning/fine-tuning-basics/full-fine-tuning-vs-peft) model can't be shared this way, because it *is* a whole modified model, not a base-plus-patch."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The reason people care about multi-LoRA serving is money and GPU memory, which are really the same thing. Loading a model onto a GPU is the expensive part — it eats most of the VRAM and most of the cost. Once it's loaded, generating tokens is comparatively cheap."
+        },
+        {
+          "type": "p",
+          "md": "Now imagine you've fine-tuned the same base model 50 times, one variant per customer. The naive approach gives each variant its own GPU (or its own loaded copy of the model). That's 50 copies of the same multi-gigabyte base sitting in memory, differing by a few megabytes each — almost all of that memory is wasted on duplicate base weights."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Per-tenant customization at scale.** A SaaS product can give every customer their own fine-tuned model without buying a GPU per customer. One base, many adapters.",
+            "**Per-task variants.** One service can host a summarizer adapter, a classifier adapter, and a code-style adapter side by side, picking the right one per request.",
+            "**Cheap to add another model.** Onboarding a new variant means uploading a small adapter file, not provisioning hardware. Marginal cost is close to zero.",
+            "**Better GPU utilization.** Idle adapters cost almost nothing, so you're not paying for 50 mostly-idle GPUs to serve 50 lightly-used models."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "This is a deployment-economics story, not a quality story. Each adapter is just as good (or bad) as it was when you trained it — see [how to evaluate a fine-tuned model](/learn/fine-tuning/fine-tuning-basics/what-is-fine-tuning) for that. What multi-LoRA changes is the *cost of running many of them*: it turns \"one GPU per model\" into \"many models per GPU.\""
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Recall what LoRA does at the math level. For a weight matrix `W` in the base model, LoRA learns two small matrices `A` and `B` and computes the layer as `W·x + (B·A)·x`. The base `W` is frozen; the small `B·A` term is the adapter. Serving many adapters means keeping `W` shared and resident, and swapping which `(A, B)` pair gets added in."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "One resident base, many attachable adapters",
+            "root": {
+              "label": "Base model (frozen W)",
+              "sub": "loaded once, GBs of VRAM",
+              "accent": true
+            },
+            "children": [
+              {
+                "label": "Adapter A",
+                "sub": "tenant: Acme"
+              },
+              {
+                "label": "Adapter B",
+                "sub": "tenant: Globex"
+              },
+              {
+                "label": "Adapter C",
+                "sub": "task: summarize"
+              },
+              {
+                "label": "Adapter D",
+                "sub": "task: classify"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Loading and swapping adapters"
+        },
+        {
+          "type": "p",
+          "md": "Adapters live cheaply. Because each one is only a few megabytes, you can hold many of them in GPU memory at the same time, or keep them in CPU RAM (or on disk) and copy the needed one to the GPU just before use. Moving a few megabytes across the PCIe bus takes a fraction of a millisecond, so **hot-swapping** an adapter per request is practical. The base model never moves; only the small adapter does."
+        },
+        {
+          "type": "p",
+          "md": "When a request arrives, the server looks at which adapter that request asked for (by an id you pass in, e.g. `adapter=\"acme-support\"`), makes sure those `(A, B)` weights are on the GPU, and runs the forward pass with that adapter's correction added to the frozen base."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Per-request adapter selection",
+            "steps": [
+              {
+                "label": "Request",
+                "sub": "+ adapter id"
+              },
+              {
+                "label": "Route",
+                "sub": "look up adapter"
+              },
+              {
+                "label": "Ensure on GPU",
+                "sub": "swap in if absent"
+              },
+              {
+                "label": "Forward pass",
+                "sub": "W·x + (B·A)·x"
+              },
+              {
+                "label": "Response",
+                "sub": "adapter-specific output",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Batching across different adapters"
+        },
+        {
+          "type": "p",
+          "md": "Here's the clever part that makes it fast at scale. A GPU is most efficient when it processes many requests in one **batch**. The catch: in a multi-LoRA server, different requests in the same batch may want *different* adapters. A request for Acme and a request for Globex arrive together — must you run two separate batches?"
+        },
+        {
+          "type": "p",
+          "md": "No. Modern multi-LoRA serving runs the shared base computation (`W·x`) for the whole batch at once — that's the heavy part and it's identical for everyone. Then it applies each row's *own* adapter correction (`B·A·x`) to that row. The small per-adapter term is computed per request, but the expensive shared term is computed once for the entire mixed batch. This is sometimes called *batched* or *segmented* LoRA, and it's why a single server can interleave hundreds of adapters with throughput close to serving the plain base model."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The mental model: **base cost is paid once per batch; adapter cost is paid per request but is tiny.** As long as the adapter math stays small relative to the base, mixing many adapters in one batch barely dents throughput."
+        }
+      ]
+    },
+    {
+      "id": "worked-example",
+      "title": "A worked example: the memory math",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Numbers make the economics obvious. Suppose your base model occupies about 16 GB of VRAM once loaded, and each LoRA adapter is about 20 MB. Compare two ways of serving 50 fine-tuned variants on a 24 GB GPU."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Approach",
+            "Base copies in memory",
+            "Adapter memory",
+            "Fits on one 24 GB GPU?"
+          ],
+          "rows": [
+            [
+              "Separate model per variant",
+              "50 × 16 GB = 800 GB",
+              "(baked in)",
+              "No — needs ~50 GPUs"
+            ],
+            [
+              "Multi-LoRA, one base",
+              "1 × 16 GB",
+              "50 × 20 MB ≈ 1 GB",
+              "Yes, with room to spare"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Same 50 models, same quality, but one path needs a rack of GPUs and the other fits on a single card. The adapters are so small that you could hold *hundreds* of them resident before their combined size rivals one extra copy of the base. (The exact base size depends on the model and on whether you also quantize it — see [QLoRA](/learn/fine-tuning/lora-and-peft/qlora-explained) for the quantized-base variant, which shrinks the resident base further.)"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "the shape of a multi-LoRA request (pseudocode)",
+          "code": "# One server, one resident base, adapters chosen per call.\nserver = load_base(\"my-base-model\")           # 16 GB, loaded ONCE\nserver.register_adapter(\"acme\",   \"acme.lora\")    # ~20 MB each\nserver.register_adapter(\"globex\", \"globex.lora\")\nserver.register_adapter(\"summarize\", \"sum.lora\")\n\n# Different requests pick different adapters — same loaded base.\nserver.generate(prompt, adapter=\"acme\")\nserver.generate(prompt, adapter=\"globex\")\nserver.generate(prompt, adapter=None)         # plain base, no adapter\n\n# These three can even share one GPU batch: the base math runs once\n# for all of them, each row gets its own small adapter correction."
+        }
+      ]
+    },
+    {
+      "id": "limits-and-pitfalls",
+      "title": "Limits and pitfalls",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Multi-LoRA is powerful but not magic. The constraints are worth knowing before you design around it."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Adapters must share the same base.** Every adapter you serve together has to be trained against the *identical* base model (same architecture and weights). You can't mix adapters from different bases on one server — there's nothing for them to attach to.",
+            "**Mixing ranks adds bookkeeping.** Adapters can have different [ranks](/learn/fine-tuning/lora-and-peft/lora-rank-and-alpha) (the `r` that sets adapter size). Serving mixed ranks is supported by good systems but complicates the batched math; some setups are happiest when all adapters share a rank.",
+            "**Too many *active* adapters in one batch erodes the win.** The shared base is free to batch; the per-adapter term is not. If a single batch touches a huge number of distinct adapters, the adapter side of the math grows and throughput drops toward the per-model case.",
+            "**Cold adapters add latency.** An adapter not currently on the GPU must be copied in first. It's fast (megabytes), but a flood of requests for many rarely-used adapters can cause swap thrash if memory is tight.",
+            "**Quality is still per-adapter.** A badly trained adapter is badly trained no matter how cheaply you serve it. Multi-LoRA solves *deployment* cost, not training quality."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Treat adapter ids like tenant boundaries. If a request can choose *any* adapter by id, make sure the routing layer enforces that a customer can only invoke *their own* adapter — otherwise tenant A could request tenant B's fine-tuned model."
+        }
+      ]
+    },
+    {
+      "id": "when-to-use",
+      "title": "When multi-LoRA fits — and when it doesn't",
+      "blocks": [
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Multi-LoRA serving vs a model per variant",
+            "columns": [
+              {
+                "title": "Multi-LoRA, one base",
+                "accent": true,
+                "items": [
+                  "Many variants of the SAME base",
+                  "Each variant lightly to moderately used",
+                  "Marginal cost per new variant ≈ free",
+                  "Per-tenant / per-task at scale",
+                  "Memory shared, near-base throughput"
+                ]
+              },
+              {
+                "title": "Dedicated model per variant",
+                "items": [
+                  "Variants from DIFFERENT bases",
+                  "A few variants, each heavily used",
+                  "Each new variant needs hardware",
+                  "Strict isolation / different sizes",
+                  "Simple, but memory-duplicative"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Reach for multi-LoRA when you have **many adapters over one shared base** and most of them aren't saturating a GPU on their own — the classic per-tenant SaaS or many-small-tasks situation. If instead you have one or two variants each running flat-out at full GPU utilization, a dedicated deployment per model is simpler and the sharing buys you little. And if your variants come from genuinely different base models, multi-LoRA doesn't apply at all."
+        },
+        {
+          "type": "p",
+          "md": "For the wider cost picture — training spend, serving spend, and where each lands — the [fine-tuning cost breakdown](/learn/fine-tuning/fine-tuning-basics/fine-tuning-cost-breakdown) puts these tradeoffs in context."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics click, a few directions are worth knowing."
+        },
+        {
+          "type": "p",
+          "md": "**Merging vs. keeping adapters separate.** You *can* fold a LoRA adapter permanently into the base by computing `W + B·A` once, producing a standalone merged model. Merging removes the tiny per-request adapter overhead and is great when you serve exactly one variant. But merging destroys the very separability that multi-LoRA depends on — a merged model can no longer share a base with other adapters. Serving many variants means deliberately *not* merging."
+        },
+        {
+          "type": "p",
+          "md": "**Adapter cache as a hierarchy.** Real servers treat adapters like a cache: hot adapters stay on the GPU, warm ones sit in CPU RAM, cold ones live on disk or object storage, and the system promotes/evicts them based on traffic. Designing this tier well is what keeps tail latency low when you have thousands of adapters but GPU room for only a few hundred at once."
+        },
+        {
+          "type": "p",
+          "md": "**Throughput tuning.** Because the shared base dominates cost, the levers that matter are batch size and how many *distinct* adapters land in each batch. Routing requests so that batches reuse a small set of adapters (grouping by adapter when latency budgets allow) keeps the per-adapter math cheap. This interacts with continuous batching and paged attention in the underlying serving engine."
+        },
+        {
+          "type": "p",
+          "md": "**Where to go next.** If you're new to the building block underneath all of this, start with [what LoRA is](/learn/fine-tuning/lora-and-peft/what-is-lora) and [LoRA rank and alpha](/learn/fine-tuning/lora-and-peft/lora-rank-and-alpha); for serving a quantized base to shrink memory further, read [QLoRA](/learn/fine-tuning/lora-and-peft/qlora-explained); and for the broader choice between adapters and full fine-tuning, see [full fine-tuning vs PEFT](/learn/fine-tuning/fine-tuning-basics/full-fine-tuning-vs-peft)."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "How many LoRA adapters can one base model serve at once?",
+      "a": "It depends on GPU memory and traffic, but the count is high. Since each adapter is only a few megabytes, you can hold hundreds resident next to one multi-gigabyte base, and keep thousands more in CPU RAM or on disk to swap in on demand. The practical limit is usually how many *distinct* adapters appear in a single batch, not total adapter count."
+    },
+    {
+      "q": "Does serving multiple LoRA adapters slow down inference?",
+      "a": "Only slightly. The heavy shared base computation runs once per batch for all requests, and each request adds just its own tiny adapter correction. Throughput stays close to serving the plain base model — unless a single batch touches a very large number of different adapters, which grows the per-adapter work."
+    },
+    {
+      "q": "What is LoRA hot-swapping?",
+      "a": "Hot-swapping means changing which adapter is active without reloading the base model. Because adapters are tiny, the server can copy a different one onto the GPU between requests in a fraction of a millisecond, so a single loaded base can answer one request as Acme's model and the next as Globex's model."
+    },
+    {
+      "q": "Can I serve LoRA adapters trained on different base models together?",
+      "a": "No. Every adapter you serve on one multi-LoRA server must be trained against the same base model and architecture, because the adapter only adds a correction to *that* base's weights. Adapters from different bases need separate deployments."
+    },
+    {
+      "q": "Should I merge a LoRA adapter into the base before serving?",
+      "a": "Merge only if you serve exactly one variant — it removes the small per-request adapter overhead. If you serve many variants from one base, do NOT merge: merging produces a standalone model and destroys the separability that lets one base share many adapters."
+    },
+    {
+      "q": "Why is multi-LoRA serving cheaper than one model per customer?",
+      "a": "Loading the base model is the expensive part, and it dominates GPU memory. Giving each customer a full copy duplicates that base many times. Multi-LoRA loads the base once and adds a few megabytes per customer, so 50 variants can fit where 50 full copies never would."
+    }
+  ],
+  "related": [
+    "what-is-lora",
+    "qlora-explained",
+    "lora-rank-and-alpha",
+    "full-fine-tuning-vs-peft",
+    "fine-tuning-cost-breakdown"
+  ],
+  "furtherReading": [
+    {
+      "title": "LoRA: Low-Rank Adaptation of Large Language Models (arXiv)",
+      "url": "https://arxiv.org/abs/2106.09685"
+    },
+    {
+      "title": "Hugging Face PEFT documentation",
+      "url": "https://huggingface.co/docs/peft"
+    },
+    {
+      "title": "Multi-LoRA inference — vLLM documentation",
+      "url": "https://docs.vllm.ai/en/latest/features/lora.html"
+    },
+    {
+      "title": "S-LoRA: Serving Thousands of Concurrent LoRA Adapters (arXiv)",
+      "url": "https://arxiv.org/abs/2311.03285"
+    }
+  ]
+}

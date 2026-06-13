@@ -1,0 +1,347 @@
+{
+  "slug": "handle-context-window-overflow",
+  "title": "What to Do When Your Prompt Is Too Long for the Context Window",
+  "shortTitle": "Context Window Overflow",
+  "seoTitle": "Prompt Too Long? Handling Context Window Overflow",
+  "metaDescription": "Practical fixes when a prompt exceeds the context window: truncation, summarization, chunking, retrieval, and rolling conversation memory — with trade-offs.",
+  "keywords": [
+    "prompt too long for context window",
+    "context window overflow",
+    "how to fit more in the context window",
+    "truncate vs summarize context",
+    "handle long conversation history llm"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Get a decision guide for when your input blows past the context limit — truncate, summarize, chunk, or retrieve — and the trade-offs of each option.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every language model reads and writes inside a fixed budget of [tokens](/learn/llm-fundamentals/context-windows/what-is-a-context-window) — its **context window**. That budget has to cover *everything*: your system prompt, the documents you paste in, the whole back-and-forth of a chat, and the space the model needs to write its reply. When the total crosses the limit, you have **context window overflow** — the prompt simply does not fit."
+        },
+        {
+          "type": "p",
+          "md": "Think of the context window as a single whiteboard the model uses for one request. You write the instructions, the reference material, and the conversation on it, and the model needs room left over to write its answer. A small whiteboard is fine for a quick note. But try to fit a 300-page contract, a year of chat history, and a long question, and you run out of board. Something has to come off — the only real question is *what*, and *how you choose*."
+        },
+        {
+          "type": "p",
+          "md": "This article is not about *what* a context window is — that's covered in [context windows](/learn/llm-fundamentals/context-windows/what-is-a-context-window). It's the practical sequel: your input is too big, the API is about to reject it (or quietly drop the front of it), and you need a plan. There are four standard moves — **truncate, summarize, chunk-and-map, or retrieve** — and the skill is knowing which one fits your situation."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "\"Too long\" is measured in tokens, not characters or words. A rough rule of thumb for English is ~4 characters or ~0.75 words per token, but it varies by model and language. Always count with the provider's real tokenizer before assuming you fit."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Overflow is not a rare edge case — it is the default failure mode of any real application the moment inputs get bigger than your test cases. A chatbot works beautifully in a demo with three messages, then breaks in week two when a power user's conversation reaches a hundred turns. A document tool handles a memo, then chokes on a merger agreement. If you build with LLMs, you *will* hit this."
+        },
+        {
+          "type": "p",
+          "md": "What actually happens at the limit depends on the API, and the two behaviors are dangerously different:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Hard rejection.** Most chat APIs return an error like *\"this request exceeds the maximum context length\"* and refuse to run. Annoying, but honest — you know immediately that you have a problem to solve.",
+            "**Silent truncation.** Some tools and middleware quietly drop the *oldest* or *front* part of the prompt to make it fit, then run anyway. This is worse, because it can throw away your system prompt or the very document the user asked about — and you get a confident, wrong answer with no error at all."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "There is also a quieter cost. Even when a giant prompt *does* fit, it is slow and expensive — you pay for every input token on every call — and models recall facts buried in the middle of a long context less reliably than facts near the edges (the well-known *\"lost in the middle\"* effect). So managing context length is not only about avoiding errors; it's about keeping answers fast, cheap, and accurate. That broader discipline is [context engineering](/learn/prompt-engineering/context-engineering/what-is-context-engineering); overflow handling is its most concrete, unavoidable piece."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works: the four moves",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every fix for overflow does one of two things: it makes the input *smaller* before it reaches the model, or it *changes the strategy* so the full input never has to be in the window at once. Here are the four standard moves, from simplest to most powerful."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Deciding what to do at the limit",
+            "steps": [
+              {
+                "label": "Prompt too long",
+                "sub": "tokens > window"
+              },
+              {
+                "label": "Count tokens",
+                "sub": "measure the overflow"
+              },
+              {
+                "label": "Pick a strategy",
+                "sub": "truncate / summarize / chunk / retrieve"
+              },
+              {
+                "label": "Fits the window",
+                "sub": "model can answer",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "1. Truncate — just cut it down"
+        },
+        {
+          "type": "p",
+          "md": "The bluntest fix: drop tokens until the prompt fits. Keep the most important parts (usually the system prompt and the latest user message) and cut the rest — the oldest chat turns, or the tail of a document. Truncation is instant, free, and adds no extra model calls. Its weakness is equally obvious: whatever you cut is *gone*, so if the answer lived in the part you dropped, the model can't find it. Use truncation when the cut material is genuinely low-value (old small talk, boilerplate) — never when it might hold the answer."
+        },
+        {
+          "type": "h3",
+          "text": "2. Summarize — compress instead of cut"
+        },
+        {
+          "type": "p",
+          "md": "Instead of deleting the old material, replace it with a shorter version of itself. The classic case is a long chat: when history grows too big, you ask the model to write a compact summary of the older turns, then keep that summary plus the most recent messages verbatim. This is often called a **rolling summary** or **conversation memory**. You preserve the gist of a long history in a fraction of the tokens. The cost is an extra LLM call to produce each summary, and some loss of detail — a summary is lossy by definition, so specific names, numbers, or quotes can blur."
+        },
+        {
+          "type": "h3",
+          "text": "3. Chunk-and-map — process in pieces"
+        },
+        {
+          "type": "p",
+          "md": "When the task is *over the whole input* — \"summarize this 200-page report,\" \"find every clause about liability\" — you can't just throw most of it away. Instead, split the input into chunks that each fit the window, run the model on every chunk, then combine the results. This is the **map-reduce** (or *map-and-combine*) pattern: *map* the task across chunks, then *reduce* the partial answers into one final answer. It handles inputs of any size, but it's slower and pricier (one call per chunk plus a combine step), and reasoning that spans two distant chunks can get lost because no single call sees both."
+        },
+        {
+          "type": "h3",
+          "text": "4. Retrieve — only fetch what's relevant"
+        },
+        {
+          "type": "p",
+          "md": "The most scalable move flips the problem around. Instead of trying to fit a huge corpus into the prompt, you *search* it and insert only the handful of passages the question actually needs. This is [retrieval-augmented generation](/learn/rag/rag-fundamentals/what-is-rag): index your documents once, then at question time pull the top few relevant chunks into the prompt. The window stays small no matter how big the underlying library is — you could have a million documents and still send only 2,000 tokens. The trade-off is real infrastructure (an index or vector store) and the risk that retrieval misses the right passage."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "The four moves at a glance",
+            "columns": [
+              {
+                "title": "Truncate",
+                "items": [
+                  "Cut tokens to fit",
+                  "Free, instant, no extra calls",
+                  "Loses whatever you cut",
+                  "For low-value tail content"
+                ]
+              },
+              {
+                "title": "Summarize",
+                "items": [
+                  "Compress old content",
+                  "Keeps the gist cheaply",
+                  "Lossy on exact details",
+                  "For long chat history"
+                ]
+              },
+              {
+                "title": "Chunk + map",
+                "items": [
+                  "Process in pieces, combine",
+                  "Handles any input size",
+                  "Slow, misses cross-chunk links",
+                  "For tasks over a whole doc"
+                ]
+              },
+              {
+                "title": "Retrieve",
+                "accent": true,
+                "items": [
+                  "Fetch only relevant bits",
+                  "Scales to millions of docs",
+                  "Needs an index; can miss",
+                  "For large, searchable corpora"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "worked-example-rolling-chat-memory",
+      "title": "Worked example: a rolling chat memory",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The most common place builders meet overflow is a chat that just keeps growing. Here's the standard pattern in plain Python: keep recent turns verbatim, and once history crosses a token budget, fold the older turns into a running summary. The key idea is a **token budget check before every call**, not after the error."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "rolling_memory.py",
+          "code": "from anthropic import Anthropic\n\nclient = Anthropic(api_key=\"sk-ant-...\")\nMODEL = \"claude-sonnet-4-6\"\n\nsummary = \"\"            # running summary of older turns\nrecent: list[dict] = []  # last few verbatim messages\nTOKEN_BUDGET = 8000     # max tokens we allow for history\n\ndef token_count(messages):\n    # Use the provider's real token counter, not a guess.\n    r = client.messages.count_tokens(model=MODEL, messages=messages)\n    return r.input_tokens\n\ndef maybe_compress():\n    global summary, recent\n    # If recent history is over budget, summarize the oldest half.\n    while token_count(recent) > TOKEN_BUDGET and len(recent) > 2:\n        old, recent = recent[:2], recent[2:]\n        text = \"\\n\".join(f\"{m['role']}: {m['content']}\" for m in old)\n        prompt = (\n            f\"Update this running summary with the new turns.\\n\\n\"\n            f\"Summary so far:\\n{summary}\\n\\nNew turns:\\n{text}\"\n        )\n        summary = client.messages.create(\n            model=MODEL, max_tokens=400,\n            messages=[{\"role\": \"user\", \"content\": prompt}],\n        ).content[0].text\n\ndef chat(user_msg):\n    recent.append({\"role\": \"user\", \"content\": user_msg})\n    maybe_compress()\n    system = f\"Conversation summary so far:\\n{summary}\" if summary else \"\"\n    reply = client.messages.create(\n        model=MODEL, max_tokens=600, system=system, messages=recent,\n    ).content[0].text\n    recent.append({\"role\": \"assistant\", \"content\": reply})\n    return reply"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Notice the budget (8000) is well *below* the model's true window. Always leave headroom for the system prompt, the next user message, and the model's reply (`max_tokens`). A prompt that fits exactly but leaves no room to *answer* still fails."
+        }
+      ]
+    },
+    {
+      "id": "choosing-and-pitfalls",
+      "title": "Choosing a strategy and avoiding traps",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Pick by what kind of input you have and what the task needs. Use this as a quick decision guide:"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Your situation",
+            "Best move",
+            "Why"
+          ],
+          "rows": [
+            [
+              "Long chat history, old turns mostly chit-chat",
+              "Truncate or summarize",
+              "Recent context matters most; old turns compress or drop cleanly"
+            ],
+            [
+              "Task needs the *whole* document (summarize / extract all)",
+              "Chunk + map-reduce",
+              "No single passage answers it; you must touch every part"
+            ],
+            [
+              "Big, searchable knowledge base; question hits a few spots",
+              "Retrieve (RAG)",
+              "Only a handful of passages are relevant; scales to any size"
+            ],
+            [
+              "One medium doc that *almost* fits",
+              "Trim boilerplate, then send whole",
+              "Simplest path; avoids retrieval infra when you don't need it"
+            ],
+            [
+              "Hard token cap on a single huge field you can't split",
+              "Summarize then process",
+              "Compress first so the downstream call fits"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "These moves also combine. A serious assistant might *retrieve* documents, *summarize* old chat turns, and *truncate* a stray oversized field — all in the same request. The strategies are tools, not religions."
+        },
+        {
+          "type": "h3",
+          "text": "Common pitfalls"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Counting tokens with the wrong tool.** Guessing from word count, or using a different model's tokenizer, leads to off-by-thousands errors. Use the provider's own token counter on the exact model.",
+            "**Forgetting the output budget.** The reply lives in the same window. If you fill it to the brim with input, the model has no room to answer and gets cut off mid-sentence.",
+            "**Truncating the system prompt.** Naive \"drop the front\" logic can delete your instructions, since the [system prompt](/learn/prompt-engineering/context-engineering/what-is-system-prompt) sits first. Always protect it explicitly when trimming.",
+            "**Chunking that splits mid-thought.** Cutting a sentence, table, or clause in half garbles meaning. Split on natural boundaries (paragraphs, sections) and overlap a little between chunks.",
+            "**Summary drift.** Re-summarizing a summary over and over slowly loses fidelity. Keep recent turns verbatim and only compress what's genuinely old."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Silent truncation is the trap that bites hardest in production. If a library or proxy is dropping tokens to \"help\" you, you can ship answers built on half the input and never see an error. Log your real input token counts and prefer hard failures you can catch over silent ones you can't."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the four basic moves are second nature, a few more advanced ideas are worth knowing."
+        },
+        {
+          "type": "p",
+          "md": "**\"Just use a bigger window\" is not a full answer.** Modern models offer huge windows — hundreds of thousands or even a [million tokens](/learn/llm-fundamentals/context-windows/million-token-context-windows). That genuinely removes overflow for many tasks, and for a single handbook \"just paste it\" can be the right, simple call. But a bigger window doesn't make every token *free* or every fact *equally recalled*: you still pay per input token on every call, latency still grows, and the lost-in-the-middle effect still bites. Overflow handling becomes a *cost and quality* decision long before it stops being a *will-it-fit* one."
+        },
+        {
+          "type": "p",
+          "md": "**Prompt caching changes the math.** If a large, stable chunk of your prompt (a long system prompt, a fixed document, few-shot examples) repeats across many requests, several APIs let you *cache* it so you don't re-pay full price to re-process it each time. That makes \"keep a big stable context\" far cheaper, shifting some decisions away from aggressive trimming. It doesn't raise the window limit — it lowers the cost of reusing what's in it."
+        },
+        {
+          "type": "p",
+          "md": "**Map-reduce has variants.** The plain version maps independently then combines once. A *refine* loop instead carries a running answer through the chunks one at a time, updating it as it goes — better for tasks where later chunks should adjust earlier conclusions, at the cost of being sequential and slower. Choose based on whether your chunks are independent or build on each other."
+        },
+        {
+          "type": "p",
+          "md": "**Structure helps the model use a full window.** When you do send a lot of context, clear boundaries matter: label sections, fence documents, and separate instructions from data so the model knows what's what — see [structuring prompts with XML or Markdown](/learn/prompt-engineering/prompting-basics/structure-prompts-xml-markdown) and [putting documents in prompts](/learn/prompt-engineering/context-engineering/documents-in-llm-prompts). A well-organized large prompt is recalled better than a wall of undifferentiated text."
+        },
+        {
+          "type": "p",
+          "md": "The durable takeaway: overflow is not a bug to patch once, it's a constraint to design around. Decide *before* you hit the limit which content is load-bearing and which is disposable, measure real token counts, and keep the window full of only what the current answer actually needs."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What happens when a prompt is too long for the context window?",
+      "a": "It depends on the API. Most chat APIs reject the request with a \"maximum context length exceeded\" error and run nothing. Some tools instead silently drop the oldest or front part of the prompt to make it fit and then answer anyway — which is more dangerous, because it can throw away your instructions or the relevant document without any error."
+    },
+    {
+      "q": "Should I truncate or summarize a long conversation?",
+      "a": "Truncate when the old turns are genuinely low-value (small talk, boilerplate) — it's free and instant. Summarize when the older history still carries information you need later — you keep the gist in far fewer tokens at the cost of one extra model call and some loss of exact detail. Many chat apps do both: summarize old turns into a running memory, keep recent turns verbatim."
+    },
+    {
+      "q": "How do I fit a document that's bigger than the context window?",
+      "a": "If the task needs the whole document (like summarizing it), split it into chunks that each fit, run the model on every chunk, then combine the results — the map-reduce pattern. If the task only needs a few relevant parts (like answering a question), use retrieval (RAG) to search the document and insert just the matching passages."
+    },
+    {
+      "q": "Does a bigger context window remove the need to manage overflow?",
+      "a": "It helps but doesn't eliminate the work. A larger window fits more, but you still pay per input token on every call, latency grows with size, and models recall facts buried in the middle of very long prompts less reliably. So managing context becomes a cost and quality decision even when everything technically fits."
+    },
+    {
+      "q": "How do I count tokens before sending a prompt?",
+      "a": "Use the provider's own token counter for the exact model you'll call (for example, a count-tokens endpoint or the model's tokenizer library). Don't estimate from character or word count, and don't reuse a different model's tokenizer — token counts differ between models, and guessing leads to off-by-thousands errors."
+    },
+    {
+      "q": "Why does my model's answer get cut off even though the input fit?",
+      "a": "The reply shares the same context window as the input. If you fill the window almost entirely with prompt, there's no room left for the model to write, and the output gets truncated mid-sentence. Always reserve headroom for the response (your max_tokens setting) when budgeting context."
+    }
+  ],
+  "related": [
+    "what-is-context-engineering",
+    "documents-in-llm-prompts",
+    "what-is-system-prompt",
+    "structure-prompts-xml-markdown",
+    "how-many-few-shot-examples"
+  ],
+  "furtherReading": [
+    {
+      "title": "Token counting — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/token-counting"
+    },
+    {
+      "title": "Prompt caching — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching"
+    },
+    {
+      "title": "Lost in the Middle: How Language Models Use Long Contexts (arXiv)",
+      "url": "https://arxiv.org/abs/2307.03172"
+    }
+  ]
+}

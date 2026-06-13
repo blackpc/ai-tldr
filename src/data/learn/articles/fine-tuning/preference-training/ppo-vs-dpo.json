@@ -1,0 +1,371 @@
+{
+  "slug": "ppo-vs-dpo",
+  "title": "PPO vs DPO: Two Ways to Align an LLM to Preferences",
+  "shortTitle": "PPO vs DPO",
+  "seoTitle": "PPO vs DPO: Which Preference Method to Use",
+  "metaDescription": "PPO runs a full RL loop with a reward model; DPO skips it and trains on preference pairs directly. Compare stability, cost, and quality to pick one.",
+  "keywords": [
+    "ppo vs dpo",
+    "dpo or ppo for alignment",
+    "ppo reinforcement learning llm",
+    "dpo vs ppo quality",
+    "preference optimization methods compared",
+    "rlhf ppo explained"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "See exactly where PPO and DPO diverge so you can choose the simpler pipeline without giving up alignment quality.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once a base model can write fluent text, you still have to teach it *which* answers people actually prefer — the helpful one over the rambling one, the honest one over the confident-but-wrong one. **PPO** and **DPO** are two recipes for doing exactly that from human preference data. They aim for the same target; they take very different roads to get there."
+        },
+        {
+          "type": "p",
+          "md": "Picture training a new chef. **PPO** is the version where a food critic tastes every dish the chef cooks, scores it, and the chef adjusts based on those live scores — over thousands of rounds of cook, taste, react. **DPO** skips the live critic entirely: you hand the chef a stack of *paired* photos — \"diners liked this plate more than that one\" — and the chef studies the pairs directly until they internalize the preference. Same goal, far less moving machinery."
+        },
+        {
+          "type": "p",
+          "md": "PPO is short for **Proximal Policy Optimization**, a reinforcement-learning algorithm borrowed from robotics and games. It's the engine inside classic [RLHF](/learn/fine-tuning/preference-training/what-is-rlhf). DPO is **Direct Preference Optimization**: a 2023 method that proved you can get the same alignment effect with a single supervised-style loss — no reward model, no reinforcement learning loop. See the standalone [DPO explainer](/learn/fine-tuning/preference-training/what-is-dpo) for the full derivation; this page is the head-to-head."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Both methods consume the *same raw ingredient*: pairs of model answers where a human marked one as better (\"chosen\") and one as worse (\"rejected\"). The difference is entirely in what they do with those pairs."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "If you're aligning a model, picking between PPO and DPO is one of the first big forks in the road. It decides how much infrastructure you build, how much compute you burn, how likely your training run is to blow up, and — sometimes — how good the final model gets on the hardest cases. Getting it wrong costs weeks."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Cost and complexity.** PPO keeps up to four models in play at once and runs an unstable RL loop; DPO trains one model with a loss that looks almost like ordinary fine-tuning. For most teams, DPO is dramatically cheaper to stand up and run.",
+            "**Stability.** PPO is famous for being finicky — a slightly wrong learning rate or KL setting and the model collapses into gibberish or game-the-reward nonsense. DPO has far fewer knobs and rarely explodes, which matters a lot when you can't babysit every run.",
+            "**Ceiling on quality.** The trade-off cuts back the other way: because PPO can *explore* new answers and get fresh feedback on them, a well-tuned PPO pipeline can sometimes push past what DPO reaches on subtle, hard-to-specify alignment goals."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who cares in practice? Anyone past basic [supervised fine-tuning](/learn/fine-tuning/fine-tuning-basics/what-is-fine-tuning) who wants the model to follow *preferences* rather than just imitate examples. The honest summary the field has converged on: **start with DPO** because it's simpler and usually good enough, and reach for **PPO** only when you've hit DPO's ceiling and can afford the extra machinery. The rest of this page makes that recommendation concrete."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The cleanest way to see the difference is to walk each pipeline end to end. They start from the same place — a model that's already been supervised-fine-tuned (the **SFT model**) — and the same preference dataset. From there they diverge completely."
+        },
+        {
+          "type": "h3",
+          "text": "PPO: an online reinforcement-learning loop"
+        },
+        {
+          "type": "p",
+          "md": "PPO treats alignment as a *learning-by-doing* problem. First you train a separate **reward model** — a network that reads a prompt and a candidate answer and outputs a single number, a learned stand-in for \"how much a human would like this.\" Then the real loop begins. The model being trained (the **policy**) generates fresh answers to prompts, the reward model scores them, and PPO nudges the policy to produce higher-scoring answers next time. This repeats over and over."
+        },
+        {
+          "type": "p",
+          "md": "Two extra pieces keep it from going off the rails. A **value head** (a critic) estimates how good a partially-written answer is, which makes the reward signal less noisy. And a **KL penalty** measures how far the policy has drifted from the original SFT model and pushes back if it strays too far — without it, the policy learns to *exploit* the reward model, churning out weird text that scores high but reads like nonsense (\"reward hacking\")."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "PPO — the online RLHF loop",
+            "steps": [
+              {
+                "label": "Policy generates",
+                "sub": "fresh answers to prompts"
+              },
+              {
+                "label": "Reward model scores",
+                "sub": "one number per answer"
+              },
+              {
+                "label": "Value head + KL",
+                "sub": "stabilize the signal"
+              },
+              {
+                "label": "Update policy",
+                "sub": "nudge toward high reward"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Notice the cost hiding in that loop: at any moment PPO juggles up to **four models** — the policy being trained, a frozen reference copy (for the KL penalty), the reward model, and the value/critic head. The policy also has to *generate* text on every step, which is slow. This is the price of being **online**: the model learns from its own new outputs, not a fixed dataset."
+        },
+        {
+          "type": "h3",
+          "text": "DPO: one offline loss, no RL"
+        },
+        {
+          "type": "p",
+          "md": "DPO's key insight is mathematical: the optimal policy that RLHF is *trying* to reach can be written in closed form, so you can skip the whole loop and optimize for it directly. There's no reward model, no generating new text, no critic. You take your fixed preference pairs and train with a single loss that says, in effect: *make the chosen answer more likely than the rejected one, relative to where the reference model started* — while a built-in term plays the same role the KL penalty did in PPO."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "DPO — offline, on a fixed dataset",
+            "steps": [
+              {
+                "label": "Preference pairs",
+                "sub": "chosen vs rejected"
+              },
+              {
+                "label": "Compare to reference",
+                "sub": "policy vs frozen SFT"
+              },
+              {
+                "label": "DPO loss",
+                "sub": "raise chosen, lower rejected"
+              },
+              {
+                "label": "Updated model",
+                "sub": "one network, done",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Because nothing is generated and the data never changes, DPO is **offline**: it looks and runs almost exactly like supervised fine-tuning. You hold two models in memory (the policy and a frozen reference) and stream batches of pairs through a loss. That simplicity is the whole reason DPO took off."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Rule of thumb for the mechanism: **PPO learns a reward function and then chases it; DPO bakes the reward signal straight into the loss.** Everything else — the cost, the stability, the quirks — flows from that one choice."
+        }
+      ]
+    },
+    {
+      "id": "head-to-head",
+      "title": "PPO vs DPO, head to head",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Side by side, the trade-off is easy to read. PPO buys quality with complexity; DPO buys simplicity by giving up some exploration."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Dimension",
+            "PPO (RLHF)",
+            "DPO"
+          ],
+          "rows": [
+            [
+              "Paradigm",
+              "Online reinforcement learning",
+              "Offline, supervised-style"
+            ],
+            [
+              "Reward model",
+              "Yes — trained separately",
+              "None — implicit in the loss"
+            ],
+            [
+              "Models in memory",
+              "Up to 4 (policy, ref, reward, critic)",
+              "2 (policy + frozen reference)"
+            ],
+            [
+              "Generates during training",
+              "Yes — slow rollouts each step",
+              "No — fixed dataset"
+            ],
+            [
+              "Stability",
+              "Finicky; can collapse / reward-hack",
+              "Robust; few failure modes"
+            ],
+            [
+              "Hyperparameters to tune",
+              "Many (KL, clip, value loss, lr…)",
+              "Few (mainly beta and lr)"
+            ],
+            [
+              "Compute cost",
+              "High",
+              "Low"
+            ],
+            [
+              "Quality ceiling",
+              "Higher on hard cases when tuned well",
+              "Strong, but can plateau"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The single most important row is **\"generates during training.\"** Because PPO produces new answers and scores them live, it can discover responses that aren't anywhere in your dataset and learn whether they're good. DPO only ever sees the chosen/rejected pairs you collected; it can sharpen preferences inside that data beautifully, but it can't go looking for better answers on its own. That's the root cause of PPO's higher ceiling — and of why it's so much more expensive."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Beware head-to-head benchmark claims in either direction. PPO-vs-DPO results swing hard with the reward-model quality, dataset, and tuning budget. A poorly-tuned PPO loses to DPO; a poorly-curated DPO dataset loses to PPO. The *method* is rarely the whole story — the data and the tuning effort usually matter more."
+        }
+      ]
+    },
+    {
+      "id": "which-to-choose",
+      "title": "Which one should you choose?",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You don't need to agonize. A short decision flow covers almost every real situation."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "Picking a preference method",
+            "root": {
+              "label": "Have an SFT model + preference pairs"
+            },
+            "children": [
+              {
+                "label": "Default: start with DPO",
+                "sub": "simple, cheap, usually enough",
+                "accent": true
+              },
+              {
+                "label": "Hit DPO's ceiling?",
+                "sub": "subtle goals, plateau → try PPO"
+              },
+              {
+                "label": "No RL infra / small team?",
+                "sub": "stay on DPO + better data"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Reach for DPO when"
+        },
+        {
+          "type": "list",
+          "items": [
+            "You want results fast and can't afford to babysit an unstable RL loop.",
+            "Your compute or engineering budget is limited — DPO runs on roughly the footprint of ordinary fine-tuning.",
+            "Your preference data already covers the behaviors you care about well; you mainly need to *sharpen* them, not discover new ones.",
+            "You're combining it with [LoRA or other PEFT](/learn/fine-tuning/lora-and-peft/what-is-lora) to keep the run cheap — DPO pairs naturally with parameter-efficient methods."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Reach for PPO when"
+        },
+        {
+          "type": "list",
+          "items": [
+            "You've run DPO and it plateaued on the hard, subtle alignment goals you care most about.",
+            "You can train a *good* reward model — PPO is only as good as the reward signal it chases.",
+            "You have the infrastructure and tolerance to tune an RL loop (KL schedules, clipping, rollouts) and watch for reward hacking.",
+            "Online exploration genuinely helps your task — the model needs to find better answers than the ones in your dataset."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "These aren't mutually exclusive over a model's life. A common path is **SFT → DPO** to get most of the way cheaply, then a careful **PPO** stage near the end to squeeze out the last bit of alignment quality."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the core contrast clicks, a few nuances are worth knowing — they're where most of the real-world confusion lives."
+        },
+        {
+          "type": "p",
+          "md": "**The DPO beta parameter.** DPO has one knob that behaves like PPO's KL penalty: **beta**. Low beta lets the model drift far from the reference (more aggressive, riskier); high beta keeps it close (safer, weaker effect). It's the single most important DPO hyperparameter and the first thing to sweep — see [fine-tuning hyperparameters](/learn/fine-tuning/fine-tuning-basics/what-is-fine-tuning) for the broader picture if your subcategory hasn't got a dedicated page yet."
+        },
+        {
+          "type": "p",
+          "md": "**On-policy vs off-policy is the deeper axis.** \"Online vs offline\" is really shorthand for *where the training answers come from*. PPO is **on-policy** — it learns from text the current model just generated. DPO is **off-policy** — it learns from a frozen dataset that may have been written by a different (often weaker) model. Off-policy data can be stale or mismatched, which is a subtle reason DPO sometimes underperforms: it's optimizing over answers the model would no longer produce."
+        },
+        {
+          "type": "p",
+          "md": "**The middle ground is filling in.** The field hasn't stayed at two options. **Online DPO** and **iterative DPO** periodically generate fresh answers and re-label them, borrowing PPO's exploration while keeping DPO's simpler loss. Variants like **IPO**, **KTO**, and **ORPO** tweak the loss to fix specific DPO weaknesses (overfitting to noisy pairs, needing paired data at all). The clean PPO-vs-DPO binary is increasingly a *spectrum* from fully offline to fully online."
+        },
+        {
+          "type": "p",
+          "md": "**Reward models didn't disappear.** A frequent misconception is that DPO killed reward models. It removed the *explicit* one from the training loop, but reward models are alive and well elsewhere — for **rejection sampling** (generate many answers, keep the best-scored), for evaluation, and for the newer RL-from-verifiable-rewards pipelines used in reasoning models. Understanding PPO's reward model is still worth your time even if you only ever run DPO."
+        },
+        {
+          "type": "p",
+          "md": "**Where to go next.** If you haven't already, read the full [RLHF walkthrough](/learn/fine-tuning/preference-training/what-is-rlhf) (PPO in its native habitat) and the standalone [DPO explainer](/learn/fine-tuning/preference-training/what-is-dpo) for the loss derivation. To ground the whole thing in cost and tooling, [pretraining vs fine-tuning](/learn/fine-tuning/fine-tuning-basics/pretraining-vs-fine-tuning) and [full fine-tuning vs PEFT](/learn/fine-tuning/fine-tuning-basics/full-fine-tuning-vs-peft) show where preference training sits in the larger pipeline. The durable takeaway: **PPO and DPO are points on a single trade-off curve between simplicity and exploratory power — start simple, and only add machinery when the data proves you need it.**"
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is the main difference between PPO and DPO?",
+      "a": "PPO runs a full reinforcement-learning loop: it trains a separate reward model, then has the policy generate answers, score them, and improve over many rounds. DPO skips all of that and trains directly on chosen-vs-rejected preference pairs with a single supervised-style loss. PPO is online and complex; DPO is offline and simple."
+    },
+    {
+      "q": "Is DPO better than PPO?",
+      "a": "Not strictly — they trade off. DPO is simpler, cheaper, and far more stable, and it's good enough for most projects. A well-tuned PPO can reach a higher quality ceiling on hard, subtle alignment goals because it explores new answers, but it costs much more and is harder to get right. Most teams start with DPO and only move to PPO if they hit a wall."
+    },
+    {
+      "q": "Why is PPO so much more expensive than DPO?",
+      "a": "PPO keeps up to four models in play at once (the policy, a frozen reference, a reward model, and a value/critic head) and has to generate fresh text on every training step. DPO holds just two models (policy plus frozen reference) and never generates anything — it streams a fixed dataset of pairs through one loss, so it runs at roughly the cost of ordinary fine-tuning."
+    },
+    {
+      "q": "Do I need a reward model for DPO?",
+      "a": "No. That's the whole point of DPO: the reward signal is baked implicitly into the loss, so there's no separately trained reward model. PPO does need one. Reward models are still useful for other things, like ranking generated answers or evaluation, but DPO training doesn't require one."
+    },
+    {
+      "q": "Can I use both PPO and DPO on the same model?",
+      "a": "Yes. A common pipeline is supervised fine-tuning, then DPO to get most of the alignment cheaply, then an optional, carefully tuned PPO stage to squeeze out the last bit of quality. They aren't mutually exclusive — they're stages you can chain."
+    },
+    {
+      "q": "What does 'online' versus 'offline' mean here?",
+      "a": "It refers to where the training answers come from. PPO is online (on-policy): it learns from text the model just generated. DPO is offline (off-policy): it learns from a fixed dataset of preference pairs, possibly written by a different model. Online lets the model explore new answers; offline is simpler but can be stale."
+    }
+  ],
+  "related": [
+    "what-is-dpo",
+    "what-is-rlhf",
+    "what-is-fine-tuning",
+    "full-fine-tuning-vs-peft",
+    "what-is-lora"
+  ],
+  "furtherReading": [
+    {
+      "title": "Direct Preference Optimization (arXiv)",
+      "url": "https://arxiv.org/abs/2305.18290"
+    },
+    {
+      "title": "Proximal Policy Optimization Algorithms (arXiv)",
+      "url": "https://arxiv.org/abs/1707.06347"
+    },
+    {
+      "title": "TRL — Transformer Reinforcement Learning (Hugging Face docs)",
+      "url": "https://huggingface.co/docs/trl"
+    }
+  ]
+}

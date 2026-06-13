@@ -1,0 +1,357 @@
+{
+  "slug": "build-rag-evaluation-dataset",
+  "title": "How to Build a RAG Evaluation Dataset (Golden Set)",
+  "shortTitle": "Building an Eval Dataset",
+  "seoTitle": "How to Build a RAG Evaluation Dataset (Golden Set)",
+  "metaDescription": "You can't improve a RAG system you can't measure. Learn how to build a golden question-answer set, including synthetic generation, to evaluate retrieval and answers.",
+  "keywords": [
+    "rag evaluation dataset",
+    "golden dataset rag",
+    "build rag test set",
+    "synthetic qa rag",
+    "rag ground truth"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You'll learn how to assemble a golden set of questions and answers that lets you measure RAG quality repeatably.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A **RAG evaluation dataset** — usually called a *golden set* or *ground truth* — is a fixed list of test questions, each paired with the right answer and the documents that answer should come from. You run your [RAG system](/learn/rag/rag-fundamentals/what-is-rag) over these questions, then compare what it produced against what you *know* is correct. No golden set, no real measurement — just vibes."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like a teacher's answer key. A teacher can't grade a stack of exams from memory; they need the key that says question 7's answer is *1789* and it comes from chapter 4. Your golden set is that answer key for your RAG pipeline. Each entry says: *here's a question a real user might ask, here's the answer we'd accept, and here are the exact passages in our knowledge base that contain it.*"
+        },
+        {
+          "type": "p",
+          "md": "Why does it need to exist *separately* from your system? Because the whole point of a test is that the system never sees the answers in advance. The golden set lives outside the pipeline, frozen and trusted, so that when you change a chunk size or swap an embedding model, you can re-run the same questions and see whether the number went up or down. It turns *\"I think retrieval got better\"* into *\"recall went from 0.71 to 0.84.\"*"
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The metrics articles — [RAG evaluation metrics](/learn/rag/rag-evaluation/rag-evaluation-metrics), [precision/recall/MRR](/learn/rag/rag-evaluation/retrieval-precision-recall-mrr), [faithfulness vs relevance](/learn/rag/rag-evaluation/faithfulness-vs-relevance) — all *assume you already have* a golden set. This article is the prerequisite: it's about building that ground truth in the first place."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You cannot improve a system you cannot measure. A RAG pipeline has many knobs — chunk size, overlap, embedding model, number of retrieved chunks, reranker on or off, prompt wording — and every one of them is a tradeoff. Change a knob and *something* gets better and *something* gets worse. Without a golden set you're tuning blind, judging each change by eyeballing three questions that happen to be on your mind that day."
+        },
+        {
+          "type": "p",
+          "md": "A golden set buys you three concrete things:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Regression safety.** When you fix one bad answer, a golden set tells you whether you quietly broke five others. \"It works on the demo question\" is how RAG systems silently rot.",
+            "**Separating retrieval from generation.** RAG fails in two distinct places — the retriever fetched the wrong chunks, or the model misused the right ones. Because each golden entry records *which chunks are relevant* and *what the answer should be*, you can score retrieval and generation independently and know which half to fix.",
+            "**Comparing options fairly.** Pinecone vs pgvector, one embedding model vs another, top-k of 3 vs 8 — these are only meaningful when every candidate runs the same fixed questions. The golden set is the level playing field."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Here's the trap that makes this *harder* than ordinary software testing: the right answer is fuzzy. A unit test checks `2 + 2 == 4`. But a RAG answer can be phrased a hundred valid ways, cite different-but-correct passages, and still be right. That's exactly why you invest effort up front in a careful golden set — so that later, an automated grader (often an [LLM judge](/learn/rag/rag-evaluation/what-is-ragas)) has a trustworthy reference to compare against instead of guessing."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A golden set is a list of records. Each record is one test case. At minimum it holds a **question**, a **reference answer** (the answer you'd accept as correct), and the **relevant chunk IDs** (which passages in your knowledge base actually contain that answer). Optionally it carries metadata — a difficulty label, a topic tag, or the answer type (factual, list, yes/no) — so you can slice your scores later."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Building the golden set",
+            "steps": [
+              {
+                "label": "Gather questions",
+                "sub": "real users + gaps"
+              },
+              {
+                "label": "Find the source",
+                "sub": "locate the chunks"
+              },
+              {
+                "label": "Write reference answer",
+                "sub": "grounded in those chunks"
+              },
+              {
+                "label": "Mark relevant chunk IDs",
+                "sub": "the retrieval target"
+              },
+              {
+                "label": "Review + freeze",
+                "sub": "human-checked",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The two halves of a record map directly onto the two halves of RAG evaluation. The **relevant chunk IDs** let you score *retrieval*: did the retriever return those chunks? That gives you precision, recall, and MRR. The **reference answer** lets you score *generation*: did the final answer match it, and did it stay faithful to the retrieved text? Recording both is what makes the set useful for the whole pipeline rather than just one end of it."
+        },
+        {
+          "type": "h3",
+          "text": "What one golden record looks like"
+        },
+        {
+          "type": "p",
+          "md": "Keep it boring and explicit. A flat JSON list is plenty — you don't need a database for a few hundred examples."
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "title": "one entry in golden_set.json",
+          "code": "{\n  \"id\": \"q-014\",\n  \"question\": \"How long do I have to return a physical product?\",\n  \"reference_answer\": \"Physical items can be returned within 30 days of purchase.\",\n  \"relevant_chunk_ids\": [\"refunds-policy#c2\"],\n  \"answer_type\": \"factual\",\n  \"source\": \"real_support_ticket\"\n}"
+        },
+        {
+          "type": "p",
+          "md": "Note `relevant_chunk_ids` references chunks by a *stable ID*, not by their text. If you re-chunk your corpus those IDs may change, so tie each ID to a source document and section rather than a row number — that way the golden set survives an ingestion change."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Start small and grow. 50 carefully-built, human-reviewed questions beat 5,000 sloppy synthetic ones. You can detect a real regression with a few dozen good examples; you can't trust *any* number that came from a noisy set."
+        }
+      ]
+    },
+    {
+      "id": "sourcing-questions-and-answers",
+      "title": "Sourcing questions and writing answers",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Where do good questions come from? In rough order of value:"
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Real user queries.** Support tickets, search logs, chat transcripts, sales questions. These are gold because they reflect how people *actually* phrase things — messy, abbreviated, ambiguous — not the clean questions you'd invent. Mine these first.",
+            "**Subject-matter experts.** Ask the people who own the documents: \"what do users always get wrong?\" and \"what's the trickiest question in here?\" Experts surface edge cases and multi-document questions you'd never think of.",
+            "**Coverage gaps.** Walk your taxonomy and make sure every important document and every category has at least one question pointing at it. Otherwise you'll measure the popular topics and stay blind to the rest.",
+            "**Synthetic generation.** Use an LLM to scale the set up (covered below). Best as a *supplement* to real questions, not a replacement."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "When you write the **reference answer**, the cardinal rule is: it must be grounded in the chunks you marked relevant. Open the actual source passage and write the answer from it — don't write from memory or let a model freestyle. If the answer can't be supported by a passage in your knowledge base, that's not a golden question yet; either it's out of scope, or your corpus has a gap (which is itself a useful finding)."
+        },
+        {
+          "type": "p",
+          "md": "Deliberately include some **unanswerable questions** — things your corpus genuinely doesn't cover, with the reference answer set to *\"I don't know\"* or *\"not in the provided documents.\"* A good RAG system must refuse to answer when it has no grounds, and you can only test that behavior if your golden set contains questions where refusal is the correct response."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Cover the hard cases, not just the easy ones. Include multi-hop questions (the answer spans two documents), questions with near-duplicate distractor passages, and questions whose wording shares no keywords with the source text. An easy-only golden set reports a flattering score that collapses in production."
+        }
+      ]
+    },
+    {
+      "id": "synthetic-qa-generation",
+      "title": "Generating synthetic Q&A at scale",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Hand-writing hundreds of questions is slow. The standard scaling trick reverses the RAG pipeline: instead of *question → find chunk*, you go *chunk → generate question*. You hand the model a real passage from your corpus and ask it to write a question that passage answers, plus the answer. Because you started from a known chunk, you get the `relevant_chunk_ids` and a grounded reference answer almost for free."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Synthetic Q&A — reverse the pipeline",
+            "steps": [
+              {
+                "label": "Pick a chunk",
+                "sub": "from your corpus"
+              },
+              {
+                "label": "LLM writes Q + A",
+                "sub": "answerable from chunk"
+              },
+              {
+                "label": "chunk ID = ground truth",
+                "sub": "the relevant target"
+              },
+              {
+                "label": "Human filters",
+                "sub": "drop weak items",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "generate_synthetic_qa.py",
+          "code": "from anthropic import Anthropic\nimport json\n\nclient = Anthropic(api_key=\"sk-ant-...\")\n\nPROMPT = \"\"\"You are writing evaluation data for a retrieval system.\nFrom the passage below, write ONE question a real user might ask\nthat is fully answered by this passage, and the concise answer.\nThe answer must use ONLY facts in the passage.\nReturn JSON: {\"question\": \"...\", \"answer\": \"...\"}\n\nPassage:\n%s\"\"\"\n\ndef make_qa(chunk_text, chunk_id):\n    msg = client.messages.create(\n        model=\"claude-sonnet-4-6\",\n        max_tokens=400,\n        messages=[{\"role\": \"user\", \"content\": PROMPT % chunk_text}],\n    )\n    qa = json.loads(msg.content[0].text)\n    return {\n        \"question\": qa[\"question\"],\n        \"reference_answer\": qa[\"answer\"],\n        \"relevant_chunk_ids\": [chunk_id],   # we know the source\n        \"source\": \"synthetic\",\n    }\n\n# Run over a sample of chunks, then HAND-REVIEW the output.\ngolden = [make_qa(c.text, c.id) for c in sample_of_chunks]"
+        },
+        {
+          "type": "p",
+          "md": "Synthetic generation has real failure modes, so treat its output as *candidates*, not finished data:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Shallow questions.** Models love trivial \"what does paragraph one say\" questions whose answer is a near-copy of the chunk. These make retrieval look easy because keywords overlap perfectly. Prompt for paraphrased, realistic phrasing and filter the lazy ones out.",
+            "**Single-chunk bias.** Generating from one chunk at a time produces only single-hop questions. Real multi-document questions need a different prompt that's shown two or more chunks at once.",
+            "**Unverifiable answers.** A model can still hallucinate an answer the passage doesn't support. Always have a human (or a second, separate verification model) confirm the answer is grounded before it enters the set."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Open-source frameworks like Ragas can generate a synthetic test set for you and even build deliberately harder multi-hop questions — see [what is Ragas](/learn/rag/rag-evaluation/what-is-ragas). Use them to bootstrap, then keep a human in the loop on the final set."
+        }
+      ]
+    },
+    {
+      "id": "pitfalls-and-leakage",
+      "title": "Pitfalls: leakage and a stale set",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The single most damaging mistake is **test-set leakage** — letting your evaluation data influence the system it's supposed to judge. When that happens, your scores climb while real quality doesn't, and you ship a regression thinking you shipped an improvement."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Leak",
+            "What goes wrong",
+            "Fix"
+          ],
+          "rows": [
+            [
+              "Golden questions used to tune the prompt",
+              "You overfit to your own test; the number looks great, production doesn't",
+              "Keep a held-out slice you never look at while iterating"
+            ],
+            [
+              "Synthetic Q&A made by the same model that answers",
+              "The judge and the student share blind spots",
+              "Generate eval data with a different model than the one under test"
+            ],
+            [
+              "Reference answers copied verbatim from chunks",
+              "Rewards keyword overlap, not real retrieval",
+              "Paraphrase reference answers; vary the wording"
+            ],
+            [
+              "Eval questions pasted into few-shot examples",
+              "The system has literally seen the test",
+              "Source few-shot examples from outside the golden set"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Two more failure modes worth naming:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**A stale golden set.** Your corpus changes — policies update, products launch, docs get rewritten. A reference answer that was correct in January can be wrong by June. Re-validate the set on a schedule, and flag any entry whose source chunk was edited or deleted.",
+            "**One annotator, one opinion.** Whether a chunk is \"relevant\" is a judgment call. If a single person labels everything, their biases become your ground truth. For high-stakes sets, have two people label and reconcile disagreements — the disagreements themselves reveal genuinely ambiguous questions."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Never tune *and* report on the same questions. Split your set: a **dev** slice you iterate against freely, and a **test** slice you touch only to produce the final, honest number. The moment you optimize against the test slice, it stops measuring reality."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you have a working golden set, the next questions are about scale, trust, and keeping it alive."
+        },
+        {
+          "type": "p",
+          "md": "**How big should it be?** Big enough that a one-question swing doesn't move the metric much. A few dozen questions catches gross regressions; a couple hundred lets you slice scores by topic or difficulty and still trust each bucket. Diversity matters more than raw count — 150 questions spanning every document and every question type beat 1,000 near-duplicates about your three most popular pages."
+        },
+        {
+          "type": "p",
+          "md": "**Grading the answers.** Because reference answers can be phrased many valid ways, exact-string match is too strict and embedding similarity is too loose. The modern default is an **LLM-as-judge**: you give a model the question, the reference answer, and the system's answer, and ask it to score correctness and faithfulness. Frameworks like Ragas package this with standard metrics — start at [how to evaluate RAG](/learn/rag/rag-evaluation/how-to-evaluate-rag) and [RAG evaluation metrics](/learn/rag/rag-evaluation/rag-evaluation-metrics) for what to compute once the data exists. Sanity-check the judge itself against a few human-scored examples; a judge you don't trust just moves the measurement problem."
+        },
+        {
+          "type": "p",
+          "md": "**Relevance labels are a spectrum.** Marking a chunk simply \"relevant\" or \"not\" loses information. Graded relevance (perfectly answers / partially helps / off-topic) lets you compute richer ranking metrics like nDCG, which reward putting the *most* useful chunk first — useful once basic recall is solid and you're tuning a [reranker](/learn/rag/rag-fundamentals/rag-pipeline-explained)."
+        },
+        {
+          "type": "p",
+          "md": "**Treat the set as a living asset.** The most valuable golden questions are the ones that came from real failures. Whenever a user reports a wrong answer, distill it into a new golden entry. Over time your evaluation set becomes a memory of every mistake the system ever made — and the guarantee you'll never make any of them twice. The honest constraint never goes away: your evaluation is only as trustworthy as the ground truth behind it, so the effort you spend building a careful golden set pays back on every experiment that follows."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is a golden dataset in RAG evaluation?",
+      "a": "A golden dataset (or ground truth) is a fixed, human-trusted set of test cases for your RAG system. Each case pairs a question with the reference answer you'd accept and the IDs of the chunks that actually contain that answer. You run your pipeline over it and compare results against these known-correct entries to measure retrieval and answer quality repeatably."
+    },
+    {
+      "q": "How many questions do I need in a RAG evaluation set?",
+      "a": "Start with 50 carefully built, human-reviewed questions — that's enough to catch obvious regressions. Grow toward a few hundred if you want to slice scores by topic or difficulty and still trust each bucket. Diversity across documents and question types matters far more than raw count; a small, well-spread set beats thousands of near-duplicates."
+    },
+    {
+      "q": "Can I use an LLM to generate my RAG test set?",
+      "a": "Yes, and it's the standard way to scale. You hand the model a real chunk and ask it to write a question that chunk answers plus the answer, which gives you the relevant chunk ID for free. But treat the output as candidates: models produce shallow, keyword-matching questions and can hallucinate answers, so always have a human or a separate model verify each item before it enters the set."
+    },
+    {
+      "q": "What is test-set leakage in RAG and how do I avoid it?",
+      "a": "Leakage is when your evaluation data influences the system it's meant to judge — for example tuning your prompt against the golden questions, or using the same model to both generate eval data and answer it. The fix is to hold out a test slice you only touch for the final score, generate synthetic data with a different model than the one under test, and never paste eval questions into few-shot examples."
+    },
+    {
+      "q": "Should my RAG eval set include questions the documents can't answer?",
+      "a": "Yes. Include unanswerable questions with the reference answer set to 'I don't know' or 'not in the provided documents.' A good RAG system must refuse to answer when it lacks grounds, and you can only test that refusal behavior if some golden entries make refusal the correct response."
+    },
+    {
+      "q": "Why mark relevant chunks instead of just storing the answer?",
+      "a": "Recording which chunks are relevant lets you score retrieval separately from generation. The chunk IDs measure whether the retriever fetched the right passages (precision, recall, MRR), while the reference answer measures whether the model used them correctly. Storing both tells you which half of the pipeline to fix when an answer is wrong."
+    }
+  ],
+  "related": [
+    "how-to-evaluate-rag",
+    "rag-evaluation-metrics",
+    "retrieval-precision-recall-mrr",
+    "faithfulness-vs-relevance",
+    "what-is-ragas",
+    "what-is-rag"
+  ],
+  "furtherReading": [
+    {
+      "title": "Ragas — Synthetic Test Data Generation (docs)",
+      "url": "https://docs.ragas.io/"
+    },
+    {
+      "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks (arXiv)",
+      "url": "https://arxiv.org/abs/2005.11401"
+    },
+    {
+      "title": "Embeddings — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/embeddings"
+    }
+  ]
+}

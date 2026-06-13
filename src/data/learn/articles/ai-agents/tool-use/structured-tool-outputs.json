@@ -1,0 +1,325 @@
+{
+  "slug": "structured-tool-outputs",
+  "title": "Why Tool Outputs Should Be Structured, Not Just Text",
+  "shortTitle": "Structured Tool Outputs",
+  "seoTitle": "Structured Tool Outputs for AI Agents Explained",
+  "metaDescription": "What a tool returns shapes what the agent does next. Learn why structured, trimmed outputs beat raw dumps, and how to format results an LLM can use.",
+  "keywords": [
+    "agent tool output format",
+    "structured tool results llm",
+    "what should a tool return to an agent",
+    "trimming tool output tokens",
+    "tool response design llm",
+    "json vs text tool output"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn that designing what a tool returns matters as much as its inputs — and how trimmed, structured results make agents more accurate and cheaper.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When an agent calls a [tool](/learn/ai-agents/tool-use/what-is-tool-use), the tool runs some code and hands a result back. That result goes straight into the model's next prompt — it becomes part of what the model reads before it decides what to do next. So the *output* of a tool is not a side detail. It is input to the model's reasoning. Most guides obsess over the tool's name, description, and parameters. Far fewer mention that what a tool *returns* matters just as much."
+        },
+        {
+          "type": "p",
+          "md": "Here is the everyday analogy. Imagine you ask an assistant, *\"Is the conference room free at 3pm?\"* A good assistant says: *\"Yes, it's free until 4.\"* A bad assistant photocopies the entire building's booking system — every room, every day, every attendee — and drops the stack on your desk. Both technically contain the answer. Only one is usable. A **structured tool output** is the one-line answer; a **raw dump** is the photocopied stack."
+        },
+        {
+          "type": "p",
+          "md": "\"Structured\" here means two things at once: the result is **shaped** (clear fields with names, like a small `json` object) instead of a wall of text, and it is **trimmed** to the parts that matter instead of the full firehose. A weather tool shouldn't return the raw 40-kilobyte API response with radar tiles and station metadata. It should return something like `{\"temp_c\": 18, \"condition\": \"rain\", \"city\": \"Berlin\"}`. Same information the agent needs — a fraction of the noise."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "A handy rule of thumb: design a tool's output for the *model that has to read it*, not for the human who is debugging it. They want different things. The human wants everything; the model wants the answer."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Dumping a giant raw response back to the model feels harmless — the data is *there*, surely the model can find what it needs. In practice it hurts on three fronts at once: cost, speed, and accuracy."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Tokens cost money and fill the context window.** Every character a tool returns is re-sent to the model on the *next* step, and often on every step after that as the conversation grows. A 50KB JSON blob can be 15,000+ tokens. In a multi-step agent loop that runs ten times, you may pay for that blob ten times over. Trimming it to the 200 tokens that matter is a direct, repeated cost saving.",
+            "**Noise lowers accuracy.** Models recall facts buried in long inputs less reliably than facts near the edges — the well-known \"lost in the middle\" effect. Bury the one number that matters inside 14,000 tokens of irrelevant metadata and the model is genuinely more likely to grab the wrong field or miss it entirely.",
+            "**Big outputs are slow.** More input tokens means higher latency on the next model call. In an agent that loops many times, this latency stacks up and the whole task drags.",
+            "**Shape removes guessing.** Faced with a flat slab of prose, the model has to *parse* meaning back out before it can act. Hand it labelled fields and the parsing is already done — there is less to misread."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "There's a reliability angle too. The output of one tool is frequently the *input* to the next decision: the model reads a search result and decides which page to open; it reads a database row and decides whether to write an update. If that intermediate result is ambiguous or cluttered, every downstream step inherits the confusion. Clean outputs make the whole [agent loop](/learn/ai-agents/agent-fundamentals/agent-loop-explained) steadier, not just the one step."
+        },
+        {
+          "type": "p",
+          "md": "Who should care? Anyone wrapping an external API, a database, or a file system as a tool for an agent. The temptation is always to return `response.json()` verbatim because it's the least code. Resisting that one-liner is one of the highest-leverage things you can do for an agent's quality."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Mechanically, a tool result is just a string (or a small structured value serialized to a string) that your code attaches to the conversation as a `tool_result` before the next model call. There is no magic — *you* decide what goes in that string. The design work happens in the gap between \"the raw data your function fetched\" and \"the result you hand back.\" Think of it as a curation step that sits between fetch and return."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Where output design lives",
+            "steps": [
+              {
+                "label": "Model calls tool",
+                "sub": "name + arguments"
+              },
+              {
+                "label": "Your code runs",
+                "sub": "hit API / DB / file"
+              },
+              {
+                "label": "Raw result",
+                "sub": "50KB JSON, full rows"
+              },
+              {
+                "label": "Curate",
+                "sub": "select + label + trim",
+                "accent": true
+              },
+              {
+                "label": "tool_result",
+                "sub": "small, structured"
+              },
+              {
+                "label": "Model reads it",
+                "sub": "decides next step"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "The four curation moves"
+        },
+        {
+          "type": "p",
+          "md": "Good output design is almost always some combination of these four moves applied to the raw result before you return it."
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Select** — keep only the fields the agent could plausibly act on; drop IDs it will never use, internal flags, pagination cursors, styling metadata.",
+            "**Label** — give the surviving values clear names so the model doesn't have to infer what a bare number means. `temp_c` beats `18` floating alone.",
+            "**Trim** — cap list lengths and text lengths. Return the top 5 results, not 500; the first 2,000 characters of a page, not 200,000.",
+            "**Signal** — tell the model what was left out, so it can ask for more. \"Showing 5 of 213 matches\" is far more useful than silently returning 5 and pretending that's all there is."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Choosing a format: JSON, prose, or a handle"
+        },
+        {
+          "type": "p",
+          "md": "Not every output should be JSON. Three shapes cover almost everything, and picking the right one is part of the design."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Format",
+            "Best for",
+            "Example"
+          ],
+          "rows": [
+            [
+              "**Structured (JSON)**",
+              "Discrete values the model will reason over or pass to another tool",
+              "`{\"order_id\": 4471, \"status\": \"shipped\", \"eta\": \"2026-06-15\"}`"
+            ],
+            [
+              "**Prose / text**",
+              "Content meant to be read and summarized, like an article or doc snippet",
+              "The trimmed body text of a web page"
+            ],
+            [
+              "**Reference / handle**",
+              "Data too big to inline, that a later tool can fetch by ID",
+              "`{\"file_id\": \"rep_88\", \"rows\": 12000, \"preview\": [...]}`"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The **handle** pattern is the one beginners miss. When a result is genuinely huge — a 12,000-row query, a large file — you don't have to inline it. Return a small summary plus an identifier, and provide a *second* tool that fetches a slice of it by that identifier (a page, a filtered subset, a single row). The model gets enough to decide what it needs without you paying to stuff the whole thing into context. This is the same instinct behind preferring [code execution over yet more tools](/learn/ai-agents/tool-use/code-execution-vs-more-tools): let the agent reach for the slice it needs instead of receiving everything up front."
+        }
+      ]
+    },
+    {
+      "id": "raw-vs-curated",
+      "title": "A worked example: raw vs curated",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Say the agent calls a `search_products` tool. The underlying API returns rich JSON. The lazy implementation returns it verbatim; the considered one curates it. Here's the raw response the API gives your code:"
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "title": "raw API response (one of 200 items shown)",
+          "code": "{\n  \"meta\": { \"request_id\": \"req_9f2a\", \"took_ms\": 41, \"page\": 1,\n            \"per_page\": 200, \"total\": 213, \"api_version\": \"2.4.1\" },\n  \"results\": [\n    {\n      \"sku\": \"A-1182-XL\", \"internal_id\": 90431, \"name\": \"Trail Jacket\",\n      \"price_cents\": 12900, \"currency\": \"USD\", \"in_stock\": true,\n      \"warehouse_flags\": [\"W3\", \"W7\"], \"tax_class\": \"std\",\n      \"image_urls\": [\"https://cdn.example.com/a1.jpg\", \"...x6\"],\n      \"description_html\": \"<p>Lightweight ...</p>\", \"created_at\": \"2024-11-02\",\n      \"_score\": 8.41, \"category_path\": [\"apparel\", \"outerwear\"]\n    }\n  ]\n}"
+        },
+        {
+          "type": "p",
+          "md": "Returning that for all 200 items is thousands of tokens of `request_id`, `warehouse_flags`, `tax_class`, raw HTML, and image URLs the agent will never act on. Now the curated version — select the fields a shopping agent actually uses, trim to the top matches, and signal what was held back:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "curate before returning",
+          "code": "def search_products(query: str, limit: int = 5) -> dict:\n    raw = api.search(query, per_page=200)        # full firehose\n    items = raw[\"results\"][:limit]               # TRIM the list\n    return {\n        \"matches\": [\n            {                                    # SELECT + LABEL\n                \"sku\": it[\"sku\"],\n                \"name\": it[\"name\"],\n                \"price_usd\": it[\"price_cents\"] / 100,\n                \"in_stock\": it[\"in_stock\"],\n            }\n            for it in items\n        ],\n        # SIGNAL what was left out so the model can ask for more\n        \"showing\": len(items),\n        \"total_found\": raw[\"meta\"][\"total\"],\n    }"
+        },
+        {
+          "type": "code",
+          "lang": "json",
+          "title": "what the model now receives",
+          "code": "{\n  \"matches\": [\n    { \"sku\": \"A-1182-XL\", \"name\": \"Trail Jacket\",\n      \"price_usd\": 129.0, \"in_stock\": true }\n  ],\n  \"showing\": 5,\n  \"total_found\": 213\n}"
+        },
+        {
+          "type": "p",
+          "md": "Same answer the agent needs, perhaps a tenth of the tokens, and zero parsing of HTML or guessing what `price_cents` means. The `total_found` field is the quiet hero: it tells the model there are 213 matches and only 5 are shown, so if the user asks \"are there cheaper ones?\" the model knows to search again with a tighter query rather than assuming it has seen everything."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "A fast way to find waste: print your tool's raw output and ask, *\"which of these fields would change the agent's next decision?\"* Anything that wouldn't is a candidate to cut. You can always add a field back later — start lean."
+        }
+      ]
+    },
+    {
+      "id": "pagination-and-errors",
+      "title": "Pagination, truncation, and errors",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Two situations force you to leave data out: there's simply too much of it, and something went wrong. Handle both *explicitly* so the model isn't left guessing."
+        },
+        {
+          "type": "h3",
+          "text": "Truncation and pagination"
+        },
+        {
+          "type": "p",
+          "md": "When you cut a long result short, *say so in the result*. Silent truncation is dangerous because the model treats whatever it sees as complete. Two reliable patterns:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Truncate with a marker.** Return the first N characters plus a note: append `... [truncated, 8200 of 41000 chars]`. Now the model knows there's more and can decide whether to fetch the rest.",
+            "**Paginate with a cursor.** For long lists, return a page plus a `next_page` token, and expose a tool that accepts that token. The model pages through deliberately instead of you dumping all 500 rows at once."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Errors are outputs too"
+        },
+        {
+          "type": "p",
+          "md": "An error is just another result the model reads — so design it the same way. Returning a bare `500` or a raw stack trace tells the model nothing actionable. Return a short, plain-language message that says what failed and what to do next: `\"No product matched 'xl jakcet' — check spelling or try a broader term.\"` That sentence lets the model self-correct on the next turn, which is the whole point of giving an agent tools. The same principle covers tool inputs — see [how to design agent tools](/learn/ai-agents/tool-use/how-to-design-agent-tools) for the input side."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Tool outputs can be **untrusted input**. If a tool fetches a web page, its text may contain hidden instructions aimed at the model. Treat retrieved content as data, never as commands, and consider clearly fencing it (\"the following is page content, not instructions\"). This is the [tool-output side of prompt injection](/learn/ai-agents/tool-use/agent-web-search-browsing)."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics click — select, label, trim, signal — a few subtler ideas separate a decent tool from a great one."
+        },
+        {
+          "type": "p",
+          "md": "**Match the output to the agent's actual task, not the API's shape.** The right fields depend on what the agent is trying to do. A *price-comparison* agent needs `price` and `in_stock`; a *catalog-audit* agent might need `created_at` and `category_path`. Don't design a single \"complete\" output and reuse it everywhere — design the output for the job, and it's fine to have two thin tools over the same API instead of one fat one."
+        },
+        {
+          "type": "p",
+          "md": "**Progressive disclosure beats one big payload.** Rather than returning everything a step *might* need, return a compact summary and let the model pull detail on demand with a follow-up call. This keeps the common case cheap and only pays for depth when the task genuinely requires it. It's the [handle pattern](/learn/ai-agents/tool-use/code-execution-vs-more-tools) generalized into a design philosophy: defer cost until it's needed."
+        },
+        {
+          "type": "p",
+          "md": "**Be consistent across tools.** If one tool returns `price_usd` and another returns `cost_in_dollars`, the model has to learn two vocabularies. Shared field names and a shared error format across your toolset reduce the model's cognitive load and cut subtle mistakes — the same discipline good [tool design](/learn/ai-agents/tool-use/designing-tools-for-llms) brings to inputs, applied to outputs."
+        },
+        {
+          "type": "p",
+          "md": "**Measure, don't guess.** The honest way to tune output design is to run the agent on real tasks and watch where it stumbles. If it keeps re-calling a search because it can't tell whether it saw all the results, add a `total_found`. If it grabs the wrong field, the labels or selection are off. Token counts and task success rate, tracked over a set of evaluation tasks, turn output design from taste into measurement. There is no universal \"correct\" output — only the one that makes *your* agent more accurate and cheaper on *your* tasks."
+        },
+        {
+          "type": "p",
+          "md": "Finally, remember the principle that ties it all together: **a tool's output is part of the prompt for the model's next step.** Every habit you have for writing a good prompt — be concise, be clear, label things, don't bury the lede — applies just as much to what your tools return. Treat output design as prompt design, because that's exactly what it is."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What should a tool return to an AI agent?",
+      "a": "Return the smallest, clearest result that lets the agent decide its next step — usually a structured object with a few labelled fields, trimmed to the relevant parts. Drop metadata, internal IDs, and styling the agent will never act on, and include a short signal (like a total count) when you leave data out so the model knows more exists."
+    },
+    {
+      "q": "Should tool outputs be JSON or plain text?",
+      "a": "Use JSON for discrete values the model will reason over or pass to another tool (an order status, a price, a row). Use plain text for content meant to be read and summarized, like a document snippet or article body. The deciding question is whether the model needs to act on specific fields (JSON) or understand prose (text)."
+    },
+    {
+      "q": "Why is dumping a raw API response back to the model a bad idea?",
+      "a": "A large raw response wastes tokens — it's re-sent on every following step, so a 50KB blob in a ten-step loop is paid for many times. It also lowers accuracy, because models recall facts buried in long inputs less reliably, and it adds latency. Selecting and labelling the few fields that matter is cheaper, faster, and more reliable."
+    },
+    {
+      "q": "How do I handle a tool result that's too big to return?",
+      "a": "Use a handle or reference pattern: return a small summary plus an identifier, and expose a second tool that fetches a slice of the data by that identifier (a page, a filtered subset, a single row). For long lists, paginate with a cursor. Either way, the agent gets what it needs without you inlining the whole payload."
+    },
+    {
+      "q": "How should a tool report an error to an agent?",
+      "a": "Treat the error as an output the model will read. Instead of a bare 500 or raw stack trace, return a short plain-language message saying what failed and what to do next, such as suggesting a corrected query. That lets the model self-correct on its next turn instead of getting stuck."
+    },
+    {
+      "q": "Does trimming tool output actually save money?",
+      "a": "Yes, and often more than expected, because the result is re-sent to the model on every subsequent step in an agent loop. A blob that's expensive once becomes expensive many times over. Cutting it to the fields that matter reduces input tokens on each of those calls, which directly lowers cost and latency."
+    }
+  ],
+  "related": [
+    "designing-tools-for-llms",
+    "how-to-design-agent-tools",
+    "what-is-tool-use",
+    "code-execution-vs-more-tools",
+    "agent-loop-explained"
+  ],
+  "furtherReading": [
+    {
+      "title": "Tool use (function calling) — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/tool-use"
+    },
+    {
+      "title": "Function calling — OpenAI Platform Docs",
+      "url": "https://platform.openai.com/docs/guides/function-calling"
+    },
+    {
+      "title": "Lost in the Middle: How Language Models Use Long Contexts (arXiv)",
+      "url": "https://arxiv.org/abs/2307.03172"
+    }
+  ]
+}

@@ -1,0 +1,340 @@
+{
+  "slug": "parent-document-retrieval",
+  "title": "What Is Parent Document Retrieval?",
+  "shortTitle": "Parent Document Retrieval",
+  "seoTitle": "What Is Parent Document Retrieval in RAG?",
+  "metaDescription": "Small chunks retrieve precisely but lack context. Parent document retrieval searches small and returns big. Learn how this small-to-big pattern works.",
+  "keywords": [
+    "parent document retrieval",
+    "small to big retrieval",
+    "sentence window retrieval",
+    "parent child chunks rag",
+    "retrieve small return large"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You'll understand the small-to-big pattern: match on tiny chunks for precision, then hand the LLM the larger parent for context.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "In [RAG](/learn/rag/rag-fundamentals/what-is-rag), you split documents into pieces, search those pieces, and paste the winners into the prompt. But you face an annoying trade-off when you decide how big a piece should be. Tiny pieces — a sentence or two — *match* the question very precisely, because each one is about a single idea. The problem is that a single sentence is often too little for the model to actually answer with: the surrounding context is missing."
+        },
+        {
+          "type": "p",
+          "md": "Big pieces — a whole page or section — carry plenty of context, so the model has enough to work with. But they *match* worse: one page covers several topics, so its overall meaning is blurry, and the part that actually answers the question gets diluted by everything else around it."
+        },
+        {
+          "type": "p",
+          "md": "**Parent document retrieval** refuses to pick a side. It searches with the small, precise pieces, but once a small piece wins, it hands the model the *larger* piece that the small one came from. You match small and return big. The fancy name for this idea is **small-to-big retrieval**, and a common variant is **sentence-window retrieval**."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Think of a library index. You look up a single, exact term in the index (the small, precise unit), and it points you to the *page* that contains it (the larger, context-rich unit). You don't read the index card to a friend — you read them the page. The card is just how you *found* the page."
+        },
+        {
+          "type": "p",
+          "md": "The core trick is decoupling two jobs that ordinary [chunking](/learn/rag/chunking-and-ingestion/what-is-chunking-in-rag) forces into one piece of text: the **search unit** (what you compare against the question) and the **generation unit** (what the model actually reads to write the answer). They no longer have to be the same size."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "If you have built a basic RAG system, you have probably hit this wall. With small chunks, retrieval finds the *right spot* but the answer is thin or wrong because the model only saw a fragment — the sentence said \"this is not covered,\" but the chunk before it explained what \"this\" was. With big chunks, the model has context but retrieval keeps missing, because the precise answer is buried inside a chunk whose average meaning points somewhere else."
+        },
+        {
+          "type": "p",
+          "md": "Parent document retrieval matters because it lets you stop tuning one chunk size as an uncomfortable compromise. You get the *precision* of small-chunk matching and the *context* of large-chunk reading at the same time. For a builder, that usually translates into fewer \"the answer was technically in there but the model didn't have enough to use it\" failures."
+        },
+        {
+          "type": "h3",
+          "text": "Where it pays off most"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Long, prose-heavy documents** — manuals, legal contracts, research papers — where the answer to a question depends on sentences before and after the matched line.",
+            "**Documents with pronouns and back-references** — \"it,\" \"this clause,\" \"the above\" — where an isolated sentence is meaningless without its neighbours.",
+            "**Definitions and exceptions** — where the precise phrase matches but the rule it belongs to spans a whole paragraph or section.",
+            "**Tables and code** — where one matched row or line only makes sense alongside the surrounding header, caption, or function."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "It matters less when your documents are already short and self-contained — a list of FAQ entries, product cards, or one-paragraph notes. There, a small chunk *is* the whole context, so there's nothing bigger worth returning, and the extra bookkeeping just adds complexity."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The mechanism rests on one idea: build *two* views of your documents during ingestion and keep a link between them. You index the small pieces for searching, store the large pieces for reading, and remember which small piece belongs to which large piece."
+        },
+        {
+          "type": "h3",
+          "text": "Ingestion: build the parent-child link"
+        },
+        {
+          "type": "p",
+          "md": "You split each document into large **parent** chunks (say, a section or a sliding window of a few hundred tokens). Then you split each parent again into small **child** chunks (a sentence or two). You compute an [embedding](/learn/embeddings-vector-databases/embeddings-explained/what-are-embeddings) for every *child* and store it in your [vector database](/learn/embeddings-vector-databases/vector-database-guides/what-is-a-vector-database) — but each child carries its parent's id as metadata. The parents themselves live in a plain key-value store, keyed by id. Only the children get embedded; the parents are just looked up later."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "Each parent fans out into searchable children",
+            "root": {
+              "label": "Parent chunk",
+              "sub": "a section — stored by id, NOT embedded"
+            },
+            "children": [
+              {
+                "label": "Child 1",
+                "sub": "1 sentence — embedded"
+              },
+              {
+                "label": "Child 2",
+                "sub": "1 sentence — embedded",
+                "accent": true
+              },
+              {
+                "label": "Child 3",
+                "sub": "1 sentence — embedded"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Query time: match small, return big"
+        },
+        {
+          "type": "p",
+          "md": "When a question arrives, you embed it and run [semantic search](/learn/embeddings-vector-databases/similarity-search-indexing/what-is-semantic-search) over the *children* — the small, precise units. This is where the precision comes from. But instead of putting the matched children into the prompt, you read each winner's `parent_id`, fetch the corresponding parent chunks from the key-value store, de-duplicate them (several children often share one parent), and put *those parents* into the context. The model reads the big, context-rich text; the small chunks were only the map that led there."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Query time — the small-to-big handoff",
+            "steps": [
+              {
+                "label": "Question",
+                "sub": "embed it"
+              },
+              {
+                "label": "Search children",
+                "sub": "top-k small chunks (precise)"
+              },
+              {
+                "label": "Look up parents",
+                "sub": "follow each parent_id"
+              },
+              {
+                "label": "De-duplicate",
+                "sub": "merge shared parents"
+              },
+              {
+                "label": "Generate",
+                "sub": "model reads the big chunks",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "**Sentence-window retrieval** is the same pattern with a simpler \"parent.\" Instead of pre-cutting documents into section-sized parents, you index every single sentence, and the \"parent\" you return is a *window* — that sentence plus its N neighbours on each side, reassembled on the fly. The matched sentence stays exact; the window gives the model just enough surrounding text. Both are forms of decoupling the search unit from the generation unit."
+        }
+      ]
+    },
+    {
+      "id": "minimal-implementation",
+      "title": "A minimal implementation",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Here is the whole idea in a few dozen lines: embed children, keep a `parent_id` on each, search children, then return the de-duplicated parents. No framework — just a dict for the parent store."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "parent_document_retrieval.py",
+          "code": "import numpy as np\n\n# --- INGESTION ---------------------------------------------------------\n# parents: large, context-rich chunks, kept in a plain key-value store.\nparent_store = {}        # parent_id -> parent text\nchild_vecs   = []        # one embedding per child\nchild_meta   = []        # parallel list of {'text', 'parent_id'}\n\ndef ingest(parent_id, parent_text, children):\n    parent_store[parent_id] = parent_text\n    for child in children:                 # child = one sentence\n        child_vecs.append(embed(child))    # only CHILDREN get embedded\n        child_meta.append({'text': child, 'parent_id': parent_id})\n\n# --- QUERY TIME --------------------------------------------------------\ndef retrieve(question, k=4):\n    q = embed(question)\n    mat = np.array(child_vecs)\n    scores = mat @ q                       # similarity vs. each CHILD\n    top = np.argsort(scores)[::-1][:k]\n\n    # match small -> return big: follow parent_id, de-duplicate parents\n    seen, parents = set(), []\n    for i in top:\n        pid = child_meta[i]['parent_id']\n        if pid not in seen:                # several children share a parent\n            seen.add(pid)\n            parents.append(parent_store[pid])\n    return parents                         # feed THESE to the LLM\n\ncontext = \"\\n\\n\".join(retrieve(\"What is the refund window?\"))"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The two retrieval tuning knobs are the child size (smaller = more precise matching) and the parent size (larger = more context, but more tokens per answer). De-duplication matters: if your top-k children all came from one section, you should send that parent *once*, not four times."
+        }
+      ]
+    },
+    {
+      "id": "the-trade-off-and-cousins",
+      "title": "The trade-off it resolves — and its cousins",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "It helps to see the three options side by side. Plain small chunks and plain large chunks each sacrifice something; parent retrieval is the pattern that refuses the sacrifice by using a different unit for each job."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Approach",
+            "Search unit",
+            "Returned to model",
+            "Matching",
+            "Context for the answer"
+          ],
+          "rows": [
+            [
+              "Plain small chunks",
+              "Small",
+              "The same small chunk",
+              "Precise",
+              "Often too thin"
+            ],
+            [
+              "Plain large chunks",
+              "Large",
+              "The same large chunk",
+              "Fuzzy / diluted",
+              "Plenty"
+            ],
+            [
+              "Parent document",
+              "Small (child)",
+              "Large parent it belongs to",
+              "Precise",
+              "Plenty"
+            ],
+            [
+              "Sentence window",
+              "One sentence",
+              "Sentence + N neighbours",
+              "Precise",
+              "Just enough"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Parent retrieval is one tool among several advanced patterns, and they stack rather than compete. You can run [hybrid search](/learn/rag/advanced-rag/hybrid-rag-explained) over the *children* to combine keyword and semantic matching, then still return parents. You can let an agent decide when to retrieve in [agentic RAG](/learn/rag/advanced-rag/what-is-agentic-rag) and have its retrieval tool use the small-to-big pattern under the hood. And for questions that span many documents at once, [GraphRAG](/learn/rag/advanced-rag/what-is-graphrag) solves a different problem — relationships between entities — which parent retrieval does not address."
+        }
+      ]
+    },
+    {
+      "id": "pitfalls",
+      "title": "Common pitfalls and the bookkeeping it needs",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The pattern is conceptually simple but introduces real index bookkeeping. Most failures come from getting that plumbing wrong, not from the idea itself."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Forgetting the parent_id.** The whole pattern depends on every child knowing its parent. If you embed children without storing the link as metadata, you cannot find the parent at query time and you are back to plain small chunks.",
+            "**Skipping de-duplication.** Your top-k children frequently come from the same parent. Without de-duplication you send the same large block several times — wasting context window and money, and possibly crowding out other relevant parents.",
+            "**Parents that are too large.** If a parent is a whole 20-page chapter, you've just recreated the \"stuffing too much context\" problem. Returning fewer, smaller parents is usually better than one giant one.",
+            "**Index drift on updates.** When a document changes, you must re-chunk it into children, re-embed those children, AND update the parent store together. If the two stores fall out of sync, a child can point to a parent_id that no longer exists.",
+            "**Cross-parent answers.** If the real answer needs sentences from two different sections, returning each child's single parent may still miss the bridge. Retrieving more parents or overlapping windows can help; sometimes the document just needs better structure."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Because matching and reading now use different text, your [evaluation](/learn/rag/rag-evaluation/how-to-evaluate-rag) should check two things separately: did the *child* search surface the right spot, and did the *parent* you returned actually contain enough to answer? A perfect child match with a wrong parent link looks fine to a naive metric but fails the user."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic pattern clicks, a few refinements are worth knowing."
+        },
+        {
+          "type": "p",
+          "md": "**Tune child and parent sizes independently.** This is the real payoff of decoupling. Make children small enough to be about one idea (often a sentence, or a short sliding window with a little overlap so a thought isn't cut in half). Make parents large enough to be self-contained but no larger. Because the two are separate, you can adjust one without disturbing the other — something plain chunking never lets you do."
+        },
+        {
+          "type": "p",
+          "md": "**Multi-level summaries (another small-to-big flavour).** Instead of embedding raw sentences, you can embed a short *summary* of each parent and, on a match, return the full parent. The summary is the precise, clean search unit; the full text is the generation unit. This is the same decouple-the-units principle applied to a summary instead of a sentence, and it can match better when the raw text is noisy."
+        },
+        {
+          "type": "p",
+          "md": "**Where it sits with reranking.** Small-to-big and reranking are complementary, not alternatives. A common order is: search children broadly, optionally rerank the *children* to pick the truly best matches, then expand the survivors to their parents and de-duplicate. You get precise matching, a precise re-score, and rich context — in that order."
+        },
+        {
+          "type": "p",
+          "md": "**Storage cost vs. embedding cost.** Note that you only ever embed the *children*, so you don't pay to embed the large parents — the parent store is cheap text in a key-value store. The trade is more entries in your vector index (many small children instead of fewer large chunks) and the extra lookup step at query time. For most prose corpora this is a good deal."
+        },
+        {
+          "type": "p",
+          "md": "The durable lesson is the one the pattern is built on: the unit you *search* with and the unit you *read* with do not have to be the same. Once you internalize that, parent retrieval, sentence windows, and summary-based retrieval all stop looking like separate tricks and start looking like one idea — decouple the search unit from the generation unit — applied in slightly different ways. From here, the natural next steps are combining it with [hybrid retrieval](/learn/rag/advanced-rag/hybrid-rag-explained) and wrapping it in an [agentic loop](/learn/rag/advanced-rag/what-is-agentic-rag)."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is parent document retrieval in RAG?",
+      "a": "It is a retrieval pattern where you search using small, precise child chunks but return the larger parent chunk each child came from. You match on a sentence for precision, then hand the model the surrounding section for context. The search unit and the generation unit are deliberately different sizes."
+    },
+    {
+      "q": "What does \"small-to-big retrieval\" mean?",
+      "a": "It is another name for the same idea: you do the matching with *small* chunks (which match precisely) and then expand to the *big* chunk that contains them before sending text to the model. Small to find, big to read."
+    },
+    {
+      "q": "How is sentence-window retrieval different from parent document retrieval?",
+      "a": "They are two flavours of the same pattern. Parent document retrieval pre-splits documents into section-sized parents and returns the matched child's parent. Sentence-window retrieval indexes every sentence and returns that sentence plus its neighbours as a window. Both decouple the unit you search from the unit you read."
+    },
+    {
+      "q": "Why not just use one medium chunk size instead?",
+      "a": "A single medium size is a compromise that is mediocre at both jobs — not small enough to match precisely, not large enough to always give full context. Parent retrieval lets you optimize each job separately, so you get precise matching and rich context at the same time."
+    },
+    {
+      "q": "Does parent document retrieval cost more?",
+      "a": "Storage and a query-time lookup, mostly. You only embed the small children, so embedding cost does not go up; you store the parents as plain text in a key-value store. The trade-offs are more entries in your vector index and an extra fetch-and-de-duplicate step per query."
+    },
+    {
+      "q": "When should I not use parent document retrieval?",
+      "a": "When your documents are already short and self-contained — FAQ entries, product cards, one-paragraph notes. There the small chunk is already the full context, so there is no larger parent worth returning and the extra bookkeeping adds complexity for no gain."
+    }
+  ],
+  "related": [
+    "what-is-chunking-in-rag",
+    "hybrid-rag-explained",
+    "what-is-agentic-rag",
+    "what-is-rag",
+    "what-is-graphrag"
+  ],
+  "furtherReading": [
+    {
+      "title": "LlamaIndex — Documentation",
+      "url": "https://docs.llamaindex.ai/"
+    },
+    {
+      "title": "LangChain — Retrieval (RAG) docs",
+      "url": "https://docs.langchain.com/oss/python/langchain/rag"
+    },
+    {
+      "title": "Embeddings — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/embeddings"
+    }
+  ]
+}

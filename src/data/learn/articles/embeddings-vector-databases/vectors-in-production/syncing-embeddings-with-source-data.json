@@ -1,0 +1,304 @@
+{
+  "slug": "syncing-embeddings-with-source-data",
+  "title": "Keeping Embeddings in Sync with Your Source Data",
+  "shortTitle": "Syncing Embeddings",
+  "seoTitle": "Keeping Embeddings in Sync With Your Source Data",
+  "metaDescription": "When source documents change, stale embeddings give wrong answers. Learn patterns for incremental re-embedding, deletes, and keeping a vector index fresh.",
+  "keywords": [
+    "keep embeddings in sync with source data",
+    "incremental re-embedding pipeline",
+    "update embeddings when documents change",
+    "handle deletes in vector database",
+    "stale embeddings vector search problem"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn the production patterns for keeping a vector index fresh as source data changes, updates, and gets deleted, so search never returns stale results.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Your [vector index](/learn/embeddings-vector-databases/vectors-in-production/how-to-choose-vector-database) is not your real data. It's a *copy* — a derived snapshot. You took your documents, ran each one through an [embedding model](/learn/embeddings-vector-databases/embeddings-explained/how-to-choose-embedding-model), and stored the resulting vectors so you could do fast [semantic search](/learn/embeddings-vector-databases/similarity-search-indexing/what-is-semantic-search). The original documents live somewhere else: a database, a wiki, a folder of PDFs, a help center. The index just mirrors them."
+        },
+        {
+          "type": "p",
+          "md": "Here's the problem: the originals keep changing, and the copy doesn't change with them. Someone edits a help article. A product gets discontinued. A contract is replaced. Every one of those edits leaves a vector in your index that no longer matches reality. Search keeps returning the *old* text confidently, as if nothing happened."
+        },
+        {
+          "type": "p",
+          "md": "Think of a library card catalog from before computers — those little drawers of index cards. The cards are not the books; they *point at* the books. If a librarian reshelves a book, retitles it, or throws it out, but nobody updates the card, readers walk to an empty shelf or pull the wrong book. The catalog drifts out of sync with the shelves. Keeping embeddings in sync is exactly the job of the clerk who updates a card the moment a book changes — and removes the card when a book is gone."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This is a *data-freshness* problem, not a search-quality problem. Your retrieval could be perfectly tuned and still return wrong answers, simply because the text it indexed no longer exists in the source. Syncing is the pipeline that keeps the derived copy honest."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A stale index fails *silently*. There's no error, no exception, no crash. Search returns a confident answer drawn from text that was deleted or edited months ago, and your [RAG](/learn/embeddings-vector-databases/similarity-search-indexing/what-is-semantic-search) system passes it straight to the model as ground truth. The worst bugs are the ones that look like success."
+        },
+        {
+          "type": "p",
+          "md": "Concretely, three things go wrong when embeddings drift from their source:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Wrong answers from edited docs.** A refund window changes from 14 days to 30, but the old chunk is still in the index. Your bot keeps quoting 14 days, with a citation that *looks* legitimate.",
+            "**Ghost results from deleted docs.** A product page comes down, a policy is retired, an employee leaves — but their vector lingers. Search surfaces content that no longer exists anywhere on your site. This is also a compliance risk: a user asks you to delete their data and it stays retrievable.",
+            "**Wasted money re-embedding everything.** The lazy fix — \"just rebuild the whole index every night\" — works at small scale and quietly becomes very expensive. Re-embedding millions of unchanged chunks every day burns API budget and pipeline time to produce vectors identical to the ones you already had."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who needs to care? Anyone running vector search over data that *changes*. A one-time index of static literature never goes stale. But a support knowledge base, a product catalog, a codebase, a CRM, a set of legal documents — these mutate constantly, and the freshness of your index becomes an operations problem with the same weight as uptime. The guides teach you how to *build* an index. Syncing is how you keep it *true*."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Syncing is a small pipeline that sits between your source of truth and your vector index. Its one job: detect what changed in the source, and apply exactly that change — no more — to the index. Three operations cover everything: **upsert** (insert or update a vector), **delete** (remove a vector), and **skip** (the document is unchanged, do nothing)."
+        },
+        {
+          "type": "p",
+          "md": "The whole design rests on one foundation: every chunk in your index must carry a **stable ID** tied back to its source. Not a random UUID generated at insert time — a deterministic ID you can reconstruct from the source, like `doc-4711:chunk-3` or a hash of `source_table:primary_key:chunk_index`. With stable IDs, an update is just an upsert to the *same* ID, and a delete is a removal *by* ID. Without them, you can't tell a new vector from an updated one, and you can never find the right vector to remove."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "The sync pipeline — runs whenever the source changes",
+            "steps": [
+              {
+                "label": "Source change",
+                "sub": "edit / add / delete"
+              },
+              {
+                "label": "Detect",
+                "sub": "what actually changed"
+              },
+              {
+                "label": "Decide",
+                "sub": "upsert · delete · skip"
+              },
+              {
+                "label": "Re-embed",
+                "sub": "only changed chunks"
+              },
+              {
+                "label": "Apply to index",
+                "sub": "by stable ID",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Step 1 — Detect what changed (content hashing)"
+        },
+        {
+          "type": "p",
+          "md": "You only want to re-embed text that actually changed. The cheapest reliable way: store a **content hash** of each chunk alongside its vector. When you process a document, hash its chunks and compare each hash to what's stored. Same hash means the text is byte-for-byte identical — skip it, no embedding call. Different hash means re-embed and upsert. A new chunk that doesn't exist yet is just an insert."
+        },
+        {
+          "type": "p",
+          "md": "Hashing is the single biggest cost lever in the whole pipeline. A document edit usually touches one or two chunks out of dozens; hashing lets you re-embed those two and leave the rest untouched, instead of re-embedding the entire document because one word changed."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "skip unchanged chunks with a content hash",
+          "code": "import hashlib\n\ndef chunk_id(doc_id, idx):\n    # Deterministic, reconstructable from the source — NOT a random UUID.\n    return f\"{doc_id}:chunk-{idx}\"\n\ndef content_hash(text):\n    return hashlib.sha256(text.encode(\"utf-8\")).hexdigest()\n\ndef sync_document(doc_id, chunks, index):\n    for idx, text in enumerate(chunks):\n        cid = chunk_id(doc_id, idx)\n        new_hash = content_hash(text)\n        stored = index.get_metadata(cid)        # None if this chunk is new\n        if stored and stored[\"hash\"] == new_hash:\n            continue                            # unchanged → skip, no embed call\n        vector = embed(text)                    # changed or new → re-embed\n        index.upsert(\n            id=cid,\n            vector=vector,\n            metadata={\"hash\": new_hash, \"doc_id\": doc_id, \"text\": text},\n        )"
+        },
+        {
+          "type": "h3",
+          "text": "Step 2 — Handle deletes (the part everyone forgets)"
+        },
+        {
+          "type": "p",
+          "md": "Upserts are easy to get right because you're processing documents that still exist. Deletes are the trap: when a document vanishes from the source, *nothing arrives* in your pipeline to tell you. You have to actively notice its absence. There are two standard approaches. **Tombstoning**: the source marks a row as deleted (a `deleted_at` flag) rather than physically removing it, so your sync sees the flag and removes the matching vectors by ID. **Reconciliation**: periodically list every ID in the source and every ID in the index, and remove any index ID that no longer has a source — a safety net that catches whatever slipped through."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "A document that splits from 5 chunks into 3 leaves 2 orphan vectors behind. After re-embedding a changed document, always delete any chunk IDs for that `doc_id` that you did *not* just upsert. Re-indexing without cleaning up old chunk IDs is the most common source of ghost results."
+        }
+      ]
+    },
+    {
+      "id": "batch-vs-streaming",
+      "title": "Batch vs streaming: how fresh do you need it?",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "How you *trigger* the sync depends on how quickly a source change must show up in search. There are two ends of a spectrum, and most teams sit somewhere between them."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "",
+            "Batch (scheduled)",
+            "Streaming (event-driven)"
+          ],
+          "rows": [
+            [
+              "How it runs",
+              "A cron job every N minutes/hours scans for changes",
+              "Each source change emits an event that updates the index"
+            ],
+            [
+              "Freshness",
+              "Lag = the schedule interval",
+              "Near-real-time (seconds)"
+            ],
+            [
+              "Trigger",
+              "Timestamp / hash diff since last run",
+              "Change-data-capture (CDC), webhooks, message queue"
+            ],
+            [
+              "Complexity",
+              "Low — easy to build and reason about",
+              "Higher — needs queues, retries, ordering"
+            ],
+            [
+              "Best for",
+              "Wikis, catalogs, docs that change hourly",
+              "Live data: chats, tickets, prices, user-deletable data"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "**Batch** is the right default. A scheduled job asks the source \"what changed since my last run?\" — using a `updated_at` timestamp or the content-hash comparison above — and applies those changes. It's simple, restartable, and easy to test. Most products never need anything more."
+        },
+        {
+          "type": "p",
+          "md": "**Streaming** uses **change-data-capture (CDC)**: the source database emits an event for every insert, update, and delete (tools like Debezium read the database's write-ahead log), and a consumer turns each event into an upsert or delete on the index. You reach for this when stale results are genuinely costly within minutes — live pricing, a customer's right-to-be-forgotten deletion, a moderation removal — or when full scans are too big to run often. The cost is real operational complexity: ordering, retries, duplicate events, and dead-letter handling for embeds that fail."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Make every operation **idempotent**: keying upserts and deletes by a stable ID means re-processing the same change twice produces the same final state. That single property is what lets you safely retry failed jobs and replay an event stream without corrupting the index."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Sync bugs are sneaky because the index doesn't crash — it just slowly tells lies. Watch for these."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Random IDs.** Generating a fresh UUID per insert makes updates and deletes impossible — you can never find the vector that corresponds to a given source row. Derive IDs deterministically from the source instead.",
+            "**Forgetting deletes entirely.** The most common production gap. Upserts feel like \"sync\" but only cover half the job; without a delete path, your index only ever grows, and old content never leaves.",
+            "**Orphan chunks after re-chunking.** When a document's chunk *count* shrinks, the leftover chunk IDs from the previous version stay in the index. Always reconcile a document's current chunk IDs against what you just wrote.",
+            "**Re-embedding everything, every time.** Skipping the content-hash check means you pay to regenerate identical vectors on every run. It works in a demo and bankrupts you at scale — see the [embedding cost](/learn/embeddings-vector-databases/embeddings-explained/how-to-choose-embedding-model) tradeoff.",
+            "**Changing the embedding model without re-embedding everything.** A new model produces vectors in a *different* space; mixing old and new vectors in one index makes distances meaningless. A model change is a full rebuild, not an incremental sync — keep the two operations separate.",
+            "**No way to verify sync.** \"It should be in sync\" is not a check. Without a reconciliation count (source IDs vs index IDs) you won't notice drift until a user does."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic upsert/delete/skip loop is solid, a few harder questions show up in real systems."
+        },
+        {
+          "type": "p",
+          "md": "**Zero-downtime full rebuilds.** Sometimes you *do* need to re-embed everything — a new embedding model, a changed chunking strategy, a corrupted index. Doing this in place means search degrades while it runs. The standard pattern is **blue-green indexing**: build a brand-new index alongside the live one, validate it, then atomically swap the alias your application reads from. Readers never see a half-built index, and you can roll back instantly by swapping the alias back."
+        },
+        {
+          "type": "p",
+          "md": "**Cascading changes beyond text.** Your vectors often carry metadata used for [filtering](/learn/embeddings-vector-databases/vectors-in-production/vector-metadata-filtering) — author, category, access level, publish date. That metadata can change *without* the text changing, so the content hash alone won't catch it. Decide explicitly what triggers a re-sync: text edits trigger re-embedding, but a permission change might only need a cheap metadata update, not a new vector."
+        },
+        {
+          "type": "p",
+          "md": "**Hybrid stores and keeping two indexes aligned.** If you run [hybrid search](/learn/embeddings-vector-databases/vectors-in-production/hybrid-search-explained), you have *two* derived copies — a vector index and a keyword index — and both must stay in sync with the source and with each other. A document deleted from one but not the other reintroduces ghost results through the back door. The same applies when you [bolt vector search onto an existing database](/learn/embeddings-vector-databases/vectors-in-production/vector-search-existing-databases): the appeal there is that the vectors live *in the same transaction* as the source row, so an update and its re-embedding can commit together and never drift apart."
+        },
+        {
+          "type": "p",
+          "md": "**Ordering and consistency under concurrency.** In an event-driven setup, two edits to the same document can arrive out of order, and a slow embedding call can finish *after* a newer one. Carry a version or timestamp on each change and refuse to overwrite a newer vector with an older one. This is the same eventual-consistency reasoning you'd apply to any replicated data store — because that is exactly what a vector index is: a replica that happens to be queried by meaning instead of by key."
+        },
+        {
+          "type": "p",
+          "md": "The durable mental model: treat your vector index as a **materialized view** of your source data. Everything good database engineers know about keeping a derived view consistent — change capture, idempotent writes, reconciliation, atomic swaps — applies directly. The embeddings are just an unusual column type."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "How do I update embeddings when a document changes?",
+      "a": "Re-embed only the chunks whose text actually changed, then upsert them to the index using a stable ID derived from the source (like `doc-id:chunk-index`). Store a content hash with each chunk so unchanged chunks are skipped, and after re-embedding, delete any old chunk IDs for that document that you didn't just write back."
+    },
+    {
+      "q": "How do I handle deletes in a vector database?",
+      "a": "Deletes need an active signal because nothing arrives in your pipeline when a document simply disappears. Either tombstone in the source (a `deleted_at` flag your sync reads and acts on) or run periodic reconciliation that lists source IDs versus index IDs and removes any index vector without a matching source. Always delete by the same stable ID you used to insert."
+    },
+    {
+      "q": "Should I rebuild the whole vector index every night?",
+      "a": "Only at small scale. A nightly full rebuild is simple but re-embeds millions of unchanged chunks and gets expensive fast. Switch to incremental sync — content hashing to skip unchanged text and upserts keyed by stable IDs — so you pay only for what actually changed. Reserve full rebuilds for embedding-model or chunking changes."
+    },
+    {
+      "q": "Why does my vector search return deleted or outdated content?",
+      "a": "Because the index is a derived copy that drifted from its source. The original document was edited or removed, but its vector stayed behind. The fix is a sync pipeline that propagates updates (upsert by stable ID) and deletions (remove by ID), plus periodic reconciliation to catch orphan vectors that slipped through."
+    },
+    {
+      "q": "What is incremental re-embedding?",
+      "a": "It's re-embedding only the chunks that changed instead of the entire corpus. You detect change with a content hash per chunk, embed just the chunks whose hash differs, and upsert them by stable ID. It keeps the index fresh while cutting embedding cost and pipeline time dramatically compared to rebuilding everything."
+    },
+    {
+      "q": "Do I need streaming or is a scheduled batch job enough?",
+      "a": "Batch is the right default for most products — a scheduled job that asks the source what changed since the last run. Reach for streaming (change-data-capture, webhooks, queues) only when stale results are costly within minutes, such as live prices or a user's right-to-be-forgotten deletion. Streaming buys freshness at the price of real operational complexity."
+    }
+  ],
+  "related": [
+    "how-to-choose-vector-database",
+    "hybrid-search-explained",
+    "vector-metadata-filtering",
+    "vector-search-existing-databases",
+    "how-to-choose-embedding-model",
+    "what-is-semantic-search"
+  ],
+  "furtherReading": [
+    {
+      "title": "Pinecone — Upsert data",
+      "url": "https://docs.pinecone.io/guides/index-data/upsert-data"
+    },
+    {
+      "title": "Debezium — Change Data Capture documentation",
+      "url": "https://debezium.io/documentation/"
+    },
+    {
+      "title": "Materialized view — Wikipedia",
+      "url": "https://en.wikipedia.org/wiki/Materialized_view"
+    },
+    {
+      "title": "Embeddings — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/embeddings"
+    }
+  ]
+}

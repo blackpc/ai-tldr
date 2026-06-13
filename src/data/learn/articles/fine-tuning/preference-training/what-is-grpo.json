@@ -1,0 +1,415 @@
+{
+  "slug": "what-is-grpo",
+  "title": "What Is GRPO? Group Relative Policy Optimization Explained",
+  "shortTitle": "GRPO",
+  "seoTitle": "What Is GRPO? Group Relative Policy Optimization",
+  "metaDescription": "GRPO drops the value model and ranks a group of sampled answers against each other to compute advantage. Learn how it works and why reasoning models use it.",
+  "keywords": [
+    "what is grpo",
+    "group relative policy optimization explained",
+    "grpo vs ppo",
+    "grpo reasoning model training",
+    "grpo reinforcement learning llm",
+    "how grpo works"
+  ],
+  "difficulty": "advanced",
+  "oneLiner": "Understand the lean RL method behind modern reasoning models: how GRPO scores answers relative to a group and skips PPO's expensive value model.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**GRPO** — *Group Relative Policy Optimization* — is a way to train a language model with reinforcement learning so it gets better at tasks where you can check whether the answer is right. Math problems, code that either passes the tests or doesn't, puzzles with a known solution: for these, you don't need a human to score every reply. You just need the model to *try* an answer, find out if it worked, and shift toward the strategies that work more often."
+        },
+        {
+          "type": "p",
+          "md": "Here is the everyday version. Imagine a teacher hands the *same* hard problem to a small group of students at once. Five students write five different solutions. The teacher grades all five, then tells each student not an absolute score but a *relative* one: \"you did better than the group average\" or \"you did worse.\" Students above the group average are encouraged to keep doing what they did; students below it are nudged to change. Nobody needs a separate expert predicting in advance how hard the problem was — the group itself sets the bar."
+        },
+        {
+          "type": "p",
+          "md": "That single idea is the whole trick. For each prompt, GRPO samples a *group* of answers from the current model, scores them with a reward, and judges each answer **relative to its own group's average**. Answers that beat the group get reinforced; answers below it get suppressed. Because the group provides the baseline, GRPO throws away a big, expensive piece that older methods needed — a second neural network that tried to guess that baseline in advance."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "GRPO is a flavor of [RLHF](/learn/fine-tuning/preference-training/what-is-rlhf)-style training, but it is most associated with *reasoning* models. It was introduced by the DeepSeek team and became widely known as a lean recipe for teaching models to think step by step on verifiable problems."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "To see why GRPO is a big deal, you have to know what it replaced. The standard reinforcement-learning algorithm for tuning LLMs was **PPO** (Proximal Policy Optimization). PPO works, and it powered the first generation of [RLHF](/learn/fine-tuning/preference-training/what-is-rlhf) models, but it is heavy. It requires running *four* models at training time: the policy you're training, a frozen reference copy, a reward model, and — the costly one — a **value model** (also called a critic) that learns to predict the expected reward of a partial answer. That value model is roughly the same size as the model you're training, so it can double your memory and compute just for the training machinery."
+        },
+        {
+          "type": "p",
+          "md": "GRPO's contribution is simple and practical: **drop the value model.** Instead of training a separate network to estimate the baseline reward, it estimates that baseline empirically, from a group of sampled answers to the same prompt. The average reward of the group *is* the baseline. This removes one large network entirely, which is why GRPO is dramatically cheaper to run and easier to scale."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Less memory, less compute.** No critic network means you free up the memory and FLOPs PPO spent training and storing a second large model. On the same hardware you can train a bigger policy or use larger batches.",
+            "**Fewer moving parts.** A value model is finicky to train and a common source of instability in PPO. Removing it removes a whole class of tuning headaches.",
+            "**A natural fit for verifiable rewards.** GRPO shines when the reward is cheap and objective — did the code pass the unit tests, is the final math answer correct, did the output match the required format. You can sample many answers and grade them all automatically.",
+            "**It scales to reasoning.** Because grading is automatic and the baseline is free, you can afford to sample large groups over millions of problems — exactly what training a model to reason through long chains of thought requires."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who should care? Anyone training or fine-tuning models on tasks with a clear notion of *correct*: coding assistants, math and science tutors, agents that must follow a strict output schema, anything you can wrap a checker around. GRPO is the recipe that made large-scale reinforcement learning on reasoning tasks affordable enough to become mainstream."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "GRPO runs the same loop over and over: pick a prompt, sample a *group* of answers from the current model, score every answer, convert those scores into a **relative advantage**, and nudge the model up on good answers and down on bad ones. The clever part is entirely in how the advantage is computed."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "The GRPO training loop",
+            "steps": [
+              {
+                "label": "Take a prompt"
+              },
+              {
+                "label": "Sample a group",
+                "sub": "G answers from current model"
+              },
+              {
+                "label": "Reward each",
+                "sub": "verifier or reward model"
+              },
+              {
+                "label": "Group-relative advantage",
+                "sub": "(r − mean) / std"
+              },
+              {
+                "label": "Update policy",
+                "sub": "push toward high-advantage answers"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Step 1 — sample a group, not one answer"
+        },
+        {
+          "type": "p",
+          "md": "For a single prompt, GRPO doesn't generate one completion; it generates a *group* of them — often 8, 16, or more — using the current model with sampling turned on, so the answers genuinely differ. Each answer is one attempt the model could have made. Together they form a little tournament for that prompt."
+        },
+        {
+          "type": "h3",
+          "text": "Step 2 — score every answer with a reward"
+        },
+        {
+          "type": "p",
+          "md": "Each answer in the group gets a reward. For verifiable tasks this is just a checker: run the generated code against tests, compare the final math answer to the ground truth, or apply a regex for the required format. For more subjective tasks you can still use a trained reward model. Either way you end up with one number per answer in the group."
+        },
+        {
+          "type": "h3",
+          "text": "Step 3 — turn rewards into group-relative advantage"
+        },
+        {
+          "type": "p",
+          "md": "This is the heart of GRPO. Instead of asking a value model \"how good was this answer compared to what we expected,\" GRPO compares each answer to *its own group*. It computes the group's mean reward and standard deviation, then normalizes each answer's reward against them. The result is the **advantage**:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "group-relative advantage",
+          "code": "# rewards: one number per answer in the group, e.g. [1, 0, 1, 1, 0]\nmean = rewards.mean()\nstd  = rewards.std()\n\n# Each answer is scored relative to its own group.\nadvantage = (rewards - mean) / (std + 1e-8)\n\n# Answers above the group average get a POSITIVE advantage\n# (reinforce them); answers below get a NEGATIVE one (suppress them).\n# If every answer in the group is equally good or bad, the advantages\n# are ~0 and that prompt teaches the model nothing this step."
+        },
+        {
+          "type": "p",
+          "md": "Notice what just happened. The group *itself* supplied the baseline that PPO needed a whole value network to predict. If three of five answers solved the problem, the two that failed get pushed down and the three that succeeded get pushed up. Every token in a good answer shares that answer's positive advantage; every token in a bad one shares its negative advantage."
+        },
+        {
+          "type": "h3",
+          "text": "Step 4 — update the policy (with guardrails)"
+        },
+        {
+          "type": "p",
+          "md": "Finally GRPO updates the model to make high-advantage answers more likely and low-advantage ones less likely. It keeps two safety rails borrowed from PPO: a **clipped objective** that limits how far the model can move in one step (so a single batch can't wreck it), and a **KL penalty** that keeps the model from drifting too far from a frozen reference copy (so it doesn't forget its general abilities while chasing the reward). The reward model and value model are gone, but these two stabilizers stay."
+        },
+        {
+          "type": "p",
+          "md": "Then it repeats — millions of times, over millions of prompts. Slowly the model's distribution shifts toward whatever the group comparisons keep rewarding."
+        }
+      ]
+    },
+    {
+      "id": "grpo-vs-ppo",
+      "title": "GRPO vs PPO at a glance",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "GRPO and PPO answer the same question — *how good was this answer relative to a baseline?* — but they get the baseline in opposite ways. PPO **predicts** it with a learned value network; GRPO **measures** it from a group of samples. Everything else follows from that one choice."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "",
+            "PPO",
+            "GRPO"
+          ],
+          "rows": [
+            [
+              "Baseline for advantage",
+              "Learned value model (a critic network)",
+              "Mean reward of a sampled group"
+            ],
+            [
+              "Models at train time",
+              "Policy, reference, reward, value (4)",
+              "Policy, reference, reward (3)"
+            ],
+            [
+              "Memory / compute",
+              "Higher — critic is policy-sized",
+              "Lower — no critic to train or store"
+            ],
+            [
+              "Samples per prompt",
+              "Usually one trajectory",
+              "A group (e.g. 8–16+)"
+            ],
+            [
+              "Main tuning pain",
+              "Stabilizing the value model",
+              "Choosing group size and reward design"
+            ],
+            [
+              "Best fit",
+              "General RLHF, dense rewards",
+              "Verifiable tasks, reasoning, large-scale RL"
+            ]
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Where the baseline comes from",
+            "columns": [
+              {
+                "title": "PPO",
+                "items": [
+                  "Trains a separate value network",
+                  "Critic predicts expected reward",
+                  "Advantage = reward − prediction",
+                  "Extra ~policy-sized model in memory",
+                  "One sample per prompt is enough"
+                ]
+              },
+              {
+                "title": "GRPO",
+                "accent": true,
+                "items": [
+                  "No value network at all",
+                  "Group's own mean is the baseline",
+                  "Advantage = (reward − mean) / std",
+                  "Saves the critic's memory entirely",
+                  "Needs a group of samples per prompt"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "There is no free lunch: GRPO doesn't eliminate the value model's cost so much as *trade* it for sampling cost. You now generate many answers per prompt instead of one. The win is that generating extra samples is usually cheaper and far more stable than training a separate critic network — and the samples are reusable, gradient-free work."
+        }
+      ]
+    },
+    {
+      "id": "where-it-fits",
+      "title": "Where GRPO fits among fine-tuning methods",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "GRPO is a reinforcement-learning method, so it sits in the same family as [RLHF](/learn/fine-tuning/preference-training/what-is-rlhf) and [DPO](/learn/fine-tuning/preference-training/what-is-dpo), not plain supervised [fine-tuning](/learn/fine-tuning/fine-tuning-basics/what-is-fine-tuning). It usually comes *after* a supervised step, as the polishing stage that teaches behavior rather than facts. A common modern pipeline looks like this:"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Typical training pipeline",
+            "steps": [
+              {
+                "label": "Pretrain",
+                "sub": "raw text, next-token"
+              },
+              {
+                "label": "Supervised fine-tune",
+                "sub": "demonstration data"
+              },
+              {
+                "label": "RL stage",
+                "sub": "GRPO / PPO / DPO",
+                "accent": true
+              },
+              {
+                "label": "Deployed model",
+                "sub": "reasons + follows reward"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "It helps to see how the three RL-flavored methods differ in what they need from you:"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Method",
+            "What it needs",
+            "How it learns"
+          ],
+          "rows": [
+            [
+              "DPO",
+              "Pairs of (preferred, rejected) answers",
+              "Directly optimizes a preference loss — no sampling, no reward model"
+            ],
+            [
+              "PPO (RLHF)",
+              "A trained reward model + value model",
+              "Online RL with a learned critic as baseline"
+            ],
+            [
+              "GRPO",
+              "A reward signal (often a verifier)",
+              "Online RL with the group average as baseline"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Two practical signals tell you GRPO is the right tool. First, **you can grade answers automatically** — a verifier, test suite, or exact-match check that runs cheaply at scale. Second, **the model needs to explore**: there are many valid solution paths, and you want it to discover good ones rather than imitate fixed demonstrations. If instead you already have curated good/bad pairs and want the simplest possible setup, [DPO](/learn/fine-tuning/preference-training/what-is-dpo) is lighter. If your reward is dense and subjective and you have a solid reward model, classic PPO still applies."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "GRPO is typically combined with parameter-efficient methods like [LoRA](/learn/fine-tuning/lora-and-peft/what-is-lora) so the RL stage only updates a small set of weights — see [full fine-tuning vs PEFT](/learn/fine-tuning/fine-tuning-basics/full-fine-tuning-vs-peft). The RL algorithm and the *which weights you update* question are independent choices."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "GRPO is conceptually clean but easy to mis-tune. Most failures trace back to the reward and the group, not the optimizer itself."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Reward hacking.** The model optimizes exactly what you measure, not what you mean. If your checker rewards a final number but ignores the reasoning, the model may guess or write nonsense that happens to match. Reward design *is* the hard part — verify the whole behavior you want, not a proxy.",
+            "**Groups with no signal.** If every answer in a group is right (or every one is wrong), the advantages collapse to roughly zero and that prompt teaches nothing. You want problems at the edge of the model's ability, where the group splits — too easy or too hard wastes the sample budget.",
+            "**Group too small.** A tiny group gives a noisy mean and standard deviation, so the advantage estimate is unstable. Larger groups give a steadier baseline but cost more samples; this is the central tradeoff to tune.",
+            "**Letting the model drift.** Chasing the reward too hard can make a model forget general skills, lose its calibration, or produce repetitive, gamed outputs. The KL penalty against the reference model exists precisely to bound this — don't set it to zero.",
+            "**No held-out evaluation.** Reward going up is not the same as the model getting better. Always [evaluate](/learn/fine-tuning/fine-tuning-basics/what-is-fine-tuning) on tasks the reward never touched, or you'll ship a model that aced its own training game and nothing else."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Verifiable rewards are powerful precisely because they're cheap and objective — which also makes them the easiest thing in the world to game. Treat your verifier as adversarial: assume the model will find every loophole, because over millions of steps it will."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic loop makes sense, a few finer points separate a toy implementation from a working one."
+        },
+        {
+          "type": "p",
+          "md": "**Token-level vs sequence-level credit.** In the simplest GRPO, every token in an answer inherits that whole answer's advantage. That is coarse — a great answer might contain a few bad tokens and vice versa. Implementations differ in how they spread credit across the sequence and how they handle the length of long chains of thought, and the details meaningfully affect stability. The exact normalization (whether you divide by standard deviation, how you treat length) is an active area where variants disagree."
+        },
+        {
+          "type": "p",
+          "md": "**The KL term, more carefully.** GRPO keeps a KL penalty to a frozen reference model, but where and how it's applied varies. Some formulations fold it into the reward, others into the loss. A stronger KL keeps the model close to its starting point and safer but slows learning; a weaker one learns faster but risks collapse. It is one of the most important knobs you'll touch."
+        },
+        {
+          "type": "p",
+          "md": "**Why it pairs with reasoning.** Long step-by-step reasoning is hard to supervise directly — you rarely have a labeled \"correct chain of thought.\" But you often *can* check the final answer. GRPO turns that single end-of-answer reward into a training signal for the entire reasoning trace: sample many reasoning paths, keep the ones that reach the right answer, push toward them. This is why letting the model generate long, exploratory thoughts and rewarding only correct conclusions can make reasoning *emerge* without anyone scripting the steps."
+        },
+        {
+          "type": "p",
+          "md": "**On-policy and stale samples.** GRPO is an *on-policy* method: the samples should come from roughly the current model. In practice you generate a big batch, then take several gradient steps on it for efficiency, which makes the later steps slightly off-policy. The clipping objective is what keeps those reused samples from pushing the model too far. Push reuse too hard and training destabilizes; this is the same balance PPO manages."
+        },
+        {
+          "type": "p",
+          "md": "**Where to go next.** If you have clean preference pairs and want a simpler path, study [DPO](/learn/fine-tuning/preference-training/what-is-dpo), which skips sampling and reward models entirely. To understand the broader feedback paradigm GRPO descends from, read [what RLHF is](/learn/fine-tuning/preference-training/what-is-rlhf). And to place all of this in the larger picture of changing a model's behavior cheaply, see [what fine-tuning is](/learn/fine-tuning/fine-tuning-basics/what-is-fine-tuning) and [full fine-tuning vs PEFT](/learn/fine-tuning/fine-tuning-basics/full-fine-tuning-vs-peft). The durable lesson of GRPO is that you don't always need a learned critic to know how good an answer is — sometimes a handful of the model's own attempts, graded against each other, is baseline enough."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What does GRPO stand for?",
+      "a": "GRPO stands for Group Relative Policy Optimization. \"Group relative\" means each answer is scored against a group of other answers to the same prompt rather than against an absolute target, and \"policy optimization\" means it's a reinforcement-learning method that adjusts the model (the policy) to make better answers more likely."
+    },
+    {
+      "q": "How is GRPO different from PPO?",
+      "a": "PPO trains a separate value model (a critic) to predict the baseline reward for each answer, which roughly doubles the memory needed. GRPO removes that critic entirely and instead uses the average reward of a sampled group of answers as the baseline. The result is a leaner, cheaper, more stable setup, at the cost of generating several answers per prompt."
+    },
+    {
+      "q": "What is a verifiable reward in GRPO?",
+      "a": "A verifiable reward is an objective, automatic check of whether an answer is correct — running generated code against unit tests, comparing a math result to the known answer, or matching a required format. Because it's cheap and unambiguous, you can score thousands of sampled answers without humans, which is exactly what GRPO needs."
+    },
+    {
+      "q": "Why is GRPO used for training reasoning models?",
+      "a": "Reasoning traces are hard to supervise directly because you rarely have a labeled correct chain of thought, but you can often check the final answer. GRPO turns that single end-of-answer reward into a training signal for the whole reasoning path: it samples many chains, rewards the ones that reach the right answer, and pushes the model toward them — so good reasoning can emerge without scripting the steps."
+    },
+    {
+      "q": "How big should the GRPO group size be?",
+      "a": "Group sizes are commonly in the range of 8 to 16 or more. Larger groups give a steadier estimate of the mean and standard deviation used for the advantage, which stabilizes training, but they cost more samples per prompt. It's a tradeoff between baseline quality and compute, and the right value depends on your reward and budget."
+    },
+    {
+      "q": "Is GRPO better than DPO?",
+      "a": "They suit different situations. DPO is simpler and needs only pairs of preferred and rejected answers — no sampling and no reward model — so it's great when you already have preference data. GRPO is an online RL method that shines when you can grade answers automatically and want the model to explore many solution paths, as on math, code, and reasoning tasks."
+    }
+  ],
+  "related": [
+    "what-is-rlhf",
+    "what-is-dpo",
+    "what-is-fine-tuning",
+    "full-fine-tuning-vs-peft",
+    "what-is-lora"
+  ],
+  "furtherReading": [
+    {
+      "title": "DeepSeekMath: Pushing the Limits of Mathematical Reasoning (arXiv)",
+      "url": "https://arxiv.org/abs/2402.03300"
+    },
+    {
+      "title": "Proximal Policy Optimization Algorithms (arXiv)",
+      "url": "https://arxiv.org/abs/1707.06347"
+    },
+    {
+      "title": "TRL — GRPO Trainer documentation (Hugging Face)",
+      "url": "https://huggingface.co/docs/trl/main/en/grpo_trainer"
+    }
+  ]
+}

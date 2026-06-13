@@ -1,0 +1,354 @@
+{
+  "slug": "frequency-and-presence-penalty",
+  "title": "Frequency Penalty vs Presence Penalty: Stopping LLM Repetition",
+  "shortTitle": "Frequency vs Presence Penalty",
+  "seoTitle": "Frequency Penalty vs Presence Penalty in LLMs",
+  "metaDescription": "Frequency and presence penalties discourage an LLM from repeating itself, but in different ways. Learn what each does and how to tune them to fix loops.",
+  "keywords": [
+    "frequency penalty vs presence penalty",
+    "what is frequency penalty llm",
+    "what is presence penalty",
+    "how to stop llm repeating itself",
+    "frequency penalty presence penalty settings"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn the difference between the two repetition penalties, frequency and presence, and how to use them to stop a model from looping or droning on the same words.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When a [language model](/learn/llm-fundamentals/llm-basics/what-is-an-llm) writes text, it picks one word at a time. At each step it produces a probability for every possible next token, and a sampler chooses one. Left alone, a model can fall into a rut: repeating the same phrase, looping the same sentence, or leaning on one favourite word again and again. **Frequency penalty** and **presence penalty** are two knobs that fight exactly this, by quietly lowering the odds of words the model has *already* used."
+        },
+        {
+          "type": "p",
+          "md": "Picture a friend telling a story who keeps saying \"basically\" every few words. The penalties are like two different ways of nudging them. The **frequency penalty** is a friend who flinches a little *more each time* they hear \"basically\" — the tenth one annoys them far more than the first, so the pressure to stop grows with the count. The **presence penalty** is a friend who reacts the same the moment a word shows up at all: *\"you've used that word — now move on to something new,\"* no matter whether it appeared once or twenty times."
+        },
+        {
+          "type": "p",
+          "md": "Both penalties do the same physical thing — they subtract a number from a token's score before the model samples — but they count differently. Frequency penalty scales with **how many times** a token has appeared. Presence penalty is a **flat** amount applied **once a token has appeared at all**. That single difference is the whole topic."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "These are sampling controls, not a separate model. They sit between the model's raw output and the final choice of word, in the same family as [temperature](/learn/llm-fundamentals/sampling-and-hallucination/llm-temperature-explained) and [top-p / top-k](/learn/llm-fundamentals/sampling-and-hallucination/top-p-vs-top-k) — but they target *repetition* specifically, not overall randomness."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Repetition is one of the most common and most visible failures in generated text. A summary that restates the same point three times, a chatbot that opens every reply with the identical sentence, a product description that hammers one adjective, or — in the worst case — a model that gets stuck in an infinite loop, emitting the same line until it hits the token limit. All of these make output feel robotic and untrustworthy, and none of them are fixed by a bigger or smarter model alone."
+        },
+        {
+          "type": "p",
+          "md": "Why does a capable model repeat itself at all? Because at each step it's just picking high-probability tokens, and language is genuinely repetitive — once a phrase has appeared, the patterns the model learned make that *same* phrase even more likely to come next. This creates a feedback loop: the more a token appears, the more the surrounding context points back to it. Low [temperature](/learn/llm-fundamentals/sampling-and-hallucination/llm-temperature-explained) makes this worse, because the model keeps taking the single safest token, and the safest token is often a word it just used."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Long-form generation.** Articles, reports, and stories drift into repeating phrases the longer they run. A small penalty keeps the vocabulary moving.",
+            "**Lists and brainstorming.** Asking for 20 ideas, 50 product names, or a varied set of examples — without a penalty, the model recycles the same few concepts. Presence penalty in particular pushes it toward fresh territory.",
+            "**Runaway loops.** A model that starts echoing one line can keep going to the end of its output budget, wasting tokens and money. A repetition penalty is the standard guardrail.",
+            "**Conversational tone.** Bots that begin every message with \"Sure, I can help with that!\" feel canned. A light penalty across a turn adds variety."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "If your output is fine, leave these at zero. They are *corrective* knobs — reach for them when you actually see repetition, not as a default. Many production prompts never touch them."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "To see the mechanism, you need one idea from how sampling works. Before choosing a token, the model produces a **logit** for every token in its vocabulary — a raw score, where higher means more likely. Those logits are turned into probabilities (via softmax), and the sampler draws from that distribution. Both penalties act on the **logits**, *before* the probabilities are computed, by subtracting from the scores of tokens that have already appeared in the text so far."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Where the penalties act in the pipeline",
+            "steps": [
+              {
+                "label": "Model",
+                "sub": "raw logits per token"
+              },
+              {
+                "label": "Apply penalties",
+                "sub": "subtract from seen tokens",
+                "accent": true
+              },
+              {
+                "label": "Softmax",
+                "sub": "logits → probabilities"
+              },
+              {
+                "label": "Sample",
+                "sub": "pick the next token"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "The two formulas, in words"
+        },
+        {
+          "type": "p",
+          "md": "For each token, the system tracks how many times it has appeared so far in the generated text. The new score for a token is roughly:"
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "title": "how each penalty adjusts a token's logit",
+          "code": "new_logit = original_logit\n            - presence_penalty  * (1 if token has appeared at all else 0)\n            - frequency_penalty * (number of times token has appeared)"
+        },
+        {
+          "type": "p",
+          "md": "Read those two terms carefully — they are the entire distinction. The **presence** term is multiplied by 0 or 1: it switches on the first time a token appears and never grows after that. The **frequency** term is multiplied by the running *count*: it gets stronger every single time the token reappears. So a word used once feels both penalties equally, but a word used ten times feels the frequency penalty ten times as hard while the presence penalty stays flat."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Same token, used more and more times",
+            "columns": [
+              {
+                "title": "Frequency penalty",
+                "accent": true,
+                "items": [
+                  "Penalty = penalty × count",
+                  "1st use: small nudge",
+                  "10th use: 10× the nudge",
+                  "Grows the more it repeats",
+                  "Great for stopping loops & droning"
+                ]
+              },
+              {
+                "title": "Presence penalty",
+                "items": [
+                  "Penalty = penalty × (appeared? 1 : 0)",
+                  "1st use: full nudge",
+                  "10th use: same nudge",
+                  "Flat once the token appears",
+                  "Great for pushing new topics"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Both penalties typically accept a value from about **-2.0 to 2.0**, with **0** meaning \"off\". Positive values discourage repetition; negative values *encourage* it (rarely useful — occasionally for a deliberately repetitive style). In practice useful positive values are small, often **0.1 to 1.0**. Anything near the top of the range is aggressive and tends to distort the text."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Exact names and ranges vary by provider, and not every API exposes both. Some APIs offer a single combined `repetition_penalty` instead, which *multiplies* logits rather than subtracting from them. The concept — \"lower the odds of words you've already said\" — is the same; check your provider's docs for the precise parameter."
+        }
+      ]
+    },
+    {
+      "id": "a-worked-example",
+      "title": "A worked example",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Suppose you ask a model for a short product blurb and it returns this, with both penalties at zero:"
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "title": "penalties = 0 (the model loves one word)",
+          "code": "Our amazing blender is amazing for smoothies. It is amazing\nat crushing ice and amazing with frozen fruit. Truly amazing."
+        },
+        {
+          "type": "p",
+          "md": "The word *amazing* keeps winning because each time it appears, the surrounding pattern makes it likely again. Now turn on a **frequency penalty** of around 0.6. The first *amazing* costs little, but by the third and fourth it has been penalised three and four times over, so its logit drops below the alternatives and the model is forced to vary:"
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "title": "frequency_penalty ≈ 0.6 (repeats get progressively suppressed)",
+          "code": "Our amazing blender is perfect for smoothies. It crushes ice\nwith ease and handles frozen fruit beautifully. A real workhorse."
+        },
+        {
+          "type": "p",
+          "md": "Now a different task: \"List 15 hobbies.\" The model offers reading, hiking, cooking, then keeps circling back to those same few. Here **presence penalty** is the better tool. The moment *reading* has appeared even once, its flat penalty pushes the model to look elsewhere — you don't need the penalty to grow, you just need a steady shove toward unseen tokens so the list keeps expanding into new ideas."
+        },
+        {
+          "type": "p",
+          "md": "Here is how you'd set them on a typical chat-completions-style API. Most SDKs accept the two parameters directly alongside `temperature`:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "tuning the penalties in an API call",
+          "code": "response = client.chat.completions.create(\n    model=\"...\",\n    messages=[{\"role\": \"user\", \"content\": \"List 15 hobbies.\"}],\n    temperature=0.8,\n    # flat shove toward words not yet used — good for variety/lists\n    presence_penalty=0.6,\n    # grows with repeats — good for killing loops & droning\n    frequency_penalty=0.2,\n)"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Change one penalty at a time and re-run the *same* prompt. Because generation is stochastic, compare a few samples, not a single output — one good run can hide a setting that's too weak or too strong."
+        }
+      ]
+    },
+    {
+      "id": "which-one-when",
+      "title": "Which one to reach for",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A simple rule of thumb: use **frequency penalty** when the same *words or phrases* repeat too much, and **presence penalty** when you want the model to *cover more ground / new topics*. They can be combined, but start with one."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Symptom",
+            "Reach for",
+            "Why"
+          ],
+          "rows": [
+            [
+              "Same word over and over",
+              "Frequency penalty",
+              "Penalty grows with each repeat, so heavy repeaters get hit hardest"
+            ],
+            [
+              "Stuck in an exact loop",
+              "Frequency penalty",
+              "The looping line's count climbs fast and is suppressed quickly"
+            ],
+            [
+              "List keeps recycling ideas",
+              "Presence penalty",
+              "A flat shove off any already-used token opens room for new ones"
+            ],
+            [
+              "Answers feel narrow / on-topic-but-samey",
+              "Presence penalty",
+              "Encourages broader vocabulary and fresh concepts"
+            ],
+            [
+              "Output is fine",
+              "Neither (0)",
+              "Penalties distort good text; only correct a real problem"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "These knobs are *orthogonal* to [temperature and top-p/top-k](/learn/llm-fundamentals/sampling-and-hallucination/top-p-vs-top-k). Temperature controls overall randomness; top-p/top-k control which candidates are even eligible. The penalties don't touch randomness at all — they only reshape the scores of tokens you've already produced. That's why a model can be highly repetitive even at high temperature (the repeated token is just *that* dominant), and why the right fix is a penalty, not cranking temperature up and hoping."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "These knobs are easy to over-apply. Because they punish *any* reuse of a token, pushing them too high makes the model avoid words it genuinely needs."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Cranking them too high.** At values near 1.5–2.0 the model starts dodging common, necessary words — articles, names, technical terms it *must* repeat — and the text turns awkward, drifts off-topic, or grabs odd synonyms. Stay in the 0.1–1.0 range unless you've measured otherwise.",
+            "**Penalising required repetition.** Code, structured output (JSON), tables, and anything with a fixed vocabulary *need* repeated tokens like `{`, field names, or a recurring keyword. A high frequency penalty can quietly corrupt the format. Keep penalties at 0 for structured generation.",
+            "**Using them to fix the wrong thing.** Penalties stop repetition; they do nothing for accuracy. If a model is making facts up, that's a different problem — see [why LLMs hallucinate](/learn/llm-fundamentals/sampling-and-hallucination/why-llms-hallucinate). No penalty setting will ground an answer in real sources.",
+            "**Confusing the two.** Turning up presence penalty to stop a tight loop barely helps, because a flat penalty doesn't grow with the count. Loops want *frequency* penalty.",
+            "**Stacking both at high values.** Each penalty already discourages reuse; running both near the top of the range compounds the distortion. If you use both, keep each modest."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Penalties operate on raw **tokens**, not whole words or meanings. A model dodging the *token* for \"good\" might still produce \"great,\" \"goodness,\" or the same idea phrased differently. They reduce surface repetition; they don't enforce semantic variety."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A few nuances matter once the basics click."
+        },
+        {
+          "type": "p",
+          "md": "**Tokens, not words.** The count both penalties track is over *tokens* from the model's vocabulary, which are often word-pieces rather than whole words. A long or rare word may be several tokens; a common word is usually one. This is why the effect can feel uneven — a penalty bites a one-token word more cleanly than a word split into three pieces, and it can accidentally suppress a shared sub-word (like a common suffix) across otherwise different words."
+        },
+        {
+          "type": "p",
+          "md": "**The running window.** Most implementations count occurrences over the tokens generated *so far in this response* (and often the prompt too). The exact window — whole context vs a recent slice — varies by provider and affects long generations: with a full-context count, a token used early keeps its penalty for the entire output, which can over-suppress legitimately recurring terms in very long text."
+        },
+        {
+          "type": "p",
+          "md": "**Subtractive vs multiplicative.** The OpenAI-style `presence_penalty` / `frequency_penalty` *subtract* from logits, as shown above. A separate convention, common in open-source inference stacks, is `repetition_penalty`, which *divides* (or multiplies) the logit of seen tokens by a factor — so its neutral value is **1.0**, not 0, and it doesn't distinguish presence from frequency. Don't mix the mental models; check which parameter your API exposes and what its neutral value is."
+        },
+        {
+          "type": "p",
+          "md": "**When penalties aren't enough.** Some repetition comes from the *prompt* or the *task*, not the sampler. If a model keeps restating the question, fix the instruction. If it loops because the request is impossible or contradictory, no penalty will save it. Other tools in the same family — adjusting [temperature](/learn/llm-fundamentals/sampling-and-hallucination/llm-temperature-explained), tightening [top-p / top-k](/learn/llm-fundamentals/sampling-and-hallucination/top-p-vs-top-k), or simply choosing a stronger model — often address the root cause better than maxing out a penalty. The honest summary: frequency and presence penalties are precise, cheap fixes for *surface* repetition, best applied lightly and only when you see the symptom they're built for."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is the difference between frequency penalty and presence penalty?",
+      "a": "Both lower the probability of tokens the model has already used, but they count differently. Frequency penalty scales with **how many times** a token has appeared, so it grows stronger the more a word repeats. Presence penalty is a **flat** amount applied once a token appears at all, regardless of how often. Use frequency penalty to crush repeated words and loops; use presence penalty to push the model toward new topics."
+    },
+    {
+      "q": "What is frequency penalty in an LLM?",
+      "a": "Frequency penalty is a sampling control that subtracts from a token's score in proportion to how many times that token has already appeared in the text. The more a token repeats, the larger the penalty, which pushes the model to vary its wording. It usually ranges from -2.0 to 2.0, with 0 meaning off; small positive values (0.1–1.0) are typical."
+    },
+    {
+      "q": "What is presence penalty?",
+      "a": "Presence penalty is a flat reduction applied to a token's score the moment it has appeared at least once, no matter how many times. It doesn't grow with repetition, so its main job is to nudge the model toward words and ideas it hasn't used yet — useful for varied lists, brainstorming, and broader coverage."
+    },
+    {
+      "q": "How do I stop an LLM from repeating itself?",
+      "a": "First try a frequency penalty around 0.3–0.7, which suppresses words that keep recurring. If the model is stuck in an exact loop, frequency penalty is the right tool because the looping line's count climbs fast and gets hit hard. If the issue is variety rather than literal repeats, add a presence penalty instead. Keep values modest — high settings distort the text."
+    },
+    {
+      "q": "What are good frequency penalty and presence penalty settings?",
+      "a": "Start at 0 (off) and only adjust when you actually see repetition. Useful positive values are usually small, around 0.1–1.0. Values near 1.5–2.0 are aggressive and tend to make the model avoid necessary words and drift off-topic. Set both to 0 for structured output like JSON or code, which legitimately needs repeated tokens."
+    },
+    {
+      "q": "Are frequency and presence penalties the same as temperature?",
+      "a": "No. Temperature controls overall randomness across all tokens, while these penalties target only tokens that have already appeared, to reduce repetition. They're independent knobs — a model can repeat heavily even at high temperature, and the correct fix is a repetition penalty, not more temperature."
+    }
+  ],
+  "related": [
+    "llm-temperature-explained",
+    "top-p-vs-top-k",
+    "why-llms-hallucinate",
+    "how-llms-work"
+  ],
+  "furtherReading": [
+    {
+      "title": "Create chat completion — API Reference (OpenAI Docs)",
+      "url": "https://platform.openai.com/docs/api-reference/chat/create"
+    },
+    {
+      "title": "Generation strategies — Hugging Face Transformers Docs",
+      "url": "https://huggingface.co/docs/transformers/en/generation_strategies"
+    },
+    {
+      "title": "Sampling Parameters — vLLM Docs",
+      "url": "https://docs.vllm.ai/en/latest/api/inference_params.html"
+    }
+  ]
+}

@@ -1,0 +1,395 @@
+{
+  "slug": "matryoshka-embeddings-explained",
+  "title": "What Are Matryoshka Embeddings? Shrinking Vectors Without Re-embedding",
+  "shortTitle": "Matryoshka Embeddings",
+  "seoTitle": "Matryoshka Embeddings: Truncate Vectors, Keep Quality",
+  "metaDescription": "Matryoshka representation learning lets you chop an embedding down to fewer dimensions and keep most of its accuracy. Learn how MRL works and when to truncate.",
+  "keywords": [
+    "what are matryoshka embeddings",
+    "matryoshka representation learning explained",
+    "truncate embedding dimensions",
+    "variable dimension embeddings",
+    "shrink embeddings without losing accuracy"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn how Matryoshka-trained embeddings let you slice a vector down to fewer dimensions for cheaper storage while keeping most of the quality.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "An [embedding](/learn/embeddings-vector-databases/embeddings-explained/what-are-embeddings) is a list of numbers that captures the meaning of a piece of text. A typical model gives you a vector with something like 768, 1024, or 1536 numbers in it — each one a *dimension*. More dimensions usually means more nuance, but also more storage, more memory, and slower search. So you're stuck choosing one fixed size up front and living with it."
+        },
+        {
+          "type": "p",
+          "md": "**Matryoshka embeddings** break that trade-off. The name comes from Russian nesting dolls — the ones where a big doll opens to reveal a smaller doll inside, then a smaller one, all the way down. A Matryoshka embedding is built so that a *full* 1536-dimensional vector secretly contains a good 768-dimensional vector inside it, which contains a good 256-dimensional vector inside *that*, and so on. You can chop the vector down to a shorter length and it still works — because the model deliberately packed the most important information into the first dimensions."
+        },
+        {
+          "type": "p",
+          "md": "The technique is called **Matryoshka Representation Learning (MRL)**, from a 2022 paper by Aditya Kusupati and colleagues. The trick is entirely in how the model is *trained*. A normal embedding model only learns to be good at its one full size. An MRL model is trained so that *every* prefix of the vector — the first 64 numbers, the first 128, the first 256 — is also a usable embedding on its own."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The key intuition: with a Matryoshka embedding, **truncation is a valid operation**. To get a smaller vector you just keep the first *N* numbers and throw the rest away. No re-embedding, no extra model, no math. With an ordinary embedding, the first *N* numbers are *not* a smaller embedding — they're a meaningless slice."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "If you run [semantic search](/learn/embeddings-vector-databases/similarity-search-indexing/what-is-semantic-search) over a large corpus, the size of your vectors is a direct cost. Storing ten million 1536-dimensional float32 vectors takes roughly 60 GB of RAM. Halve the dimensions and you halve the memory; cut them to a quarter and you quarter it. Search latency drops too, because comparing two short vectors is faster than comparing two long ones."
+        },
+        {
+          "type": "p",
+          "md": "Normally, shrinking vectors forces an ugly choice: re-run a smaller, weaker model over your entire dataset, or apply a dimensionality-reduction step like PCA that needs to be fitted, stored, and re-applied to every new query. Both add moving parts. MRL gives you the small vector *for free* — it's already sitting at the front of the big one."
+        },
+        {
+          "type": "h3",
+          "text": "Who benefits"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Anyone with a large vector index.** Storage and RAM for a [vector database](/learn/embeddings-vector-databases/vector-database-guides/what-is-a-vector-database) scale linearly with dimension count. Truncating from 1536 to 384 dimensions is a 4× cut in index size with only a small accuracy loss.",
+            "**Latency-sensitive search.** Shorter vectors mean fewer multiply-add operations per comparison, so [approximate nearest neighbor](/learn/embeddings-vector-databases/similarity-search-indexing/approximate-nearest-neighbors) lookups run faster and indexes like [HNSW](/learn/embeddings-vector-databases/similarity-search-indexing/hnsw-explained) build and query quicker.",
+            "**Teams that can't commit to one size.** Maybe you want tiny vectors for a fast first pass and full vectors for a precise final ranking. One MRL model gives you both from a single embedding call.",
+            "**Anyone who wants to tune cost vs. quality after the fact.** You can store the full vector once and decide *at query time* how many dimensions to actually compare — no re-embedding to change your mind."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "This is why several major embedding providers now ship Matryoshka-style models with a configurable dimension parameter. Asking for fewer dimensions returns a truncated (and renormalized) prefix of the full vector — the same idea, served through an API knob."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "MRL changes one thing: the **training objective**. A normal embedding model is trained with a single loss computed on the full vector. MRL computes the *same* loss at several nested sizes at once and adds them together. The model is rewarded for being good not just at 1536 dimensions, but simultaneously at 768, 384, 192, and so on down a chosen list of sizes."
+        },
+        {
+          "type": "p",
+          "md": "Because the shorter prefixes are scored during training, gradient descent is pressured to put the most broadly useful, coarse-grained information into the *earliest* dimensions, and reserve the later dimensions for finer detail. The result is a vector where importance decays from front to back — exactly the nesting-doll structure."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "stack",
+            "title": "One vector, many usable sizes nested inside it",
+            "layers": [
+              {
+                "label": "Dims 1–1536",
+                "sub": "full vector — highest quality"
+              },
+              {
+                "label": "Dims 1–768",
+                "sub": "prefix — still strong"
+              },
+              {
+                "label": "Dims 1–256",
+                "sub": "prefix — good, much smaller",
+                "accent": true
+              },
+              {
+                "label": "Dims 1–64",
+                "sub": "prefix — coarse but searchable"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "The training loss, conceptually"
+        },
+        {
+          "type": "p",
+          "md": "During training the model takes each example, produces the full embedding, then slices it to each target size and computes the loss on every slice. The total loss is the sum. Minimizing that sum forces *all* the prefixes to be useful at the same time."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Matryoshka loss — the core idea",
+          "code": "# full_vec: the model's output embedding, e.g. shape (batch, 1536)\n# A normal model would do: loss = contrastive_loss(full_vec)\n\nnesting_sizes = [64, 128, 256, 512, 1024, 1536]\n\ntotal_loss = 0.0\nfor d in nesting_sizes:\n    prefix = full_vec[:, :d]          # keep only the first d dimensions\n    prefix = normalize(prefix)        # re-normalize the shorter vector\n    total_loss += contrastive_loss(prefix)   # same loss, smaller vector\n\n# Optimizing total_loss makes EVERY prefix a good embedding,\n# so truncation later is safe."
+        },
+        {
+          "type": "h3",
+          "text": "Using it at search time"
+        },
+        {
+          "type": "p",
+          "md": "Once trained, you embed your documents at full size and store them. To search with smaller vectors, you simply truncate every vector to the first *N* dimensions and re-normalize, then run normal [cosine similarity](/learn/embeddings-vector-databases/similarity-search-indexing/cosine-similarity-vs-dot-product). The query must be truncated to the *same* size as the documents — you only ever compare vectors of equal length."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Truncated search — keep the front, drop the rest",
+            "steps": [
+              {
+                "label": "Full vector",
+                "sub": "1536 dims"
+              },
+              {
+                "label": "Slice",
+                "sub": "keep first 256"
+              },
+              {
+                "label": "Re-normalize",
+                "sub": "unit length again"
+              },
+              {
+                "label": "Cosine search",
+                "sub": "fast, small index",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Always re-normalize after truncating. A prefix of a unit-length vector is generally *not* unit length, so cosine similarity and dot-product scores will be off unless you scale it back to length 1 first."
+        }
+      ]
+    },
+    {
+      "id": "mrl-vs-pca",
+      "title": "MRL vs. PCA and other shrink-after-the-fact methods",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "People often confuse Matryoshka embeddings with dimensionality reduction such as PCA. Both end up with shorter vectors, but they get there in opposite ways. PCA is a *post-hoc* transform: you take ordinary embeddings and fit a projection that compresses them afterwards. MRL is *baked into training*: the model itself learns to make truncation safe, so no extra step is needed at all."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "",
+            "Matryoshka (MRL)",
+            "PCA / post-hoc reduction"
+          ],
+          "rows": [
+            [
+              "When the shrink happens",
+              "Built in during training",
+              "Applied after the model, separately"
+            ],
+            [
+              "How you shrink",
+              "Keep the first N dims (truncate)",
+              "Multiply by a fitted projection matrix"
+            ],
+            [
+              "Extra artifact to store",
+              "None",
+              "The projection matrix, fit on your data"
+            ],
+            [
+              "New query handling",
+              "Just truncate it",
+              "Must apply the same projection"
+            ],
+            [
+              "Multiple sizes",
+              "Any prefix works instantly",
+              "Re-fit per target size"
+            ],
+            [
+              "Risk",
+              "Model must be MRL-trained",
+              "Reduction can drift from training data"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The practical difference is operational simplicity. With MRL there is literally nothing to fit, nothing to version, and nothing to apply to queries beyond a slice. With PCA you own a projection matrix that was fitted on a snapshot of your data and may need refreshing as your data shifts. That said, the two aren't enemies — you can apply PCA on top of an MRL vector, or quantize a truncated MRL vector, to squeeze even harder."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "MRL is about *where the size choice lives*, not about picking a number. For how to pick a default full size in the first place, see [embedding dimensions explained](/learn/embeddings-vector-databases/embeddings-explained/embedding-dimensions-explained). MRL then lets you revisit that choice cheaply, after the fact."
+        }
+      ]
+    },
+    {
+      "id": "coarse-to-fine-workflow",
+      "title": "The coarse-to-fine retrieval pattern",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The most powerful way to use Matryoshka embeddings is a two-pass, *coarse-to-fine* search. You store the full vectors once, but you do most of the work with cheap truncated ones, and only spend full-precision effort on a small shortlist. This gets you small-index speed and full-vector accuracy at the same time."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Two-pass coarse-to-fine search",
+            "steps": [
+              {
+                "label": "Query",
+                "sub": "embed once, full size"
+              },
+              {
+                "label": "Coarse pass",
+                "sub": "search with 256-dim prefix"
+              },
+              {
+                "label": "Shortlist",
+                "sub": "top ~200 candidates"
+              },
+              {
+                "label": "Fine pass",
+                "sub": "re-score on full vectors"
+              },
+              {
+                "label": "Final top-k",
+                "sub": "best results",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Coarse pass.** Run [approximate nearest neighbor](/learn/embeddings-vector-databases/similarity-search-indexing/approximate-nearest-neighbors) search over the *truncated* vectors (say the first 256 dims). This is fast and memory-light, and it returns a generous shortlist — a few hundred candidates.",
+            "**Fine pass.** Re-score just that shortlist using the *full* vectors you stored. Because it's only a few hundred items, the cost of full-dimension comparison is trivial.",
+            "**Return.** Keep the top-k after the fine pass. You paid coarse-pass prices for the heavy scan and full-precision quality only where it mattered."
+          ]
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Coarse-to-fine with a Matryoshka embedding",
+          "code": "import numpy as np\n\ndef normalize(v):\n    return v / np.linalg.norm(v, axis=-1, keepdims=True)\n\n# full_db: (N, 1536) stored once. q_full: (1536,) query embedding.\nCOARSE = 256\n\n# --- Coarse pass: search the cheap truncated index ---\ndb_small = normalize(full_db[:, :COARSE])      # precomputed in practice\nq_small  = normalize(q_full[:COARSE])\ncoarse_scores = db_small @ q_small\nshortlist = np.argsort(coarse_scores)[::-1][:200]   # top 200 candidates\n\n# --- Fine pass: re-rank the shortlist on full vectors ---\ndb_full = normalize(full_db[shortlist])\nfine_scores = db_full @ normalize(q_full)\norder = shortlist[np.argsort(fine_scores)[::-1]]\n\ntop_k = order[:10]   # final results"
+        },
+        {
+          "type": "p",
+          "md": "A common variant pairs this with **quantization**: store the truncated coarse vectors as int8 or even binary for an extremely small, fast index, then re-rank on the full float vectors. Truncation and quantization are independent levers, and stacking them compounds the savings."
+        }
+      ]
+    },
+    {
+      "id": "pitfalls",
+      "title": "Common pitfalls and when not to truncate",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Matryoshka embeddings are easy to misuse in ways that quietly hurt quality. The failures are usually about consistency, not the model."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Truncating a non-MRL model.** This is the big one. If the model was *not* trained with Matryoshka loss, its first 256 numbers are just an arbitrary slice and chopping it wrecks accuracy. Confirm the model card advertises Matryoshka or variable dimensions before you truncate. See [how embeddings are trained](/learn/embeddings-vector-databases/embeddings-explained/how-embeddings-are-trained).",
+            "**Forgetting to re-normalize.** A truncated prefix loses its unit length. Skip the re-normalization and your similarity scores silently drift, especially with cosine similarity.",
+            "**Mismatched query and document sizes.** You must truncate the query to the *same* dimension as the indexed documents. Comparing a 256-dim query to 1536-dim documents is meaningless.",
+            "**Truncating too aggressively.** Quality decays gracefully, but it does decay. Going from 1536 to 768 might cost almost nothing; going to 32 will hurt. Measure recall on your own data rather than guessing.",
+            "**Assuming all sizes were trained.** MRL only guarantees the *specific* nesting sizes used during training (and prefixes near them). A size the model never saw may behave worse than expected — check which dimensions the provider supports."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "When a fixed full vector is simply fine"
+        },
+        {
+          "type": "p",
+          "md": "If your corpus is small — thousands of documents, not millions — the storage and latency savings are negligible, and the simplest move is to keep the full vector and not think about it. MRL earns its keep at scale, or when you genuinely need to trade quality for cost on the fly. For choosing which model to start with, see [how to choose an embedding model](/learn/embeddings-vector-databases/embeddings-explained/how-to-choose-embedding-model)."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Before adopting a truncation size, run a quick recall test: index at full size, index at the candidate truncated size, and compare top-k overlap on a sample of real queries. If overlap stays high, the smaller size is safe to ship."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The naive picture — train with a few extra losses, then truncate — is the heart of it, but a few nuances matter once you start relying on Matryoshka embeddings in production."
+        },
+        {
+          "type": "p",
+          "md": "**Graceful, not linear, decay.** Quality does not fall off evenly as you cut dimensions. The first chunk of dimensions carries most of the signal, so the curve is steep at the very low end and almost flat near the top. In practice you often find a sweet spot — say, half the full size — that costs you a fraction of a percent in recall while halving your index. The only way to find your sweet spot is to plot recall against dimension count on your own data."
+        },
+        {
+          "type": "p",
+          "md": "**Adaptive retrieval.** Because every prefix is valid, you can choose the dimension count *per query* rather than globally. Cheap, common queries can run at low dimensions; rare or high-stakes queries can use the full vector. The coarse-to-fine pattern is one instance of this idea, but you can take it further with multiple nesting levels in a cascade."
+        },
+        {
+          "type": "p",
+          "md": "**Interaction with ANN indexes.** Truncation changes the vector length, so a [HNSW](/learn/embeddings-vector-databases/similarity-search-indexing/hnsw-explained) graph built on 1536-dim vectors is not the same as one built on 256-dim vectors. If you want a fast truncated index, you build it on the truncated vectors directly. Many vector databases now expose Matryoshka-aware features so you can store full vectors but index and search a prefix without managing two copies by hand."
+        },
+        {
+          "type": "p",
+          "md": "**It generalizes beyond text.** Matryoshka representation learning was introduced as a general technique, not a text-only trick. The same nested-loss idea applies to image embeddings, multimodal embeddings, and classification features. Anywhere a fixed-size representation is a cost bottleneck, MRL offers the same escape hatch: one model, many usable sizes."
+        },
+        {
+          "type": "p",
+          "md": "**The honest limits.** MRL doesn't make information free — a 64-dim vector genuinely holds less than a 1536-dim one, and there are tasks where you'll feel the loss. It also requires a model trained for it; you can't retrofit truncation onto an arbitrary embedding. And the convenience can invite over-aggressive shrinking that looks fine in a demo and fails on the long tail of real queries. Treat the dimension count as a tunable knob you measure, not a setting you guess — and the nesting-doll design will reward you with cheaper, faster search at a quality you actually chose."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What are Matryoshka embeddings?",
+      "a": "They are embeddings from a model trained with Matryoshka Representation Learning (MRL), so the most important information is packed into the earliest dimensions. That means you can keep just the first N numbers of the vector — for example the first 256 of a 1536-dim vector — and still get a usable, high-quality embedding. The name comes from Russian nesting dolls, since a smaller good vector sits inside the bigger one."
+    },
+    {
+      "q": "How do I shrink an embedding without losing much accuracy?",
+      "a": "If the model was trained with MRL (or exposes a dimensions parameter), you just keep the first N dimensions and re-normalize the result to unit length. No re-embedding and no extra reduction step are needed. Quality decays gracefully, so cutting a 1536-dim vector to 768 or 512 typically costs very little recall — but measure on your own data before committing."
+    },
+    {
+      "q": "What is the difference between Matryoshka embeddings and PCA?",
+      "a": "PCA is a post-hoc transform: you fit a projection matrix and apply it to compress ordinary embeddings afterward. MRL bakes the shrinkability into training, so you reduce dimensions by simply truncating the vector — no fitted matrix to store, version, or re-apply to queries. They can even be combined, applying PCA or quantization on top of a truncated MRL vector."
+    },
+    {
+      "q": "Can I truncate any embedding to fewer dimensions?",
+      "a": "No. Truncation is only safe if the model was trained for it, such as a Matryoshka model. For a normal embedding model, the first N numbers are an arbitrary slice and chopping them destroys quality. Always check the model card for Matryoshka support or a variable-dimension option before truncating."
+    },
+    {
+      "q": "Why do I need to re-normalize after truncating an embedding?",
+      "a": "A full embedding is usually scaled to unit length, but a prefix of it generally is not. If you skip re-normalization, cosine similarity and dot-product scores will be slightly off. Re-scaling the truncated vector back to length 1 keeps your similarity math consistent."
+    },
+    {
+      "q": "What is coarse-to-fine retrieval with Matryoshka embeddings?",
+      "a": "It is a two-pass search: do a fast first pass over truncated low-dimensional vectors to get a shortlist, then re-score only that shortlist using the full vectors. You get the speed and small index of short vectors plus the accuracy of full ones, because full-precision scoring runs on just a few hundred candidates instead of the whole corpus."
+    }
+  ],
+  "related": [
+    "what-are-embeddings",
+    "embedding-dimensions-explained",
+    "how-embeddings-are-trained",
+    "what-is-semantic-search",
+    "approximate-nearest-neighbors",
+    "what-is-a-vector-database"
+  ],
+  "furtherReading": [
+    {
+      "title": "Matryoshka Representation Learning (arXiv)",
+      "url": "https://arxiv.org/abs/2205.13147"
+    },
+    {
+      "title": "Matryoshka Embedding Models — Sentence Transformers docs",
+      "url": "https://huggingface.co/blog/matryoshka"
+    },
+    {
+      "title": "Embeddings — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/embeddings"
+    }
+  ]
+}

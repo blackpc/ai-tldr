@@ -1,0 +1,333 @@
+{
+  "slug": "parallel-tool-calling",
+  "title": "What Is Parallel Tool Calling? When an LLM Requests Many Tools at Once",
+  "shortTitle": "Parallel Tool Calling",
+  "seoTitle": "What Is Parallel Tool Calling? Many Tools in One Turn",
+  "metaDescription": "A model can ask for several tool calls in a single turn. Learn how parallel tool calls work, how to run and return them, and when to disable the behavior.",
+  "keywords": [
+    "parallel tool calling llm",
+    "multiple tool calls one response",
+    "run tool calls concurrently",
+    "disable parallel function calling",
+    "return multiple tool results"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Understand how a model can emit several tool calls in one turn, how to execute and return them together, and when to switch parallel calling off.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you give a model a set of tools (functions it can ask you to run), it does not have to ask for them one at a time. In a single reply, it can request **several tool calls at once**. This is **parallel tool calling**: the model looks at your question, decides it needs three separate pieces of information, and asks for all three in the same turn instead of going back and forth three times."
+        },
+        {
+          "type": "p",
+          "md": "Think of ordering at a busy deli. A slow customer asks for one thing, waits, sees the result, then asks for the next — three trips to the counter. An efficient customer reads the whole menu and says: *\"I'll have the soup, the sandwich, and a coffee.\"* The model doing parallel tool calling is the efficient customer: it batches its requests so you can fulfil them together."
+        },
+        {
+          "type": "p",
+          "md": "If you have read [what is function calling](/learn/llm-apis/function-calling/what-is-function-calling), you already know the basic loop: the model asks for a tool, you run it, you send the result back. Parallel tool calling is the same loop — it just lets the model put **more than one request in a single message**, and expects you to send back **all the matching results together**."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Most modern function-calling models do this **by default**. You do not switch it on. The thing you can switch is *off* — there is a flag to force the model back to one tool call per turn (covered below) when running several at once would be unsafe."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The reason to care about parallel tool calling is **latency**. Every round trip to the model is slow and costs tokens. If the model asks for tools one at a time, a question that needs three independent lookups means three full model calls in sequence — the model waits for each result before it even asks for the next."
+        },
+        {
+          "type": "p",
+          "md": "With parallel calling, the model asks for all three in one turn. You run them — and because they don't depend on each other, you can run them **at the same time** (concurrently). The user sees the answer in roughly the time of the slowest single lookup, not the sum of all three."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Fewer round trips.** Three independent lookups become one model turn instead of three, cutting the number of slow model calls.",
+            "**Concurrent execution.** Independent calls can run in parallel on your side (async requests, a thread pool), so total wait time drops to about the slowest one.",
+            "**Lower token cost.** Each extra model turn re-sends the whole conversation as input. Collapsing three turns into one means you pay to re-read that history once, not three times.",
+            "**More natural answers.** \"Compare the weather in Paris, London, and Tokyo\" is genuinely three lookups. Letting the model express that as three calls in one turn matches how the task actually decomposes."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who cares about this? Anyone building an agent or assistant that calls real tools — a travel bot checking several cities, a support agent pulling a customer's profile *and* their recent orders, a research tool querying multiple sources. The moment a single user request maps to more than one independent action, parallel tool calling is what keeps it fast."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Mechanically, nothing exotic happens. The model's response is a list of content blocks. In a normal text reply, that list holds one text block. When the model wants tools, the list holds one or more **tool-call blocks** — each with a tool name, the arguments the model chose, and a unique **call id**. Parallel tool calling just means *more than one tool-call block in the same response*."
+        },
+        {
+          "type": "p",
+          "md": "Your job is to walk that list, run **every** tool call the model requested, and send **all** the results back in a single follow-up turn — one result per call, each tagged with the id of the call it answers. Then the model reads all the results together and writes its final answer (or asks for another round of tools)."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "One turn, many tool calls",
+            "steps": [
+              {
+                "label": "User question",
+                "sub": "\"weather in Paris, London, Tokyo?\""
+              },
+              {
+                "label": "Model responds",
+                "sub": "3 tool-call blocks, 3 ids"
+              },
+              {
+                "label": "You run all 3",
+                "sub": "concurrently if independent"
+              },
+              {
+                "label": "Send 3 results",
+                "sub": "one user turn, ids matched"
+              },
+              {
+                "label": "Model answers",
+                "sub": "grounded in all 3",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "The two rules that trip people up"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Return every requested call.** If the model asked for three tools, you must send back three results in the next turn. Skip one and the conversation is malformed — the API will reject the turn, because it expects exactly one result for each open call.",
+            "**Match each result to its call id.** Results are linked to calls by id, not by order. Each result block carries the `tool_use_id` (or `tool_call_id`) of the call it answers. Get the ids right and order no longer matters."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The result blocks all go in a **single** message, not one message per result. Bundling them is what lets the model see the full picture at once. This is the same protocol whether the model returned one call or ten — handling \"many\" is just looping over \"one.\""
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "handle whatever the model asked for — one block or many",
+          "code": "# response.content is a list of blocks. Some are text, some are tool calls.\ntool_calls = [b for b in response.content if b.type == \"tool_use\"]\n\n# Run every requested call and collect a result per call id.\nresults = []\nfor call in tool_calls:\n    output = run_tool(call.name, call.input)   # your dispatch function\n    results.append({\n        \"type\": \"tool_result\",\n        \"tool_use_id\": call.id,                # links result -> call\n        \"content\": output,\n    })\n\n# Send ALL results back in ONE user turn, then let the model continue.\nmessages.append({\"role\": \"assistant\", \"content\": response.content})\nmessages.append({\"role\": \"user\", \"content\": results})"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Notice the loop doesn't care if `tool_calls` has one item or five — the same code handles a single call and a parallel batch. Write it this way from day one and parallel calling \"just works\" the first time the model uses it."
+        }
+      ]
+    },
+    {
+      "id": "worked-example-concurrency",
+      "title": "A worked example: running the calls concurrently",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The latency win only materialises if you actually run the independent calls **at the same time**. A naive loop runs them one after another — correct, but it throws away the whole point. If each lookup takes 300ms, three in a sequence take ~900ms; three concurrently take ~300ms."
+        },
+        {
+          "type": "p",
+          "md": "Here is the same handler written with async concurrency. The model asked for several weather lookups in one turn; we fire them all off together and wait for them as a group."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "run independent tool calls concurrently with asyncio",
+          "code": "import asyncio\n\nasync def run_tool_async(call):\n    output = await fetch_weather(call.input[\"city\"])   # an async I/O call\n    return {\n        \"type\": \"tool_result\",\n        \"tool_use_id\": call.id,\n        \"content\": output,\n    }\n\ntool_calls = [b for b in response.content if b.type == \"tool_use\"]\n\n# Launch all calls at once; gather waits for the slowest, not the sum.\nresults = await asyncio.gather(*(run_tool_async(c) for c in tool_calls))\n\nmessages.append({\"role\": \"assistant\", \"content\": response.content})\nmessages.append({\"role\": \"user\", \"content\": list(results)})"
+        },
+        {
+          "type": "p",
+          "md": "`asyncio.gather` keeps the results in the same order as the input calls, but you should **not** rely on order to match results to calls — each result already carries its `tool_use_id`. That id is the source of truth. Whether the results come back in order, out of order, or you build them from a thread pool, the id is what links each one to its call."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Concurrency is only safe when the calls are **independent**. If two calls write to the same record, or one needs the other's output, running them at the same time invites race conditions. Reserve concurrent execution for read-only or genuinely separate work — see the pitfalls below."
+        }
+      ]
+    },
+    {
+      "id": "when-to-disable",
+      "title": "When (and how) to turn parallel calling off",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Parallel calling is great for reads. It can be dangerous for **writes**. If a tool has side effects — charging a card, sending an email, deleting a row, posting a message — letting the model batch several of those in one turn means they may all fire before the model sees the result of any of them. If the first one fails or changes the situation, the model never got the chance to adjust."
+        },
+        {
+          "type": "p",
+          "md": "For that reason most function-calling APIs let you **disable parallel tool use**, forcing the model back to one tool call per turn. The model then calls a tool, sees the result, decides what to do next, and only then calls the next tool. Slower, but each step is informed by the last — exactly what you want for irreversible actions."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "force one tool call per turn",
+          "code": "# Add disable_parallel_tool_use to whatever tool_choice you use.\n# The model now emits at most ONE tool-call block per response.\nresponse = client.messages.create(\n    model=\"claude-opus-4-8\",\n    max_tokens=1024,\n    tools=tools,\n    tool_choice={\"type\": \"auto\", \"disable_parallel_tool_use\": True},\n    messages=messages,\n)"
+        },
+        {
+          "type": "p",
+          "md": "Naming differs by provider (Anthropic exposes `disable_parallel_tool_use` on `tool_choice`; other APIs use a similarly named flag), but the idea is identical: a single switch that caps the model at one call per turn. Reach for it whenever the order or the result of one action should shape the next."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Situation",
+            "Parallel calling",
+            "Why"
+          ],
+          "rows": [
+            [
+              "Independent read-only lookups",
+              "Leave on (default)",
+              "Maximum speed, no interaction between calls"
+            ],
+            [
+              "Writes with side effects",
+              "Disable",
+              "Each action's result should inform the next"
+            ],
+            [
+              "One call's input depends on another's output",
+              "Disable",
+              "The model can't pass data it hasn't received yet"
+            ],
+            [
+              "Strict, auditable step-by-step flow",
+              "Disable",
+              "One action per turn is easier to log and approve"
+            ],
+            [
+              "Fan-out across many cities / sources",
+              "Leave on",
+              "Classic case the feature exists for"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Parallel tool calling is simple to describe and easy to get subtly wrong. Almost every bug comes from mishandling the *set* of calls rather than a single one."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Returning only some results.** You ran three calls but sent back two results — maybe one tool threw and you silently dropped it. The next turn is now malformed and the API rejects it. Always return one result per call, and on failure send an **error result** (a result marked as an error) rather than nothing.",
+            "**Matching by position instead of id.** If you assume result #1 answers call #1, a reordered or concurrent result set will pair answers with the wrong calls. Always set each result's `tool_use_id` from its own call.",
+            "**Running dependent calls concurrently.** The model sometimes asks for calls that only *look* independent. If call B needs call A's output, the model usually shouldn't have batched them — but if it did, running them at once produces wrong or racy results. Disable parallel calling for those tools.",
+            "**Forgetting the assistant turn.** Before sending results, you must append the model's own tool-call message (the assistant turn) to the history. Skip it and the results have nothing to attach to.",
+            "**Treating side-effecting tools as parallel-safe.** Two `send_email` calls in one turn will both send. If that's not what you want, disable parallel calling for write tools."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "A tool failing is **not** a reason to skip its result. The model needs to know it failed. Return a result for that call with an error flag and a short message; the model will usually retry, route around it, or tell the user — which it can't do if the call just vanishes. See [handling tool errors](/learn/llm-apis/function-calling/tool-calling-best-practices) for patterns."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic loop works, a few nuances separate a toy from a robust agent."
+        },
+        {
+          "type": "p",
+          "md": "**Multiple rounds of parallel calls.** A single user request can trigger several *turns* of tool use, each of which may itself be parallel. The model might ask for three searches, read the results, then ask for two follow-up lookups, and so on. Your loop should keep going — run the batch, return all results, call the model again — until it stops asking for tools and returns a plain text answer. Handling \"many calls per turn\" and \"many turns\" are separate concerns; build both into the loop."
+        },
+        {
+          "type": "p",
+          "md": "**Partial failure and timeouts.** When you run calls concurrently, some may succeed and some may time out. Don't let one slow call block the whole turn forever — give each a timeout, and for any that fail, return an error result so the batch is still complete. The model decides what to do with a mix of successes and failures, which is far better than the request hanging."
+        },
+        {
+          "type": "p",
+          "md": "**The model decides how to split work, not you.** You can't force three calls; you can only describe the tools well and let the model judge. Clear, specific tool descriptions make it more likely to decompose a request into clean parallel calls instead of one awkward call or a needless sequence. Good schema design — see [defining function schemas](/learn/llm-apis/function-calling/defining-function-schemas) — is what makes parallel calling reliable in practice."
+        },
+        {
+          "type": "p",
+          "md": "**Ordering and determinism.** The model may list its calls in any order, and concurrent execution finishes them in any order. Neither order is meaningful — only the ids are. If your own logic needs a deterministic order (for logging, say), sort by id or by call name yourself; never assume the model's ordering carries intent."
+        },
+        {
+          "type": "p",
+          "md": "**Cost and context growth.** Each round of tool results gets appended to the conversation and re-sent on the next model call. A few large tool outputs across several parallel rounds can balloon the context window fast. Keep tool outputs compact, and consider summarising or trimming old results in long-running agents. The latency you save with parallelism shouldn't be spent back on bloated context."
+        },
+        {
+          "type": "p",
+          "md": "The durable mental model: a turn is a *batch* of tool calls, not a single one. Write your handler to loop over the batch, key every result by id, run independent work concurrently, and fall back to one-at-a-time (disable parallel use) the instant actions have side effects or dependencies. Get those four habits right and parallel tool calling is pure upside."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Can an LLM call multiple tools in one response?",
+      "a": "Yes. Most modern function-calling models can return several tool-call blocks in a single response — this is parallel tool calling, and it's usually on by default. You run all the requested tools and send back all the results together in one follow-up turn."
+    },
+    {
+      "q": "Do I have to return a result for every tool call the model makes?",
+      "a": "Yes. If the model requested three tool calls, you must send back three results in the next turn, one per call, each tagged with the matching call id. Omitting a result makes the conversation malformed and the API will reject it. If a tool fails, return an error result rather than nothing."
+    },
+    {
+      "q": "How do I run parallel tool calls concurrently?",
+      "a": "Collect all the tool-call blocks from the response, then execute them at the same time — for example with `asyncio.gather` in Python or a thread pool. Match each result to its call by id, not by order, and send all results back in a single user turn. Only do this for independent, side-effect-free calls."
+    },
+    {
+      "q": "How do I disable parallel tool calling?",
+      "a": "Add a flag to your tool-choice setting — on Anthropic's API it's `disable_parallel_tool_use: true` on `tool_choice`. The model is then limited to at most one tool call per turn, so it sees each result before requesting the next. Use it for tools with side effects or dependencies."
+    },
+    {
+      "q": "Why would I turn parallel tool calling off?",
+      "a": "Because parallel calling lets several actions fire before the model sees any results. That's fine for read-only lookups but risky for writes (sending email, charging a card, deleting data) or when one call needs another's output. Disabling it forces a safe, informed, one-step-at-a-time sequence."
+    },
+    {
+      "q": "Does the order of tool results matter?",
+      "a": "No. Results are linked to calls by id (such as `tool_use_id`), not by position. You can return them in any order, including the order concurrent calls happen to finish, as long as each result carries the id of the call it answers."
+    }
+  ],
+  "related": [
+    "what-is-function-calling",
+    "tool-calling-best-practices",
+    "defining-function-schemas",
+    "multi-turn-conversations",
+    "messages-roles-turns"
+  ],
+  "furtherReading": [
+    {
+      "title": "Tool use (function calling) overview — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview"
+    },
+    {
+      "title": "Implement tool use — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/implement-tool-use"
+    },
+    {
+      "title": "Function calling — OpenAI API docs",
+      "url": "https://platform.openai.com/docs/guides/function-calling"
+    }
+  ]
+}

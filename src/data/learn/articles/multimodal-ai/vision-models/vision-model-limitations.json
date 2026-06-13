@@ -1,0 +1,338 @@
+{
+  "slug": "vision-model-limitations",
+  "title": "Vision Model Limitations: Where VLMs Quietly Fail",
+  "shortTitle": "Vision Model Limitations",
+  "seoTitle": "Vision Model Limitations: Where VLMs Fail",
+  "metaDescription": "Vision models look impressive until they miscount objects or misread tiny text. Learn the common failure modes and how to design around them.",
+  "keywords": [
+    "vision model limitations",
+    "why do vlms miscount objects",
+    "vision model fails small text",
+    "vlm hallucination images",
+    "when not to use a vision model"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Know the predictable ways vision models fail — counting, tiny text, spatial reasoning — so you can design around them before they bite.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A modern [vision-language model](/learn/multimodal-ai/vision-models/what-is-vision-language-model) can look at a photo and describe it, read a screenshot, or answer questions about a chart. It feels like the model truly *sees*. But a VLM doesn't perceive an image the way your eye does. It chops the picture into a grid of patches, turns each patch into a handful of numbers (tokens), and reasons over that compressed summary. A lot of fine detail never survives that step."
+        },
+        {
+          "type": "p",
+          "md": "Think of describing a crowded street scene to a friend over a bad phone line. You get the gist across — \"busy market, lots of stalls, sunny\" — but if they ask *exactly how many* oranges are in the third stall, or what the tiny price tag says, you're guessing. The model is in the same spot. It has a vivid impression of the image, not a pixel-perfect copy it can re-inspect."
+        },
+        {
+          "type": "p",
+          "md": "So the failures in this guide are not random bugs. They are *predictable* consequences of how images get squeezed into tokens. Once you know where the line is, you can design around it instead of being surprised by it."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This article is a failure-mode field guide, not a takedown. VLMs are genuinely useful. The point is to know the half-dozen places they quietly fail so you can catch the error before your users do."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The dangerous thing about VLM failures is that they are *confident*. The model rarely says \"that text is too small for me to read.\" It returns a clean, fluent, authoritative answer — that happens to be wrong. A wrong-but-confident count or a misread invoice number looks exactly like a correct one until someone checks."
+        },
+        {
+          "type": "p",
+          "md": "That matters most when the image carries a decision:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Document and data extraction.** Misreading a single digit on an invoice, a meter, or a lab result turns an automation into a liability.",
+            "**Inventory, safety, and compliance.** \"How many people are wearing hard hats?\" or \"count the pills in this blister pack\" sounds simple and is exactly the kind of counting VLMs get wrong.",
+            "**Accessibility and UI automation.** A model driving a screen has to know *which* button is where; small spatial mistakes cascade into clicking the wrong thing.",
+            "**Anything you bill or ship on.** If the model's reading feeds a refund, a diagnosis, or a legal record, an unflagged error is expensive."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Builders who treat a VLM as a perfect eye ship brittle systems. Builders who know its blind spots add a crop here, a second pass there, an \"are you sure?\" check, and a human in the loop on the high-stakes 1%. The difference between those two products is entirely this knowledge."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "Why these failures happen: the tokenization bottleneck",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Almost every recurring weakness traces back to one design choice. A VLM cannot feed millions of raw pixels into the language model — that would be impossibly expensive. Instead an image encoder downscales the picture to a fixed working resolution, splits it into a grid of patches, and emits a *bounded* number of visual tokens. The language model then reasons over those tokens, never the original pixels. (For the full picture, see [how vision models see](/learn/multimodal-ai/vision-models/how-vision-models-see).)"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Where detail is lost",
+            "steps": [
+              {
+                "label": "Original image",
+                "sub": "millions of pixels"
+              },
+              {
+                "label": "Downscale",
+                "sub": "to fixed max resolution"
+              },
+              {
+                "label": "Patch grid",
+                "sub": "e.g. 14×14 px patches"
+              },
+              {
+                "label": "Visual tokens",
+                "sub": "bounded count",
+                "accent": true
+              },
+              {
+                "label": "Language model",
+                "sub": "reasons over tokens only"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Two facts about that pipeline explain most of the failures:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Resolution is capped.** A huge image is shrunk to fit a maximum size before tokenizing. Fine structures — tiny fonts, thin lines, distant objects — can blur into a few pixels or vanish entirely. The model literally cannot read what the encoder threw away.",
+            "**Tokens summarize, they don't store.** Each patch becomes a feature vector capturing *what's roughly there*, not an exact pixel record. The model has a strong sense of texture and gist but a weak sense of precise position, exact quantity, and small high-frequency detail."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Add to that how these models were *trained*. They learned mostly from image–caption pairs scraped from the web. Captions describe scenes (\"a dog catching a frisbee in a park\") far more than they enumerate (\"four dogs, two on the left\") or transcribe tiny text. So the model is brilliant at gist and weak at precision — exactly because that's what its training data rewarded."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "A useful mental model: a VLM is excellent at *what is this?* and shaky at *how many, where exactly, and what does that small text say?* If your question is the second kind, expect to do extra work."
+        }
+      ]
+    },
+    {
+      "id": "the-failure-catalogue",
+      "title": "The failure catalogue",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Here are the failures you'll meet most, what triggers each, and the practical fix. None requires retraining the model — they're all about how you *frame the task*."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Failure mode",
+            "What it looks like",
+            "Practical mitigation"
+          ],
+          "rows": [
+            [
+              "Object counting",
+              "Confidently says \"6 cars\" when there are 9; worse as count and clutter rise",
+              "Crop to the region; ask it to list and label each item, then count the list; verify with a specialist detector for high counts"
+            ],
+            [
+              "Tiny / dense text",
+              "Misreads small fonts, footnotes, dense tables, low-res scans",
+              "Send a higher-resolution crop; tile the page and OCR each tile; see [OCR with vision models](/learn/multimodal-ai/vision-models/ocr-with-vision-models)"
+            ],
+            [
+              "Precise spatial reasoning",
+              "Confuses left/right, above/below, or which label points to which part",
+              "Ask for relative positions explicitly; overlay a grid; use a detection model when exact coordinates matter"
+            ],
+            [
+              "Hallucinated detail",
+              "Invents plausible objects/text in blurry or empty regions",
+              "Allow \"not visible / can't tell\" as an answer; lower the temperature; ask it to quote only what it can clearly see"
+            ],
+            [
+              "Resolution downscaling",
+              "Fine detail present in the file is simply gone after encoding",
+              "Pre-crop to the area of interest before sending; don't rely on one huge full-page image"
+            ],
+            [
+              "Charts & precise values",
+              "Reads the trend right but the exact y-value wrong",
+              "Ask for the trend, not the decimal; pair with the underlying data when you have it"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Notice the pattern: every fix either *gives the model more pixels where it matters* (cropping, tiling, higher resolution) or *lets the model admit uncertainty* (allowing \"can't tell\", asking it to list before counting). Those two levers solve the large majority of real-world VLM problems."
+        }
+      ]
+    },
+    {
+      "id": "worked-example-counting",
+      "title": "A worked example: making counting reliable",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Counting is the textbook VLM failure, so it's a perfect case study. Suppose you ask a model to count items in a busy shelf photo. The naive prompt — \"How many bottles are in this image?\" — invites a single confident guess with no way to check it."
+        },
+        {
+          "type": "p",
+          "md": "Three changes make the same model far more reliable: force it to *enumerate* before it counts, let it *flag uncertainty*, and *crop* when the scene is dense. Enumerating works because listing each item one by one pushes the reasoning into the text the model is actually good at, instead of a single holistic glance."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "count_with_uncertainty.py",
+          "code": "from anthropic import Anthropic\n\nclient = Anthropic()\n\nPROMPT = (\n    \"Count the bottles on the shelf.\\n\"\n    \"Do NOT answer with a single number first.\\n\"\n    \"1) List each bottle you can clearly see, one per line, \"\n    \"   with its rough location (e.g. 'top row, 2nd from left').\\n\"\n    \"2) Mark any item you are unsure about as (uncertain).\\n\"\n    \"3) Then give the total count of CLEARLY visible bottles, \"\n    \"   and a separate count of uncertain ones.\\n\"\n    \"If the image is too low-resolution to be sure, say so.\"\n)\n\nmsg = client.messages.create(\n    model=\"claude-sonnet-4-6\",\n    max_tokens=800,\n    messages=[{\n        \"role\": \"user\",\n        \"content\": [\n            {\"type\": \"image\", \"source\": {\n                \"type\": \"base64\",\n                \"media_type\": \"image/jpeg\",\n                \"data\": image_b64,  # a tight crop of the shelf\n            }},\n            {\"type\": \"text\", \"text\": PROMPT},\n        ],\n    }],\n)\nprint(msg.content[0].text)"
+        },
+        {
+          "type": "p",
+          "md": "The separate \"uncertain\" count is the real win. Now your downstream code can branch: if uncertainty is zero, trust the number; if it's high, route the image to a human or a dedicated object-detection model. You've turned a silent error into a visible signal. (For the request format itself, see [sending images to an LLM API](/learn/multimodal-ai/vision-models/send-images-to-llm-api).)"
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Don't let \"list, then count\" lull you. For exact counts above roughly a dozen objects, or safety-critical counts, a purpose-built detector is still more reliable than any general VLM. Use the VLM to triage, not to be the final authority."
+        }
+      ]
+    },
+    {
+      "id": "when-not-to-use-a-vlm",
+      "title": "When not to use a VLM (and what to use instead)",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Sometimes the right call is to not hand the job to a general vision model at all. A quick decision guide:"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Reach for a VLM vs. a specialist tool",
+            "columns": [
+              {
+                "title": "Great fit for a VLM",
+                "accent": true,
+                "items": [
+                  "Describe / summarize an image",
+                  "Answer open questions about a scene",
+                  "Read clear, reasonably large text",
+                  "Understand a screenshot or UI at a glance",
+                  "Reason about layout + content together"
+                ]
+              },
+              {
+                "title": "Use a specialist instead",
+                "items": [
+                  "Exact object counts at scale → detector",
+                  "Pixel-precise boxes/coordinates → detection model",
+                  "Bulk OCR of dense scans → dedicated OCR engine",
+                  "Reading the exact value off a chart → the source data",
+                  "Sub-millimeter measurement → no general model"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "A common and strong pattern is *hybrid*: let a specialist tool do the precise part and the VLM do the reasoning part. For document work, run a dedicated OCR engine to extract exact text, then feed that text plus the image to the VLM so it can interpret the layout and answer questions — see [LLM OCR and document understanding](/learn/multimodal-ai/vision-models/llm-ocr-document-understanding). You get the detector's precision and the model's reasoning, instead of forcing one tool to do both jobs badly."
+        },
+        {
+          "type": "p",
+          "md": "There's also a cost angle. High-resolution images and tiling both spend more tokens. If you're tiling a page into nine crops to read small text, you're paying roughly nine images' worth of [image tokens](/learn/multimodal-ai/vision-models/image-token-cost). Sometimes a cheaper dedicated OCR call is both more accurate *and* less expensive than brute-forcing resolution through a VLM."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic failure modes click, a few subtler points separate a robust system from a demo."
+        },
+        {
+          "type": "p",
+          "md": "**Tiling has its own blind spot.** Splitting a big image into tiles fixes resolution, but each tile is encoded in isolation. An object straddling two tiles can get counted twice or missed, and the model loses the global context that told it what it was looking at. Overlap your tiles slightly, and re-stitch results carefully rather than trusting per-tile counts to simply add up."
+        },
+        {
+          "type": "p",
+          "md": "**\"Lost in the middle\" applies to vision too.** Just as text models recall facts at the edges of a long prompt better than the middle, VLMs attend unevenly across an image. Salient, central, high-contrast regions get more reliable attention than faint detail in a corner. If the critical content is a small mark in the periphery, crop it to the center."
+        },
+        {
+          "type": "p",
+          "md": "**Hallucination is worse where information is scarce.** A VLM fills gaps with priors learned from training. Blurry regions, blank areas, and ambiguous shapes are exactly where it invents plausible content — a price on an unreadable tag, a face in noise. The fix is structural: always offer the model an explicit escape hatch like \"reply 'not visible' if you cannot clearly read it,\" or it will feel pressured to produce *something*."
+        },
+        {
+          "type": "p",
+          "md": "**Evaluate on the hard cases, not the easy ones.** A model that nails clean stock photos can collapse on your real, messy, low-light, skewed inputs. Build a small test set from genuinely difficult examples — tiny text, dense scenes, edge crops — and measure there. \"It worked on three nice screenshots\" is not evidence it works."
+        },
+        {
+          "type": "p",
+          "md": "**The frontier keeps moving — the failure shape doesn't.** Newer models read smaller text and count better than older ones, and resolution limits keep rising. But the *causes* here are baked into how images become tokens, so the same weaknesses keep reappearing in milder form. Design for them as permanent properties to manage, not bugs that the next release will fully erase. To ground all of this in the bigger picture, revisit [what a multimodal AI is](/learn/multimodal-ai/vision-models/what-is-multimodal-ai)."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Why do vision models miscount objects?",
+      "a": "Because they reason over a compressed grid of visual tokens, not the raw pixels, and they were trained mostly on captions that describe scenes rather than enumerate them. The result is a strong sense of *what's there* but a weak sense of *exactly how many*. Counting gets worse as the number and clutter rise. Asking the model to list each item before totaling, and cropping dense regions, helps a lot."
+    },
+    {
+      "q": "Why can't a vision model read small text in my image?",
+      "a": "The image encoder downscales pictures to a capped resolution before tokenizing, so tiny fonts can blur into a few pixels or disappear entirely. The model literally never receives the detail. Send a higher-resolution crop of just the text, or tile the page and process each tile separately."
+    },
+    {
+      "q": "Do vision models hallucinate details that aren't in the image?",
+      "a": "Yes. In blurry, empty, or ambiguous regions a VLM fills the gap with plausible content learned from training — an invented price, a face in noise, text that isn't really there. The best defense is to explicitly allow answers like \"not visible\" or \"can't tell,\" and to ask it to report only what it can clearly see."
+    },
+    {
+      "q": "When should I not use a vision model?",
+      "a": "Avoid relying on a general VLM for exact object counts at scale, pixel-precise coordinates, bulk OCR of dense low-quality scans, or reading exact values off charts. For those, use a dedicated detector, OCR engine, or the underlying source data — often in a hybrid setup where the specialist does the precise part and the VLM does the reasoning."
+    },
+    {
+      "q": "Does sending a higher-resolution image fix the problems?",
+      "a": "Partly. Cropping to the region of interest and sending more pixels there genuinely improves reading of small text and detail. But resolution is still capped per request, higher resolution costs more tokens, and tiling introduces its own seams. Resolution helps precision failures; it does nothing for spatial-reasoning or hallucination issues, which need prompt-level fixes."
+    },
+    {
+      "q": "How do I make a vision model admit when it's unsure?",
+      "a": "Give it permission in the prompt. Add an explicit instruction like \"if the image is too low-resolution to be sure, say so\" and ask it to mark uncertain items. Without that escape hatch, models tend to produce a confident answer rather than say nothing, which is exactly how silent errors slip through."
+    }
+  ],
+  "related": [
+    "what-is-vision-language-model",
+    "how-vision-models-see",
+    "ocr-with-vision-models",
+    "llm-ocr-document-understanding",
+    "send-images-to-llm-api",
+    "image-token-cost"
+  ],
+  "furtherReading": [
+    {
+      "title": "Vision — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/vision"
+    },
+    {
+      "title": "Images and vision — OpenAI API docs",
+      "url": "https://platform.openai.com/docs/guides/images-vision"
+    },
+    {
+      "title": "Learning Transferable Visual Models From Natural Language Supervision (CLIP, arXiv)",
+      "url": "https://arxiv.org/abs/2103.00020"
+    }
+  ]
+}

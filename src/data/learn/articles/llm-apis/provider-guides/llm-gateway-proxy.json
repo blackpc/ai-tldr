@@ -1,0 +1,319 @@
+{
+  "slug": "llm-gateway-proxy",
+  "title": "What Is an LLM Gateway? Proxying Calls for Keys, Limits, and Logs",
+  "shortTitle": "LLM Gateways",
+  "seoTitle": "What Is an LLM Gateway? Proxy for Keys & Limits",
+  "metaDescription": "An LLM gateway sits between your app and providers to centralize keys, rate limits, logging, and caching. Learn what it does and when a team needs one.",
+  "keywords": [
+    "what is an llm gateway",
+    "llm proxy server explained",
+    "centralize llm api keys",
+    "llm gateway vs direct api",
+    "litellm proxy gateway"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Understand the gateway pattern — a proxy between your services and LLM providers — and the key management, spend caps, logging, and routing it centralizes.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When your app calls an [LLM API](/learn/llm-apis/api-basics/what-is-llm-api), the simplest setup is direct: your code holds the provider's [API key](/learn/llm-apis/api-basics/api-keys-explained), builds a request, and sends it straight to the provider. That works fine for one service and one developer. It starts to hurt the moment you have five services, three providers, and a finance team asking who spent what."
+        },
+        {
+          "type": "p",
+          "md": "An **LLM gateway** (also called an **LLM proxy**) is a small server you run *between* your apps and the providers. Every model call goes to the gateway first. The gateway attaches the real key, enforces limits, writes a log, maybe checks a cache, then forwards the request to OpenAI, Anthropic, Google, or wherever it's headed — and relays the answer back. Your app never talks to the provider directly anymore. It talks to the gateway, and the gateway talks to the world."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like a company mailroom. Employees don't each keep their own postage meter and courier accounts. They drop letters at the mailroom, which stamps them, records what went out, applies the department's budget, and routes each one to the right carrier. One controlled door instead of fifty. An LLM gateway is that mailroom for model calls."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This article is about the *self-hosted, team-infrastructure* gateway pattern — a proxy **you** run. That's different from a hosted aggregator like OpenRouter, which is a single external service you sign up for. Same idea (one endpoint in front of many models), but here you own the box, the logs, and the keys."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The direct-call setup is the right default for a prototype. A gateway earns its place once the same few problems show up across a growing team — and they always do."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Key sprawl.** Without a gateway, the same provider key gets copied into every service, every CI pipeline, and a few developers' laptops. Rotating it means hunting down every copy. With a gateway, the *real* provider keys live in one place; each app gets its own internal gateway key that you can issue or revoke on its own.",
+            "**No spend control.** A direct caller can run up an unlimited bill, and a loop bug at 3am will. A gateway can enforce a per-team or per-key budget and cut a service off when it crosses the cap — a circuit breaker you simply don't get calling providers directly.",
+            "**No central visibility.** Finance wants cost per team; engineering wants to debug a bad answer from last Tuesday. If every service logs differently (or not at all), neither is possible. The gateway sees every request, so it can produce one consistent log of prompts, tokens, latency, and cost.",
+            "**Brittleness.** When a provider has an outage or rate-limits you, direct callers just fail. A gateway can retry, fall back to a second provider, and serve a cached answer for a repeated prompt — without touching app code.",
+            "**Provider lock-in.** Switching models normally means editing every app. If they all speak to the gateway through one stable interface, you re-point the gateway and the apps never notice."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who needs one? Mostly teams, not solo prototypes. The clearest signal is when *more than one* service calls models, when you have to answer \"what did we spend, and on what?\", or when a single provider outage can take your product down. If none of those is true yet, a direct call is simpler and you should keep it."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A gateway is a reverse proxy with opinions. It accepts requests on an endpoint that looks like a normal LLM API, runs a chain of checks and transforms, calls the real provider, and streams the response back. The single most important design choice is that it usually exposes an **OpenAI-compatible** interface — the same request shape (`/v1/chat/completions`, a `messages` array, a `model` name) that most SDKs and tools already speak."
+        },
+        {
+          "type": "p",
+          "md": "That compatibility is what makes the extra hop nearly invisible to app code. To point an app at the gateway, you typically change two things and nothing else: the **base URL** (from the provider's host to your gateway's host) and the **key** (from a real provider key to an internal gateway key). The model name, the message format, and your existing client library all stay the same."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "same SDK, two lines changed",
+          "code": "from openai import OpenAI\n\n# Before: calling the provider directly.\n# client = OpenAI(base_url=\"https://api.provider.com/v1\",\n#                 api_key=\"sk-real-provider-key\")\n\n# After: calling the gateway. The app code below is untouched.\nclient = OpenAI(\n    base_url=\"https://llm-gateway.internal/v1\",  # 1) point at the gateway\n    api_key=\"gw-team-checkout-key\",              # 2) internal key, not the real one\n)\n\nresp = client.chat.completions.create(\n    model=\"claude-sonnet-4-6\",                    # gateway maps this to a provider\n    messages=[{\"role\": \"user\", \"content\": \"Summarize this ticket.\"}],\n)\nprint(resp.choices[0].message.content)"
+        },
+        {
+          "type": "p",
+          "md": "Behind that endpoint, every request flows through the same pipeline. Each stage is a place to enforce a policy or save a call:"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "One request through the gateway",
+            "steps": [
+              {
+                "label": "App request",
+                "sub": "internal gateway key"
+              },
+              {
+                "label": "Authenticate",
+                "sub": "validate the gateway key"
+              },
+              {
+                "label": "Check limits",
+                "sub": "rate + budget caps"
+              },
+              {
+                "label": "Cache lookup",
+                "sub": "seen this prompt?"
+              },
+              {
+                "label": "Attach real key",
+                "sub": "+ route to provider"
+              },
+              {
+                "label": "Call provider",
+                "sub": "retry / failover",
+                "accent": true
+              },
+              {
+                "label": "Log + return",
+                "sub": "tokens, cost, latency"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Where the real keys live"
+        },
+        {
+          "type": "p",
+          "md": "The gateway is the only component that holds the actual provider secrets. Apps receive *virtual* keys the gateway mints — scoped to one team, one budget, maybe one allowed model list. If a virtual key leaks, you revoke that one key; the provider secret behind it never moves. This split between *who is calling* (the virtual key) and *how we reach the provider* (the real key) is the core of the pattern."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Because the gateway is OpenAI-compatible, it usually maps a `model` string to a real provider behind the scenes. Asking for one model name can route to Anthropic today and a fallback provider during an outage — the calling app never learns which one answered."
+        }
+      ]
+    },
+    {
+      "id": "what-a-gateway-centralizes",
+      "title": "What a gateway centralizes",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "It helps to see the five jobs a gateway pulls out of each app and into one shared place. None of these is magic; each is something you *could* build per-service, but doing it once in the gateway is the whole point."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Job",
+            "Without a gateway",
+            "With a gateway"
+          ],
+          "rows": [
+            [
+              "Keys",
+              "Real key copied into every app and pipeline",
+              "Real keys in one box; apps get revocable virtual keys"
+            ],
+            [
+              "Spend",
+              "Unlimited; a loop bug bills forever",
+              "Per-team / per-key budget caps that hard-stop"
+            ],
+            [
+              "Rate limits",
+              "Each app hits the provider's limit blindly",
+              "Central rate limiting + fair sharing across apps"
+            ],
+            [
+              "Logging",
+              "Inconsistent or missing per service",
+              "One uniform log of prompt, tokens, latency, cost"
+            ],
+            [
+              "Reliability",
+              "Provider error = request fails",
+              "Retries, provider failover, response caching"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Two of these deserve a closer look. **Caching** stores the response for a repeated request so the second identical prompt returns instantly and costs nothing — valuable for deterministic, frequently-repeated calls. **Failover** lets the gateway detect a 429 or 5xx from [provider errors](/learn/llm-apis/api-basics/llm-api-errors) and transparently re-send to an equivalent model on another provider, so a single vendor's bad day doesn't become your outage."
+        }
+      ]
+    },
+    {
+      "id": "when-to-use-and-when-to-skip",
+      "title": "When to use one — and when to skip it",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A gateway is an extra network hop and an extra service to run. That cost is real: more latency, one more thing to keep up, and a single point of failure if you run it badly. Be honest about whether the benefits outweigh it for your situation."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Reach for a gateway vs. call direct",
+            "columns": [
+              {
+                "title": "Use a gateway",
+                "accent": true,
+                "items": [
+                  "Several services call models",
+                  "You need per-team spend caps",
+                  "Finance/audit wants one cost log",
+                  "You want provider failover",
+                  "Keys must be rotatable centrally",
+                  "You plan to swap providers often"
+                ]
+              },
+              {
+                "title": "Call providers directly",
+                "items": [
+                  "A single app or a prototype",
+                  "One developer, one key",
+                  "Latency budget is razor-thin",
+                  "You can't run extra infra",
+                  "Provider's own dashboard is enough",
+                  "No multi-provider needs yet"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "If you decide you need one, you don't have to build it. There's an established category of **open-source LLM proxy/gateway projects** that implement exactly this pattern — OpenAI-compatible endpoint, virtual keys, budgets, logging, caching, and multi-provider routing — that you self-host. LiteLLM's proxy is a widely-used example of the category. This isn't an endorsement of any single tool; the point is that the gateway pattern is common enough that you can adopt it instead of writing a proxy from scratch."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "The gateway sits in the hot path of every model call, so it becomes a critical dependency. If it's down, *every* app is down. Run it with redundancy, keep its own latency tiny, and make sure it fails in a predictable way — ideally a clear error your apps already handle, not a silent hang."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic proxy is running, the interesting questions are about policy, privacy, and where the boundary should sit. A few directions worth knowing as you mature the setup."
+        },
+        {
+          "type": "p",
+          "md": "**Routing strategy.** A gateway can route on more than \"which provider is up.\" You can route by cost (send cheap, easy prompts to a small model and hard ones to a frontier model), by latency, by region for data-residency, or by a weighted split for A/B tests. This is where the gateway stops being plumbing and becomes a place to encode real [model-selection policy](/learn/llm-apis/api-basics/how-to-choose-llm-model) — without redeploying any app."
+        },
+        {
+          "type": "p",
+          "md": "**Privacy and the trust boundary.** Centralized logging is a feature and a liability at once: the gateway now holds a record of every prompt, which may include sensitive or personal data. Decide deliberately what to log, for how long, and who can read it, and align that with each provider's [data-handling terms](/learn/llm-apis/api-basics/llm-api-data-privacy). A common pattern is to redact or hash sensitive fields before they're written to the log."
+        },
+        {
+          "type": "p",
+          "md": "**Managed cloud equivalents.** Cloud platforms offer something close to a gateway without you running the box. Hosted model endpoints on services like [Amazon Bedrock and Google Vertex AI](/learn/llm-apis/provider-guides/bedrock-vertex-ai) centralize keys, billing, and access control inside the cloud account's IAM. They're less flexible on multi-provider routing than a self-hosted proxy, but they remove the operational burden — a reasonable trade for teams already standardized on one cloud."
+        },
+        {
+          "type": "p",
+          "md": "**Observability and evaluation.** Because every request and response passes through one place, the gateway is the natural spot to capture traces, sample requests for quality review, and feed an evaluation pipeline. Many teams start the gateway purely for keys and budgets, then discover its logs are the foundation for understanding how their AI features actually behave in production."
+        },
+        {
+          "type": "p",
+          "md": "The honest summary: a gateway adds a hop and a dependency, and you should only pay that price when more than one service, more than one provider, or more than one stakeholder is in the picture. When they are, centralizing keys, limits, and logs in one OpenAI-compatible proxy is one of the highest-leverage pieces of infrastructure a team building on [LLM APIs](/learn/llm-apis/api-basics/what-is-llm-api) can add."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is an LLM gateway?",
+      "a": "An LLM gateway is a proxy server you run between your applications and LLM providers. Every model call goes through it, so it can attach the real provider key, enforce rate limits and spend caps, log each request, cache responses, and fail over between providers — all in one central place instead of in every app."
+    },
+    {
+      "q": "What is the difference between an LLM gateway and calling the API directly?",
+      "a": "Calling directly, each app holds the provider key and talks straight to the provider — simplest for one service. A gateway inserts one controlled hop in front of all providers, giving you central key management, per-team budgets, uniform logging, retries, and provider failover. The trade is extra latency and one more service to run."
+    },
+    {
+      "q": "How does an LLM proxy keep my API keys safe?",
+      "a": "The real provider keys live only inside the gateway. Each app gets its own virtual key that the gateway mints and can revoke independently. If a virtual key leaks, you revoke just that one; the underlying provider secret never moves and never sits in app code or pipelines."
+    },
+    {
+      "q": "Is an LLM gateway the same as OpenRouter?",
+      "a": "Not quite. OpenRouter is a hosted aggregator — an external service you sign up for that fronts many models. The gateway pattern in this article is self-hosted infrastructure you run yourself, so you own the box, the logs, and the keys. Both expose one endpoint in front of many providers, but the ownership and control differ."
+    },
+    {
+      "q": "What is an OpenAI-compatible gateway?",
+      "a": "It means the gateway exposes the same request shape as the OpenAI API — endpoints like /v1/chat/completions with a messages array and a model name. Because most SDKs already speak that format, pointing an app at the gateway usually means changing only the base URL and the key; your client library and message code stay the same."
+    },
+    {
+      "q": "Do I need a gateway for a small project?",
+      "a": "Usually no. For a single app or a prototype with one key and one developer, a direct API call is simpler and faster. A gateway earns its place when several services call models, when you need per-team spend caps or central audit logs, or when provider failover matters."
+    }
+  ],
+  "related": [
+    "what-is-llm-api",
+    "api-keys-explained",
+    "llm-api-errors",
+    "bedrock-vertex-ai",
+    "how-to-choose-llm-model",
+    "llm-api-data-privacy"
+  ],
+  "furtherReading": [
+    {
+      "title": "LiteLLM Proxy Server (LLM Gateway) — Documentation",
+      "url": "https://docs.litellm.ai/docs/simple_proxy"
+    },
+    {
+      "title": "OpenAI API Reference",
+      "url": "https://platform.openai.com/docs/api-reference"
+    },
+    {
+      "title": "Amazon Bedrock — Documentation",
+      "url": "https://docs.aws.amazon.com/bedrock/"
+    }
+  ]
+}

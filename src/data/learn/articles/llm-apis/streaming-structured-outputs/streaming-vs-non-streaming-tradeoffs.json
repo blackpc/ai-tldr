@@ -1,0 +1,345 @@
+{
+  "slug": "streaming-vs-non-streaming-tradeoffs",
+  "title": "Streaming vs Non-Streaming API Calls: When to Use Each",
+  "shortTitle": "Streaming vs Non-Streaming",
+  "seoTitle": "Streaming vs Non-Streaming LLM Calls: When to Use",
+  "metaDescription": "Streaming feels faster but complicates parsing, retries, and structured output. Compare streaming and blocking calls and learn which jobs need which.",
+  "keywords": [
+    "streaming vs non streaming llm",
+    "when not to use streaming llm",
+    "streaming retries and timeouts",
+    "blocking vs streaming api call",
+    "streaming structured output problems"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Decide when token-by-token streaming is worth its extra complexity and when a simple blocking call is the better, more reliable choice.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you call a language model API, you get the answer back in one of two ways. With a **non-streaming** (also called *blocking*) call, you wait until the model has finished writing, then receive the whole answer in a single response. With a **streaming** call, the API sends you the answer in small pieces — usually a few characters or a [token](/learn/llm-apis/api-basics/what-is-llm-api) at a time — as the model produces them, so words appear on screen one after another."
+        },
+        {
+          "type": "p",
+          "md": "Think of ordering food two ways. A blocking call is a sealed takeout bag: nothing arrives until the entire order is ready, then you get all of it at once. A streaming call is a sit-down meal served course by course: the bread shows up while the main is still cooking. The total cooking time is the same either way. The difference is *when you start receiving* — and whether you have to manage a steady trickle of plates or just one bag."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Both modes run the *same* model on the *same* prompt and produce the *same* total text. Streaming does not make the model think faster. It only changes the delivery: incremental pieces versus one final blob. Everything in this article follows from that single fact."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A model writing a long answer can take many seconds. With a blocking call the user stares at a spinner the whole time, then the full paragraph snaps into view. With streaming the first words appear almost immediately and keep flowing. The reply lands at the same moment either way, but it *feels* dramatically faster because the user sees progress. This is the single biggest reason streaming exists: it improves **perceived latency**, not actual latency."
+        },
+        {
+          "type": "p",
+          "md": "That perceived-speed win is real and worth a lot for anything a human watches live — chat assistants, coding copilots, writing tools. But streaming is not free. It trades a simple, one-shot response for a live connection you have to read piece by piece, and that complicates almost everything that happens *around* the call: parsing the result, retrying on failure, validating structured data, caching, and logging. Many backend jobs see none of the upside and all of the cost."
+        },
+        {
+          "type": "p",
+          "md": "So the question a builder actually faces is not \"is streaming better?\" but \"is this particular call *watched by a person in real time*?\" Get that decision right and you ship a snappy UI without drowning your backend in needless complexity. Get it wrong and you either make users wait on a spinner they didn't need to see, or you bolt fragile streaming machinery onto a job that just needed one clean answer."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A blocking call is an ordinary request/response. You send the prompt, the server holds the connection open while the model generates the full answer, and then it returns one complete payload — the text plus metadata like token usage and a stop reason. Your code gets a single object and moves on."
+        },
+        {
+          "type": "p",
+          "md": "A streaming call keeps the HTTP connection open and pushes a sequence of small **events** down it as the model writes, typically using *server-sent events* (SSE). Each event carries a tiny fragment of the answer (a \"delta\"). Your code listens to this stream, appends each delta to a running buffer, and usually shows it on screen as it arrives. A final event signals the model is done and reports the stop reason and token counts. Until that final event arrives, you only ever hold a *partial* answer."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Same prompt, two delivery modes",
+            "columns": [
+              {
+                "title": "Non-streaming (blocking)",
+                "items": [
+                  "Send prompt → wait → one full response",
+                  "First bytes arrive only at the end",
+                  "You hold the complete answer immediately",
+                  "Easy to parse, validate, retry, cache",
+                  "User sees a spinner, then everything"
+                ]
+              },
+              {
+                "title": "Streaming",
+                "accent": true,
+                "items": [
+                  "Send prompt → receive a flow of deltas",
+                  "First token arrives in a fraction of a second",
+                  "You assemble the answer piece by piece",
+                  "Parsing, retries, validation get harder",
+                  "User watches the text appear live"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Two timing numbers make the difference precise. **Time to first token (TTFT)** is how long until the *first* piece of output appears. **Total latency** is how long until the *whole* answer is done. Streaming slashes TTFT to a fraction of a second; it does **not** change total latency at all — the model generates at the same speed regardless. Streaming wins only when a human is watching during that gap. A background job that just needs the finished text gains nothing from a low TTFT."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Where the two modes differ on the clock",
+            "steps": [
+              {
+                "label": "Request sent",
+                "sub": "identical for both"
+              },
+              {
+                "label": "Model generates",
+                "sub": "same speed, same total time"
+              },
+              {
+                "label": "Streaming: deltas flow",
+                "sub": "first token in ~0.x s",
+                "accent": true
+              },
+              {
+                "label": "Blocking: nothing yet",
+                "sub": "still waiting"
+              },
+              {
+                "label": "Done",
+                "sub": "both finish together"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "In code the shapes differ. A blocking call returns one object you read directly. A streaming call gives you an iterator you loop over, accumulating text as events arrive."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "blocking vs streaming with the same SDK",
+          "code": "from anthropic import Anthropic\n\nclient = Anthropic()\nmsg = [{\"role\": \"user\", \"content\": \"Explain TTFT in one sentence.\"}]\n\n# --- Non-streaming: one object, full text in hand ---\nresp = client.messages.create(\n    model=\"claude-sonnet-4-6\", max_tokens=200, messages=msg,\n)\nprint(resp.content[0].text)        # the complete answer, ready to use\n\n# --- Streaming: a flow of events you assemble yourself ---\nfull = \"\"\nwith client.messages.stream(\n    model=\"claude-sonnet-4-6\", max_tokens=200, messages=msg,\n) as stream:\n    for text in stream.text_stream:\n        full += text                # append each delta\n        print(text, end=\"\", flush=True)   # show it live\n# `full` now holds the same text the blocking call returned"
+        }
+      ]
+    },
+    {
+      "id": "the-hidden-costs-of-streaming",
+      "title": "The hidden costs of streaming",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The live UX is the easy part to see. The costs hide in the plumbing, and they are the real reason streaming is not a default. Each of these is manageable, but each is work you simply don't do with a blocking call."
+        },
+        {
+          "type": "h3",
+          "text": "Error handling and retries get harder"
+        },
+        {
+          "type": "p",
+          "md": "A blocking call either succeeds or fails as a whole. If it errors, you retry the one request — clean and idempotent. A stream can fail *halfway*: the connection drops after 200 tokens. Now you hold a partial answer and a hard choice. Retrying from scratch means the user sees the text restart or duplicate. Resuming is usually impossible because most APIs can't continue a stream from where it broke. You also can't see [errors](/learn/llm-apis/api-basics/llm-api-errors) like rate limits or content filters until they interrupt a stream that already started printing."
+        },
+        {
+          "type": "h3",
+          "text": "Structured output is awkward to parse mid-stream"
+        },
+        {
+          "type": "p",
+          "md": "If you asked for JSON, a partial stream gives you *invalid* JSON — `{\"name\": \"Al` is not parseable. You cannot reliably validate, repair, or act on [structured output](/learn/llm-apis/streaming-structured-outputs/structured-outputs-explained) until the final token lands, which erases streaming's main benefit: there is nothing useful to show the user mid-stream anyway. For machine-readable results, blocking is almost always simpler and just as fast end to end."
+        },
+        {
+          "type": "h3",
+          "text": "Caching and logging need extra glue"
+        },
+        {
+          "type": "p",
+          "md": "To cache a response or write it to a log, you need the *complete* text. With streaming you must buffer every delta into one string before you can store it, then handle the case where the stream died before completion (do you cache a truncated answer? usually not). Token usage often arrives only in the final event, so cost accounting has to wait for the stream to finish cleanly too. None of this is hard, but it's all boilerplate a blocking call gives you for free."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "A subtle trap: a stream that prints tokens live has *already shown the user output* by the time an error or content filter fires. With a blocking call you can inspect the full answer and decide whether to display it. Stream, and you may have to retract text that's already on screen."
+        }
+      ]
+    },
+    {
+      "id": "the-decision-rule",
+      "title": "The decision rule: when to use each",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The rule is short: **stream when a human is watching the text arrive in real time; block for everything else.** Almost every case follows from asking \"who is reading this output, and when?\""
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Use case",
+            "Best mode",
+            "Why"
+          ],
+          "rows": [
+            [
+              "User-facing chat / assistant",
+              "Streaming",
+              "Long replies; perceived speed matters; user reads live"
+            ],
+            [
+              "Coding copilot / live writing tool",
+              "Streaming",
+              "Same — humans watch each token appear"
+            ],
+            [
+              "Extracting JSON or a structured record",
+              "Blocking",
+              "Partial JSON is useless; need the full object to validate"
+            ],
+            [
+              "Classification / scoring / short labels",
+              "Blocking",
+              "Answer is tiny; TTFT win is negligible"
+            ],
+            [
+              "Batch / offline jobs (no live viewer)",
+              "Blocking",
+              "Nobody watches; simpler retries and logging"
+            ],
+            [
+              "Agent / tool-calling step",
+              "Blocking (usually)",
+              "Code consumes the result, not a human; you need it complete to act on"
+            ],
+            [
+              "Backend API your own server calls",
+              "Blocking",
+              "No UI; total latency is identical, so keep it simple"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "A useful sanity check: if your code is going to wait for the *whole* answer before doing anything with it — parsing JSON, calling a tool, storing a row — there is no point streaming. You'd pay all the complexity to then throw away the incrementality by buffering to completion anyway. Stream only when *displaying the partial answer is itself valuable*."
+        }
+      ]
+    },
+    {
+      "id": "edge-cases-and-tips",
+      "title": "Edge cases and practical tips",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The rule covers most situations, but a few real cases sit on the boundary and deserve a closer look."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Very long blocking calls can time out.** Some platforms drop a request that holds a connection open for too long. Ironically, streaming can be *more* reliable here, because a flow of events keeps the connection alive. If your blocking call risks hitting a gateway or proxy timeout on long outputs, streaming (or raising the timeout) can be the pragmatic fix.",
+            "**Streaming lets you cancel early.** Because output flows as it's generated, you can stop a stream mid-answer — useful for a \"stop generating\" button, or to abort once you've seen enough. A blocking call can't be cut short; you pay for and wait on the whole thing.",
+            "**You can stream internally and deliver in bulk.** Nothing forces you to expose streaming to the end user. A backend can stream from the model (for early-cancel or keep-alive) yet buffer the result and hand your own client one clean response. Streaming the upstream call and streaming to your user are separate decisions.",
+            "**Tool calls and partial structure.** When the model calls a tool, you generally need the full, valid arguments before executing it — so even mid-stream you wait for that block to complete. Streaming the surrounding prose is fine; streaming a tool call into your execution path is not.",
+            "**SSE has its own failure modes.** Streaming rides on a long-lived connection through whatever proxies, load balancers, and CDNs sit between you and the API. Buffering proxies, short idle timeouts, and serverless response limits can all break a stream that a single blocking response would survive. Test your *whole* path, not just localhost."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Default to blocking. Reach for streaming only when you can name the human who benefits from watching the text appear. \"It feels more modern\" is not a reason to take on partial-parse, retry, and logging complexity on a backend nobody watches."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic rule is second nature, a few finer points separate a tidy integration from a fragile one."
+        },
+        {
+          "type": "p",
+          "md": "**Measure TTFT and total latency separately.** They answer different questions. TTFT tells you how responsive the UI *feels*; total latency tells you how long the work *takes* and how much you'll pay in wall-clock time for a backend step. Optimizing one does nothing for the other. If you only log total latency you'll miss why a streamed chat feels great while a blocking endpoint feels sluggish, even though the model ran identically. See [LLM streaming explained](/learn/llm-apis/streaming-structured-outputs/llm-streaming-explained) for the event mechanics in detail."
+        },
+        {
+          "type": "p",
+          "md": "**Idempotency and retries.** Design retries around whole units of work. For blocking calls this is trivial: fail, retry the request, done. For streams, decide your policy up front — most teams retry the *entire* call from scratch on a mid-stream failure and accept that the UI may flicker, rather than attempting to resume. Buffer the assembled text so that on success you have one canonical string to cache, log, and (if needed) re-display cleanly."
+        },
+        {
+          "type": "p",
+          "md": "**Streaming plus structured output is the genuinely hard combination.** Some platforms now support streaming partial JSON so a UI can render fields as they fill in, but you still cannot *trust* the object until it's complete and validated. If you adopt this, treat every partial as draft-only and gate any action — saving a row, calling a tool — on the final, fully-parsed result. When in doubt, [block for structured calls](/learn/llm-apis/streaming-structured-outputs/json-mode-vs-structured-outputs); the simplicity is usually worth more than the marginal UX gain."
+        },
+        {
+          "type": "p",
+          "md": "**SDK versus raw HTTP.** Official SDKs hide most streaming pain — they parse SSE, accumulate deltas, expose a clean iterator, and surface the final usage object for you. Hand-rolling streaming over [raw HTTP](/learn/llm-apis/api-basics/sdk-vs-raw-http) means parsing the event protocol yourself, which is exactly where subtle bugs (dropped deltas, mis-handled final events, leaked connections) creep in. If you stream, lean on the SDK unless you have a strong reason not to."
+        },
+        {
+          "type": "p",
+          "md": "The durable takeaway: streaming and blocking deliver the *same answer* at the *same finish time*. Streaming only changes *when the first words appear* and *how much plumbing you take on to handle a partial result*. Spend that complexity where a human is watching, and keep your backend and structured-data paths blocking and boring. Boring is reliable."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Is streaming actually faster than a non-streaming API call?",
+      "a": "No — not in total. The model generates at the same speed either way, so the full answer finishes at the same moment. Streaming only lowers *time to first token*, so the first words appear far sooner. That makes it *feel* faster to a person watching, but a backend job that waits for the whole answer gains nothing."
+    },
+    {
+      "q": "When should I NOT use streaming?",
+      "a": "Avoid streaming when no human is watching the output arrive: backend-to-backend calls, batch and offline jobs, classification or scoring, and anything that returns structured data like JSON. In those cases blocking is simpler to parse, retry, cache, and log, and the perceived-speed benefit doesn't apply."
+    },
+    {
+      "q": "Why is streaming structured output (JSON) a problem?",
+      "a": "Mid-stream you only have *partial* JSON, which isn't valid and can't be parsed or validated until the final token arrives. So you can't safely act on it or show a usable result early — which defeats streaming's main purpose. For structured outputs, a blocking call is usually simpler and just as fast end to end."
+    },
+    {
+      "q": "How do retries differ between streaming and blocking calls?",
+      "a": "A blocking call fails as a whole, so you just retry the one request. A stream can fail halfway, leaving you with a partial answer and no clean way to resume — most APIs can't continue a broken stream. The common policy is to retry the entire call from scratch and accept that the user may see the text restart."
+    },
+    {
+      "q": "Can a streaming call help with timeouts on long responses?",
+      "a": "Sometimes, yes. A blocking request that holds the connection open for a long time can hit a gateway, proxy, or serverless timeout. A stream sends events continuously, which keeps the connection active and can survive where a single long blocking response would be cut off."
+    },
+    {
+      "q": "Does streaming cost more than a blocking call?",
+      "a": "No. Pricing is based on input and output tokens, which are identical for the same prompt and answer regardless of delivery mode. Streaming doesn't change your token bill — it only changes how the response is delivered to your code."
+    }
+  ],
+  "related": [
+    "llm-streaming-explained",
+    "structured-outputs-explained",
+    "json-mode-vs-structured-outputs",
+    "llm-api-errors",
+    "how-to-call-llm-api",
+    "sdk-vs-raw-http"
+  ],
+  "furtherReading": [
+    {
+      "title": "Streaming Messages — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/streaming"
+    },
+    {
+      "title": "Streaming API responses — OpenAI Docs",
+      "url": "https://platform.openai.com/docs/guides/streaming-responses"
+    },
+    {
+      "title": "Server-sent events — MDN Web Docs",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events"
+    }
+  ]
+}

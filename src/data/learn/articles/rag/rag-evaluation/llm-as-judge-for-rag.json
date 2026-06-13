@@ -1,0 +1,362 @@
+{
+  "slug": "llm-as-judge-for-rag",
+  "title": "Using an LLM as a Judge to Evaluate RAG Answers",
+  "shortTitle": "LLM as a Judge for RAG",
+  "seoTitle": "Using an LLM as a Judge to Evaluate RAG",
+  "metaDescription": "Human grading doesn't scale. An LLM judge scores RAG answers automatically. Learn how to prompt a judge, its biases, and how to keep its scores trustworthy.",
+  "keywords": [
+    "llm as a judge rag",
+    "llm judge evaluation",
+    "automated rag scoring",
+    "evaluate rag answers with llm",
+    "llm judge bias"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You'll learn how to use an LLM to grade RAG answers at scale and how to avoid the judge's known biases.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you build a [RAG system](/learn/rag/rag-fundamentals/what-is-rag), you face an annoying question: *is it any good?* You can read a few answers and nod, but a real system handles thousands of questions, and you tweak it constantly — a new chunk size, a different retriever, a reworded prompt. After every change you'd have to re-read everything to know if you improved or quietly broke it. Humans can't grade at that speed, and exact-match scoring fails because a correct answer can be phrased a hundred different ways."
+        },
+        {
+          "type": "p",
+          "md": "**LLM-as-a-judge** is the workaround: you use a *second* language model to grade the answers your RAG system produces. You hand the judge the question, the retrieved context, and the generated answer, give it a clear rubric, and ask it to score things like *did this answer stick to the sources?* and *did it actually address the question?* The judge reads like a careful human grader, but it runs in seconds and never gets tired."
+        },
+        {
+          "type": "p",
+          "md": "Think of a teacher with 500 essays to mark. Grading each one personally would take weeks. Instead they write a detailed rubric — \"2 points for a clear thesis, 2 for evidence, 1 for grammar\" — and hand it to a trained teaching assistant who marks them all against that rubric overnight. The judge LLM is that teaching assistant. It is not the final authority on truth, but with a good rubric it is consistent, fast, and good enough to spot which essays — or answers — are strong and which are weak."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This is the engine inside popular evaluation tools. Frameworks like [RAGAS](/learn/rag/rag-evaluation/what-is-ragas) compute their faithfulness and relevance scores by prompting an LLM judge under the hood. Understanding the raw pattern helps you read those numbers — and fix them when they look wrong."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Evaluating RAG is hard in a specific way. The output is free-form text, so there is no single correct string to compare against. \"You have 30 days to return it\" and \"Returns are accepted within a month of purchase\" mean the same thing, but every keyword-overlap metric will mark them as different. Older scores like BLEU and ROUGE measure word overlap, not meaning, so they punish good paraphrases and reward fluent nonsense. An LLM judge reads for *meaning*, which is exactly what you actually care about."
+        },
+        {
+          "type": "p",
+          "md": "Here is why a builder reaches for it:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**It scales.** Grading 1,000 answers by hand is a day of tedious work. An LLM judge does it in minutes for a few dollars, so you can run a full evaluation on every pull request instead of once a quarter.",
+            "**It handles open-ended answers.** No reference string required. The judge reasons about whether the answer is supported and on-topic, the way a person would, rather than counting matching words.",
+            "**It gives you a regression gate.** With a fixed test set and a judge, you get a number that moves when quality moves. Now \"did this change help?\" has an answer you can put in CI, not a gut feeling.",
+            "**It explains its scores.** Ask the judge to give a reason, and you get *why* an answer failed — \"the answer claims a 60-day window but the context says 30\" — which points you straight at the bug."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The catch — and the whole reason this article exists — is that a judge is itself an LLM, with all the quirks that implies. It can be biased, inconsistent, and confidently wrong. Used naively it produces numbers that *look* rigorous but don't track real quality. The skill is not \"call an LLM to grade\"; it's writing a rubric and calibrating the judge so its scores actually mean something. That's what separates a trustworthy eval from a vanity metric."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The mechanism is a single, carefully built prompt. You assemble everything the judge needs to grade one answer — the original question, the chunks your retriever pulled, and the answer your system generated — wrap it in a rubric and an output format, and send it to a strong model. The judge returns a score (and ideally a reason). You repeat this across your whole test set and average the results."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "One grading pass per test question",
+            "steps": [
+              {
+                "label": "Question",
+                "sub": "from your test set"
+              },
+              {
+                "label": "RAG system",
+                "sub": "retrieves + generates"
+              },
+              {
+                "label": "Bundle",
+                "sub": "question + context + answer"
+              },
+              {
+                "label": "Judge LLM",
+                "sub": "applies the rubric"
+              },
+              {
+                "label": "Score + reason",
+                "sub": "e.g. 4/5, \"unsupported claim\"",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Two things worth grading separately"
+        },
+        {
+          "type": "p",
+          "md": "RAG can fail in two independent ways, so a good judge scores them apart. **Faithfulness** (also called groundedness) asks: is every claim in the answer actually supported by the retrieved context? This catches hallucination. **Answer relevance** asks: does the answer actually address what the user asked? This catches answers that are true but off-topic. An answer can be perfectly faithful and useless (\"correct, but you didn't answer my question\") or perfectly on-topic and hallucinated. Scoring them separately tells you which half of your pipeline to fix — see [faithfulness vs relevance](/learn/rag/rag-evaluation/faithfulness-vs-relevance) for the full split."
+        },
+        {
+          "type": "h3",
+          "text": "Writing the judge prompt"
+        },
+        {
+          "type": "p",
+          "md": "The rubric is everything. A vague instruction like \"rate this answer 1 to 10\" gives you noisy, meaningless numbers, because the judge has to invent its own definition of each score and will do so differently every call. A good rubric defines each level explicitly and asks for evidence before the score, so the judge reasons first and commits second."
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "title": "a faithfulness judge prompt",
+          "code": "You are grading whether an ANSWER is fully supported by the CONTEXT.\nJudge ONLY support, not whether the answer is helpful or well written.\n\nScoring:\n  1 = a key claim contradicts or is absent from the context\n  2 = mostly supported, but at least one claim is unsupported\n  3 = every claim in the answer is directly supported by the context\n\nFirst, list each factual claim in the answer and mark it\nSupported or Unsupported, quoting the context for supported ones.\nThen output your verdict as JSON: {\"score\": <1-3>, \"reason\": \"<one line>\"}.\n\nCONTEXT:\n{retrieved_chunks}\n\nQUESTION:\n{question}\n\nANSWER:\n{generated_answer}"
+        },
+        {
+          "type": "p",
+          "md": "Three habits make judge prompts reliable. **Use a small scale** (1–3 or 1–5, not 1–100): the judge can't meaningfully tell a 73 from a 76, and a tight scale gives you consistent grades. **Make it reason before scoring** — having the judge list the claims first turns a vibe into a checkable verdict and improves accuracy. **Force structured output** like JSON so you can parse scores automatically across thousands of runs. For more on shaping these prompts, see [prompt engineering basics](/learn/prompt-engineering)."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "For binary questions (\"is this claim supported: yes/no?\") you can take it further: have the judge score each individual claim, then compute faithfulness as *supported claims ÷ total claims*. That turns a fuzzy 1–5 into a precise fraction and is close to how RAGAS computes its faithfulness number."
+        }
+      ]
+    },
+    {
+      "id": "worked-example",
+      "title": "A worked example",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Say your support bot is asked: *\"How long do I have to return a laptop?\"* The retriever pulls one chunk: *\"Physical items may be returned within 30 days of delivery.\"* Two different answers come back on two different days. Here is how the judge scores them."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Generated answer",
+            "Faithfulness",
+            "Relevance",
+            "Judge's reason"
+          ],
+          "rows": [
+            [
+              "You can return a laptop within 30 days of delivery.",
+              "3 / 3",
+              "3 / 3",
+              "Claim matches the context exactly and answers the question."
+            ],
+            [
+              "Laptops can be returned within 60 days.",
+              "1 / 3",
+              "3 / 3",
+              "On-topic, but '60 days' contradicts the context's '30 days'."
+            ],
+            [
+              "Our support hours are 9am to 6pm Eastern.",
+              "3 / 3",
+              "1 / 3",
+              "True and grounded, but does not address the return window."
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Notice the diagnostic power. The second row has a relevance of 3 but faithfulness of 1 — the *generator* hallucinated, so look at the model and the prompt. The third row is the opposite: faithful but irrelevant, a sign the *retriever* fetched the wrong chunk. Two numbers, two different bugs, located instantly. This is why splitting the metrics beats a single \"quality\" score; see the full list in [RAG evaluation metrics](/learn/rag/rag-evaluation/rag-evaluation-metrics)."
+        },
+        {
+          "type": "p",
+          "md": "Here is the same loop in code — assemble the bundle, prompt the judge, parse the JSON, and average across your test set."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "judge.py",
+          "code": "import json\nfrom anthropic import Anthropic\n\nclient = Anthropic(api_key=\"sk-ant-...\")\n\nRUBRIC = \"\"\"You grade whether the ANSWER is fully supported by the CONTEXT.\nScore: 1 = a key claim is unsupported or contradicted; 3 = every claim is\ndirectly supported. First list each claim as Supported/Unsupported, then\noutput JSON: {\"score\": <1-3>, \"reason\": \"<one line>\"}.\n\nCONTEXT:\\n{context}\\n\\nQUESTION:\\n{question}\\n\\nANSWER:\\n{answer}\"\"\"\n\ndef judge(question, context, answer):\n    prompt = RUBRIC.format(context=context, question=question, answer=answer)\n    msg = client.messages.create(\n        model=\"claude-sonnet-4-6\",\n        max_tokens=400,\n        temperature=0,                       # determinism: same input -> same grade\n        messages=[{\"role\": \"user\", \"content\": prompt}],\n    )\n    text = msg.content[0].text\n    verdict = json.loads(text[text.index(\"{\"):text.rindex(\"}\") + 1])\n    return verdict[\"score\"], verdict[\"reason\"]\n\n# Run across a fixed test set and average.\nscores = [judge(q, ctx, ans)[0] for q, ctx, ans in test_set]\nprint(\"mean faithfulness:\", sum(scores) / len(scores))"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Set `temperature=0` on the judge. You want the *same answer* to get the *same grade* every time, otherwise your evaluation has built-in noise that masks the real changes you're trying to measure."
+        }
+      ]
+    },
+    {
+      "id": "known-biases",
+      "title": "Known biases of an LLM judge",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "An LLM judge is not an objective ruler. Research and practice have surfaced consistent, predictable biases. If you don't account for them, your scores will quietly favor the wrong answers. These are the big four."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Bias",
+            "What happens",
+            "How to reduce it"
+          ],
+          "rows": [
+            [
+              "**Length / verbosity**",
+              "Judges tend to rate longer, more detailed answers higher even when a short answer is just as correct.",
+              "Add 'do not reward length' to the rubric; compare answers of similar length; penalize unsupported padding."
+            ],
+            [
+              "**Position**",
+              "When comparing two answers A vs B, judges favor whichever was shown first (or sometimes last).",
+              "Run each comparison twice with the order swapped; keep the result only if it agrees both ways."
+            ],
+            [
+              "**Self-preference**",
+              "A judge tends to prefer text written in its own style — often answers from the *same model family* it belongs to.",
+              "Use a different model family as judge than as generator when you can; never let a model be the sole grader of itself."
+            ],
+            [
+              "**Score clustering**",
+              "On a 1–10 scale judges bunch everything into 7–9 and rarely use the low end, flattening real differences.",
+              "Use a small scale (1–3 or 1–5) with explicit level definitions so each grade is forced to mean something."
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Self-preference bias is the trap people fall into most. Using `claude-sonnet-4-6` to grade answers generated by `claude-sonnet-4-6` is convenient, but the judge may flatter outputs that match its own style. For high-stakes comparisons, pick a judge from a different model family, or at minimum be aware the home-field advantage exists."
+        }
+      ]
+    },
+    {
+      "id": "calibrating-the-judge",
+      "title": "Calibrating the judge against humans",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Here is the rule that makes the whole approach trustworthy: **never assume the judge is right — prove it.** Before you rely on a judge's scores, check that they agree with human scores on a sample. If they don't, the judge's numbers are decoration. Calibration is what turns a plausible-looking eval into a defensible one."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "The calibration loop",
+            "steps": [
+              {
+                "label": "Hand-label a sample"
+              },
+              {
+                "label": "Run the judge on it"
+              },
+              {
+                "label": "Measure agreement"
+              },
+              {
+                "label": "Fix the rubric"
+              }
+            ]
+          }
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Build a gold set.** Have humans carefully grade 50–100 answers using the *same* rubric you'll give the judge. This is your ground truth.",
+            "**Run the judge** on those exact same answers and collect its scores.",
+            "**Measure agreement.** Compare the judge's grades against the human grades. People often use a metric like Cohen's kappa (which corrects for chance agreement) or simply the percentage where judge and human match within one point.",
+            "**Diagnose disagreements.** Read every case where the judge and humans diverge. The disagreements usually reveal a vague rubric line — tighten it, add an example, and re-run.",
+            "**Re-check after big changes.** When you change the judge model or rewrite the rubric, re-run the calibration. A judge that agreed with humans yesterday may not after you swap models."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "If the judge agrees with your humans, say, 90% of the time, you can trust it to run unsupervised across thousands of answers and only spot-check. If agreement is poor, the fix is almost always a clearer rubric, not a fancier model. A precise rubric with worked examples beats a bigger judge with a vague one nearly every time. This calibration step is the part most teams skip — and it's exactly why their eval numbers don't predict real-world quality. See the broader workflow in [how to evaluate a RAG system](/learn/rag/rag-evaluation/how-to-evaluate-rag)."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic judge works, a few refinements separate a toy eval from a production one."
+        },
+        {
+          "type": "p",
+          "md": "**Pairwise vs pointwise.** So far we've scored each answer on its own (pointwise). The alternative is **pairwise**: show the judge two answers to the same question and ask which is better. Pairwise comparisons are often *more reliable* because relative judgments are easier than absolute ones — \"is A better than B?\" is a cleaner question than \"is A a 4 or a 5?\". The cost is position bias (always swap and re-run) and that you get a ranking, not an absolute score. Pairwise shines when comparing two system versions head-to-head; pointwise shines when you need an absolute regression number over time."
+        },
+        {
+          "type": "p",
+          "md": "**Reference-based judging.** If your test set includes a hand-written ideal answer for each question, give it to the judge as a reference: \"compare the answer to this gold answer.\" This sharply reduces ambiguity and bias because the judge has a concrete target instead of an open-ended rubric. The tradeoff is the upfront work of writing gold answers — but for a stable regression suite it's often worth it."
+        },
+        {
+          "type": "p",
+          "md": "**Cost and ensembles.** A judge call costs real money and latency on every test question. For large suites, use a cheaper, faster model as the judge once it's calibrated — judging is easier than generating, so a smaller model often suffices. For the highest-stakes grades, the opposite move helps: run several judges (or the same judge several times) and take a majority vote, which smooths out one judge's bad day at the cost of more compute."
+        },
+        {
+          "type": "p",
+          "md": "**Know the honest limits.** A judge inherits every weakness of the model behind it. It can be confidently wrong, share the generator's blind spots, and miss subtle factual errors a domain expert would catch. It is a fast, scalable *proxy* for human judgment, not a replacement — keep a human in the loop for the answers that matter most, and treat the judge as a powerful filter that tells you where to look. Used that way alongside retrieval metrics like [precision, recall, and MRR](/learn/rag/rag-evaluation/retrieval-precision-recall-mrr), an LLM judge becomes the backbone of a RAG evaluation pipeline you can actually trust."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is an LLM-as-a-judge for RAG?",
+      "a": "It's the practice of using a second language model to automatically grade the answers your RAG system produces. You give the judge the question, the retrieved context, and the generated answer, plus a scoring rubric, and it returns a score (and usually a reason) for things like faithfulness and relevance. It replaces slow human grading so you can evaluate thousands of answers in minutes."
+    },
+    {
+      "q": "How do I write a good LLM judge prompt?",
+      "a": "Define an explicit rubric where each score level has a clear meaning, ask the judge to reason before it scores (for example, list each claim and mark it supported or unsupported), use a small scale like 1 to 3 or 1 to 5, and force structured JSON output so you can parse it. Vague instructions like 'rate 1 to 10' produce noisy, meaningless numbers."
+    },
+    {
+      "q": "What biases do LLM judges have?",
+      "a": "The main ones are length bias (preferring longer answers), position bias (favoring whichever answer is shown first in a comparison), self-preference bias (favoring text in the judge's own style or from its own model family), and score clustering (bunching grades into a narrow high range). You reduce them with rubric instructions, order swapping, using a different model family as judge, and small scales."
+    },
+    {
+      "q": "Should I use the same model to judge that I use to generate?",
+      "a": "Avoid it for high-stakes comparisons. A model tends to prefer answers written in its own style, so grading a model's output with the same model can inflate scores — this is self-preference bias. When possible, pick a judge from a different model family, and never let a model be the only grader of its own work."
+    },
+    {
+      "q": "How do I know if my LLM judge is accurate?",
+      "a": "Calibrate it against humans. Have people hand-grade 50 to 100 answers with the same rubric, run the judge on those same answers, and measure how often they agree (using percentage agreement or a metric like Cohen's kappa). If agreement is high you can trust the judge at scale; if it's low, the fix is almost always a clearer rubric, not a bigger model."
+    },
+    {
+      "q": "Is LLM-as-a-judge the same as RAGAS?",
+      "a": "No, but RAGAS uses it. RAGAS is a specific framework that computes RAG metrics like faithfulness and answer relevance, and it does so by prompting an LLM judge internally. LLM-as-a-judge is the general underlying pattern; RAGAS is one packaged tool built on top of it."
+    }
+  ],
+  "related": [
+    "how-to-evaluate-rag",
+    "what-is-ragas",
+    "faithfulness-vs-relevance",
+    "rag-evaluation-metrics",
+    "retrieval-precision-recall-mrr"
+  ],
+  "furtherReading": [
+    {
+      "title": "Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena (arXiv)",
+      "url": "https://arxiv.org/abs/2306.05685"
+    },
+    {
+      "title": "RAGAS: Automated Evaluation of Retrieval Augmented Generation",
+      "url": "https://docs.ragas.io/"
+    },
+    {
+      "title": "Increase output consistency (JSON mode) — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/define-success"
+    }
+  ]
+}

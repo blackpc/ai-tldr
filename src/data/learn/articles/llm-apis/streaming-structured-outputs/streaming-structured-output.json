@@ -1,0 +1,362 @@
+{
+  "slug": "streaming-structured-output",
+  "title": "Can You Stream JSON? Combining Streaming with Structured Outputs",
+  "shortTitle": "Streaming Structured Output",
+  "seoTitle": "Can You Stream JSON? Streaming Structured Outputs",
+  "metaDescription": "Streaming gives you partial text, but JSON is only valid when complete. Learn the tradeoffs of streaming structured output and patterns for partial parsing.",
+  "keywords": [
+    "stream json from llm",
+    "streaming structured outputs",
+    "partial json parsing llm",
+    "stream tool call arguments",
+    "incremental json schema streaming"
+  ],
+  "difficulty": "advanced",
+  "oneLiner": "Understand why streaming and strict JSON pull in opposite directions and the partial-parse patterns that let you show progress before the object is complete.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "[Streaming](/learn/llm-apis/streaming-structured-outputs/llm-streaming-explained) lets a model send its answer to you word by word, the instant each piece is ready, instead of making you wait for the whole reply. [Structured output](/learn/llm-apis/streaming-structured-outputs/structured-outputs-explained) is the opposite habit: you ask the model to return strict JSON that matches a fixed schema, so your code can `JSON.parse` it without guessing."
+        },
+        {
+          "type": "p",
+          "md": "These two pull in opposite directions. Streaming wants to hand you *partial* text early. JSON is only valid once it is *complete* — a half-sent object like `{\"name\": \"Ja` is not parseable. You cannot call a JSON parser on it; it just throws an error. So \"can you stream JSON?\" has an awkward answer: yes, the bytes arrive as a stream, but you can't treat each fragment as a finished object."
+        },
+        {
+          "type": "p",
+          "md": "Think of receiving a long fax of a filled-out form. With plain prose, you can read each line as it prints — it makes sense on its own. With a strict form, half a page is useless: the closing brackets, the last field, the comma that separates two entries are all still in the machine. You either wait for the full page, or you teach yourself to read a form that is missing its bottom half — and fill in the blanks carefully. That second skill is what this article is about."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Two different things get called \"streaming JSON.\" One is *transport*: the raw bytes of the JSON arrive incrementally over the network. That always happens when you stream. The other is *usable partial state*: turning those incomplete bytes into a half-filled object your UI can render. The first is free; the second takes work."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The whole point of streaming is perceived speed. A user watching text appear feels a response is fast, even if the total time is the same. The moment you switch the model to strict JSON mode, that benefit is at risk — because the natural way to consume JSON is to wait for the last byte, parse once, and render. At that point you have re-introduced the very lag streaming was supposed to hide."
+        },
+        {
+          "type": "p",
+          "md": "This bites hardest in three common situations a builder runs into:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**A UI that renders structured data live.** You want a product card, a table, or a form to fill in field-by-field as the model writes it — not pop into existence three seconds later. That needs partial JSON you can read mid-stream.",
+            "**Tool calls / function calling.** When a model decides to call a tool, its *arguments* are themselves a JSON object, and they stream as fragments. If you want to show \"the assistant is searching for: flights to Tokyo…\" while the argument is still being written, you are parsing partial JSON whether you meant to or not.",
+            "**Long structured outputs.** A big JSON array of 50 items takes real time to generate. Blocking the entire thing means a long blank wait; streaming it means you can start processing item 1 while item 50 is still being written."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The tension is real and there is no magic setting that removes it. What exists instead is a small set of patterns — partial parsing, splitting prose from JSON, or simply deciding *not* to stream the structured part — and the skill is picking the right one for the job. Knowing them stops you from either shipping a laggy UI or fighting a parser that throws on every chunk."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "To stream structured output well, you first need to see what actually comes down the wire. A streaming API does not send you finished objects — it sends a series of small **events**, and the text (or JSON) arrives inside *delta* events, each carrying a tiny fragment that you append to a growing buffer."
+        },
+        {
+          "type": "h3",
+          "text": "What a stream actually delivers"
+        },
+        {
+          "type": "p",
+          "md": "A typical message stream emits a start event, then many delta events (each a piece of text), then stop events. For ordinary prose the deltas are `text_delta` fragments. For a tool call, the model's JSON arguments arrive as a different delta type — an **`input_json_delta`** — where each event carries a *partial JSON string*, not a parsed object. You concatenate those partial strings yourself; only when the block finishes do you have a complete, parseable argument object."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "How JSON arrives over a stream",
+            "steps": [
+              {
+                "label": "block start",
+                "sub": "empty buffer"
+              },
+              {
+                "label": "delta",
+                "sub": "\"{\\\"city\\\":\""
+              },
+              {
+                "label": "delta",
+                "sub": "\"Tok\""
+              },
+              {
+                "label": "delta",
+                "sub": "\"yo\\\"}\""
+              },
+              {
+                "label": "block stop",
+                "sub": "buffer now valid JSON",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "p": "",
+          "type": "p",
+          "md": "Notice that after the second delta your buffer holds `{\"city\":\"Tok` — syntactically broken. A strict parser rejects it. Only at *block stop* is the buffer guaranteed to be a complete, valid object. That is the core problem in one picture: **validity arrives only at the end, but you wanted to use the data along the way.**"
+        },
+        {
+          "type": "h3",
+          "text": "The accumulate-and-parse loop"
+        },
+        {
+          "type": "p",
+          "md": "The base pattern, regardless of language or provider, is: keep a string buffer, append every delta's fragment, and attempt to parse — but expect failure until the end. Here it is with a tool-call stream, where the streamed fragments are the tool's `input` JSON:"
+        },
+        {
+          "type": "code",
+          "lang": "typescript",
+          "title": "accumulate streamed JSON fragments",
+          "code": "let jsonBuffer = \"\";\n\nfor await (const event of stream) {\n  if (\n    event.type === \"content_block_delta\" &&\n    event.delta.type === \"input_json_delta\"\n  ) {\n    // Each delta is a PARTIAL JSON string, not an object.\n    jsonBuffer += event.delta.partial_json;\n    // jsonBuffer is usually invalid here — don't JSON.parse blindly.\n  }\n}\n\n// Only safe to parse once the block is complete.\nconst args = JSON.parse(jsonBuffer);"
+        },
+        {
+          "type": "p",
+          "md": "This works, but it only gives you the final object — no live updates. To render *during* the stream, you need a parser that tolerates an unfinished buffer. That is the next section."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Never feed a mid-stream buffer to a strict `JSON.parse` / `json.loads` inside the loop and swallow the error on every chunk. It works by accident (you parse successfully only on the last chunk) but it is slow, noisy, and hides real bugs. Use a parser built for partial input, or only parse at block stop."
+        }
+      ]
+    },
+    {
+      "id": "partial-json-parsing",
+      "title": "Partial and relaxed JSON parsing",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "To show a half-built object as it streams, you need a **partial JSON parser** (sometimes called a *relaxed*, *streaming*, or *forgiving* parser). Instead of throwing on incomplete input, it does its best: it closes any open strings, objects, and arrays in its head, and returns whatever is unambiguous so far."
+        },
+        {
+          "type": "p",
+          "md": "Given the broken buffer `{\"city\": \"Tok`, a partial parser returns `{ city: \"Tok\" }` — it understands you are mid-way through a string value and hands you the prefix. A strict parser returns an error. As more deltas arrive, the partial parse keeps improving until it matches the final object exactly."
+        },
+        {
+          "type": "h3",
+          "text": "What a partial parser can and cannot know"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Buffer so far",
+            "Strict parser",
+            "Partial parser"
+          ],
+          "rows": [
+            [
+              "`{\"name\":`",
+              "error",
+              "`{}` (key seen, no value yet)"
+            ],
+            [
+              "`{\"name\": \"Al`",
+              "error",
+              "`{ name: \"Al\" }`"
+            ],
+            [
+              "`{\"name\": \"Alice\", \"age\":`",
+              "error",
+              "`{ name: \"Alice\" }`"
+            ],
+            [
+              "`{\"name\": \"Alice\", \"age\": 30}`",
+              "`{ name: \"Alice\", age: 30 }`",
+              "same — now complete"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The key insight: a partial parser only surfaces fields it is *sure* about. A number that is still being typed (`\"age\": 3`, which could become `30` or `300`) is usually withheld until the next token confirms it. This means your live UI should treat every field as provisional — it may appear, then refine — until the stream ends. Render optimistically, but don't act irreversibly on a value that isn't final."
+        },
+        {
+          "type": "p",
+          "md": "Several small libraries do this (search for \"partial json parser\" or \"streaming json\" in your language's package registry), and some SDKs expose a partial-parse helper directly on the stream object so you get a progressively-completed object on each event without wiring up your own parser. Check your SDK's streaming docs before pulling in a dependency."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "If you control the schema, put the fields your UI needs *first*. Models emit JSON keys in schema order, so an early `title` field streams in seconds while a long `description` is still being written — the user sees the important part immediately."
+        }
+      ]
+    },
+    {
+      "id": "choosing-an-approach",
+      "title": "Choosing an approach",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "There are three sane ways to handle structured output under streaming. Pick by how much you actually need live partial data versus how simple you want your code."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Three strategies for streaming structured output",
+            "columns": [
+              {
+                "title": "Stream + partial parse",
+                "accent": true,
+                "items": [
+                  "Live field-by-field UI",
+                  "Needs a partial JSON parser",
+                  "Every value is provisional",
+                  "Best for rich, data-driven UIs"
+                ]
+              },
+              {
+                "title": "Stream prose, block the JSON",
+                "items": [
+                  "Narration streams as text",
+                  "Final JSON sent in one piece",
+                  "Simple, robust parsing",
+                  "Best when only the prose is user-facing"
+                ]
+              },
+              {
+                "title": "Don't stream the structure",
+                "items": [
+                  "One request, parse once at end",
+                  "No partial-state handling",
+                  "Lowest complexity",
+                  "Best for back-end / batch / short JSON"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "The \"stream the prose, block the JSON\" split"
+        },
+        {
+          "type": "p",
+          "md": "A very practical middle path: have the model stream a human-readable explanation as normal text (which the user watches appear live), and return the machine-readable structured part separately — for example as a tool call whose arguments you only read once complete, or as a final JSON block at the end. The user gets the streaming feel from the prose; your code gets clean, complete JSON to parse. You avoid partial-JSON handling entirely while keeping the perceived speed."
+        },
+        {
+          "type": "h3",
+          "text": "When to just not stream"
+        },
+        {
+          "type": "p",
+          "md": "If the structured output is the *only* thing you need and nothing renders it live — a classification label, an extraction feeding a database, a back-end pipeline step — streaming adds complexity for zero user benefit. Make a normal blocking request, parse the JSON once, done. Streaming earns its keep only when a human is watching output appear, or when the output is long enough that processing-as-you-go is a real win. (One unrelated reason to still stream: very large outputs can hit request timeouts on a blocking call, so streaming is sometimes a transport necessity even when you don't show partials.)"
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "**Calling a strict parser on every chunk.** It throws on all but the last fragment. Either accumulate and parse once at the end, or use a partial parser on purpose — don't rely on catching exceptions in a hot loop.",
+            "**Assuming each delta is a whole token or a whole field.** Deltas are arbitrary byte fragments. A single field's value can span several deltas, and one delta can straddle two fields. Always concatenate; never assume boundaries.",
+            "**Acting on provisional values.** A field a partial parser shows mid-stream can still change as more text arrives. Don't fire a side effect (charge a card, send an email) off a value until the stream completes.",
+            "**Forgetting the stream can end early.** If the model hits its `max_tokens` cap, the JSON may be truncated and never becomes valid. Check the finish/stop reason — a `max_tokens` stop means your buffer is incomplete on purpose, not a bug to retry blindly.",
+            "**Mixing up the delta types.** Plain text streams as text deltas; tool-call arguments stream as `input_json_delta` fragments. They are different event shapes — branch on the delta type, don't treat all deltas as text.",
+            "**Ignoring schema constraints under streaming.** [Structured-output / JSON-mode](/learn/llm-apis/streaming-structured-outputs/json-mode-vs-structured-outputs) guarantees the *final* object matches your schema, but says nothing about intermediate states — your partial-render code must tolerate missing and half-typed fields."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**Schema-constrained generation and streaming.** Strict structured-output modes constrain the model so the *finished* response is guaranteed valid against your JSON schema. This is great for correctness, but remember the guarantee is about the end state. While streaming, you still pass through every invalid intermediate buffer on the way there. Constrained decoding makes the destination safe; it does not make the journey parseable."
+        },
+        {
+          "type": "p",
+          "md": "**Tool calls are the most common place this shows up.** Most developers meet streamed partial JSON not through a JSON-mode response but through *function calling*: a model's tool-call arguments are a JSON object that arrives as `input_json_delta` fragments. If you build an agent UI that shows \"calling `search` with query: …\" as the argument is typed, you are doing partial JSON parsing of tool inputs. The same accumulate-and-partial-parse loop applies. See [structured outputs explained](/learn/llm-apis/streaming-structured-outputs/structured-outputs-explained) for how schemas and tool arguments relate."
+        },
+        {
+          "type": "p",
+          "md": "**Validation belongs at block stop, not during.** A clean architecture streams partial JSON only for *display*, then runs full schema validation once on the complete object before doing anything consequential with it. Treat the live partial view as a preview and the final parsed object as the source of truth. If they ever disagree, trust the final one."
+        },
+        {
+          "type": "p",
+          "md": "**Robustness details that bite in production.** Network chunking is independent of the model's token boundaries, so a single SSE event can split a multi-byte UTF-8 character across two deltas — decode the byte stream carefully, or work at the string level your SDK already provides. Also handle the stream simply *stopping*: a dropped connection or a refusal mid-generation leaves you with a permanently-incomplete buffer, so always have a timeout and a \"never completed\" path, not just a success path."
+        },
+        {
+          "type": "p",
+          "md": "**Where to go next.** Solidify the two halves separately: read [how streaming works](/learn/llm-apis/streaming-structured-outputs/llm-streaming-explained) for the event model in depth, and the [JSON-mode vs structured-outputs comparison](/learn/llm-apis/streaming-structured-outputs/json-mode-vs-structured-outputs) for how the schema guarantee is enforced. Combine them with the patterns here and you can stream structured data without fighting your parser."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Can you stream JSON from an LLM?",
+      "a": "Yes — the bytes of the JSON arrive incrementally over the stream. What you cannot do is treat each fragment as finished JSON: an incomplete buffer like `{\"name\": \"Ja` will fail a strict parser. To use the data mid-stream you accumulate the fragments and use a partial (relaxed) JSON parser, or you wait until the stream completes and parse once."
+    },
+    {
+      "q": "What is an input_json_delta event?",
+      "a": "When a model streams a tool call (function call), the tool's arguments are a JSON object, and they arrive as a series of `input_json_delta` events. Each event carries a partial JSON *string*, not a parsed object. You concatenate those strings into a buffer; only when the content block finishes is the buffer guaranteed to be complete, valid JSON you can parse."
+    },
+    {
+      "q": "How do I parse partial JSON while streaming?",
+      "a": "Use a partial JSON parser (also called relaxed, forgiving, or streaming JSON). It mentally closes any open strings, arrays, and objects and returns the fields it is already sure about, so `{\"name\": \"Al` yields `{ name: \"Al\" }` instead of an error. Treat every field it surfaces as provisional until the stream ends, then validate the final complete object."
+    },
+    {
+      "q": "Should I stream structured output or just block?",
+      "a": "Stream with partial parsing when a human is watching structured data fill in live, or when the output is long enough that processing as it arrives is a real win. If the JSON only feeds your back-end (a classification, an extraction, a pipeline step) and nothing renders it live, just make a blocking request and parse once — streaming adds complexity for no user benefit there."
+    },
+    {
+      "q": "What happens if a streamed JSON response gets cut off?",
+      "a": "If the model hits its token limit or the connection drops mid-generation, the buffer never becomes valid JSON. Check the stop/finish reason: a `max_tokens` stop means the output was truncated on purpose, so the incomplete buffer is expected, not a transient error. Always have a timeout and an explicit \"never completed\" path rather than only handling success."
+    },
+    {
+      "q": "Does JSON mode work with streaming?",
+      "a": "Yes. A strict structured-output or JSON mode guarantees the *final* response matches your schema, and that works fine alongside streaming. But the guarantee is only about the end state — while streaming you still pass through every syntactically-incomplete intermediate buffer, so your live-rendering code must tolerate missing and half-typed fields and only validate the completed object."
+    }
+  ],
+  "related": [
+    "llm-streaming-explained",
+    "structured-outputs-explained",
+    "json-mode-vs-structured-outputs",
+    "how-to-call-llm-api",
+    "sdk-vs-raw-http"
+  ],
+  "furtherReading": [
+    {
+      "title": "Streaming Messages — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/streaming"
+    },
+    {
+      "title": "Structured Outputs — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs"
+    },
+    {
+      "title": "JSON — Wikipedia",
+      "url": "https://en.wikipedia.org/wiki/JSON"
+    },
+    {
+      "title": "Server-sent events — Wikipedia",
+      "url": "https://en.wikipedia.org/wiki/Server-sent_events"
+    }
+  ]
+}

@@ -1,0 +1,408 @@
+{
+  "slug": "sampling-parameters-explained",
+  "title": "Temperature, Top-P, and Top-K: The LLM Sampling Parameters Explained",
+  "shortTitle": "Sampling Parameters",
+  "seoTitle": "Temperature, Top-P, Top-K: LLM Sampling Parameters",
+  "metaDescription": "The request-body knobs that control randomness: learn what temperature, top_p, and top_k actually do, how they interact, and which combinations to avoid.",
+  "keywords": [
+    "temperature vs top_p llm",
+    "what is top_p in llm api",
+    "top_k sampling explained",
+    "llm sampling parameters tuning",
+    "should i change temperature or top_p"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Understand the three randomness knobs in an LLM request body — how each reshapes the token probabilities, how they interact, and which ones to leave alone.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every time a [large language model](/learn/llm-fundamentals/llm-basics/what-is-an-llm) writes a word, it isn't really *choosing* one word — it produces a whole ranked list of possible next tokens, each with a probability. \"The cat sat on the ___\" might give `mat` a 40% score, `floor` 15%, `couch` 10%, and a long tail of thousands of other options after that. **Sampling** is the step that picks one token from that list. The sampling parameters — `temperature`, `top_p`, and `top_k` — are the knobs in your API request that control *how* that pick is made."
+        },
+        {
+          "type": "p",
+          "md": "Think of the model as a chef who, for every spoonful, considers a tray of labelled jars. Some jars are nearly full (likely words), most are nearly empty (unlikely words). **Temperature** decides how carefully the chef weighs the jars: a low temperature means \"always reach for the fullest jar,\" a high temperature means \"treat the jars as more equal and sometimes grab a small one.\" **Top-k** says \"only consider the k fullest jars, ignore the rest.\" **Top-p** says \"only consider the fewest jars that together hold p of all the sauce.\" They are three different ways to shrink or reshape the tray before the pick."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "These are *request-body* parameters — fields you set on a single API call alongside `model`, `max_tokens`, and `messages`. They change nothing about the model's weights or your prompt. They only reshape the probability list at the moment each token is sampled."
+        },
+        {
+          "type": "p",
+          "md": "The single most useful fact to start with: **`temperature` controls how random the output is, and the other two control which candidates are even eligible.** Most builders only ever touch `temperature`. The other two exist for finer control, and as you'll see below, mixing them carelessly is where people get into trouble."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The same model, with the same prompt, can behave like two completely different tools depending on these settings. That's the whole point — and the whole risk."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Reproducibility.** A data-extraction pipeline that pulls an invoice total must give the *same* answer every run. Set `temperature` to 0 and the model picks the top token every time, so the output is as deterministic as the API allows. Leave it at the default and the same invoice can yield slightly different JSON on each call — a debugging nightmare.",
+            "**Creativity.** A brainstorming or story-writing feature that returns the same opening line every time feels broken. Here you *want* variety, so you raise `temperature` to loosen the model and let it explore less-likely words.",
+            "**Quality vs. chaos.** Push randomness too high and the text stops making sense — the model starts grabbing genuinely improbable tokens and drifts into nonsense. Too low, and on open-ended tasks it becomes repetitive and dull. The right value is task-specific, and knowing which knob to turn (and which to leave alone) is the difference between tuning and flailing."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who cares about this? Anyone calling an LLM API directly. If you're building [RAG](/learn/rag/rag-fundamentals/what-is-rag), classifiers, or structured-output pipelines, you almost certainly want low randomness. If you're building creative-writing or ideation tools, you want more. And if you've ever seen an LLM feature that's \"sometimes great, sometimes weird,\" mis-set sampling parameters are a prime suspect."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "A subtle trap: even at `temperature` 0, LLM output is rarely *bit-for-bit* identical across calls. Floating-point math on GPUs, load-balanced model versions, and batching can introduce tiny variations. Temperature 0 makes output *as reproducible as the provider allows* — it is not a hard determinism guarantee. Don't build a system that assumes byte-identical replies."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "To see what each knob does, follow a single token from the model's raw output to the final pick. The model emits a vector of **logits** — raw, unbounded scores, one per token in its vocabulary. A function called **softmax** turns those logits into probabilities that sum to 1. Sampling parameters intervene at specific points in this pipeline."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Where each knob acts on one token's pick",
+            "steps": [
+              {
+                "label": "Logits",
+                "sub": "raw score per token"
+              },
+              {
+                "label": "Temperature",
+                "sub": "scales logits: sharpen or flatten"
+              },
+              {
+                "label": "Softmax",
+                "sub": "logits → probabilities"
+              },
+              {
+                "label": "Top-k / Top-p",
+                "sub": "trim the candidate set"
+              },
+              {
+                "label": "Sample",
+                "sub": "draw one token",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Temperature — sharpen or flatten the distribution"
+        },
+        {
+          "type": "p",
+          "md": "Temperature divides every logit by the temperature value *before* softmax. Divide by a small number (below 1) and the gaps between scores grow — the most likely token pulls far ahead, so the model almost always picks it. Divide by a large number (above 1) and the gaps shrink — probabilities flatten toward each other, so unlikely tokens get a real chance. At `temperature` 0 the math collapses to \"always take the single highest-probability token\" (called *greedy decoding*)."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Temperature",
+            "Effect on the distribution",
+            "Output feel"
+          ],
+          "rows": [
+            [
+              "0",
+              "Always the top token (greedy)",
+              "Deterministic, repeatable"
+            ],
+            [
+              "~0.2–0.4",
+              "Top tokens strongly favored",
+              "Focused, factual, consistent"
+            ],
+            [
+              "~0.7–1.0",
+              "Balanced, some exploration",
+              "Natural, varied, creative"
+            ],
+            [
+              "> 1.0",
+              "Distribution flattened",
+              "Diverse, risks incoherence"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Scales differ by provider. OpenAI accepts `temperature` from 0 to 2; Anthropic's older Claude models accept 0 to 1. A value of `1.0` therefore does not mean the same thing everywhere — always check the provider's docs for the range before copying a number from a tutorial."
+        },
+        {
+          "type": "h3",
+          "text": "Top-k — keep only the k most likely tokens"
+        },
+        {
+          "type": "p",
+          "md": "Top-k truncation throws away everything except the `k` highest-probability tokens, then re-normalizes and samples from just those. `top_k = 1` is equivalent to greedy decoding (only one candidate survives). `top_k = 40` keeps the 40 best and zeroes out the rest. It's a hard cutoff by *count*: it always keeps exactly k candidates, whether the model is confident or unsure."
+        },
+        {
+          "type": "h3",
+          "text": "Top-p — keep the smallest set that covers probability p"
+        },
+        {
+          "type": "p",
+          "md": "Top-p (also called **nucleus sampling**) is smarter about confidence. Instead of a fixed count, it keeps the *smallest* group of top tokens whose probabilities add up to at least `p`. With `top_p = 0.9`, the model walks down the ranked list adding tokens until their combined probability reaches 90%, then samples from only that group. When the model is very confident (one token at 95%), the group is tiny — maybe one token. When it's unsure (probability spread across many tokens), the group is large. Top-p adapts; top-k does not."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Top-k vs top-p on the same token list",
+            "columns": [
+              {
+                "title": "Top-k (k = 3)",
+                "items": [
+                  "Always keeps exactly 3 tokens",
+                  "Fixed count, ignores confidence",
+                  "Too few when the model is unsure",
+                  "Too many when it's certain"
+                ]
+              },
+              {
+                "title": "Top-p (p = 0.9)",
+                "accent": true,
+                "items": [
+                  "Keeps a variable number of tokens",
+                  "Cutoff by cumulative probability",
+                  "Shrinks when the model is confident",
+                  "Grows when the model is uncertain"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The order matters: a provider typically applies these as **temperature → top-k → top-p**. Temperature reshapes the distribution first, then top-k and top-p trim the candidate set, then one token is drawn. Because all three act on the same distribution, stacking them multiplies their effects — which is exactly why tuning more than one at a time is hard to reason about."
+        }
+      ]
+    },
+    {
+      "id": "value-recipes",
+      "title": "Value recipes for common tasks",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You rarely need to invent values from scratch. These starting points cover the vast majority of real use cases. Adjust from here, one knob at a time."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Task",
+            "temperature",
+            "top_p",
+            "Why"
+          ],
+          "rows": [
+            [
+              "Data extraction / classification",
+              "0",
+              "(leave default)",
+              "You want the single most likely answer, repeatably"
+            ],
+            [
+              "Factual Q&A / RAG answers",
+              "0–0.3",
+              "(leave default)",
+              "Grounded, consistent, low invention"
+            ],
+            [
+              "Code generation",
+              "0–0.4",
+              "(leave default)",
+              "Correctness over variety; fewer odd tokens"
+            ],
+            [
+              "General chat assistant",
+              "0.7",
+              "(leave default)",
+              "Natural and varied without going off the rails"
+            ],
+            [
+              "Creative writing / brainstorming",
+              "0.9–1.0",
+              "(leave default)",
+              "Maximum variety and surprise"
+            ]
+          ]
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "deterministic_extraction.py",
+          "code": "# Pulling a structured field — you want the SAME answer every time.\nfact = client.chat.completions.create(\n    model=\"gpt-5.5\",\n    max_tokens=120,\n    temperature=0,          # greedy: most likely token, every run\n    messages=[{\n        \"role\": \"user\",\n        \"content\": \"Return ONLY the total amount from this invoice: ...\",\n    }],\n)\n# Note: do NOT also set top_p here. One knob at a time."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "creative_writing.py",
+          "code": "# Generating a fresh story opening — you WANT variety across runs.\nstory = client.chat.completions.create(\n    model=\"gpt-5.5\",\n    max_tokens=400,\n    temperature=0.9,        # loosened: explores less-likely, more interesting words\n    messages=[{\n        \"role\": \"user\",\n        \"content\": \"Write the opening line of a science-fiction novel.\",\n    }],\n)"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "If you only remember one rule: **start by tuning `temperature` alone**, leave `top_p` and `top_k` at their defaults, and only reach for the others if temperature alone can't get you the behavior you want. For most applications you will never need to touch top-p or top-k."
+        }
+      ]
+    },
+    {
+      "id": "pitfalls",
+      "title": "Common pitfalls and the temperature/top-p trap",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Most sampling bugs come from one mistake: turning two knobs at once and then being unable to explain the result."
+        },
+        {
+          "type": "h3",
+          "text": "Don't tune temperature and top_p together"
+        },
+        {
+          "type": "p",
+          "md": "Both `temperature` and `top_p` control randomness, just by different mechanisms. Lowering one and raising the other gives you a confusing, hard-to-reproduce mixture where it's unclear which one is actually driving the output. Providers explicitly recommend altering **one or the other, not both**. Pick the knob you understand — for almost everyone that's `temperature` — set the other to its default, and tune only that."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Stacking everything.** Setting `temperature`, `top_p`, *and* `top_k` all at once multiplies their trimming effects. You can accidentally narrow the candidate set so hard the model becomes repetitive, or loosen it so much it rambles — and you won't know which knob to blame.",
+            "**Expecting temperature 0 to be perfectly deterministic.** As noted above, GPU floating-point and load-balanced model versions mean even `temperature` 0 can vary slightly. Treat it as \"maximally repeatable,\" not \"guaranteed identical.\"",
+            "**High temperature to 'fix' wrong answers.** If a model gives wrong facts, raising temperature makes it *more* likely to wander, not more correct. Factual problems are usually retrieval or prompt problems — see [RAG](/learn/rag/rag-fundamentals/what-is-rag) — not sampling problems.",
+            "**Assuming every provider exposes the same knobs.** Some APIs expose only `temperature` and `top_p`; `top_k` is often missing. And some of the newest models remove these controls entirely (see Going deeper). Code that hard-codes `top_k` will break against a provider that doesn't accept it."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Passing parameters a model doesn't support is a common source of `400 Bad Request` errors — see [common LLM API errors](/learn/llm-apis/api-basics/llm-api-errors). If a request that worked on one model suddenly fails on another, check whether the new model dropped `temperature`, `top_p`, or `top_k` before debugging anything else."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the three basic knobs make sense, a few advanced realities are worth knowing."
+        },
+        {
+          "type": "p",
+          "md": "**Providers expose different subsets.** There is no universal sampling API. OpenAI's Chat Completions exposes `temperature` (0–2) and `top_p` but not `top_k`. Anthropic's older Claude models accept `temperature` (0–1), `top_p`, and `top_k`. Open-source runtimes like vLLM or Ollama tend to expose all three plus extras (repetition penalties, min-p, and more). When you switch providers, audit which parameters survive the move — don't assume your request body transfers unchanged. The [Claude vs GPT vs Gemini comparison](/learn/llm-apis/api-basics/claude-vs-gpt-vs-gemini) is a good reminder that providers diverge in exactly these details."
+        },
+        {
+          "type": "p",
+          "md": "**The newest reasoning models are removing these knobs.** This is the biggest recent shift. Anthropic's latest frontier models (the Claude Opus 4.x family and newer) **no longer accept `temperature`, `top_p`, or `top_k` at all** — sending any of them returns a `400` error. These models use adaptive, reasoning-driven decoding internally, and the guidance is to steer behavior through *prompting* and an *effort* setting rather than sampling parameters. So a deterministic-extraction recipe that relied on `temperature=0` must be rewritten for those models: drop the parameter, and make the prompt itself demand a single exact answer. Always check the current model's docs before assuming the classic three knobs are available."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Surface",
+            "temperature",
+            "top_p",
+            "top_k"
+          ],
+          "rows": [
+            [
+              "OpenAI Chat Completions",
+              "Yes (0–2)",
+              "Yes",
+              "No"
+            ],
+            [
+              "Older Claude models",
+              "Yes (0–1)",
+              "Yes",
+              "Yes"
+            ],
+            [
+              "Latest Claude frontier models",
+              "Removed (400)",
+              "Removed (400)",
+              "Removed (400)"
+            ],
+            [
+              "vLLM / Ollama (open models)",
+              "Yes",
+              "Yes",
+              "Yes"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "**Beyond the big three.** Other sampling controls exist on some runtimes: *min-p* keeps tokens above a fraction of the top token's probability (a more confidence-aware cousin of top-p), *repetition* and *frequency penalties* discourage the model from repeating itself, and *seed* parameters (where supported) pin the random draw for closer-to-reproducible sampling even above temperature 0. These are powerful but niche — reach for them only after temperature alone proves insufficient."
+        },
+        {
+          "type": "p",
+          "md": "**The durable lesson:** sampling parameters reshape *which* token gets picked, never *what the model knows*. They cannot add facts, fix retrieval, or make a wrong model right. They are a behavior dial — randomness up or down — not a quality dial. Set them deliberately for your task, change one at a time, and when in doubt, leave the defaults alone and improve the prompt instead. For the full request anatomy these knobs live inside, see [how to make your first LLM API call](/learn/llm-apis/api-basics/how-to-call-llm-api)."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is the difference between temperature and top_p in an LLM API?",
+      "a": "Both control randomness, but differently. `temperature` rescales the whole probability distribution — low values make the top token dominant, high values flatten it so unlikely tokens get picked. `top_p` (nucleus sampling) instead keeps only the smallest set of top tokens whose probabilities sum to p, then samples from those. The key practical rule: tune one or the other, not both, because together they're hard to reason about."
+    },
+    {
+      "q": "What is top_p in an LLM API?",
+      "a": "`top_p`, or nucleus sampling, keeps the smallest group of the most likely tokens whose combined probability reaches the value p (e.g. 0.9 = 90%), discards the rest, and samples only from that group. Unlike top-k's fixed count, top-p adapts to the model's confidence: the group shrinks when the model is sure and grows when it's uncertain."
+    },
+    {
+      "q": "Should I change temperature or top_p?",
+      "a": "For almost everyone: change `temperature` and leave `top_p` at its default. They both control randomness, so adjusting both at once produces a confusing mixture that's hard to reproduce. Providers explicitly recommend altering one or the other, not both. Temperature is the more intuitive knob, so make it your default lever."
+    },
+    {
+      "q": "What does top_k do in sampling?",
+      "a": "`top_k` truncates the candidate list to the k highest-probability tokens, discards everything else, re-normalizes, and samples from just those k. `top_k = 1` is greedy decoding (only the single best token). It's a fixed-count cutoff, so unlike top-p it doesn't adapt to how confident the model is. Note that many providers (including OpenAI) don't expose top_k at all."
+    },
+    {
+      "q": "Does temperature 0 make an LLM fully deterministic?",
+      "a": "Mostly, but not perfectly. Temperature 0 means greedy decoding — always pick the single most likely token — which removes sampling randomness. But GPU floating-point math, batching, and load-balanced model versions can still cause tiny variations between runs. Treat temperature 0 as 'as reproducible as the provider allows,' not as a hard byte-for-byte guarantee."
+    },
+    {
+      "q": "Why does my API call fail when I set temperature on a newer model?",
+      "a": "Some of the newest reasoning-focused models (for example Anthropic's latest Claude frontier models) have removed `temperature`, `top_p`, and `top_k` entirely — sending any of them returns a 400 error. These models steer behavior through prompting and an effort setting instead of sampling parameters. Remove the parameter and adjust your prompt instead; check the model's current docs to confirm which knobs it accepts."
+    }
+  ],
+  "related": [
+    "how-to-call-llm-api",
+    "what-is-llm-api",
+    "llm-api-errors",
+    "claude-vs-gpt-vs-gemini",
+    "how-to-choose-llm-model"
+  ],
+  "furtherReading": [
+    {
+      "title": "Chat Completions API reference — OpenAI Platform docs",
+      "url": "https://platform.openai.com/docs/api-reference/chat"
+    },
+    {
+      "title": "Messages API reference — Anthropic docs",
+      "url": "https://docs.anthropic.com/en/api/messages"
+    },
+    {
+      "title": "The Curious Case of Neural Text Degeneration (nucleus sampling paper, arXiv)",
+      "url": "https://arxiv.org/abs/1904.09751"
+    }
+  ]
+}

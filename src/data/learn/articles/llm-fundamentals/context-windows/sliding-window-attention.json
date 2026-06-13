@@ -1,0 +1,304 @@
+{
+  "slug": "sliding-window-attention",
+  "title": "What Is Sliding Window Attention? Long Context on a Budget",
+  "shortTitle": "Sliding Window Attention",
+  "seoTitle": "What Is Sliding Window Attention in LLMs?",
+  "metaDescription": "Sliding window attention lets each token attend only to a recent window instead of the whole sequence, cutting cost for long contexts. Learn the trade-offs.",
+  "keywords": [
+    "what is sliding window attention",
+    "sliding window attention explained",
+    "local attention vs full attention",
+    "how do models handle long context cheaply",
+    "sliding window attention trade offs"
+  ],
+  "difficulty": "advanced",
+  "oneLiner": "Understand how limiting each token to a recent 'window' of neighbors makes long contexts far cheaper, and what information that throws away.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Inside a [large language model](/learn/llm-fundamentals/llm-basics/how-llms-work), the attention mechanism is how each word in your prompt decides which other words to pay attention to. In standard *full attention*, every token looks at every other token. With 1,000 tokens that's a million pairs to compute; with 100,000 tokens it's ten billion. The work grows with the *square* of the length, which is why very long prompts get slow and expensive fast."
+        },
+        {
+          "type": "p",
+          "md": "**Sliding window attention** is a simple, brutal fix: don't let each token look at *everything* — only at a fixed number of recent neighbors. If the window is 512, then token number 10,000 only attends to roughly the 512 tokens just before it, and ignores the 9,000 that came earlier. The window slides along with the text, which is where the name comes from."
+        },
+        {
+          "type": "p",
+          "md": "Picture reading a long book through a narrow cardboard tube. At any moment you can only see a few lines around where you are. You can't directly see page 1 while reading page 400 — but you *can* carry forward a running sense of the story, because what you read on page 399 already folded in what was on page 398, and so on. Sliding window attention works the same way: each token sees a small local span, but information still travels long distances by being passed hand-to-hand through the layers of the model."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Sliding window attention is also called **local attention**. It became widely known through models like Longformer and Mistral 7B, which used it to handle long inputs without the cost of full attention on every layer."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The whole reason this technique exists is cost. Full attention's compute and memory both scale as *O(n²)* in the sequence length *n*. Double the prompt and you roughly quadruple the attention work. Push toward [very long context windows](/learn/llm-fundamentals/context-windows/million-token-context-windows) and that quadratic curve turns from annoying into impossible — the memory needed to store the attention scores alone can dwarf the GPU."
+        },
+        {
+          "type": "p",
+          "md": "Sliding window attention changes the math. If every token attends to at most *w* neighbors, the cost per layer becomes *O(n × w)* — **linear** in the sequence length, because *w* is a fixed constant you choose. Go from 10,000 to 100,000 tokens and the attention cost grows about 10×, not 100×. That linear scaling is what makes long inputs affordable to serve."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Sequence length",
+            "Full attention (∝ n²)",
+            "Window = 512 (∝ n·w)"
+          ],
+          "rows": [
+            [
+              "1,000",
+              "1,000,000 pairs",
+              "~512,000 pairs"
+            ],
+            [
+              "10,000",
+              "100,000,000 pairs",
+              "~5,120,000 pairs"
+            ],
+            [
+              "100,000",
+              "10,000,000,000 pairs",
+              "~51,200,000 pairs"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The savings show up in three places a builder feels directly: **GPU memory** (the attention matrix no longer grows quadratically, so longer prompts fit on the same card — see [why LLMs need GPUs](/learn/llm-fundamentals/llm-basics/why-llms-need-gpus)), **latency** (less work per token means faster responses), and **price** (most APIs charge by token, and serving long context is what drives that cost). For workloads dominated by long documents — codebases, transcripts, logs — sliding window attention can be the difference between a feature shipping and not."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Start with what full attention does on a single layer: for each token, compute a similarity score against *every* token in the sequence, turn those scores into weights, and blend the other tokens' values together accordingly. Sliding window attention keeps that exact recipe but masks out everything outside a fixed band: a token can only score the *w* tokens immediately before it (plus itself). Everything earlier is simply invisible on that layer."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "What each token can attend to, on one layer",
+            "columns": [
+              {
+                "title": "Full attention",
+                "items": [
+                  "Every token sees every other token",
+                  "Token #9,000 can read token #1 directly",
+                  "Cost grows as n² (quadratic)",
+                  "Memory blows up on long inputs"
+                ]
+              },
+              {
+                "title": "Sliding window (w = 512)",
+                "accent": true,
+                "items": [
+                  "Each token sees only ~512 recent neighbors",
+                  "Token #9,000 cannot read token #1 directly",
+                  "Cost grows as n·w (linear)",
+                  "Long inputs fit in fixed memory"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "The clever part: stacking layers extends the reach"
+        },
+        {
+          "type": "p",
+          "md": "A window of 512 sounds like it would make the model blind beyond 512 tokens. It doesn't — because attention happens on *every* layer, and the layers compound. After layer 1, each token's representation already contains a blend of its 512 neighbors. On layer 2, that token attends to *its* 512 neighbors — but each of those has already absorbed *their* 512 neighbors. So the effective reach roughly multiplies: with window *w* and *L* layers, information can travel about *w × L* tokens, even though no single layer ever looks beyond *w*."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "How a distant fact reaches a far-away token (window = 4)",
+            "steps": [
+              {
+                "label": "Layer 1",
+                "sub": "token mixes its 4 left neighbors"
+              },
+              {
+                "label": "Layer 2",
+                "sub": "neighbors already carry their own neighbors"
+              },
+              {
+                "label": "Layer 3",
+                "sub": "reach now spans ~12 tokens",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "This is the key trade-off to understand. Information from far away *can* reach a token, but only **indirectly**, by being relayed through intermediate tokens layer by layer — like a message whispered down a line of people. A directly-attending full model reads the distant fact in one hop with full fidelity; a sliding-window model reconstructs it through many hops, and detail can blur or get lost along the way. The deeper the model, the further the reach, but it is never as crisp as a direct connection."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "A common production design is a *hybrid*: most layers use cheap sliding window attention, and a few interleaved layers use full (global) attention. The global layers act as long-range shortcuts so the model can still grab far-apart facts directly, while the bulk of the compute stays linear."
+        }
+      ]
+    },
+    {
+      "id": "worked-example",
+      "title": "A worked example: where the window helps and where it hurts",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Imagine a 100,000-token transcript and a model with a 4,096-token sliding window over 32 layers."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Where it shines — local tasks.** \"Summarize this paragraph,\" \"fix the grammar in this sentence,\" \"what is the speaker saying right here?\" The relevant context is all within a few hundred tokens, comfortably inside the window. The model loses almost nothing and runs far cheaper.",
+            "**Where it strains — long-range links.** \"The witness mentioned a date in the first minute — does it contradict the figure quoted near the end?\" Those two facts sit ~99,000 tokens apart. With a 4,096 window over 32 layers, the effective reach (~130k) technically covers it, but the signal has been relayed through dozens of hops and may be too faint to use reliably.",
+            "**Where it breaks — needle in a haystack.** \"Find the single account number buried somewhere in this log.\" If that exact token never lands inside any window that also connects to the question, a pure sliding-window model can miss it entirely. This is exactly the kind of failure that overlaps with [lost in the middle](/learn/llm-fundamentals/context-windows/lost-in-the-middle)."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The practical lesson: sliding window attention is excellent when meaning is *locally concentrated* and weak when a task depends on connecting two specific, far-apart facts. Knowing which kind of task you have tells you whether the cheaper attention will hurt you."
+        }
+      ]
+    },
+    {
+      "id": "related-techniques",
+      "title": "How it compares to other long-context tricks",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Sliding window attention is one of several ways to escape the quadratic cost. It helps to see where it sits relative to the alternatives — they are often combined, not chosen between."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Approach",
+            "Core idea",
+            "Main trade-off"
+          ],
+          "rows": [
+            [
+              "Full attention",
+              "Every token attends to all tokens",
+              "Exact but O(n²) — costly on long inputs"
+            ],
+            [
+              "Sliding window (local)",
+              "Each token attends to a fixed recent span",
+              "Linear cost; long-range links only via stacked layers"
+            ],
+            [
+              "Dilated / strided window",
+              "Window with gaps to cover more range",
+              "Wider reach per layer; can skip nearby detail"
+            ],
+            [
+              "Global + local hybrid",
+              "A few global layers among local ones",
+              "Restores direct long-range hops at modest cost"
+            ],
+            [
+              "Sparse attention",
+              "Attend to a chosen subset of tokens",
+              "Linear-ish; quality depends on the pattern"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Sliding window attention changes *which* tokens are attended to. It is different from KV-cache tricks and quantization, which change *how* the attended tokens are stored. The two are complementary — many efficient long-context systems use both at once."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**Rolling KV cache.** A neat consequence of a fixed window appears at generation time. With full attention, the model must keep a key/value cache for *every* past token, and that cache grows without bound as the conversation gets longer. With a window of *w*, a token can never attend beyond *w* steps back, so you only need to keep the most recent *w* entries — the cache becomes a fixed-size rolling buffer. That bounds memory during long generations, which is a major practical win, though it also means very old tokens are genuinely dropped from the cache."
+        },
+        {
+          "type": "p",
+          "md": "**Why position encoding matters here.** Sliding window attention pairs naturally with *relative* position schemes (such as rotary embeddings), because each token only ever cares about *how far* a neighbor is within the window, not its absolute index in a possibly-million-token sequence. This is part of why local-attention models extrapolate to longer inputs more gracefully than fixed absolute-position models."
+        },
+        {
+          "type": "p",
+          "md": "**It does not by itself give you a bigger context window.** A model with sliding window attention can still have a maximum trained length; the window controls *cost and reach within* the sequence, not the headline limit. Confusing the two is common. For the actual cap, what to do when you hit it, and how the published numbers are set, see [what is a context window](/learn/llm-fundamentals/context-windows/what-is-a-context-window) and [what happens when you exceed it](/learn/llm-fundamentals/context-windows/exceed-context-window)."
+        },
+        {
+          "type": "p",
+          "md": "**The honest open question** is the same one that motivated the whole technique: how much real long-range understanding are you sacrificing for the cheaper bill? On benchmarks dominated by local structure, sliding window models match full attention closely. On tasks that hinge on connecting distant, specific facts, they can quietly underperform in ways that don't show up until you test the exact behavior you depend on. The durable advice is to evaluate on *your* task, with prompts as long as you'll really use — the cost savings are guaranteed, but the quality cost is workload-specific."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is sliding window attention in simple terms?",
+      "a": "It is an attention pattern where each token only attends to a fixed number of recent neighboring tokens instead of the entire sequence. The window slides along the text as it is processed. This caps the cost of attention so long inputs stay affordable, at the price of no single layer seeing far-apart tokens directly."
+    },
+    {
+      "q": "Why is sliding window attention cheaper than full attention?",
+      "a": "Full attention compares every token with every other token, so its cost grows with the square of the sequence length (O(n²)). Sliding window attention limits each token to a fixed window of *w* neighbors, so the cost grows linearly (O(n·w)). For long sequences, linear instead of quadratic is a massive saving in both compute and memory."
+    },
+    {
+      "q": "If the window is small, how can the model use information from far away?",
+      "a": "Through depth. Attention runs on every layer, so after one layer each token already mixes in its neighbors, and those neighbors carry *their* neighbors. Stacking layers compounds the reach — roughly window size times number of layers — so distant information can travel, but only indirectly, hop by hop, and with some loss of detail."
+    },
+    {
+      "q": "What is the difference between local attention and full attention?",
+      "a": "\"Local attention\" is another name for sliding window attention: each token sees only a nearby span. \"Full\" (global) attention lets every token see every other token directly. Full attention is more accurate for long-range links but scales quadratically; local attention scales linearly but reaches distant tokens only through stacked layers."
+    },
+    {
+      "q": "Does sliding window attention hurt accuracy?",
+      "a": "It depends on the task. For locally-concentrated tasks like summarizing a paragraph or fixing a sentence, accuracy stays essentially the same. For tasks that require connecting two specific facts far apart in the input, it can underperform full attention because the long-range signal is relayed and may be too faint. Always test on the exact behavior you rely on."
+    },
+    {
+      "q": "Does sliding window attention give a model a bigger context window?",
+      "a": "Not directly. It lowers the cost and changes the reach of attention *within* a sequence, but a model can still have a fixed maximum trained length. It makes serving long context cheaper, which can enable larger advertised windows, but the two concepts are separate."
+    }
+  ],
+  "related": [
+    "what-is-a-context-window",
+    "lost-in-the-middle",
+    "million-token-context-windows",
+    "exceed-context-window",
+    "why-llms-need-gpus",
+    "how-llms-work"
+  ],
+  "furtherReading": [
+    {
+      "title": "Longformer: The Long-Document Transformer (arXiv)",
+      "url": "https://arxiv.org/abs/2004.05150"
+    },
+    {
+      "title": "Attention Is All You Need (arXiv)",
+      "url": "https://arxiv.org/abs/1706.03762"
+    },
+    {
+      "title": "Attention (machine learning) — Wikipedia",
+      "url": "https://en.wikipedia.org/wiki/Attention_(machine_learning)"
+    }
+  ]
+}

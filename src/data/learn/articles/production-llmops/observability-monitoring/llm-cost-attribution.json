@@ -1,0 +1,386 @@
+{
+  "slug": "llm-cost-attribution",
+  "title": "LLM Cost Attribution: Knowing Which Feature or Customer Spent the Tokens",
+  "shortTitle": "Cost Attribution",
+  "seoTitle": "LLM Cost Attribution: Track Spend by Feature & Customer",
+  "metaDescription": "Learn how to tag and attribute LLM token spend per feature, customer, and team so you can find expensive paths, charge back costs, and catch runaway usage.",
+  "keywords": [
+    "llm cost attribution",
+    "token spend per customer",
+    "llm chargeback",
+    "tag llm requests",
+    "track llm cost by feature"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You'll understand how to instrument requests with tags so a single aggregate bill becomes a clear map of which feature, customer, or team is spending the tokens.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "At the end of the month your LLM provider sends one number: the total bill. Maybe it's $4,200. That number tells you *how much* you spent, but not *where* it went. Was it the chat feature or the document-summary feature? Was it ten thousand ordinary customers, or one enterprise account hammering an endpoint? Was it real traffic, or a buggy retry loop that quietly called the model a million times overnight? The bill alone can't say."
+        },
+        {
+          "type": "p",
+          "md": "**LLM cost attribution** is the practice of splitting that single bill back into its parts. You attach small labels — *tags* — to every model call (which feature, which customer, which team, which environment), record the tokens and price for each call, and then add them up by label. The aggregate $4,200 becomes a readable map: $2,800 chat, $900 summaries, $500 search; or 'Acme Corp alone spent $1,100 this week.'"
+        },
+        {
+          "type": "p",
+          "md": "Think of a shared house with one electricity meter. Everyone pays the same flat split — until someone buys a space heater and runs it all winter. Without per-room meters, you can't prove who, and you can't bill them fairly. Cost attribution is putting a little meter on every appliance: now the bill explains itself, and the person with the heater pays for the heater."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Attribution is the flip side of cost *reduction*. Reduction asks 'how do we make the total smaller?' Attribution asks 'where does the total come from?' You can't reduce intelligently until you can attribute — otherwise you're optimizing in the dark."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "For anyone running LLMs in production, tokens are a real, variable cost of goods sold — and unlike a fixed server, that cost moves with every user action. Knowing the total is table stakes. Knowing the *breakdown* is what lets you actually run the business."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Chargeback and pricing.** If you sell a product, you need to know what each customer costs to serve. Attribution turns 'we spend a lot on AI' into 'this plan costs us $0.40 per active user per month,' which is how you set prices that don't lose money.",
+            "**Finding the expensive path.** Often 80% of spend comes from one feature or one prompt template. Attribution surfaces it instantly. Maybe a 'summarize' button silently sends the entire document on every click — you'll never spot that in a lump-sum bill.",
+            "**Catching runaway usage.** A retry loop with no backoff, an agent stuck calling a tool forever, or one customer scripting your API can multiply spend overnight. Per-dimension tracking lets you alert on 'customer X's hourly cost just jumped 20x' before the invoice does.",
+            "**Internal accountability.** In a big company, several teams share one provider account. Without tags, finance can't tell whose experiments cost what, so nobody owns the number. Attribution gives each team its own line item."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "This sits squarely inside [LLM observability](/learn/production-llmops/observability-monitoring/what-is-llm-observability) — cost is just another signal you monitor alongside latency, errors, and quality. The difference is that cost has a *finance* audience as well as an engineering one, so the goal isn't only a dashboard but clean numbers you can hand to the people who set budgets and prices."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Attribution is a pipeline with three jobs: **tag** each request with the dimensions you care about, **measure** the tokens and cost for that request, and **roll up** the tagged costs by dimension. Get the tags on early and the rest is arithmetic."
+        },
+        {
+          "type": "h3",
+          "text": "Step 1 — Decide your dimensions"
+        },
+        {
+          "type": "p",
+          "md": "A *dimension* is an axis you want to slice cost by. Pick a handful that match how you make decisions. Common ones:"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Dimension",
+            "Example values",
+            "Used for"
+          ],
+          "rows": [
+            [
+              "`feature`",
+              "chat, summarize, search",
+              "Find the expensive product surface"
+            ],
+            [
+              "`tenant` / customer",
+              "acme-corp, user-8841",
+              "Chargeback, per-account margin"
+            ],
+            [
+              "`environment`",
+              "prod, staging, dev",
+              "Stop dev experiments polluting prod spend"
+            ],
+            [
+              "`team`",
+              "growth, support, data",
+              "Internal accountability"
+            ],
+            [
+              "`model`",
+              "haiku, sonnet, opus",
+              "See where premium models are used"
+            ]
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Step 2 — Tag the request"
+        },
+        {
+          "type": "p",
+          "md": "Most providers and gateways let you attach a free-form `metadata` object (or custom headers) to each call. You set these values at the edge of your system, where you still know the user and the feature, and they travel with the request. The Claude API, for example, accepts a `metadata` field on each message."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "tagging a request with attribution metadata",
+          "code": "from anthropic import Anthropic\n\nclient = Anthropic()\n\nmsg = client.messages.create(\n    model=\"claude-sonnet-4-6\",\n    max_tokens=400,\n    metadata={\n        # the dimensions we'll attribute cost by\n        \"feature\": \"summarize\",\n        \"tenant\": \"acme-corp\",\n        \"environment\": \"prod\",\n        \"team\": \"support\",\n    },\n    messages=[{\"role\": \"user\", \"content\": prompt}],\n)\n\n# the response tells us exactly what to bill against those tags\nusage = msg.usage\nprint(usage.input_tokens, usage.output_tokens)"
+        },
+        {
+          "type": "h3",
+          "text": "Step 3 — Measure cost, then roll up"
+        },
+        {
+          "type": "p",
+          "md": "Every response reports token counts. You multiply input and output tokens by that model's per-token prices to get the dollar cost of that one call, then store a small record: timestamp, tags, tokens, cost. Aggregating those records by any tag gives you the bill broken down on that axis."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "The attribution pipeline",
+            "steps": [
+              {
+                "label": "Request",
+                "sub": "user + feature known"
+              },
+              {
+                "label": "Tag",
+                "sub": "attach metadata"
+              },
+              {
+                "label": "Call model",
+                "sub": "get token usage"
+              },
+              {
+                "label": "Price",
+                "sub": "tokens × rate = $"
+              },
+              {
+                "label": "Roll up",
+                "sub": "sum by tag",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Conceptually, the rollup is one grouped sum. If your cost records live in a table, the whole feature breakdown is a single query:"
+        },
+        {
+          "type": "code",
+          "lang": "sql",
+          "title": "cost by feature, last 30 days",
+          "code": "SELECT feature,\n       SUM(input_tokens)  AS in_tok,\n       SUM(output_tokens) AS out_tok,\n       SUM(cost_usd)      AS spend\nFROM   llm_calls\nWHERE  ts >= now() - INTERVAL '30 days'\nGROUP  BY feature\nORDER  BY spend DESC;"
+        }
+      ]
+    },
+    {
+      "id": "propagating-tags",
+      "title": "Propagating tags through gateways and traces",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The hard part of attribution is rarely the math — it's making sure the tags actually *reach* the model call. In a real system the request passes through several layers between the user and the provider, and a tag dropped anywhere along the way produces an 'unknown' bucket that swallows your cost."
+        },
+        {
+          "type": "h3",
+          "text": "Where tags get lost"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Background jobs.** A request handler knows the user, but the actual LLM call happens later in a queue worker that only has a document id. If you don't carry the tags into the job payload, the cost lands under 'no tenant.'",
+            "**Agents and chains.** One user action can trigger a dozen model calls across tools and sub-steps. Each of those calls needs the same parent tags, or you'll attribute the cheap planning call to the customer and lose the expensive tool calls.",
+            "**Caching and retries.** A retried call should usually inherit the original tags so you don't split one logical operation across buckets."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Two places to centralize tagging"
+        },
+        {
+          "type": "p",
+          "md": "Rather than hoping every call site remembers to tag, push the responsibility into a layer that *all* calls go through."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Where to attach attribution metadata",
+            "columns": [
+              {
+                "title": "LLM gateway",
+                "accent": true,
+                "items": [
+                  "Every call already routes through it",
+                  "Inject tenant/feature from headers",
+                  "Enforces tagging centrally — no call escapes",
+                  "Often does cost rollups for you"
+                ]
+              },
+              {
+                "title": "Tracing / context",
+                "items": [
+                  "Tags ride on the trace context",
+                  "Child spans inherit parent tags",
+                  "Natural fit for agents and chains",
+                  "Links cost to the full request story"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "An [LLM gateway](/learn/production-llmops/llmops-fundamentals/what-is-llm-gateway) is the cleanest single choke point: because every request passes through it, it can read a `tenant` header, stamp the metadata, and even compute the cost rollup itself. The tracing approach pairs naturally with [LLM tracing](/learn/production-llmops/observability-monitoring/llm-tracing-explained): you set the attribution tags once on the top-level trace, and every nested model call inherits them, so an agent's twelve calls all attribute to the right customer automatically."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Always keep an explicit `unattributed` bucket and watch its size. If 15% of spend has no tags, your attribution is lying to you by 15%. A growing 'unknown' slice is the first sign a new code path forgot to propagate tags."
+        }
+      ]
+    },
+    {
+      "id": "worked-example",
+      "title": "A worked example: finding the runaway",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Say your weekly LLM bill quietly doubled from $2,000 to $4,000. With attribution in place, the investigation is minutes, not days. You slice by each dimension in turn and watch for the spike."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Slice by",
+            "What you see",
+            "Verdict"
+          ],
+          "rows": [
+            [
+              "`environment`",
+              "prod $3.9k, staging $0.1k",
+              "Real traffic, not a test leak"
+            ],
+            [
+              "`feature`",
+              "summarize jumped 4x, others flat",
+              "It's the summarize feature"
+            ],
+            [
+              "`tenant`",
+              "acme-corp is 70% of summarize",
+              "One customer drives it"
+            ],
+            [
+              "`model`",
+              "all opus, was mostly sonnet",
+              "A routing change upgraded the model"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Four queries tell a complete story: a routing change started sending acme-corp's summarize calls to a premium model, and acme-corp summarizes a lot. Now you have options — fix the routing, move that customer back to a cheaper model, or charge them for the premium tier. Without attribution, all you'd know is 'AI got expensive,' and you'd be guessing for a week."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "This is also how you catch *bugs*, not just heavy users. If the spike had been the same customer making 50x the *number* of calls with flat tokens-per-call, that's a retry loop or a stuck agent — a code fix, not a pricing conversation. The dimension that spikes points you at the cause."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "**Tagging too late.** If you only know the feature deep inside the stack but call the model at the edge, the tag is empty. Capture dimensions where the context is richest (the request handler) and carry them forward — don't try to reconstruct them at the call site.",
+            "**Too many dimensions.** Twenty tags per call sound thorough but become unmaintainable and explode your storage and query cost. Start with 3–5 dimensions that map to a real decision (pricing, accountability, debugging). Add more only when a question demands it.",
+            "**Forgetting cached and free tokens.** Prompt caching and batch discounts change the real price of a call. If you price every token at the list rate, your attribution overstates cost. Read the actual usage fields the provider returns (cached vs fresh tokens) rather than assuming.",
+            "**Stale price tables.** Cost = tokens × price, and prices change. A hardcoded rate that's six months old silently corrupts every number. Keep model prices in one config you can update, not scattered through the code.",
+            "**Mismatched grain.** Rolling up by customer is useless if your `tenant` tag is sometimes the account id and sometimes the user id. Pick one canonical value per dimension and validate it on the way in."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once basic per-feature and per-customer rollups work, the interesting questions are about turning attribution into decisions and tying it to other signals."
+        },
+        {
+          "type": "p",
+          "md": "**Unit economics, not just totals.** A feature costing $900/month means nothing in isolation. Divide by usage and you get *cost per request* or *cost per active user* — the numbers that actually drive pricing and tell you whether a feature is sustainable. Attribution is the raw input; unit economics is the output executives care about."
+        },
+        {
+          "type": "p",
+          "md": "**Cost as a routing input.** Once you can see per-dimension cost, you can act on it automatically. [Model routing](/learn/production-llmops/llmops-fundamentals/llm-model-routing) can send cheap or low-value requests to a smaller model and reserve premium models for cases that justify them — and your attribution data is exactly what tells you which paths are worth the upgrade."
+        },
+        {
+          "type": "p",
+          "md": "**Budgets, alerts, and quotas.** Attribution makes per-dimension *limits* possible: a hard monthly token budget per tenant, an alert when any customer's daily cost jumps beyond its baseline, or a soft cap that downgrades a runaway free-tier user to a cheaper model. These guardrails depend entirely on knowing whose tokens are whose in near real time."
+        },
+        {
+          "type": "p",
+          "md": "**Buy vs build.** You can roll your own pipeline (metadata + a cost table + a warehouse), or use an observability platform that ingests usage and does the rollups for you — see [Langfuse vs LangSmith vs Helicone](/learn/production-llmops/observability-monitoring/langfuse-vs-langsmith-helicone). Many gateways and proxies compute per-tag cost out of the box. The build-it-yourself path gives you full control and keeps data in-house; the platform path gets you dashboards on day one. Either way, the discipline is the same: tag early, price accurately, and never let the 'unknown' bucket grow. Cost attribution lives alongside the rest of your [production metrics](/learn/production-llmops/observability-monitoring/llm-production-metrics) — it's the one finance reads too."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is LLM cost attribution?",
+      "a": "It's the practice of splitting one aggregate LLM bill into its parts by tagging each model call with dimensions like feature, customer, environment, and team, then summing token cost by tag. The result turns a single total into a map of where the money actually went."
+    },
+    {
+      "q": "How do I track LLM token spend per customer?",
+      "a": "Attach a `tenant` or customer identifier to each request's metadata (via the provider's metadata field, a custom header, or your gateway), record the token usage the response returns, multiply by the model's price, and group the resulting cost records by customer. The hard part is propagating that tenant tag through background jobs, agents, and retries so no calls land in an 'unknown' bucket."
+    },
+    {
+      "q": "What is LLM chargeback?",
+      "a": "Chargeback is billing internal teams or external customers for the LLM cost they actually generated, instead of absorbing it as one shared expense. It requires cost attribution first: you can only charge a team or customer accurately once every model call is tagged with who triggered it."
+    },
+    {
+      "q": "Where should I add the tags — at the call site or a gateway?",
+      "a": "Prefer a central layer. An LLM gateway or proxy that every request already passes through can enforce tagging so no call escapes, and tracing context lets nested calls in an agent inherit their parent's tags automatically. Tagging only at individual call sites is fragile because any forgotten path silently loses its cost."
+    },
+    {
+      "q": "How does cost attribution help catch runaway usage?",
+      "a": "Because you can slice cost by dimension in near real time, you can alert when any single customer, feature, or environment's spend jumps far above its baseline — a sign of a retry loop, a stuck agent, or one account scripting your API. You catch it within hours instead of discovering it on next month's invoice."
+    },
+    {
+      "q": "How many dimensions should I tag?",
+      "a": "Start with three to five that map to real decisions: typically feature, tenant or customer, environment, and team or model. More tags add storage and query cost and become hard to keep consistent, so add new dimensions only when a specific question requires them."
+    }
+  ],
+  "related": [
+    "what-is-llm-observability",
+    "llm-tracing-explained",
+    "langfuse-vs-langsmith-helicone",
+    "llm-production-metrics",
+    "what-is-llm-gateway",
+    "llm-model-routing"
+  ],
+  "furtherReading": [
+    {
+      "title": "Pricing — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    {
+      "title": "Messages API (usage & metadata) — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/api/messages"
+    },
+    {
+      "title": "Langfuse — Cost Tracking Documentation",
+      "url": "https://langfuse.com/docs"
+    }
+  ]
+}

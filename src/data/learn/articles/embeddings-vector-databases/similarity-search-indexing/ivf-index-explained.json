@@ -1,0 +1,410 @@
+{
+  "slug": "ivf-index-explained",
+  "title": "What Is an IVF Index? Clustering Vectors for Faster Search",
+  "shortTitle": "IVF Index",
+  "seoTitle": "What Is an IVF Index? Inverted File Vector Search",
+  "metaDescription": "IVF speeds up vector search by clustering vectors and only scanning the nearest clusters. Learn how nprobe and nlist work and how IVF compares to HNSW.",
+  "keywords": [
+    "what is an ivf index",
+    "inverted file index vector search",
+    "ivf nprobe nlist explained",
+    "ivf vs hnsw vector index",
+    "ivfflat vs ivfpq"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn how an IVF index partitions vectors into clusters so search only scans the few buckets near your query, and how to tune nlist and nprobe.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A [vector database](/learn/embeddings-vector-databases/vector-database-guides/what-is-a-vector-database) stores your data as [embeddings](/learn/embeddings-vector-databases/embeddings-explained/what-are-embeddings) — long lists of numbers where similar items sit close together. To answer \"find the items most like this query,\" the simplest method compares the query against *every* stored vector. That's exact, but with ten million vectors it's painfully slow. An **IVF index** is one of the classic tricks for skipping most of that work."
+        },
+        {
+          "type": "p",
+          "md": "**IVF** stands for **inverted file index**. The idea is to sort your vectors into buckets ahead of time, then at search time only open the few buckets nearest your query. You trade a tiny chance of missing the true best match for a search that's often 10–100x faster."
+        },
+        {
+          "type": "p",
+          "md": "Think of a giant grocery warehouse. Without organization, finding peanut butter means walking past every single product. Instead the warehouse groups items into aisles — dairy, bakery, snacks. When you want peanut butter you walk straight to the snacks aisle and ignore the rest of the building. IVF does exactly this for vectors: it carves the space into *clusters* (the aisles), figures out which clusters your query belongs near, and searches only inside those."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The \"inverted file\" name is borrowed from text search, where an inverted index maps each *word* to the list of documents containing it. Here, each *cluster* maps to the list of vectors that fell into it. IVF powers Facebook AI's **FAISS** library and Postgres' **pgvector** `ivfflat` index, so you'll meet it constantly in real systems."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The core problem IVF solves is the cost of **brute-force search**. Comparing a query to every vector is called a *flat* or *exact* search. It always returns the true nearest neighbors, but its cost grows linearly with the number of vectors — double your data, double your search time. At a few thousand vectors nobody notices. At tens of millions, every query becomes too slow and too expensive to serve in real time."
+        },
+        {
+          "type": "p",
+          "md": "IVF belongs to the family of [approximate nearest neighbor](/learn/embeddings-vector-databases/similarity-search-indexing/approximate-nearest-neighbors) (ANN) methods. \"Approximate\" is the key word: instead of guaranteeing the perfect top results, it returns *almost always the right* results while scanning a small slice of your data. For [semantic search](/learn/embeddings-vector-databases/similarity-search-indexing/what-is-semantic-search), recommendations, and RAG retrieval, that tradeoff is almost always worth it — a 99% chance of the correct neighbors at 50x the speed beats a perfect answer that arrives too late."
+        },
+        {
+          "type": "p",
+          "md": "Why IVF specifically, and not its famous rival [HNSW](/learn/embeddings-vector-databases/similarity-search-indexing/hnsw-explained)? Three reasons builders reach for IVF:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Lower memory.** IVF stores a flat list of vectors plus a small table of cluster centers. HNSW builds a graph with many links per vector, which can eat several times more RAM. On a large dataset that gap decides whether your index fits in memory at all.",
+            "**Pairs naturally with compression.** IVF combines cleanly with product quantization (the `IVFPQ` variant) to shrink each vector to a few bytes, letting billions of vectors fit on one machine.",
+            "**Simple, tunable knobs.** IVF exposes exactly two dials — how many buckets to create and how many to search — that map directly to the speed-versus-accuracy tradeoff. That makes its behavior easy to reason about and adjust."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "IVF has a one-time **build** phase and a per-query **search** phase. The build phase clusters your vectors; the search phase routes each query to the nearest clusters and scans only those."
+        },
+        {
+          "type": "h3",
+          "text": "Build: train, then add"
+        },
+        {
+          "type": "p",
+          "md": "First you **train** the index. You pick `nlist` — the number of clusters (buckets) you want — and run a clustering algorithm (k-means) over a sample of your vectors. K-means finds `nlist` *centroids*: representative center points, one per cluster. These centroids are the \"aisle signs.\" The component that holds them and decides which cluster a vector belongs to is called the **coarse quantizer** — \"coarse\" because it only sorts vectors into broad buckets, not exact positions."
+        },
+        {
+          "type": "p",
+          "md": "Then you **add** your vectors. Each vector is assigned to the cluster whose centroid is closest to it, and appended to that cluster's list (its *inverted list*). After this, every vector lives in exactly one bucket, and the index knows, for each centroid, which vectors fell under it."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Build — done once, up front",
+            "steps": [
+              {
+                "label": "Pick nlist",
+                "sub": "e.g. 4096 clusters"
+              },
+              {
+                "label": "Train (k-means)",
+                "sub": "find nlist centroids"
+              },
+              {
+                "label": "Add vectors",
+                "sub": "assign each to nearest centroid"
+              },
+              {
+                "label": "Inverted lists",
+                "sub": "centroid → its vectors",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "IVF *must* be trained before it can store data — that's the biggest practical difference from HNSW, which needs no training. If your dataset is still tiny or grows constantly, training on too few or unrepresentative vectors gives lopsided clusters and worse recall. Train on a representative sample (FAISS suggests on the order of 30–256 vectors per cluster)."
+        },
+        {
+          "type": "h3",
+          "text": "Search: probe the nearest buckets"
+        },
+        {
+          "type": "p",
+          "md": "When a query arrives, IVF first compares it against the `nlist` centroids — a cheap step, since there are far fewer centroids than vectors. It picks the `nprobe` closest centroids, opens only those buckets, and does an exact comparison against the vectors inside them. The best matches from those buckets become your results. Everything in the un-probed clusters is simply never looked at."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Search — every query",
+            "steps": [
+              {
+                "label": "Query vector",
+                "sub": "the embedding to match"
+              },
+              {
+                "label": "Compare to centroids",
+                "sub": "only nlist of them"
+              },
+              {
+                "label": "Pick nprobe clusters",
+                "sub": "the nearest buckets"
+              },
+              {
+                "label": "Scan those lists",
+                "sub": "exact compare inside"
+              },
+              {
+                "label": "Top-k results",
+                "sub": "best matches found",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The whole speedup comes from one number: how many vectors you skip. If you have 10 million vectors split into 4,096 even clusters, each holds about 2,400 vectors. With `nprobe = 8` you scan roughly 8 × 2,400 ≈ 19,000 vectors instead of 10,000,000 — under 0.2% of the data. That's the magic, and it's also the risk: if the true best match happens to live in a cluster you didn't probe, you miss it."
+        }
+      ]
+    },
+    {
+      "id": "nlist-and-nprobe",
+      "title": "The two knobs: nlist and nprobe",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Almost all of IVF tuning is balancing these two parameters. They control different things and you set them at different times."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Knob",
+            "Set when",
+            "What it controls",
+            "Turn it up to…"
+          ],
+          "rows": [
+            [
+              "`nlist`",
+              "At build / train time",
+              "How many clusters exist (bucket count)",
+              "Make each bucket smaller, so scanning a bucket is faster — but centroid comparison costs more"
+            ],
+            [
+              "`nprobe`",
+              "At query time",
+              "How many clusters each search opens",
+              "Scan more buckets → higher recall, slower search"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The crucial point: **`nprobe` is the live accuracy dial.** You fix `nlist` when you build the index, but you can change `nprobe` on every single query without rebuilding anything. Want more accurate results for an important query? Raise `nprobe`. Need lower latency? Lower it. At `nprobe = nlist` you probe every bucket, which is exact search again — slow, but a useful sanity check that your index isn't losing matches for some other reason."
+        },
+        {
+          "type": "p",
+          "md": "A common rule of thumb for `nlist` is to scale it with the square root of your vector count (roughly `4 * sqrt(N)` is a frequently cited starting point), then tune `nprobe` empirically against a recall target. There's no universal best value — the right pair depends on your data's shape and how much accuracy you're willing to trade for speed."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "How the knobs trade off",
+            "columns": [
+              {
+                "title": "More nprobe",
+                "accent": true,
+                "items": [
+                  "Opens more buckets per query",
+                  "Higher recall (fewer missed matches)",
+                  "Slower, more vectors scanned",
+                  "Changeable per query, no rebuild"
+                ]
+              },
+              {
+                "title": "More nlist",
+                "items": [
+                  "Splits data into smaller buckets",
+                  "Each bucket scan is cheaper",
+                  "But more centroids to compare first",
+                  "Fixed at build time; rebuild to change"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "**Recall** here means the fraction of the true top-k neighbors your approximate search actually returns. Measure it: take a sample of queries, compute the exact answers once with a flat index, then sweep `nprobe` and watch where recall plateaus. Pick the smallest `nprobe` that hits your target — anything higher just buys latency you don't need."
+        }
+      ]
+    },
+    {
+      "id": "ivf-vs-hnsw",
+      "title": "IVF vs HNSW: which to pick",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "IVF and [HNSW](/learn/embeddings-vector-databases/similarity-search-indexing/hnsw-explained) are the two ANN index types you'll meet most often, and they take opposite approaches. IVF is *cluster-based*: it partitions the space and scans nearby partitions. HNSW is *graph-based*: it builds a navigable network of vectors and walks the graph toward the query. Neither is universally better — they fit different constraints."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "",
+            "IVF",
+            "HNSW"
+          ],
+          "rows": [
+            [
+              "Approach",
+              "Cluster the space, probe nearby buckets",
+              "Walk a graph of nearest-neighbor links"
+            ],
+            [
+              "Training",
+              "Required (k-means up front)",
+              "None — builds as you insert"
+            ],
+            [
+              "Memory use",
+              "Low — flat lists + centroids",
+              "Higher — many graph links per vector"
+            ],
+            [
+              "Main speed knob",
+              "`nprobe` (per query)",
+              "`ef_search` (per query)"
+            ],
+            [
+              "Insert / update",
+              "Easy to add; drifts as data shifts",
+              "Easy to add; no retraining needed"
+            ],
+            [
+              "Compression",
+              "Pairs well with PQ (`IVFPQ`)",
+              "Harder to compress as effectively"
+            ],
+            [
+              "Best when",
+              "Huge datasets, tight RAM budget",
+              "Need top recall at low latency"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "A practical way to choose: if RAM is your binding constraint and your dataset is very large, IVF — especially `IVFPQ` — lets you fit far more vectors per machine. If you want the highest recall at the lowest query latency and can afford the memory, HNSW usually wins, which is why it's the default in many vector databases. Both are approximate; both have a per-query knob; the difference is the data structure underneath and what it costs you in memory."
+        },
+        {
+          "type": "p",
+          "md": "One more wrinkle on quality. With IVF, an inherent weakness is the **cluster boundary problem**: if your query sits right between two clusters, the true nearest neighbor might fall just inside a bucket you didn't probe. Raising `nprobe` covers more boundary cases. HNSW sidesteps this because its graph links cross cluster-like regions, but it pays for that in memory and build complexity."
+        }
+      ]
+    },
+    {
+      "id": "ivfflat-vs-ivfpq",
+      "title": "IVFFlat vs IVFPQ in practice",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "\"IVF\" describes how vectors are *partitioned*. What you store *inside* each bucket is a separate choice, and it gives you two common variants you'll see named in FAISS and pgvector."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**IVFFlat** stores the full, uncompressed vectors in each bucket. Search inside a probed bucket is an exact comparison, so recall is high — but you pay full memory for every vector. This is the `ivfflat` index type in pgvector.",
+            "**IVFPQ** adds *product quantization*: it compresses each vector into a short code of a few bytes before storing it. Comparisons inside a bucket use the compressed codes, so the index is dramatically smaller (billions of vectors on one box) at the cost of some accuracy from the lossy compression."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Here's the shape of building and searching an IVFFlat index with FAISS. Notice the explicit `train` step and the per-query `nprobe`."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "ivf_faiss.py",
+          "code": "import faiss\nimport numpy as np\n\nd = 768            # embedding dimension\nnlist = 4096       # number of clusters (buckets)\nN = 1_000_000\n\n# Your corpus of embeddings, L2-normalized for cosine-style search.\nvectors = np.random.rand(N, d).astype(\"float32\")\n\n# The coarse quantizer measures distance to each centroid.\nquantizer = faiss.IndexFlatL2(d)\nindex = faiss.IndexIVFFlat(quantizer, d, nlist)\n\n# 1) TRAIN: learn nlist centroids from a representative sample.\nindex.train(vectors)        # required before adding\n\n# 2) ADD: assign every vector to its nearest centroid's bucket.\nindex.add(vectors)\n\n# 3) SEARCH: nprobe is the live accuracy/speed dial.\nindex.nprobe = 16           # open the 16 nearest buckets per query\nquery = np.random.rand(1, d).astype(\"float32\")\ndistances, ids = index.search(query, k=5)\nprint(ids)\n\n# To switch to compressed IVFPQ, build it like this instead:\n# m = 64  # bytes per compressed vector\n# index = faiss.IndexIVFPQ(quantizer, d, nlist, m, 8)"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The distance metric inside the buckets still matters. Whether you compare with L2 distance, [cosine similarity, or dot product](/learn/embeddings-vector-databases/similarity-search-indexing/cosine-similarity-vs-dot-product) must match how your [embedding model](/learn/embeddings-vector-databases/embeddings-explained/what-are-embeddings) was trained. IVF only changes *which* vectors you compare against, not *how* you score the comparison."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The basic build-then-probe picture is enough to use IVF well. A few deeper realities matter once you run it in production."
+        },
+        {
+          "type": "p",
+          "md": "**Clusters drift as your data changes.** The centroids are frozen at training time. If your data distribution shifts — new topics, new languages, a different mix of documents — the original clusters stop reflecting reality, buckets grow uneven, and recall slowly degrades. Unlike HNSW, IVF doesn't self-adjust. The fix is periodic retraining and reindexing on fresh data, which you should schedule, not wait to discover from falling quality."
+        },
+        {
+          "type": "p",
+          "md": "**Uneven buckets hurt both speed and recall.** K-means rarely produces equal-sized clusters; some buckets end up far larger than others. A query routed to a giant bucket scans many vectors (slow), while a query near a sparse region may need a higher `nprobe` to find enough candidates (lower recall at a fixed setting). Watching the size distribution of your inverted lists is a good health check."
+        },
+        {
+          "type": "p",
+          "md": "**Over-fetch, then re-rank.** Because IVF is approximate, a common pattern is to retrieve more candidates than you need (say top-50), then re-rank them with the exact metric or a heavier model to recover quality. This is especially valuable with IVFPQ, where the compressed comparison is rough — you let IVF narrow the field cheaply, then refine the survivors precisely."
+        },
+        {
+          "type": "p",
+          "md": "**It composes with other tricks.** `IVFPQ` is the most common compound form, and FAISS lets you stack further options (residual encoding, an HNSW coarse quantizer to speed up centroid lookup, and so on). You don't need these to start, but it's why IVF scales to billions of vectors where a flat index would be hopeless."
+        },
+        {
+          "type": "p",
+          "md": "The durable lesson: IVF turns one big exact search into a tiny exact search over a smart shortlist. Everything you tune — `nlist`, `nprobe`, the storage variant, the retrain cadence — is just managing the same tradeoff between how much you scan and how often you're right. To zoom back out, see [approximate nearest neighbor search](/learn/embeddings-vector-databases/similarity-search-indexing/approximate-nearest-neighbors) for the whole family, or [comparing vector databases](/learn/embeddings-vector-databases/vector-database-guides/vector-db-comparison) for how different systems expose these indexes."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is an IVF index in vector search?",
+      "a": "IVF (inverted file index) is an approximate nearest neighbor method that clusters your vectors into buckets at build time, then at query time only scans the few buckets nearest the query instead of every vector. This trades a small chance of missing the true best match for search that is often 10–100x faster. It powers FAISS and pgvector's `ivfflat`."
+    },
+    {
+      "q": "What do nprobe and nlist mean in IVF?",
+      "a": "`nlist` is the number of clusters (buckets) you create when training the index — set once at build time. `nprobe` is how many of those buckets each search opens — set per query. Raising `nprobe` improves recall but slows search, and you can change it on every query without rebuilding the index."
+    },
+    {
+      "q": "Is IVF better than HNSW?",
+      "a": "Neither is universally better. IVF uses less memory and pairs well with compression (IVFPQ), so it suits very large datasets on tight RAM budgets, but it needs training and can drift as data changes. HNSW needs no training and usually gives higher recall at lower latency, but uses more memory. Pick based on your memory budget and recall needs."
+    },
+    {
+      "q": "What is the difference between IVFFlat and IVFPQ?",
+      "a": "Both partition vectors into IVF clusters; the difference is what they store inside each bucket. IVFFlat keeps full uncompressed vectors, giving high accuracy but full memory cost. IVFPQ compresses each vector with product quantization into a few bytes, making the index far smaller at some loss of accuracy — good for fitting billions of vectors."
+    },
+    {
+      "q": "Does an IVF index need to be trained?",
+      "a": "Yes. IVF must be trained before you add data, because training runs k-means to find the cluster centroids it uses to route vectors and queries. This is a key difference from HNSW, which needs no training. Train on a representative sample of your vectors, and retrain periodically if your data distribution shifts over time."
+    },
+    {
+      "q": "Why might IVF miss the nearest neighbor?",
+      "a": "IVF only scans the `nprobe` clusters closest to the query, so if the true nearest neighbor sits in a bucket you didn't probe — common when a query lands near a cluster boundary — it is missed. Raising `nprobe` opens more buckets and recovers more of these boundary cases at the cost of slower search."
+    }
+  ],
+  "related": [
+    "approximate-nearest-neighbors",
+    "hnsw-explained",
+    "what-is-semantic-search",
+    "cosine-similarity-vs-dot-product",
+    "what-is-a-vector-database",
+    "vector-db-comparison"
+  ],
+  "furtherReading": [
+    {
+      "title": "Faiss wiki — Guidelines to choose an index (GitHub)",
+      "url": "https://github.com/facebookresearch/faiss/wiki/Guidelines-to-choose-an-index"
+    },
+    {
+      "title": "pgvector — Indexing (GitHub)",
+      "url": "https://github.com/pgvector/pgvector"
+    },
+    {
+      "title": "Inverted index (Wikipedia)",
+      "url": "https://en.wikipedia.org/wiki/Inverted_index"
+    }
+  ]
+}

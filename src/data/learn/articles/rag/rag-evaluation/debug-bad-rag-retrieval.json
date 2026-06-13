@@ -1,0 +1,343 @@
+{
+  "slug": "debug-bad-rag-retrieval",
+  "title": "How to Debug Bad RAG Retrieval",
+  "shortTitle": "Debugging Bad Retrieval",
+  "seoTitle": "How to Debug Bad RAG Retrieval, Step by Step",
+  "metaDescription": "Your RAG answers are wrong, but is it retrieval or generation? Learn a step-by-step method to isolate why the right chunks aren't being found and fix it.",
+  "keywords": [
+    "debug rag retrieval",
+    "rag not finding documents",
+    "fix bad retrieval rag",
+    "rag retrieval troubleshooting",
+    "wrong chunks retrieved"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You'll get a systematic checklist to find out why your RAG isn't retrieving the right chunks and how to fix each cause.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Your [RAG](/learn/rag/rag-fundamentals/what-is-rag/) app gives a wrong or vague answer. The instinct is to blame the model and start rewriting the prompt. Usually that's the wrong place to look. In most failing RAG systems the model never had a chance — it answered fine, but it was handed the wrong source text. The bug lives in **retrieval**, the step that decides which chunks get pasted into the prompt."
+        },
+        {
+          "type": "p",
+          "md": "Think of a librarian fetching books for a researcher. The researcher (the model) is competent. But if the librarian brings back the wrong three books, or brings the right book with the key chapter torn out, the researcher's summary will be wrong — and it won't be the researcher's fault. Debugging bad RAG retrieval is figuring out *where in the fetch* the breakdown happened: was the book even in the library? Was it shelved findably? Did the librarian search for the right thing?"
+        },
+        {
+          "type": "p",
+          "md": "This article is a hands-on debugging flow, not a scoring framework. We walk one failing question down the pipeline, stage by stage, and at each stage we ask a single yes/no question. The first stage that answers *no* is your bug. Fix that, re-run, repeat."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "RAG is famously easy to demo and easy to do badly. A weekend prototype answers five questions correctly; in production it quietly fails on the sixth, and nobody knows why. Without a method, debugging turns into guesswork: people swap embedding models, re-chunk everything, bump `top_k`, and rewrite the system prompt all at once — then can't tell which change helped, or whether they just got lucky on the one question they re-tested."
+        },
+        {
+          "type": "p",
+          "md": "The core reason a method matters is that a RAG pipeline has **several independent failure points in series**, and they produce nearly identical symptoms. \"The answer is wrong\" can mean the fact isn't in your corpus at all, or it's there but chunked into uselessness, or the chunk exists but the embedding can't find it, or it was retrieved but a reranker buried it, or all of that worked and the model simply ignored good context. Same symptom, five different root causes, five different fixes. Guessing wastes hours and often makes things worse."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Cost of guessing wrong.** Switching embedding models means re-embedding your whole corpus — slow and expensive — and it does nothing if your real bug is chunking.",
+            "**Symptoms lie.** A confident, fluent wrong answer looks like a model problem but is almost always a retrieval problem.",
+            "**It compounds.** An undiagnosed retrieval bug silently degrades every answer, not just the one you noticed.",
+            "**It's measurable.** Unlike vague prompt-tweaking, each stage below has a concrete yes/no test you can automate and put in [RAG evaluation](/learn/rag/rag-evaluation/how-to-evaluate-rag/)."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The payoff: instead of \"RAG is flaky,\" you get \"the answer wasn't retrieved because the chunk size split the table from its header.\" That sentence tells you exactly what to fix."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works: the debugging flow",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The method is a linear walk through the pipeline. Pick **one** question that's failing — a single concrete example, not \"it's bad in general.\" You know the correct answer and roughly where it lives in your documents. Now push that question through each gate below in order. Stop at the first gate that fails; that's your root cause."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Walk a failing query through these gates — stop at the first NO",
+            "steps": [
+              {
+                "label": "1. In corpus?",
+                "sub": "does the answer exist at all"
+              },
+              {
+                "label": "2. Chunked OK?",
+                "sub": "is it intact in one chunk"
+              },
+              {
+                "label": "3. Embeds find it?",
+                "sub": "is it in top-k by vector"
+              },
+              {
+                "label": "4. Right search?",
+                "sub": "keyword vs semantic"
+              },
+              {
+                "label": "5. Rerank kept it?",
+                "sub": "not buried below cutoff"
+              },
+              {
+                "label": "6. Model used it?",
+                "sub": "context present, ignored",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The single most useful habit, before any of this, is to **log what your retriever actually returned** for the failing query — the exact chunk texts and their scores. Most RAG bugs become obvious the moment you read the retrieved chunks with your own eyes. If you can't see what was retrieved, you're debugging blind."
+        },
+        {
+          "type": "h3",
+          "text": "Gate 1 — Is the answer even in your corpus?"
+        },
+        {
+          "type": "p",
+          "md": "The most embarrassing and most common cause: the document was never ingested, or got filtered out, or lives in a format your loader skipped (a scanned PDF with no text layer, a table inside an image, a page behind auth). Search your *raw* corpus for a keyword from the correct answer — plain string search, before any embedding. If it isn't there, no retriever can find it. **Fix:** ingest the missing source; add OCR for scanned files; check your loader didn't silently drop anything."
+        },
+        {
+          "type": "h3",
+          "text": "Gate 2 — Did chunking keep the answer intact?"
+        },
+        {
+          "type": "p",
+          "md": "The fact is in the corpus, but is it in *one* chunk? If your chunker split a sentence, separated a table from its header row, or cut the answer across a boundary, each fragment loses the meaning that made it findable. Pull up the chunk that *should* contain the answer and read it. **Fix:** increase chunk size or overlap; chunk on semantic boundaries (headings, paragraphs) instead of a fixed character count; keep tables and their headers together."
+        },
+        {
+          "type": "h3",
+          "text": "Gate 3 — Can the embeddings actually retrieve it?"
+        },
+        {
+          "type": "p",
+          "md": "The chunk exists and is intact, but does it land in the top-k for this query? Embed the query, run the search, and check whether the correct chunk appears at all — and at what rank. If it's rank 50 instead of rank 3, your `top_k` cutoff is throwing it away. If it's nowhere, the embedding model isn't capturing the link between question wording and chunk wording. **Fix:** raise `top_k` to retrieve more candidates; try a stronger embedding model; or move to the next gate, because the problem may be that this query needs keywords, not meaning."
+        },
+        {
+          "type": "h3",
+          "text": "Gate 4 — Is semantic search the right tool for this query?"
+        },
+        {
+          "type": "p",
+          "md": "Vector search matches on *meaning*, which is great for paraphrased questions but bad at exact tokens: error codes, product SKUs, version numbers, rare proper names. \"What does error E-4021 mean?\" can score low semantically because `E-4021` is just noise to an embedding model. The fix is **hybrid search**: blend keyword search (the classic BM25 algorithm) with vector search so exact matches and meaning matches both surface. **Fix:** add a keyword/BM25 channel and merge the results."
+        },
+        {
+          "type": "h3",
+          "text": "Gate 5 — Did reranking bury the right chunk?"
+        },
+        {
+          "type": "p",
+          "md": "If you use a reranker — a second model that re-scores candidates — it can occasionally demote the correct chunk below your final cutoff. Log the candidate list *before* and *after* reranking and compare. If the right chunk was in the pre-rerank set but dropped out after, the reranker or its cutoff is the culprit. **Fix:** raise the post-rerank cutoff; try a different reranker; or confirm the reranker is even getting the full query."
+        },
+        {
+          "type": "h3",
+          "text": "Gate 6 — The context was right, but the model ignored it"
+        },
+        {
+          "type": "p",
+          "md": "Only now, having confirmed the correct chunk reached the prompt, is it fair to suspect generation. The model may have missed a fact buried in the middle of a long context, blended two chunks, or followed its training-time memory over the supplied text. **Fix:** trim the context to the few chunks that matter, put the most relevant first, and instruct the model to answer only from the provided context and to say \"I don't know\" otherwise."
+        }
+      ]
+    },
+    {
+      "id": "symptom-to-fix-map",
+      "title": "Symptom-to-fix cheat sheet",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you've run the gates a few times, you'll start recognizing failures by their fingerprint. This table maps the symptom you observe to the gate it usually points at and the first fix to try."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Symptom you see",
+            "Most likely gate",
+            "First fix to try"
+          ],
+          "rows": [
+            [
+              "Answer is totally absent / model says \"I don't know\"",
+              "Gate 1: not in corpus",
+              "Ingest the missing source; check the loader skipped nothing"
+            ],
+            [
+              "Answer is partial or contradicts a table",
+              "Gate 2: bad chunking",
+              "Bigger chunks/overlap; keep tables with their headers"
+            ],
+            [
+              "Paraphrased questions work, exact ones don't",
+              "Gate 4: needs keywords",
+              "Add hybrid (BM25 + vector) search"
+            ],
+            [
+              "Exact IDs / codes / SKUs never match",
+              "Gate 4: needs keywords",
+              "Add keyword channel for exact-token queries"
+            ],
+            [
+              "Right chunk exists but sits at a low rank",
+              "Gate 3: weak embedding / low top_k",
+              "Raise top_k; try a stronger embedding model"
+            ],
+            [
+              "Good candidates retrieved, final answer still wrong",
+              "Gate 5 or 6: rerank or generation",
+              "Compare pre/post rerank lists; trim and reorder context"
+            ],
+            [
+              "Answer cites the wrong source confidently",
+              "Gate 6: model ignored context",
+              "Fewer chunks, most-relevant first, strict \"answer only from context\""
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Build a tiny labelled set: 15–30 real questions, each tagged with the chunk (or document id) that contains the answer. Then you can measure retrieval directly — did the right chunk appear in the top-k? — instead of eyeballing final answers. See [retrieval precision, recall, and MRR](/learn/rag/rag-evaluation/retrieval-precision-recall-mrr/) for the metrics that turn this into a number."
+        }
+      ]
+    },
+    {
+      "id": "a-worked-debugging-session",
+      "title": "A worked debugging session",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Concretely, here's the most valuable diagnostic you can write: a function that prints what the retriever returned for one query, *separately* from what the model finally said. This isolates retrieval from generation in one glance."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "inspect_retrieval.py",
+          "code": "def debug_query(question, expected_substring, retriever, k=10):\n    \"\"\"Print what retrieval returned, so we can see WHERE it failed.\"\"\"\n    hits = retriever.search(question, k=k)  # -> [(chunk_text, score), ...]\n\n    # Gate 3/5 check: did the right chunk come back, and at what rank?\n    found_rank = None\n    for rank, (text, score) in enumerate(hits, start=1):\n        if expected_substring.lower() in text.lower():\n            found_rank = rank\n        print(f\"#{rank:2d}  score={score:.3f}  {text[:90]!r}\")\n\n    if found_rank is None:\n        print(\"\\n>> Correct chunk NOT in top-k. Suspect Gate 1/2/3/4:\")\n        print(\"   grep the raw corpus first; if it's there, it's chunking\")\n        print(\"   or embedding. If it's an exact ID, add keyword search.\")\n    elif found_rank > 3:\n        print(f\"\\n>> Found, but at rank {found_rank}. Raise top_k or rerank.\")\n    else:\n        print(f\"\\n>> Retrieval is FINE (rank {found_rank}).\")\n        print(\"   The bug is downstream: rerank cutoff or generation.\")\n\ndebug_query(\n    question=\"What is the refund window for physical items?\",\n    expected_substring=\"within 30 days\",\n    retriever=my_retriever,\n)"
+        },
+        {
+          "type": "p",
+          "md": "Reading the printed list answers most questions instantly. The correct chunk is missing entirely → walk Gates 1–4. It's present but at rank 8 → Gate 3, raise `top_k`. It's at rank 1 and the answer is *still* wrong → stop touching retrieval, the bug is in reranking or generation. This one habit — look at the retrieved chunks before forming any theory — saves more debugging time than any other tip in this article."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common debugging pitfalls",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Even with the right method, a few habits send people in circles."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Changing several things at once.** Re-chunking, swapping embeddings, and rewriting the prompt in one commit means you can't attribute the fix. Change one variable, re-measure, then decide.",
+            "**Testing on the one question you noticed.** Fixing a single example often breaks two others. Always re-run your small labelled set, not just the failing query.",
+            "**Believing the final answer.** A fluent answer that happens to be right can hide broken retrieval (the model guessed from memory). Check that the right chunk was actually retrieved, not just that the output looked good.",
+            "**Blaming the model first.** Generation is the *last* gate for a reason — it's the least common root cause. Earn the right to suspect it by clearing Gates 1–5.",
+            "**Mismatched embedding models.** Embedding the query with a different model (or different settings) than you used for the chunks silently destroys retrieval. Same model, same normalization, both sides."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Watch for an embedding **version mismatch** after an upgrade: if you re-embed your corpus with a new model but your query path still calls the old one (or vice versa), every score is garbage and retrieval collapses across the board. A sudden, corpus-wide quality drop right after a deploy is the classic fingerprint."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The six-gate walk catches the overwhelming majority of retrieval bugs. Once it's second nature, a few deeper topics are worth knowing."
+        },
+        {
+          "type": "p",
+          "md": "**Turn the gates into automated metrics.** Manual inspection is great for one query, but you want a dashboard. With a labelled question→chunk set you can compute **retrieval precision and recall** (did the right chunks come back, and how much junk came with them) and **MRR** (how high the first correct chunk ranked) — see [precision, recall, and MRR](/learn/rag/rag-evaluation/retrieval-precision-recall-mrr/). Track these on every change so you catch a regression before users do."
+        },
+        {
+          "type": "p",
+          "md": "**Separate retrieval failures from generation failures in your scores.** A low end-to-end score is ambiguous. Frameworks built for this split the two: [faithfulness vs relevance](/learn/rag/rag-evaluation/faithfulness-vs-relevance/) measures whether the answer stuck to the retrieved text (generation) separately from whether the retrieved text was on-topic (retrieval). Tools like [RAGAS](/learn/rag/rag-evaluation/what-is-ragas/) automate exactly this split so you don't have to guess which half broke."
+        },
+        {
+          "type": "p",
+          "md": "**Query transformation for hard questions.** Some queries fail retrieval no matter the index because the user's wording shares no vocabulary with the source. Rewriting the query with an LLM, splitting a compound question into parts, or generating a hypothetical answer and searching with *that* (the HyDE trick) can rescue queries that Gate 3 keeps failing. This is a fix that lives *before* retrieval rather than inside it."
+        },
+        {
+          "type": "p",
+          "md": "**Know the limits.** Retrieval quality is genuinely hard to measure without good labelled data, and every chunking or ranking choice is a tradeoff that only surfaces on questions you didn't anticipate. The durable lesson is the same one that holds across all of RAG: a system is only as good as what its retriever puts in front of the model, so when an answer is wrong, suspect the fetch first — and the structured walk above is how you find exactly where the fetch went wrong. To zoom back out to the whole pipeline, revisit [how the RAG pipeline works](/learn/rag/rag-fundamentals/how-rag-pipeline-works/)."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "How do I know if my RAG problem is retrieval or generation?",
+      "a": "Log the chunks your retriever returned for the failing query, separately from the final answer. If the correct chunk isn't in the retrieved set, it's a retrieval problem (Gates 1–5). If the correct chunk *was* retrieved but the answer is still wrong, it's generation (Gate 6). Generation is the least common cause, so check retrieval first."
+    },
+    {
+      "q": "Why isn't my RAG system finding documents that I know exist?",
+      "a": "Walk the gates in order. First confirm the document was actually ingested (keyword-search the raw corpus). If it's there, check that chunking didn't split the answer apart. If the chunk is intact, check whether the embedding ranks it in the top-k — and if the query contains exact IDs or codes, add keyword/BM25 search, since vector search matches meaning, not exact tokens."
+    },
+    {
+      "q": "My RAG works for normal questions but fails on error codes and IDs. Why?",
+      "a": "Vector search matches on meaning, and an exact token like `E-4021` or a SKU carries little semantic signal, so it scores low. The fix is hybrid search: run keyword (BM25) search alongside vector search and merge the results, so exact-match queries and paraphrased queries both retrieve well."
+    },
+    {
+      "q": "How many test questions do I need to debug RAG retrieval?",
+      "a": "A small labelled set of 15–30 real questions is enough to start. Tag each with the chunk or document id that contains the correct answer. That lets you measure retrieval directly — did the right chunk land in the top-k — instead of eyeballing final answers, and it catches regressions when you change chunking or embeddings."
+    },
+    {
+      "q": "Could a reranker be making my RAG worse?",
+      "a": "Occasionally, yes. A reranker re-scores candidates and can demote the correct chunk below your final cutoff. To check, log the candidate list before and after reranking: if the right chunk was present pre-rerank but dropped out after, raise the post-rerank cutoff or try a different reranker."
+    },
+    {
+      "q": "I upgraded my embedding model and retrieval quality dropped everywhere. What happened?",
+      "a": "This is almost always an embedding mismatch. If you re-embedded your corpus with the new model but your query path still uses the old model (or different normalization), every similarity score is meaningless. Make sure both the chunks and the queries use the exact same embedding model and settings."
+    }
+  ],
+  "related": [
+    "how-to-evaluate-rag",
+    "retrieval-precision-recall-mrr",
+    "faithfulness-vs-relevance",
+    "what-is-ragas",
+    "what-is-rag",
+    "rag-pipeline-explained"
+  ],
+  "furtherReading": [
+    {
+      "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks (arXiv)",
+      "url": "https://arxiv.org/abs/2005.11401"
+    },
+    {
+      "title": "RAGAS — Documentation",
+      "url": "https://docs.ragas.io/"
+    },
+    {
+      "title": "Retrieval — LangChain Docs",
+      "url": "https://docs.langchain.com/oss/python/langchain/retrieval"
+    },
+    {
+      "title": "Embeddings — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/embeddings"
+    }
+  ]
+}

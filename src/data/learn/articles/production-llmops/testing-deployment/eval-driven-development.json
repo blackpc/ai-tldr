@@ -1,0 +1,346 @@
+{
+  "slug": "eval-driven-development",
+  "title": "Eval-Driven Development: Writing Tests Before You Tweak the Prompt",
+  "shortTitle": "Eval-Driven Development",
+  "seoTitle": "Eval-Driven Development: Tests Before Prompt Changes",
+  "metaDescription": "Eval-driven development means building a measurable eval set before changing prompts or models, so every tweak is judged on data, not vibes. Learn the loop.",
+  "keywords": [
+    "eval-driven development",
+    "evals before prompt changes",
+    "llm test driven",
+    "prompt eval loop",
+    "measure prompt changes"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You'll understand how to build an eval set first so every prompt or model change is measured against real cases instead of judged by gut feeling.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Imagine you're tuning a recipe. You add more salt because a friend said the soup tasted bland. Did it actually get better? You can't really know unless you taste the *before* and *after* side by side, with the same spoon, ideally with a few people judging. If you just trust your memory of how it tasted yesterday, you're guessing."
+        },
+        {
+          "type": "p",
+          "md": "**Eval-driven development** is the same discipline applied to building with [large language models](/learn/llm-fundamentals/llm-basics/what-is-an-llm). Before you touch the prompt, swap the model, or change a setting, you first build an **eval set** — a fixed collection of real test cases with a way to score the answers. Then every change is judged against that set with numbers, not vibes. You change *one* thing, re-run the whole set, and compare the scores. If they went up, you keep the change. If they went down, you throw it away."
+        },
+        {
+          "type": "p",
+          "md": "The name is a deliberate echo of *test-driven development* (TDD) in normal software, where you write a failing test first, then write the code that makes it pass. Eval-driven development is the LLM version: write the eval first, then change the prompt until the eval improves. The difference is that LLM outputs aren't simply right or wrong — they're fuzzy — so instead of a green/red test, you get a **score** that you watch move up and down."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This page is about the *workflow* — the loop you run while developing. The thing the loop runs against is the dataset itself, which has its own page: see [golden datasets for LLM testing](/learn/evaluation-safety/evaluation-basics/golden-dataset-llm-testing). Think of it as discipline (eval-driven development) versus artifact (the golden dataset)."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Prompt and model changes feel deceptively easy. You edit a line, paste a test question, read the reply, and think *\"yeah, that's better.\"* That feeling is the trap. Human judgment of a single LLM output is unreliable for three concrete reasons."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**You only look at the cases you remember.** You fix the one bad answer a user complained about, eyeball it, and ship. You never re-check the fifty cases that *used* to work — so you quietly break them. This silent breakage is called a **regression**, and it is the single most common way LLM apps get worse over time.",
+            "**\"Better\" is not measurable by reading one reply.** A new prompt might fix tone but lose accuracy, or get more accurate but start ignoring an instruction. Reading one polished answer tells you nothing about the trade-off across your whole workload.",
+            "**Models are non-deterministic.** Run the same prompt twice and you can get two different answers. A single sample is noise. You need many cases, scored, to see the real signal."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Eval-driven development turns a vague \"I think this is better\" into a sentence like *\"this prompt scores 0.82 on faithfulness across 120 cases, up from 0.74, with no regressions on the 40 cases that already passed.\"* That sentence is something you can defend to a teammate, paste in a pull request, and trust six months from now. It is the difference between *engineering* an LLM feature and *fiddling* with it."
+        },
+        {
+          "type": "p",
+          "md": "It also unblocks the scary changes. Upgrading to a newer model, switching providers, or rewriting a system prompt all feel risky precisely because you can't see what they'll break. With an eval set, those become routine: run it, read the diff in scores, decide. This is the backbone of safe [model-upgrade rollouts](/learn/production-llmops/testing-deployment/llm-model-upgrade-rollout) and disciplined [testing of LLM apps](/learn/production-llmops/testing-deployment/testing-llm-apps) in general."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Eval-driven development is a tight loop. You build the eval set once (and keep growing it), then spin the loop on every change. The core rule, borrowed straight from good science: **change exactly one variable at a time, hold everything else fixed, and compare.**"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "The eval-driven loop",
+            "steps": [
+              {
+                "label": "Collect real cases"
+              },
+              {
+                "label": "Build eval set + scorer"
+              },
+              {
+                "label": "Change ONE thing"
+              },
+              {
+                "label": "Re-run the full set"
+              },
+              {
+                "label": "Compare scores"
+              },
+              {
+                "label": "Keep or revert"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "1. Collect real failing cases"
+        },
+        {
+          "type": "p",
+          "md": "Don't invent test cases from your imagination. Pull them from reality: production logs, user complaints, support tickets, the bug someone filed this morning. Each time the app gives a bad answer, that's a free, high-value test case. A case is just an **input** plus an **expected outcome** — which can be an exact answer, a list of facts the answer must contain, or a rule it must follow (\"must cite a source,\" \"must refuse,\" \"must be valid JSON\")."
+        },
+        {
+          "type": "h3",
+          "text": "2. Turn them into a scored eval set"
+        },
+        {
+          "type": "p",
+          "md": "An eval set is those cases plus a **scorer** that grades each output automatically. Scorers come in two flavors. *Code-graded* checks are cheap and exact — string match, regex, \"is this valid JSON,\" \"does it contain the order number.\" *Model-graded* checks use a second LLM as a judge for fuzzy qualities like helpfulness or faithfulness. Most real suites mix both (see [code-graded vs model-graded evals](/learn/evaluation-safety/evaluation-basics/code-vs-model-graded-evals))."
+        },
+        {
+          "type": "h3",
+          "text": "3. Change one thing, re-run, compare"
+        },
+        {
+          "type": "p",
+          "md": "Now the loop earns its keep. Record the baseline score. Make exactly one change — a reworded instruction, a different model, a higher temperature. Re-run the *entire* set, not just the case you were trying to fix. Look at two numbers: did the overall score go up, and did any previously-passing case start failing? Keep the change only if the answer is *up* and *no new regressions*."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Vibes-driven vs eval-driven",
+            "columns": [
+              {
+                "title": "Vibes-driven",
+                "items": [
+                  "Test on 1–3 cases you remember",
+                  "Judge by reading one reply",
+                  "Change several things at once",
+                  "Ship when it 'feels better'",
+                  "Discover regressions from users"
+                ]
+              },
+              {
+                "title": "Eval-driven",
+                "accent": true,
+                "items": [
+                  "Test on a fixed set of dozens+",
+                  "Judge by an automatic score",
+                  "Change one variable at a time",
+                  "Ship when the score goes up",
+                  "Catch regressions before release"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The eval set is a living asset, not a one-time chore. Every new bug becomes a new permanent case. Over time the set becomes a wall that bad changes can't get past — this is exactly [regression testing for prompts](/learn/evaluation-safety/evaluation-basics/regression-testing-llm-prompts)."
+        }
+      ]
+    },
+    {
+      "id": "a-worked-example",
+      "title": "A worked example",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Say you run a support assistant. A user reports it gave a refund window of \"60 days\" when the real policy is 30. You're tempted to just edit the prompt and move on. Eval-driven development asks you to slow down for ninety seconds first."
+        },
+        {
+          "type": "p",
+          "md": "Turn the complaint into a case, add it to a small set alongside cases that already work, and wire up a scorer. Here the scorer is mostly code-graded: each case lists facts the answer *must* contain."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "eval_set.py",
+          "code": "cases = [\n    # The new failing case, captured from a real complaint.\n    {\"q\": \"How long do I have to return a physical item?\",\n     \"must_include\": [\"30 days\"]},\n    # Cases that ALREADY work — guard them against regressions.\n    {\"q\": \"Are digital downloads refundable?\",\n     \"must_include\": [\"non-refundable\"]},\n    {\"q\": \"What are your support hours?\",\n     \"must_include\": [\"9am\", \"6pm\"]},\n]\n\ndef score(answer, case):\n    # Simple code-graded check: did every required fact show up?\n    hits = sum(s.lower() in answer.lower() for s in case[\"must_include\"])\n    return hits / len(case[\"must_include\"])   # 1.0 = perfect\n\ndef run(prompt_fn):\n    total = 0.0\n    for c in cases:\n        answer = prompt_fn(c[\"q\"])      # call your LLM app\n        total += score(answer, c)\n    return total / len(cases)            # average across the set\n\nbaseline = run(current_app)\nprint(f\"baseline: {baseline:.2f}\")"
+        },
+        {
+          "type": "p",
+          "md": "Now edit the prompt to fix the refund fact, and re-run *the same* `run()` over *all* cases:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "compare.py",
+          "code": "candidate = run(app_with_new_prompt)\nprint(f\"baseline:  {baseline:.2f}\")   # e.g. 0.67\nprint(f\"candidate: {candidate:.2f}\")  # e.g. 1.00\n\nif candidate > baseline:\n    print(\"keep it\")\nelse:\n    print(\"revert — the change made things worse\")"
+        },
+        {
+          "type": "p",
+          "md": "The payoff is the *full re-run*. Suppose your prompt edit fixed the refund case but, as a side effect, made the model start saying support hours were \"24/7.\" The support-hours case would drop from 1.0 to 0.0, the average would barely move, and you'd catch the regression instantly — long before a user does. Reading one reply would never have surfaced it."
+        }
+      ]
+    },
+    {
+      "id": "what-to-measure-and-when",
+      "title": "What to measure, and how big a change counts",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A single average score is a fine start, but it hides trade-offs. Track a few dimensions separately so you can see *what* a change helped and *what* it hurt."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Dimension",
+            "What it asks",
+            "Typical scorer"
+          ],
+          "rows": [
+            [
+              "Accuracy / correctness",
+              "Is the answer factually right?",
+              "Code: must-include facts, exact match"
+            ],
+            [
+              "Faithfulness",
+              "Does it stick to the provided source?",
+              "Model-graded judge"
+            ],
+            [
+              "Format / schema",
+              "Is it valid JSON / the right shape?",
+              "Code: parse + validate"
+            ],
+            [
+              "Instruction-following",
+              "Did it obey the rules (cite, refuse)?",
+              "Code rule or judge"
+            ],
+            [
+              "Regressions",
+              "Did anything that passed now fail?",
+              "Per-case pass/fail diff vs baseline"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "One trap: small score moves are often noise, not progress. Because models are non-deterministic, an average can wiggle by a point or two between runs even with no change at all. So watch the **per-case diff**, not just the headline number. A change that lifts five cases and breaks none is real; a change that nudges the average by 0.3% while flipping random cases back and forth is probably noise. When two prompts look genuinely close, that's the moment to reach for a proper [A/B test](/learn/production-llmops/testing-deployment/llm-ab-testing) on live traffic rather than trusting the offline set alone."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Never edit a case's expected answer *just to make a failing run pass*. That's the LLM version of editing the test to match the bug. If a case is genuinely wrong, fix it deliberately and note why — otherwise your eval set slowly rots into something that approves everything."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Eval-driven development is simple in principle and easy to do badly. The failures are predictable."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Too few cases.** Five cases can't catch what breaks on the sixth. You don't need thousands, but a serious set is dozens to low hundreds, covering the variety of real inputs — including the weird, adversarial, and empty ones.",
+            "**Only happy-path cases.** A set full of questions your app already answers well will rubber-stamp every change. Deliberately include the hard cases, the edge cases, and the ones it currently *fails* — that's where evals earn their keep.",
+            "**Changing many things at once.** Swap the model, rewrite the prompt, and bump temperature together, and a score change tells you nothing about *which* edit caused it. One variable per run.",
+            "**A leaky judge.** If you use an [LLM as a judge](/learn/evaluation-safety/llm-as-judge/llm-as-a-judge-explained), it has its own biases — it can favor longer answers, or its own model family. Spot-check the judge against human ratings before you trust its scores.",
+            "**Overfitting to the eval set.** If you tune endlessly until the set is perfect, you may be memorizing the set, not improving the app. Keep a *held-out* slice you don't tune against, and refresh cases from new production data regularly."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic loop is second nature, the practice scales up in a few well-worn directions."
+        },
+        {
+          "type": "p",
+          "md": "**Put evals in CI.** The natural next step is to run the eval set automatically on every pull request, exactly like unit tests. Define a threshold — \"average must stay ≥ baseline, zero regressions on the protected cases\" — and fail the build if a prompt change drops below it. Now a teammate physically cannot merge a change that quietly makes the app worse. This is where eval-driven development becomes true [LLMOps](/learn/production-llmops/llmops-fundamentals/what-is-llmops) rather than a personal habit."
+        },
+        {
+          "type": "p",
+          "md": "**Close the loop with production.** Your offline eval set is only as good as the cases in it, and reality keeps inventing new failure modes. Wire your [observability](/learn/production-llmops/observability-monitoring/what-is-llm-observability) so that thumbs-down feedback and flagged outputs flow back as candidate cases. The set should grow from live traffic, not from a one-time brainstorm."
+        },
+        {
+          "type": "p",
+          "md": "**Offline evals don't catch everything.** A change can pass your set and still misbehave on the messy distribution of real users. For high-stakes changes, run the new version on live traffic *without showing it to users* — [shadow mode](/learn/production-llmops/testing-deployment/shadow-mode-llm-testing) — and compare its outputs to the current version before you switch. Offline evals tell you a change is *probably* safe; shadow and A/B tests confirm it on real traffic."
+        },
+        {
+          "type": "p",
+          "md": "**The honest limits.** Evals reduce risk; they don't remove it. A score can go up while something you forgot to measure goes down. A model-graded judge can be quietly wrong in a consistent direction. And no offline set perfectly represents tomorrow's users. The durable lesson is the same one TDD taught a generation of engineers: the discipline of *deciding what \"better\" means before you change anything* is most of the value. Even an imperfect eval set, run consistently, beats the sharpest gut feeling — because the gut forgets the fifty cases it isn't looking at."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is eval-driven development for LLMs?",
+      "a": "It's a workflow where you build a measurable eval set of real test cases *before* changing a prompt or model, then judge every change by how its score moves across that set instead of by reading one reply. It's the LLM equivalent of test-driven development: write the eval first, then improve the prompt until the eval improves."
+    },
+    {
+      "q": "Why not just read the output to see if a prompt change is better?",
+      "a": "Because one polished reply hides everything you didn't look at. You can fix the case you remember while silently breaking dozens you don't re-check, and LLMs are non-deterministic, so a single sample is noise. A scored eval set run over many cases shows the real trade-off and catches regressions a quick eyeball never would."
+    },
+    {
+      "q": "How is this different from a golden dataset?",
+      "a": "A golden dataset is the *artifact* — the curated cases with trusted expected answers. Eval-driven development is the *discipline* of building that set first and running it on every change. You use the dataset; eval-driven development is the habit of using it before you tweak anything."
+    },
+    {
+      "q": "How many test cases do I need to start?",
+      "a": "More than a handful and fewer than you fear. Five cases can't catch what breaks on the sixth, but you don't need thousands either. Dozens of varied, real cases — drawn from logs, complaints, and edge cases, including ones your app currently fails — is a solid start, and you grow the set as new bugs appear."
+    },
+    {
+      "q": "How does eval-driven development catch regressions?",
+      "a": "Every change re-runs the *entire* eval set, not just the case you were trying to fix. So if your edit fixes one answer but breaks three that already worked, those cases flip from pass to fail and the per-case diff shows it immediately — before a user ever sees the regression."
+    },
+    {
+      "q": "Can I automate evals in my CI pipeline?",
+      "a": "Yes, and that's the natural endgame. Run the eval set on every pull request like unit tests, set a threshold (average must not drop, zero regressions on protected cases), and fail the build if a change falls below it. That makes it impossible to merge a prompt change that quietly degrades quality."
+    }
+  ],
+  "related": [
+    "testing-llm-apps",
+    "llm-ab-testing",
+    "llm-model-upgrade-rollout",
+    "shadow-mode-llm-testing",
+    "what-is-llmops",
+    "what-is-llm-observability"
+  ],
+  "furtherReading": [
+    {
+      "title": "Evaluating model performance — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+    },
+    {
+      "title": "Evals — OpenAI API docs",
+      "url": "https://platform.openai.com/docs/guides/evals"
+    },
+    {
+      "title": "Test-driven development — Wikipedia",
+      "url": "https://en.wikipedia.org/wiki/Test-driven_development"
+    }
+  ]
+}

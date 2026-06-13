@@ -1,0 +1,351 @@
+{
+  "slug": "query-rewriting-for-rag",
+  "title": "What Is Query Rewriting in RAG?",
+  "shortTitle": "Query Rewriting",
+  "seoTitle": "What Is Query Rewriting in RAG? Better Retrieval",
+  "metaDescription": "Users ask vague or multi-part questions that retrieval can't match. Query rewriting reshapes the question first. Learn the main techniques and when to use them.",
+  "keywords": [
+    "query rewriting rag",
+    "query expansion rag",
+    "query transformation retrieval",
+    "multi-query retrieval",
+    "improve rag queries"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You'll understand how rewriting, expanding, or splitting a user's question before retrieval improves which documents come back.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "In a [RAG system](/learn/rag/rag-fundamentals/what-is-rag), the user's question is what you search with. You embed it, hand it to the [retriever](/learn/rag/retrieval-and-reranking/what-is-a-retriever), and it pulls back the documents that look most similar. So the whole pipeline rests on one quiet assumption: that the way a person *phrases* a question lines up with the way the answer is *written* in your documents."
+        },
+        {
+          "type": "p",
+          "md": "That assumption breaks constantly. People type \"why is it broken again\" when the manual says \"intermittent connection loss after firmware update.\" They ask three things in one breath. They use a nickname for a product the docs call by its official name. The answer is sitting right there in your corpus — but the question, as written, doesn't *match* it, so retrieval comes back with junk."
+        },
+        {
+          "type": "p",
+          "md": "**Query rewriting** is the fix: before you search, you reshape the user's question into something that retrieves better. You might clean up vague phrasing, add synonyms, split a compound question into separate searches, or zoom out to a broader version of the question. Then you search with the improved version. The umbrella term for this family of tricks is **query transformation**."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Think of a sharp librarian. You walk up and mumble \"that thing about the tax stuff from last year.\" The librarian doesn't search the catalog for those literal words — they translate your mumble into \"2024 capital gains filing changes\" and *then* go to the shelves. Query rewriting is your pipeline doing that translation automatically, before retrieval ever runs."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Here is the uncomfortable truth about RAG: most failures are retrieval failures, and most retrieval failures start with the query. If the right chunk never enters the prompt, no model on earth can answer from it. You can swap in a bigger LLM, add a [reranker](/learn/rag/retrieval-and-reranking/what-is-reranking), tune your chunk size — and still get bad answers, because the search was doomed before it began by the shape of the question."
+        },
+        {
+          "type": "p",
+          "md": "Query rewriting earns its keep on the kinds of questions real users actually ask:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Vague or conversational.** \"How do I fix this?\" or \"is it down?\" carry almost no searchable signal on their own — especially with no conversation context attached.",
+            "**Vocabulary mismatch.** The user says \"sign-in,\" the docs say \"authentication.\" Pure [semantic search](/learn/embeddings-vector-databases/similarity-search-indexing/what-is-semantic-search) bridges *some* of this gap, but not exact terms like error codes, SKUs, or rare proper nouns.",
+            "**Compound questions.** \"What's the refund window, and does it apply to digital goods?\" is two questions. One embedding tries to be similar to both topics at once and ends up firmly matching neither.",
+            "**Too specific to match the framing.** \"Was Einstein born before or after the telephone was invented?\" needs two separate facts that no single chunk states together; a literal search for the whole sentence finds nothing useful."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The payoff is leverage in the cheapest possible place. Rewriting happens *before* embedding and search, so a small improvement to the query cascades into better candidates, which means a better rerank, which means a better final answer. It's the one stage where a little extra thinking up front pays off through the entire rest of the pipeline. The cost is latency — you've added an LLM call (or several) before retrieval — and that tradeoff is the heart of choosing which technique to use."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The mechanism is simple: you insert a transformation step between the raw question and the retriever. In naive RAG, the user's text goes straight to embedding. With query rewriting, an LLM (or a rule) reshapes it first, and *that* output is what you search with."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Where rewriting sits in the pipeline",
+            "steps": [
+              {
+                "label": "User question",
+                "sub": "raw, messy"
+              },
+              {
+                "label": "Rewrite step",
+                "sub": "LLM reshapes it",
+                "accent": true
+              },
+              {
+                "label": "Embed + retrieve",
+                "sub": "search with the new query"
+              },
+              {
+                "label": "Rerank",
+                "sub": "score candidates"
+              },
+              {
+                "label": "Generate",
+                "sub": "grounded answer"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "\"Rewrite step\" is a family, not one thing. Four techniques cover most of what you'll meet, and they differ in how many queries they produce and how aggressively they change the meaning."
+        },
+        {
+          "type": "h3",
+          "text": "1. Rewriting for clarity"
+        },
+        {
+          "type": "p",
+          "md": "The lightest move: clean the question up without changing what it asks. Resolve pronouns (\"is *it* down?\" → \"is the *payments API* down?\"), fold in conversation history, strip filler. This matters most in chat, where a follow-up like \"and the mobile one?\" is meaningless to a retriever until you rewrite it into a standalone, self-contained question."
+        },
+        {
+          "type": "h3",
+          "text": "2. Query expansion"
+        },
+        {
+          "type": "p",
+          "md": "Add alternative phrasings and synonyms so the search net is wider. \"How do I reset my password\" might expand to also cover \"recover account,\" \"forgot login,\" \"change credentials.\" You can do this with the LLM or with a classic thesaurus/keyword list. Expansion especially helps [keyword search like BM25](/learn/rag/retrieval-and-reranking/what-is-bm25), which is blind to synonyms by design."
+        },
+        {
+          "type": "h3",
+          "text": "3. Multi-query (sub-question splitting)"
+        },
+        {
+          "type": "p",
+          "md": "Take one question and produce *several* queries, run all of them, and merge the results. This is the answer to compound questions: split \"refund window and digital goods?\" into two searches, each clean and focused. You then dedupe and combine the hits — often with [reciprocal rank fusion](/learn/rag/retrieval-and-reranking/reciprocal-rank-fusion), which merges multiple ranked lists fairly. It's also the natural partner for [hybrid search](/learn/rag/retrieval-and-reranking/what-is-hybrid-search), where you already have several result lists to fuse."
+        },
+        {
+          "type": "h3",
+          "text": "4. Step-back prompting"
+        },
+        {
+          "type": "p",
+          "md": "Sometimes the question is *too* specific to retrieve well. Step-back prompting asks the LLM to generate a broader, more general version first — \"what's the refund policy for SKU-4471 bought on a Tuesday?\" steps back to \"what is the refund policy?\" — retrieves the general principle, and lets the generator apply it to the specific case. You retrieve the foundational chunk that actually exists in your docs instead of hunting for an exact match that doesn't."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "Multi-query: one question fans out into several searches",
+            "root": {
+              "label": "\"Refund window, and does it cover digital goods?\""
+            },
+            "children": [
+              {
+                "label": "Q1: refund window for physical items"
+              },
+              {
+                "label": "Q2: refund policy for digital goods"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "In code, the transformation is just a focused LLM call whose output you feed to the retriever instead of the raw text:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "multi_query.py",
+          "code": "from anthropic import Anthropic\n\nclient = Anthropic(api_key=\"sk-ant-...\")\n\ndef rewrite_to_subqueries(question: str) -> list[str]:\n    prompt = (\n        \"Split the user's question into 1-3 standalone search queries.\\n\"\n        \"Resolve any pronouns. Output one query per line, nothing else.\\n\\n\"\n        f\"Question: {question}\"\n    )\n    msg = client.messages.create(\n        model=\"claude-haiku-4-5\",          # small + fast: this runs before every search\n        max_tokens=200,\n        messages=[{\"role\": \"user\", \"content\": prompt}],\n    )\n    lines = msg.content[0].text.strip().splitlines()\n    return [q.strip(\"- \").strip() for q in lines if q.strip()]\n\n# Retrieve for each sub-query, then merge (e.g. reciprocal rank fusion).\nqueries = rewrite_to_subqueries(\"What's the refund window, and does it cover digital goods?\")\nhits = [chunk for q in queries for chunk in retrieve(q, k=5)]\ncontext = dedupe_and_fuse(hits)"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Use a small, fast model for the rewrite step. It runs on *every* query before retrieval even starts, so a slow rewrite tax is paid on every request. A cheap model that produces decent sub-queries beats a flagship model that adds a second of latency to the front of your pipeline."
+        }
+      ]
+    },
+    {
+      "id": "choosing-a-technique",
+      "title": "Which technique, and what it costs",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "These techniques aren't ranked best-to-worst — they target different failure modes. Match the technique to the symptom you're actually seeing in bad retrievals."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Technique",
+            "Fixes",
+            "Extra cost"
+          ],
+          "rows": [
+            [
+              "Rewrite for clarity",
+              "Vague phrasing, follow-up questions in chat, pronouns",
+              "1 small LLM call"
+            ],
+            [
+              "Query expansion",
+              "Synonym / vocabulary mismatch, weak keyword recall",
+              "1 LLM call, more terms to search"
+            ],
+            [
+              "Multi-query",
+              "Compound or multi-part questions",
+              "N LLM calls or 1 split + N searches + a merge step"
+            ],
+            [
+              "Step-back prompting",
+              "Overly specific questions with no exact-match chunk",
+              "1 LLM call, often paired with the original query too"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "A practical decision rule: look at your *failed* queries, not your successful ones. If failures are short and ambiguous, start with clarity rewriting. If they fail because the docs use different words, expand. If a single question is really several, go multi-query. If detailed questions retrieve nothing because no chunk is that specific, step back."
+        },
+        {
+          "type": "p",
+          "md": "And don't reach for any of this on day one. The honest baseline is: ship naive RAG, measure where it fails, and add the *one* transformation that fixes your most common failure. Every technique here adds latency and complexity, and most pipelines need far less of it than they think."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "More queries is not free accuracy. Multi-query can flood the candidate pool with loosely-related chunks, which then crowd out the one passage that mattered. Always run a [reranker](/learn/rag/retrieval-and-reranking/what-is-reranking) or a fusion step after fan-out, and cap how many chunks reach the final prompt."
+        }
+      ]
+    },
+    {
+      "id": "rewriting-vs-hyde",
+      "title": "Query rewriting vs HyDE",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A close cousin you'll meet is **HyDE** (Hypothetical Document Embeddings). It's worth contrasting because the two are easy to confuse, yet they transform the query in opposite directions."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Two ways to transform a query before search",
+            "columns": [
+              {
+                "title": "Query rewriting",
+                "accent": true,
+                "items": [
+                  "Rewrites into a better *question*",
+                  "Searches with a query",
+                  "Clarity, expansion, splitting, step-back",
+                  "Output still looks like a question"
+                ]
+              },
+              {
+                "title": "HyDE",
+                "items": [
+                  "Generates a fake *answer* to the question",
+                  "Searches with that hypothetical document",
+                  "Bets the fake answer sits near the real one",
+                  "Output looks like a passage, not a question"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The shared idea is the same insight: the raw user question is often a poor search key, so reshape it into something that lives closer to your documents in embedding space. Query rewriting reshapes it into a *clearer question*. HyDE reshapes it into a *hypothetical answer* — because answers tend to be phrased like the documents you're trying to retrieve. They're siblings, not rivals; both are forms of query transformation, and you can even combine them."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics click, a few sharper edges are worth knowing."
+        },
+        {
+          "type": "p",
+          "md": "**It's a latency and cost decision, not just a quality one.** Every rewrite is an LLM call on the critical path, before the user sees anything. Multi-query multiplies your retrieval load too. In a latency-sensitive product, the right answer is sometimes \"don't rewrite\" — or cache rewrites for common questions, or only trigger rewriting when a cheap confidence check says the raw retrieval looks weak."
+        },
+        {
+          "type": "p",
+          "md": "**Rewriting can also hurt.** An over-eager LLM may \"correct\" a query into something subtly different — drop the one rare term that mattered, or generalize away a crucial constraint. A common safety net is to *keep the original query in the mix*: search with both the rewrite and the raw question, then fuse. You get the upside of rewriting without betting everything on it being right."
+        },
+        {
+          "type": "p",
+          "md": "**Conversational rewriting is its own subfield.** In multi-turn chat, turning a context-dependent follow-up into a standalone query (\"query contextualization\" or \"condensing\") is often the single highest-impact rewrite you can add — without it, every follow-up retrieves on a fragment that means nothing on its own."
+        },
+        {
+          "type": "p",
+          "md": "**Where it fits with everything else.** Query transformation is the *front* of retrieval; reranking and fusion are the *back*. A strong production stack often does all three: rewrite or fan out the query, retrieve broadly with [hybrid search](/learn/rag/retrieval-and-reranking/what-is-hybrid-search), then [rerank](/learn/rag/retrieval-and-reranking/what-is-reranking) the merged candidates narrowly. They compound — better queries give the reranker better raw material to work with."
+        },
+        {
+          "type": "p",
+          "md": "**The agentic endpoint.** Push this idea far enough and the model stops doing a single fixed rewrite. Instead it decides *whether* to search, *what* to search for, reads the results, and reformulates the query itself if they look thin — searching again in a loop. At that point query rewriting has dissolved into the agent's own reasoning, but the founding insight still holds: the query you search with matters more than almost anything else in the pipeline, so it deserves real effort before you ever hit the index."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is query rewriting in RAG?",
+      "a": "Query rewriting is reshaping a user's question before retrieval so it matches your documents better. It covers a family of techniques — cleaning up vague phrasing, adding synonyms (expansion), splitting a compound question into several searches (multi-query), and generalizing an overly specific question (step-back). You then retrieve with the improved query instead of the raw one."
+    },
+    {
+      "q": "What's the difference between query expansion and multi-query retrieval?",
+      "a": "Query expansion adds extra terms and synonyms to *one* query to widen the search net. Multi-query produces *several distinct* queries from one question, runs each as its own search, and merges the results — which is what you want for compound questions that are really two or three questions in one."
+    },
+    {
+      "q": "Does query rewriting slow down a RAG system?",
+      "a": "Yes — every rewrite is an extra LLM call before retrieval, on the critical path, and multi-query also multiplies your search load. Use a small fast model for the rewrite, cache rewrites for common questions, and only add the techniques that fix a failure you actually measured."
+    },
+    {
+      "q": "Is HyDE the same as query rewriting?",
+      "a": "They're related but not the same. Query rewriting reshapes the question into a clearer *question*. HyDE generates a hypothetical *answer* to the question and searches with that, betting the fake answer sits near the real documents. Both are query-transformation techniques and can be combined."
+    },
+    {
+      "q": "When should I add query rewriting to my RAG pipeline?",
+      "a": "After you've shipped a basic pipeline and measured where it fails. If failures come from vague phrasing, add clarity rewriting; from vocabulary mismatch, add expansion; from multi-part questions, add multi-query; from overly specific questions, add step-back. Don't add all of it preemptively — each technique costs latency."
+    },
+    {
+      "q": "Can query rewriting make retrieval worse?",
+      "a": "Yes. An over-eager rewrite can drop a rare but crucial term or generalize away an important constraint, hurting the search. A common safeguard is to keep the original query in the mix — search with both the rewrite and the raw question, then fuse the results so you don't bet everything on the rewrite being right."
+    }
+  ],
+  "related": [
+    "what-is-a-retriever",
+    "what-is-reranking",
+    "what-is-hybrid-search",
+    "reciprocal-rank-fusion",
+    "what-is-bm25",
+    "what-is-rag"
+  ],
+  "furtherReading": [
+    {
+      "title": "Query Transformations — LangChain blog",
+      "url": "https://blog.langchain.com/query-transformations/"
+    },
+    {
+      "title": "Precise Zero-Shot Dense Retrieval without Relevance Labels (HyDE, arXiv)",
+      "url": "https://arxiv.org/abs/2212.10496"
+    },
+    {
+      "title": "Take a Step Back: Evoking Reasoning via Abstraction in LLMs (arXiv)",
+      "url": "https://arxiv.org/abs/2310.06117"
+    }
+  ]
+}

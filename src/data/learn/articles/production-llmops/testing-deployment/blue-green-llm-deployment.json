@@ -1,0 +1,360 @@
+{
+  "slug": "blue-green-llm-deployment",
+  "title": "Blue-Green vs Canary for LLM Releases: Picking a Rollout Strategy",
+  "shortTitle": "Blue-Green vs Canary",
+  "seoTitle": "Blue-Green vs Canary for LLM Releases: Which Rollout?",
+  "metaDescription": "Blue-green flips all traffic at once; canary leaks a slice first. Learn how each rollout strategy fits LLM prompt and model changes, and when to pick which.",
+  "keywords": [
+    "blue-green vs canary",
+    "llm deployment strategy",
+    "canary llm rollout",
+    "blue green deployment ai",
+    "rollout strategy llm"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You'll understand the two main rollout strategies — blue-green and canary — and how to choose between them for shipping a new prompt or model.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You've built an LLM feature and it works. Now you want to ship a change — a reworded system prompt, a swap from one model to a newer one, or a tweak to how you assemble context. The scary part isn't writing the change; it's *releasing* it to real users without breaking anyone. A **rollout strategy** is simply the plan for how new traffic reaches the new version."
+        },
+        {
+          "type": "p",
+          "md": "Two strategies dominate. **Blue-green** keeps two complete copies of your service running side by side: \"blue\" is the current live version, \"green\" is the new one. You warm up green, run your checks, then flip a switch so *all* traffic moves to green at once. If anything looks wrong, you flip back to blue instantly. **Canary** takes the opposite approach: you send a tiny slice of traffic — say 1% — to the new version while everyone else stays on the old one, watch the numbers, and slowly turn the dial up to 100% only if the slice stays healthy."
+        },
+        {
+          "type": "p",
+          "md": "A kitchen analogy. Blue-green is opening a second, fully-staffed kitchen next door: when it's ready you reroute every order to it, and if the food comes out wrong you send everyone back to the first kitchen in one move. Canary is changing one dish on the existing menu and quietly serving it to one table out of a hundred — if they love it, you offer it to ten tables, then fifty, then the whole room. One is a clean *cutover*; the other is a careful *taste test*."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The names are borrowed from classic web/DevOps deployment. \"Canary\" comes from the caged birds miners carried underground: the small exposed group warns you of trouble before it reaches everyone. Nothing about either idea is LLM-specific — but LLM changes have quirks (cost, latency, non-determinism, eval-based quality) that make the *choice* between them more interesting than for ordinary code."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "With normal software, a bad deploy throws errors you can catch in seconds. LLM changes fail more quietly. A new prompt can be syntactically perfect, return HTTP 200 every time, and still be *worse* — more verbose, more likely to refuse, slightly off-tone, or wrong in ways only a human or an [eval](/learn/production-llmops/testing-deployment/testing-llm-apps/) notices. You can't lean on a green dashboard alone. That's exactly why the *shape* of your rollout matters: it decides how many users meet a regression before you do, and how fast you can undo it."
+        },
+        {
+          "type": "p",
+          "md": "Picking a strategy is really about trading off three things that pull against each other:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Blast radius.** If the new version is bad, how many users get hit before you react? Blue-green exposes everyone the moment you flip; canary exposes only the slice you've ramped to.",
+            "**Rollback speed.** When you spot trouble, how fast can you get back to safe? Blue-green is near-instant (flip the router back to blue). Canary is also fast — you just route the slice back — but you're often mid-ramp, so the answer is \"stop ramping, drop to 0%.\"",
+            "**Cost and complexity.** Blue-green means paying to run two full LLM stacks at once during the cutover. Canary runs mostly one stack plus a thin slice, but needs traffic-splitting and live metric gates to drive the ramp."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who cares? Anyone who ships LLM features to real users and can't afford a silent quality drop: support assistants, coding tools, search and summarization products, anything where a regression costs trust or money. Getting this right is a core part of [LLMOps](/learn/production-llmops/llmops-fundamentals/what-is-llmops/) — the discipline of running LLM systems in production rather than just prototyping them."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Both strategies put a routing layer in front of your model calls — usually an [LLM gateway](/learn/production-llmops/llmops-fundamentals/what-is-llm-gateway/) or API gateway — that decides which version of the service handles each request. The difference is *how* that router splits traffic over time."
+        },
+        {
+          "type": "h3",
+          "text": "Blue-green: two environments, one switch"
+        },
+        {
+          "type": "p",
+          "md": "You stand up the green environment as a complete, independent copy: its own prompt templates, its own model, its own config. Blue keeps serving 100% of users the whole time you prepare green. You run your test suite and offline evals against green, maybe send it a [shadow](/learn/production-llmops/testing-deployment/shadow-mode-llm-testing/) copy of real traffic to warm caches and sanity-check outputs. When green passes, you change one thing — the router's target — and every new request now lands on green. Blue stays up, idle but ready, for a while. If green misbehaves, you point the router back at blue and you're safe in seconds."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Blue-green — prepare green, then cut over all at once",
+            "steps": [
+              {
+                "label": "Blue (live)",
+                "sub": "100% of traffic"
+              },
+              {
+                "label": "Stand up green",
+                "sub": "new prompt / model, idle"
+              },
+              {
+                "label": "Verify green",
+                "sub": "evals + shadow traffic"
+              },
+              {
+                "label": "Flip router",
+                "sub": "100% → green",
+                "accent": true
+              },
+              {
+                "label": "Keep blue warm",
+                "sub": "instant rollback path"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Canary: a small slice, ramped up by the numbers"
+        },
+        {
+          "type": "p",
+          "md": "You deploy the new version alongside the old, then tell the router to send a small percentage of traffic to it — commonly 1%, then 5%, 25%, 50%, 100%. After each step you pause and watch the canary's [metrics](/learn/production-llmops/observability-monitoring/what-is-llm-observability/) against the rest: error rate, latency, cost per request, refusal rate, and quality signals like thumbs-up/down or an automated grader. A gate decides whether to advance, hold, or roll back. The new version only reaches 100% after surviving every step, so a regression is caught while it's hitting a handful of users, not all of them."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "Canary — ramp one step at a time, gated on metrics",
+            "steps": [
+              {
+                "label": "Route X% to canary"
+              },
+              {
+                "label": "Collect metrics"
+              },
+              {
+                "label": "Compare vs baseline"
+              },
+              {
+                "label": "Gate: pass → ramp up"
+              },
+              {
+                "label": "Fail → roll back to 0%"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The router decision is usually just a weighted choice per request. A stripped-down version of the canary split looks like this:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "canary_router.py — split traffic by weight",
+          "code": "import random\n\n# Current ramp: 5% of traffic goes to the new version.\nCANARY_WEIGHT = 0.05\n\ndef pick_version(user_id: str) -> str:\n    # Hash the user id so the SAME user is sticky to one version\n    # for the whole session (avoids flip-flopping mid-conversation).\n    bucket = (hash(user_id) % 1000) / 1000.0\n    return \"green\" if bucket < CANARY_WEIGHT else \"blue\"\n\ndef handle(request):\n    version = pick_version(request.user_id)\n    if version == \"green\":\n        return call_new_prompt(request)   # canary\n    return call_current_prompt(request)   # baseline\n"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Make the split **sticky per user**, not random per request. If a user's first message uses the old prompt and their follow-up uses the new one, the conversation can contradict itself. Hashing a stable id (as above) keeps each user on one side until you raise the weight."
+        }
+      ]
+    },
+    {
+      "id": "blue-green-vs-canary",
+      "title": "Blue-green vs canary, head to head",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The two strategies aren't ranked — they're shaped for different risks. This is the comparison that actually drives the decision."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Dimension",
+            "Blue-green",
+            "Canary"
+          ],
+          "rows": [
+            [
+              "Traffic shift",
+              "All at once (0% → 100%)",
+              "Gradual (1% → 5% → … → 100%)"
+            ],
+            [
+              "Blast radius if bad",
+              "Everyone, until you flip back",
+              "Only the current slice"
+            ],
+            [
+              "Rollback",
+              "Instant — repoint router to blue",
+              "Drop canary weight to 0%"
+            ],
+            [
+              "Cost during release",
+              "High — two full stacks live",
+              "Low — one stack + thin slice"
+            ],
+            [
+              "Time to fully ship",
+              "Minutes — one switch",
+              "Hours to days — paced ramp"
+            ],
+            [
+              "Needs live metric gates",
+              "Optional",
+              "Essential — gates drive the ramp"
+            ],
+            [
+              "Statistical signal",
+              "Weak — no overlap to compare",
+              "Strong — old vs new run in parallel"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Notice the last row. Because canary runs the old and new versions *at the same time* on comparable traffic, you get a clean side-by-side read on quality and cost — which is why canary blends naturally into [A/B testing](/learn/production-llmops/testing-deployment/llm-ab-testing/). Blue-green gives you a clean *cutover* but a weak comparison: by the time green is live, blue is idle, so you're comparing today's green against yesterday's blue, with the day's noise mixed in."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Which shape fits the change?",
+            "columns": [
+              {
+                "title": "Lean blue-green",
+                "accent": true,
+                "items": [
+                  "Change is config-only and reversible",
+                  "You need instant, total rollback",
+                  "Quality already proven offline",
+                  "Two stacks are cheap (prompt-only swap)",
+                  "You want a clean before/after cutover"
+                ]
+              },
+              {
+                "title": "Lean canary",
+                "items": [
+                  "Quality is uncertain until real traffic",
+                  "A regression would be costly or subtle",
+                  "You want a live old-vs-new comparison",
+                  "Running two heavy stacks is expensive",
+                  "You can gate the ramp on real metrics"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "matching-strategy-to-change",
+      "title": "Matching the strategy to the change",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The single most useful question: *what exactly am I changing?* The answer points you to a strategy more reliably than any rule of thumb."
+        },
+        {
+          "type": "h3",
+          "text": "Prompt-only changes → blue-green is usually fine"
+        },
+        {
+          "type": "p",
+          "md": "If you're only editing prompt text, few-shot examples, or assembly logic — same model, same provider, same price per token — then \"two stacks\" costs almost nothing extra, because the expensive part (the model) is identical on both sides. Rollback is trivial: prompts are just strings, so flipping back to blue is reverting a config value. For low-risk wording tweaks, a blue-green flip (often gated behind a feature flag) is fast and clean. For a prompt rewrite that could shift behavior, you can still canary it — the strategies aren't locked to a change type — but the cost pressure that pushes people toward canary mostly isn't there."
+        },
+        {
+          "type": "h3",
+          "text": "Full model swaps → canary earns its keep"
+        },
+        {
+          "type": "p",
+          "md": "Swapping the underlying model — a new version, a different size, or a different provider — changes cost, latency, token accounting, *and* behavior all at once. This is exactly where you want the gradual, metric-gated ramp of a [model-upgrade rollout](/learn/production-llmops/testing-deployment/llm-model-upgrade-rollout/). Leaking 1% first lets you confirm the new model's real-world latency and spend before it touches your whole bill, and catch quality regressions while they're cheap. Blue-green a model swap and you've bet your entire user base — and your whole token budget — on offline evals being right, which they often aren't."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Two LLM stacks are not free during a blue-green window. If green uses a pricier or slower model, you may be paying for *both* models on overlapping traffic while blue stays warm as the rollback path. Keep the overlap short, or you'll burn budget keeping a safety net you may never use."
+        },
+        {
+          "type": "p",
+          "md": "In practice many teams combine the two: canary the new version up to 100% to validate it on live traffic, *then* treat the now-proven new version as the new blue and keep the old one warm briefly for instant rollback. You get canary's safe ramp and blue-green's fast undo. This pairs well with multi-provider setups where an [LLM gateway](/learn/production-llmops/llmops-fundamentals/what-is-llm-gateway/) already handles [routing](/learn/production-llmops/llmops-fundamentals/llm-model-routing/) and failover."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic choice is clear, the hard parts of an LLM rollout are mostly about *measuring* the new version well enough to trust the gate. A few nuances worth knowing."
+        },
+        {
+          "type": "p",
+          "md": "**What you gate on is harder than for normal services.** Error rate and latency are easy. Quality is not — an LLM regression often has zero errors. Good canary gates combine cheap automatic signals (refusal rate, output length, response cost, an LLM-as-judge score on sampled outputs) with human feedback (thumbs up/down). If you have no quality signal at all, a canary ramp is just guessing slowly; build the eval first."
+        },
+        {
+          "type": "p",
+          "md": "**Non-determinism muddies the comparison.** The same prompt can give different outputs run to run, so a small canary slice can look better or worse purely by chance. You need enough traffic per ramp step for the difference to mean something — tiny slices on low-traffic features may never reach significance, which is one reason low-traffic products sometimes prefer a blue-green flip plus strong offline evals over a canary that can't gather signal."
+        },
+        {
+          "type": "p",
+          "md": "**Stateful conversations complicate cutover.** A user mid-chat has history built with the old prompt. Flipping them to a new system prompt mid-conversation can cause contradictions or tone whiplash. Common fixes: keep users sticky to one version for a whole session, or only apply the new version to *new* conversations and let old ones drain on the old version."
+        },
+        {
+          "type": "p",
+          "md": "**Related techniques sit nearby.** [Shadow mode](/learn/production-llmops/testing-deployment/shadow-mode-llm-testing/) sends real traffic to the new version but throws its answers away — zero user risk, used to validate before any real rollout. [A/B testing](/learn/production-llmops/testing-deployment/llm-ab-testing/) keeps a long-running split to *measure* which version is better, rather than to ship one safely. Think of it as a toolkit: shadow to de-risk, canary or blue-green to ship, A/B to decide. The durable lesson is that for LLMs the rollout *shape* is only half the job — the other half is having a quality signal trustworthy enough to flip the switch on. Build that first, and the choice between blue-green and canary becomes a calm decision instead of a gamble."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is the difference between blue-green and canary deployment?",
+      "a": "Blue-green runs two complete environments and switches all traffic from the old one to the new one in a single cutover, with instant rollback by flipping back. Canary sends only a small slice of traffic to the new version first, then gradually ramps it up while watching metrics. Blue-green is a fast all-or-nothing switch; canary is a slow, gated ramp that limits how many users meet a bad release."
+    },
+    {
+      "q": "Which rollout strategy is best for an LLM model upgrade?",
+      "a": "Canary is usually the safer choice for a full model swap. A new model changes cost, latency, and behavior at once, so leaking 1% of traffic first lets you confirm real-world spend and quality before it hits everyone or your whole token bill. Blue-green a model swap only if your offline evals are very strong and you accept exposing all users at the flip."
+    },
+    {
+      "q": "Is blue-green deployment good for prompt-only changes?",
+      "a": "Yes, it often fits well. When you change only prompt text with the same model, running two stacks costs almost nothing extra because the expensive model is identical on both sides, and rollback is just reverting a string. For low-risk wording tweaks, a blue-green flip behind a feature flag is fast and clean."
+    },
+    {
+      "q": "Why is canary deployment more expensive to operate than blue-green?",
+      "a": "It usually isn't — that's a common mix-up. Blue-green runs two full LLM stacks at once during the cutover window, while canary runs mostly one stack plus a thin slice. Canary's added cost is operational, not compute: it needs traffic-splitting and live metric gates to drive the gradual ramp."
+    },
+    {
+      "q": "How do I roll back a bad LLM deployment quickly?",
+      "a": "With blue-green you repoint the router from green back to the still-warm blue environment, which is near-instant. With canary you drop the canary's traffic weight to 0% so everyone returns to the baseline version. Both are fast, which is why you keep the old version running until the new one is fully proven."
+    },
+    {
+      "q": "Can I use blue-green and canary together?",
+      "a": "Yes, and many teams do. A common pattern is to canary the new version up to 100% to validate it on live traffic, then treat the proven version as the new blue while keeping the old one warm briefly for instant rollback. You get canary's safe ramp plus blue-green's fast undo."
+    }
+  ],
+  "related": [
+    "llm-model-upgrade-rollout",
+    "llm-ab-testing",
+    "shadow-mode-llm-testing",
+    "testing-llm-apps",
+    "what-is-llm-gateway"
+  ],
+  "furtherReading": [
+    {
+      "title": "Canary Release — Martin Fowler",
+      "url": "https://martinfowler.com/bliki/CanaryRelease.html"
+    },
+    {
+      "title": "BlueGreenDeployment — Martin Fowler",
+      "url": "https://martinfowler.com/bliki/BlueGreenDeployment.html"
+    },
+    {
+      "title": "Progressive Delivery — Argo Rollouts docs",
+      "url": "https://argo-rollouts.readthedocs.io/en/stable/"
+    }
+  ]
+}

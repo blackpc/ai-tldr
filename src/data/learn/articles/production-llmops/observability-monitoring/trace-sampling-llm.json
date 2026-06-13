@@ -1,0 +1,323 @@
+{
+  "slug": "trace-sampling-llm",
+  "title": "Trace Sampling for LLM Apps: Logging Enough Without Drowning in Data",
+  "shortTitle": "Trace Sampling",
+  "seoTitle": "Trace Sampling for LLM Apps: Log Smarter, Store Less",
+  "metaDescription": "Logging every LLM trace gets expensive fast. Learn head vs tail sampling, always-keeping errors, and how to retain signal while cutting observability cost.",
+  "keywords": [
+    "llm trace sampling",
+    "head vs tail sampling",
+    "observability cost llm",
+    "sampling traces ai",
+    "log retention llm"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You'll understand how to sample LLM traces so you keep the ones that matter — errors, slow calls, low-rated answers — without storing every request at full cost.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every time your app calls an [LLM](/learn/llm-fundamentals/llm-basics/what-is-an-llm), you can record a *trace*: the prompt, the response, the model, the latency, the token counts, any tool calls, and the cost. One trace is tiny. A million traces a day, each holding a few kilobytes of prompt and answer text, is a firehose — and your observability vendor bills you by the volume you send and store."
+        },
+        {
+          "type": "p",
+          "md": "*Trace sampling* is the simple idea of **keeping only some traces instead of all of them**. You decide which calls are worth recording in full, which you keep as a thin metadata-only record, and which you throw away — so your bill and your storage stay sane while you still see what you need."
+        },
+        {
+          "type": "p",
+          "md": "Think of a busy restaurant kitchen with security cameras. Filming every second of every shift and keeping it forever is wasteful — most footage is people chopping onions. So you keep a low-detail log of everything (timestamps, which station), but you save the *full high-resolution clip* only when something interesting happens: a complaint, an accident, a VIP table. Trace sampling is that policy for your LLM calls. Boring successful requests get a cheap summary; the dramatic ones — errors, slow calls, thumbs-down answers — get kept in full."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Sampling is a retention policy, not a quality cut. A well-sampled system still *answers* every user request normally — it just doesn't *store the full record* of every one. The goal is to keep signal and drop redundancy."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "If you read [what is LLM observability](/learn/production-llmops/observability-monitoring/what-is-llm-observability), you know *why* you trace at all: to debug bad answers, watch latency and cost, and catch regressions. Sampling is the part that decides whether that observability is affordable. Three pressures push you toward it."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Cost.** LLM traces are fat. A single trace can carry a long system prompt, retrieved context, the full answer, and per-step tool I/O — often several kilobytes to tens of kilobytes each. Observability platforms charge by ingested events and stored bytes, so storing 100% of a high-traffic app can cost more than the LLM calls themselves.",
+            "**Noise.** When almost every trace is a normal, successful, fast request, the few that matter — the timeout, the hallucination, the angry user — get buried. Keeping everything makes the signal *harder* to find, not easier.",
+            "**Privacy and retention.** Prompts and responses often contain personal data. The less raw text you store, and the shorter you keep it, the smaller your exposure if something leaks. Sampling and retention windows are part of your PII story, not just your budget."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The builder who cares most is anyone running an LLM feature at real volume: a support bot handling thousands of chats an hour, a RAG product, an [agent](/learn/ai-agents/agent-fundamentals/what-is-an-ai-agent) that fans out many model calls per task. At ten requests a day you keep everything and never think about it. At ten requests a second, sampling is the difference between a $200 observability bill and a $20,000 one — for *the same insight*, if you sample the right traces."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The core question is *when* you decide to keep a trace. There are two answers, and the difference matters enormously: **head sampling** decides at the start of a request, before you know how it went; **tail sampling** decides at the end, once you can see the outcome."
+        },
+        {
+          "type": "h3",
+          "text": "Head sampling: decide up front"
+        },
+        {
+          "type": "p",
+          "md": "With head sampling you roll the dice the moment a request arrives. \"Keep 10% of traces\" means each request has a 10% chance of being recorded in full; the other 90% are dropped immediately and never sent to your backend. It's cheap and dead simple — you save bandwidth and storage from the very first byte — but it's *blind*. Because the decision happens before the response exists, a head sampler that keeps 10% will also drop roughly 90% of your errors and slow calls. You lose exactly the traces you most wanted."
+        },
+        {
+          "type": "h3",
+          "text": "Tail sampling: decide after you see the outcome"
+        },
+        {
+          "type": "p",
+          "md": "Tail sampling buffers the full trace until the request finishes, then applies *rules* to decide whether to keep it. Now you can say: keep every error, keep anything slower than 5 seconds, keep every trace the user rated badly, and keep a small random slice (say 5%) of the boring successful ones for baseline statistics. You get a complete picture of what goes wrong and a representative sample of what goes right. The cost is that you must hold each trace in memory or a buffer long enough to judge it, which is more moving parts than blind head sampling."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Tail sampling — decide once the outcome is known",
+            "steps": [
+              {
+                "label": "LLM request",
+                "sub": "prompt + response"
+              },
+              {
+                "label": "Buffer full trace",
+                "sub": "wait for outcome"
+              },
+              {
+                "label": "Apply keep-rules",
+                "sub": "error? slow? bad rating?"
+              },
+              {
+                "label": "Keep in full",
+                "sub": "if a rule matches",
+                "accent": true
+              },
+              {
+                "label": "Sample or drop",
+                "sub": "else 5% random / discard"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "In practice you combine both. A common production shape: **always keep** the interesting traces by rule, **randomly keep** a small fraction of the rest, and **store the dropped majority as metadata only** — latency, tokens, cost, model, status — without the prompt and response text. The metadata is small and cheap, so you keep aggregate dashboards accurate even for traffic whose full text you threw away."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "a simple tail-sampling decision",
+          "code": "import random\n\ndef keep_trace(trace) -> str:\n    \"\"\"Return 'full', 'metadata', or 'drop' for one finished trace.\"\"\"\n    # 1) Always keep the traces that carry the most signal.\n    if trace.error or trace.status_code >= 500:\n        return \"full\"\n    if trace.latency_ms > 5000:\n        return \"full\"\n    if trace.user_rating == \"down\":   # explicit bad feedback\n        return \"full\"\n\n    # 2) Keep a small representative slice of normal traffic.\n    if random.random() < 0.05:        # 5% baseline sample\n        return \"full\"\n\n    # 3) Everything else: keep cheap metadata, drop the raw text.\n    return \"metadata\"\n\n# 'full'     -> prompt + response + steps stored\n# 'metadata' -> latency, tokens, cost, model, status only\n# 'drop'     -> nothing stored (use sparingly; you lose the count)"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Prefer `metadata` over `drop` for normal traffic. Metadata records are tiny but keep your throughput, latency percentiles, and cost dashboards honest. Outright dropping a trace removes it from the *counts* too, which quietly skews every aggregate you compute later."
+        }
+      ]
+    },
+    {
+      "id": "what-to-always-keep",
+      "title": "What to always keep",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The whole art of sampling is your keep-list: the conditions under which a trace is too important to discard. These are the rules that earn their place at the top of `keep_trace`, evaluated *before* any random dice roll."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Always keep when…",
+            "Why it matters"
+          ],
+          "rows": [
+            [
+              "The call errored or timed out",
+              "Errors are rare and high-value; you can't debug an outage from a 5% sample of it."
+            ],
+            [
+              "Latency exceeded your target",
+              "Slow tails are where users feel pain. Keeping them lets you find the prompt or model behind a spike."
+            ],
+            [
+              "The user gave negative feedback",
+              "A thumbs-down ties a real complaint to the exact prompt and answer — your richest debugging signal."
+            ],
+            [
+              "A guardrail or moderation flag fired",
+              "Safety and policy events need a full record for review and audit, not a sample."
+            ],
+            [
+              "The trace is on a flagged user or session",
+              "When you're investigating one customer, keep their traces in full regardless of the global rate."
+            ],
+            [
+              "It's a new model or prompt version",
+              "During a rollout, keep more so you can compare the change against baseline. See [LLM production metrics](/learn/production-llmops/observability-monitoring/llm-production-metrics)."
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Negative-feedback retention deserves special mention. If you collect [user feedback](/learn/production-llmops/observability-monitoring/llm-user-feedback) signals like thumbs up/down, wire that signal *into* the sampler: a downvote should pin its trace to full retention. Those traces are gold for building evaluation sets and finding failure patterns, and they're rare enough that keeping 100% of them costs almost nothing."
+        }
+      ]
+    },
+    {
+      "id": "full-vs-metadata-retention",
+      "title": "Full text vs metadata, and how long to keep it",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Sampling has a second dial beyond *which* traces you keep: *how much* of each one, and *for how long*. The expensive, sensitive part of a trace is the raw prompt and response text. The metadata around it is cheap and rarely sensitive."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Two parts of a trace, two retention policies",
+            "columns": [
+              {
+                "title": "Full text",
+                "accent": true,
+                "items": [
+                  "Prompt, context, response, tool I/O",
+                  "Big and often contains PII",
+                  "Keep only for sampled / flagged traces",
+                  "Short window (e.g. 7–30 days)"
+                ]
+              },
+              {
+                "title": "Metadata",
+                "items": [
+                  "Latency, tokens, cost, model, status",
+                  "Small and usually non-sensitive",
+                  "Keep for (almost) every trace",
+                  "Long window (e.g. 90+ days for trends)"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "This split lets you have it both ways. Long-term metadata retention means your cost and latency trend charts go back months. Short-term, sampled full-text retention means you can still open a specific failed request from last week and read exactly what happened — without warehousing every prompt forever."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Sampling is not anonymization. A kept trace still holds whatever PII was in the prompt. Pair sampling with a *retention window* (auto-delete full text after N days) and, where needed, **redaction at capture** — strip or mask emails, card numbers, and names before the trace is stored. Sampling reduces *how much* sensitive data you hold; redaction reduces *how sensitive* each kept record is. You usually want both."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "**Head sampling your errors away.** The classic mistake: setting a global 10% head-sampling rate and then wondering why you can never find the failing traces. If you only have head sampling, at least exempt errors from it.",
+            "**Dropping instead of metadata-keeping.** Hard-dropping 90% of traffic skews your dashboards because the *counts* vanish too. Your error rate looks fine when it isn't, because the denominator is wrong. Keep metadata for almost everything.",
+            "**Sampling per-span instead of per-trace.** An agent run is one trace made of many spans (model calls, tool calls). Decide keep/drop for the *whole trace* at the end, or you'll save half a conversation and lose the step that explains it. (See [LLM tracing explained](/learn/production-llmops/observability-monitoring/llm-tracing-explained).)",
+            "**Forgetting the retention window.** Sampling controls intake; retention controls how long kept data lives. Without an expiry, your sampled-down store still grows without bound — just more slowly.",
+            "**Static rates as traffic grows.** A 5% baseline that was cheap at launch can become expensive at 50x traffic. Revisit your rates as volume scales; some teams target a fixed *traces-per-second* budget rather than a fixed percentage."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics click, a few advanced patterns are worth knowing."
+        },
+        {
+          "type": "p",
+          "md": "**Consistent trace IDs across services.** If a request flows through a [gateway](/learn/production-llmops/llmops-fundamentals/what-is-llm-gateway/), a retriever, and a model call, all of those spans share one trace ID. A tail sampler should make a single keep/drop decision for that whole ID so you never store a fragment. This is exactly what standards like OpenTelemetry's tail-sampling processor exist to coordinate."
+        },
+        {
+          "type": "p",
+          "md": "**Dynamic and priority sampling.** Instead of one flat rate, weight by importance: keep a higher fraction of paid-tier traffic than free-tier, or temporarily raise the rate during an incident or a new-model rollout, then lower it again. Some setups expose a per-request override so an engineer can force-keep a session they're actively debugging."
+        },
+        {
+          "type": "p",
+          "md": "**Buffering cost and late signals.** Tail sampling needs to hold a trace until it can judge it. That's easy for synchronous latency and error checks, but *user feedback* often arrives seconds or minutes later. A robust design keeps the trace tentatively (or keeps a way to upgrade a metadata record to full) when a downvote lands after the fact — otherwise late feedback can't pin its trace."
+        },
+        {
+          "type": "p",
+          "md": "**Where the tooling lives.** Most managed LLM observability platforms build these controls in. As you compare options in [Langfuse vs LangSmith vs Helicone](/learn/production-llmops/observability-monitoring/langfuse-vs-langsmith-helicone), look specifically at whether they support tail/rule-based sampling, error-always-keep, configurable retention windows, and PII redaction — not just raw trace capture. The broader discipline this sits inside is [LLMOps](/learn/production-llmops/llmops-fundamentals/what-is-llmops): running LLM features reliably and affordably in production."
+        },
+        {
+          "type": "p",
+          "md": "The durable principle: **sample for signal, not for a percentage.** A good policy is judged by whether you can still answer \"why did this fail?\" and \"is quality drifting?\" after the cut — not by how small the number got. Keep every trace that teaches you something, keep cheap metadata for the rest, set a retention window, and revisit the rates as you scale."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is the difference between head sampling and tail sampling?",
+      "a": "Head sampling decides whether to keep a trace at the *start* of a request, before the outcome is known — it's cheap but blind, so it drops errors and slow calls at the same rate as everything else. Tail sampling waits until the request finishes, then applies rules (keep all errors, keep slow or low-rated calls, keep a small random sample of the rest). Tail sampling costs a bit more to run but keeps the traces that actually matter."
+    },
+    {
+      "q": "How do I make sure I always keep error traces when sampling?",
+      "a": "Use rule-based (tail) sampling and put an explicit exemption at the top of your decision logic: if the trace errored, timed out, exceeded your latency target, or got negative user feedback, keep it in full regardless of the random sample rate. Evaluate those keep-rules *before* the random dice roll so errors are never subject to the percentage."
+    },
+    {
+      "q": "Does trace sampling reduce my observability bill?",
+      "a": "Yes — observability platforms charge by events ingested and bytes stored, and LLM traces are large because they carry full prompts and responses. Keeping all errors and bad-feedback traces plus a small random sample of normal traffic, and storing the rest as metadata only, can cut storage cost dramatically while preserving your debugging ability and aggregate dashboards."
+    },
+    {
+      "q": "Should I store the full prompt and response or just metadata?",
+      "a": "Store full text only for the traces you sampled or flagged as interesting, and keep it for a short window. Store cheap metadata (latency, tokens, cost, model, status) for nearly every trace and keep it longer. That way your trend charts stay accurate over months while sensitive raw text is held briefly and in limited volume."
+    },
+    {
+      "q": "How does sampling interact with PII and data retention?",
+      "a": "Sampling reduces how many prompts and responses you store, but a kept trace still contains whatever personal data was in it. Pair sampling with a retention window that auto-deletes full text after a set number of days, and with redaction that masks emails, card numbers, and names before storage. Sampling lowers the quantity of sensitive data; redaction lowers the sensitivity of each record."
+    },
+    {
+      "q": "What sampling rate should I use for LLM traces?",
+      "a": "There's no universal number, but a common pattern is: keep 100% of errors, slow calls, and negatively-rated traces, plus roughly 1–10% of normal successful traffic for baseline statistics, with everything else stored as metadata only. As traffic grows, revisit the rate — some teams target a fixed traces-per-second budget rather than a fixed percentage."
+    }
+  ],
+  "related": [
+    "what-is-llm-observability",
+    "llm-tracing-explained",
+    "langfuse-vs-langsmith-helicone",
+    "llm-production-metrics",
+    "llm-user-feedback",
+    "what-is-llmops"
+  ],
+  "furtherReading": [
+    {
+      "title": "OpenTelemetry — Sampling",
+      "url": "https://opentelemetry.io/docs/concepts/sampling/"
+    },
+    {
+      "title": "Langfuse Documentation",
+      "url": "https://langfuse.com/docs"
+    },
+    {
+      "title": "LangSmith Observability — Docs",
+      "url": "https://docs.smith.langchain.com/observability"
+    }
+  ]
+}

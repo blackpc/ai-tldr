@@ -1,0 +1,341 @@
+{
+  "slug": "reduce-tts-latency",
+  "title": "How to Reduce Latency in AI Voice Agents",
+  "shortTitle": "Reducing TTS Latency",
+  "seoTitle": "How to Reduce TTS Latency for Voice Agents",
+  "metaDescription": "Voice agents feel laggy when each step waits for the last. Learn how streaming, time-to-first-byte, and chunking cut perceived voice latency.",
+  "keywords": [
+    "reduce voice agent latency",
+    "tts latency streaming",
+    "time to first audio byte",
+    "low latency speech synthesis",
+    "voice ai feels slow fix"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn where latency hides in a voice agent and how streaming and chunking make AI speech feel instant.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A voice agent is a chain of steps that turns *you talking* into *the computer talking back*. You speak, a [speech-to-text](/learn/multimodal-ai/speech-and-voice/what-is-speech-to-text) model writes down your words, a [language model](/learn/llm-fundamentals/llm-basics/what-is-an-llm) decides what to say, and a [text-to-speech](/learn/multimodal-ai/speech-and-voice/what-is-text-to-speech) model turns that reply into sound. **Latency** is the silence in the middle — the gap between you finishing your sentence and the agent starting to speak."
+        },
+        {
+          "type": "p",
+          "md": "Here is the key idea: in a real conversation, humans expect a reply in roughly a *quarter of a second*. Past about half a second of silence, the other person feels slow, hesitant, or broken. So a voice agent doesn't just need to be fast on average — it needs to *start talking* almost immediately, even if it hasn't finished thinking."
+        },
+        {
+          "type": "p",
+          "md": "Think of a great simultaneous interpreter at a conference. They don't wait for the speaker to finish a whole paragraph and then translate it. They start speaking after the first few words and keep going, staying just behind the speaker the entire time. A slow voice agent is the opposite: it politely waits for every step to fully finish before the next one begins, and all that waiting stacks up into dead air."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Two numbers matter and they are not the same. **Total latency** is how long the whole turn takes end to end. **Perceived latency** is how long the user *waits in silence* before hearing the first sound. Most of this article is about shrinking the second one — because that's the number your ears judge."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Text chat forgives slowness. A chatbot can think for two seconds and stream its answer word by word, and nobody minds — you're reading, the screen is filling, the wait feels productive. Voice has none of that cover. Silence on a phone line reads as *something is wrong*: the user repeats themselves, talks over the agent, or hangs up. A voice product that is correct but laggy still feels broken."
+        },
+        {
+          "type": "p",
+          "md": "The trap is that each stage seems fast on its own, yet they add up. A transcription that settles in 300 ms, a model that takes 700 ms to start replying, and a voice that needs 400 ms to produce its first audio together leave the user sitting in **1.4 seconds** of silence — long enough to feel awkward on every single turn. And that's before any network round-trips between the services."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Conversation breaks down.** Past ~500 ms of dead air, people start talking over the agent, which forces interruption handling and makes the whole exchange feel clumsy.",
+            "**Drop-off rises.** On support and sales calls, every extra second of latency measurably increases the chance the caller gives up or asks for a human.",
+            "**Cost of the naive fix is huge.** The instinct is \"buy a faster model.\" But raw speed rarely closes the gap — the silence usually comes from *waiting for whole stages to finish* before the next one starts, which is an architecture problem, not a horsepower problem."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who needs to care? Anyone building phone agents, voice assistants, live captioning with spoken responses, or in-car and wearable assistants. If a human is waiting to *hear* a reply rather than read one, latency is a top-three product metric, right next to accuracy and cost."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "To fix latency you first have to *see* it. The honest way is to build a **latency budget**: list every stage, measure how long each one takes, and find where the silence actually lives. A voice turn has three big stages, and each one can run in two modes — **batch** (wait for the whole input, then produce the whole output) or **streaming** (start producing output while input is still arriving)."
+        },
+        {
+          "type": "h3",
+          "text": "The three stages of a voice turn"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "A single voice turn, end to end",
+            "steps": [
+              {
+                "label": "Speech in",
+                "sub": "mic captures audio"
+              },
+              {
+                "label": "STT",
+                "sub": "audio → transcript"
+              },
+              {
+                "label": "LLM",
+                "sub": "transcript → reply text"
+              },
+              {
+                "label": "TTS",
+                "sub": "text → audio"
+              },
+              {
+                "label": "Speech out",
+                "sub": "user hears reply",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The single most important measurement in each stage is its **time to first output** — not how long the whole stage takes, but how long until it produces *something* the next stage can use. People shorten these to:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**End of speech detection** — how fast you decide the user has *stopped* talking (voice activity detection, or VAD). End too late and you add pure dead air; end too early and you cut the user off.",
+            "**Time to first token (TTFT)** — how long the LLM takes to emit its *first* word, not its last one. This is usually the biggest single chunk of the budget.",
+            "**Time to first audio byte (TTFB)** — how long the TTS engine takes to produce the *first* playable audio, not the whole clip."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "The naive pipeline waits at every step"
+        },
+        {
+          "type": "p",
+          "md": "The slow design treats each stage as a closed box: fully transcribe, *then* send the whole transcript to the LLM, *then* wait for the entire reply, *then* hand all of it to the TTS, *then* play. Every arrow in the diagram below is a place the user waits for a whole stage to finish. The latencies don't overlap — they stack."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Where the silence comes from",
+            "columns": [
+              {
+                "title": "Naive (batch) — feels slow",
+                "items": [
+                  "Wait for full transcript",
+                  "Wait for full LLM reply",
+                  "Wait for full audio clip",
+                  "Then start playing",
+                  "Silences add up: 1–2 s+"
+                ]
+              },
+              {
+                "title": "Streaming — feels instant",
+                "accent": true,
+                "items": [
+                  "Transcribe as user speaks",
+                  "Send to LLM the instant they stop",
+                  "Speak the first sentence while the LLM writes the rest",
+                  "Stages overlap in time",
+                  "Perceived wait: ~0.3–0.6 s"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "The fix: stream every stage and chunk the TTS"
+        },
+        {
+          "type": "p",
+          "md": "Streaming means each stage starts emitting output before its input is complete, so the stages run *at the same time* instead of one after another. The LLM streams text token by token. As soon as you have a complete **sentence** of that text, you send it to the TTS and start playing the audio — while the LLM is still writing the rest of its answer. This sentence-by-sentence handoff is the single highest-leverage trick in voice latency, and it's why the streaming column above feels instant even though the *total* work is identical."
+        },
+        {
+          "type": "p",
+          "md": "The chunking detail matters. You don't send one word at a time (the TTS would sound choppy and robotic) and you don't wait for the whole paragraph (that's back to batch). You buffer until you hit a natural boundary — a period, question mark, or a clear clause break — and flush that chunk to the synthesizer. The user hears sentence one while sentence two is being generated and sentence three is still a thought in the model's head."
+        }
+      ]
+    },
+    {
+      "id": "a-worked-latency-budget",
+      "title": "A worked latency budget",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Numbers make this concrete. Below is the *same turn* measured two ways. The values are illustrative, but the shape is exactly what you see in practice: the naive version makes the user wait for the sum of every stage, while the streaming version makes them wait only for the first sentence to be spoken."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Stage",
+            "Naive: user waits for…",
+            "Streaming: user waits for…"
+          ],
+          "rows": [
+            [
+              "End of speech (VAD)",
+              "full silence timeout (~700 ms)",
+              "tuned, snappy timeout (~250 ms)"
+            ],
+            [
+              "STT",
+              "whole utterance transcribed",
+              "already done — ran live while speaking"
+            ],
+            [
+              "LLM",
+              "the entire reply (~900 ms)",
+              "first token only (~250 ms)"
+            ],
+            [
+              "TTS",
+              "full clip synthesized (~400 ms)",
+              "first audio byte (~150 ms)"
+            ],
+            [
+              "Perceived silence",
+              "~2.0 s",
+              "~0.6 s"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Notice the streaming column never adds the stages together. The user hears the first words after roughly the end-of-speech timeout plus the LLM's first token plus the TTS's first byte — and the rest of the reply is produced *behind* that audio, hidden by the fact that the user is already listening. The total compute didn't change; the *ordering* did."
+        },
+        {
+          "type": "p",
+          "md": "Here's the core loop in pseudocode. The important line is the one that flushes a sentence to TTS the moment it's complete, rather than waiting for the stream to end."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "stream the LLM, speak sentence by sentence",
+          "code": "buffer = \"\"\n\n# llm_stream yields text tokens as the model writes them\nfor token in llm_stream(transcript):\n    buffer += token\n\n    # As soon as we have a complete sentence, speak it —\n    # don't wait for the model to finish the whole reply.\n    sentence, sep, rest = split_at_sentence_end(buffer)\n    if sep:\n        audio = tts_stream(sentence)   # also streaming: first byte ASAP\n        play(audio)                    # user hears it NOW\n        buffer = rest                  # keep the leftover for the next chunk\n\n# Flush whatever's left after the stream ends\nif buffer.strip():\n    play(tts_stream(buffer))"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Measure *perceived* latency, not just total. Log a timestamp the instant the user stops speaking and another the instant the first audio sample plays. The gap between those two is the number your users actually feel — optimize that, and the rest takes care of itself."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Most latency bugs aren't exotic. They're a handful of mistakes that quietly turn a streaming pipeline back into a batch one."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Waiting for the full LLM response before speaking.** This is the number-one mistake. If you call the model, wait for the complete reply, then synthesize it, you've thrown away the biggest win. Stream tokens and speak the first sentence early.",
+            "**Using a non-streaming TTS.** If your synthesizer only returns a finished audio file, your time-to-first-byte equals time-to-*whole-clip*. Pick a TTS that streams audio as it generates, so playback can start on the first chunk.",
+            "**A lazy end-of-speech timeout.** Many stacks wait a fixed, generous silence (say 800 ms) before deciding the user is done. That fixed wait is added to *every* turn. Tune VAD aggressively and use endpointing that reacts to natural pauses.",
+            "**Sequential service hops with cold starts.** Each network round-trip and each cold-started model adds latency. Co-locate services, keep connections warm, and stream between them rather than POSTing a full payload and awaiting a full response.",
+            "**Chunking on the wrong boundary.** Flushing the TTS on every word sounds choppy; flushing only on paragraphs reintroduces the wait. Split on sentence/clause boundaries — the sweet spot between smoothness and speed.",
+            "**Ignoring interruptions.** If the user starts talking while the agent is mid-sentence, you must stop playback fast. Slow barge-in handling feels just as broken as slow first response."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Don't chase a faster model as your *first* move. A model that's 30% faster but still consumed in batch mode barely moves perceived latency. Switching that same model to streaming with sentence-chunked TTS can cut the silence in half. Architecture beats horsepower here almost every time."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics — stream every stage, chunk the TTS on sentence boundaries, tune endpointing — are in place, the remaining gains come from a few more advanced ideas."
+        },
+        {
+          "type": "p",
+          "md": "**Speculative and filler responses.** Some systems play a tiny, instant acknowledgement (\"sure—\", \"let me check\") generated locally while the real reply is still being produced. Used sparingly, this masks the unavoidable first-token wait the way a human says \"mm-hmm\" while gathering a thought. Overused, it sounds fake — so it's a tool, not a default."
+        },
+        {
+          "type": "p",
+          "md": "**Speech-to-speech and unified models.** The classic stack has three separate models with three handoffs. Newer **speech-to-speech** models take audio in and emit audio out directly, collapsing STT, the LLM, and TTS into one streaming system. That removes the inter-stage waits entirely and can feel dramatically more natural — at the cost of less control over the intermediate transcript, which you often want for logging, moderation, or tool calls."
+        },
+        {
+          "type": "p",
+          "md": "**Smaller, closer models for the hot path.** Latency is partly physics: audio has to travel to a server and back. Running a compact STT or even the first hop of the LLM on-device or at the network edge cuts round-trip time. A common pattern is a fast local model for the immediate response and a larger cloud model for harder turns."
+        },
+        {
+          "type": "p",
+          "md": "**Interruptions, turn-taking, and overlap.** Real conversation is messy: people interrupt, pause mid-thought, and finish each other's sentences. Production voice agents spend real engineering on *barge-in* (stopping playback when the user speaks), endpointing (deciding when a turn truly ends), and handling overlapping speech. These aren't latency in the stopwatch sense, but they decide whether the conversation *feels* responsive."
+        },
+        {
+          "type": "p",
+          "md": "The durable lesson: latency in a voice agent is rarely about one slow component. It's about *ordering*. The naive pipeline waits for each stage to finish before starting the next, so silences add up. The fast pipeline overlaps the stages by streaming, so the user hears the first words while the rest is still being made. Build a latency budget, measure perceived silence, stream everything, and chunk the speech — in that order. To round out the stack, see how [text-to-speech](/learn/multimodal-ai/speech-and-voice/text-to-speech-ai) and [speech-to-text](/learn/multimodal-ai/speech-and-voice/what-is-speech-to-text) work under the hood."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is a good latency target for a voice AI agent?",
+      "a": "Aim for under about 500 ms of perceived silence — the gap between the user finishing their sentence and hearing the first audio back. Humans expect a reply in roughly a quarter to half a second, so anything past ~800 ms starts to feel slow or broken. The total turn can be longer, as long as the agent *starts* speaking fast."
+    },
+    {
+      "q": "What is time to first audio byte (TTFB) in TTS?",
+      "a": "It's how long the text-to-speech engine takes to produce the first playable chunk of audio, rather than the whole clip. It matters because playback can begin as soon as the first byte arrives, so a low TTFB lets the agent start speaking almost immediately even while the rest of the audio is still being synthesized."
+    },
+    {
+      "q": "Why does my voice agent feel slow even though my model is fast?",
+      "a": "Almost always because the stages run one after another instead of overlapping. If you wait for the full transcript, then the full LLM reply, then the full audio clip before playing, those silences add up to seconds. Stream each stage and speak the first sentence while the model is still writing the rest — that usually matters more than raw model speed."
+    },
+    {
+      "q": "What does sentence chunking do for TTS latency?",
+      "a": "Instead of waiting for the LLM's entire reply, you flush each completed sentence to the text-to-speech engine and start playing it immediately. The user hears sentence one while the model generates sentence two. Chunking on sentence or clause boundaries balances smooth audio against a fast first response — single words sound choppy, whole paragraphs reintroduce the wait."
+    },
+    {
+      "q": "Is total latency the same as perceived latency?",
+      "a": "No. Total latency is how long the whole turn takes end to end; perceived latency is how long the user sits in silence before hearing anything. Streaming lets you keep perceived latency low even when total work is unchanged, because the user is already listening to the first words while the rest of the reply is still being produced."
+    },
+    {
+      "q": "Does using a speech-to-speech model reduce latency?",
+      "a": "It can. Speech-to-speech models take audio in and emit audio out directly, collapsing the separate speech-to-text, LLM, and text-to-speech stages into one streaming system and removing the handoff waits between them. The trade-off is less access to the intermediate transcript, which you often still want for logging, moderation, or tool calls."
+    }
+  ],
+  "related": [
+    "what-is-speech-to-text",
+    "text-to-speech-ai",
+    "what-is-text-to-speech",
+    "how-voice-cloning-works",
+    "speaker-diarization-explained"
+  ],
+  "furtherReading": [
+    {
+      "title": "Realtime API — OpenAI Docs",
+      "url": "https://platform.openai.com/docs/guides/realtime"
+    },
+    {
+      "title": "Streaming Messages — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/streaming"
+    },
+    {
+      "title": "Voice activity detection — Wikipedia",
+      "url": "https://en.wikipedia.org/wiki/Voice_activity_detection"
+    }
+  ]
+}

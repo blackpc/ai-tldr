@@ -1,0 +1,362 @@
+{
+  "slug": "hallucination-detection-production",
+  "title": "Detecting Hallucinations in Production: Practical Signals and Checks",
+  "shortTitle": "Hallucination Detection",
+  "seoTitle": "Detecting LLM Hallucinations in Production: Real Signals",
+  "metaDescription": "Learn practical ways to catch hallucinations live — grounding checks against retrieved context, self-consistency, confidence signals, and when to abstain.",
+  "keywords": [
+    "hallucination detection",
+    "detect llm hallucination",
+    "grounding check rag",
+    "faithfulness check",
+    "llm confidence signal"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You'll understand the practical, runtime techniques teams use to catch likely hallucinations before they reach the user, and how to react when one is detected.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A [large language model](/learn/llm-fundamentals/llm-basics/what-is-an-llm) will happily produce a fluent, confident answer even when it has no idea what it's talking about. When that answer is *factually wrong but presented as true*, we call it a **hallucination**. The model invents a citation, a price, an API method, a refund window — and it never warns you, because to the model a made-up sentence and a true one look identical."
+        },
+        {
+          "type": "p",
+          "md": "**Hallucination detection in production** means catching those likely-wrong answers *at request time* — in the few hundred milliseconds between the model finishing its reply and your app showing it to a user — so you can do something about it before harm is done. This is a runtime *guardrail*, not an offline test. You are not measuring overall quality on a benchmark; you are deciding, live, for this one answer, whether to trust it."
+        },
+        {
+          "type": "p",
+          "md": "Think of a sharp intern who writes beautifully but sometimes makes things up. You can't fire them — they're too useful — so you put a quick reviewer next to them. Before any answer goes to the customer, the reviewer asks three cheap questions: *Does this match the source documents we gave you? Did you say the same thing twice when I asked twice? Are you actually sure, or just fluent?* If the answer fails, the reviewer holds it back. Hallucination detection is that reviewer, automated."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Two related jobs are easy to confuse. **Offline evaluation** measures how often your system hallucinates across a test set, before you ship — that's [RAG and faithfulness evaluation](/learn/production-llmops/guardrails-reliability/llm-output-validation). **Online detection**, covered here, runs on *every live request* and feeds a real-time decision. You need both; this article is about the live half."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A hallucination that escapes to a user is not a minor quality dip. It is the single failure mode most likely to destroy trust in an AI product, trigger a support ticket, or create real liability."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**The model gives no warning.** Unlike a crash or a timeout, a hallucination returns a perfectly-formed, high-confidence response. Nothing in the HTTP status, latency, or token count tells you it's wrong. If you don't actively check, it ships.",
+            "**Offline eval can't catch this request.** You may know your system hallucinates 4% of the time. That statistic does nothing for the specific user staring at the specific wrong answer right now. Only a runtime check can intervene on *this* response.",
+            "**The cost is asymmetric.** In support, legal, medical, or financial tools, one confident fabrication — a wrong dosage, a non-existent legal clause, a made-up policy — outweighs a hundred correct answers. The downside is shaped like a long tail of rare, expensive mistakes.",
+            "**Users over-trust fluency.** People read a confident, well-written paragraph as authoritative. The better your model writes, the *more* dangerous an unflagged hallucination becomes."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who needs this? Anyone shipping LLM output to users who will act on it. The detection layer is what lets you say \"we don't know\" instead of guessing, attach a confidence signal, or quietly route a shaky answer to a human. It is a core piece of any [LLM guardrails](/learn/production-llmops/guardrails-reliability/what-are-llm-guardrails) stack and a defining step in moving an [LLM prototype to production](/learn/production-llmops/llmops-fundamentals/llm-prototype-to-production), where \"it usually works in the demo\" stops being good enough."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "There is no single hallucination detector. In practice you layer several cheap, imperfect signals and combine their verdicts — because each one catches a different kind of error and none catches all. The pipeline sits *between* the model's raw output and the user, and ends in a decision: pass, abstain, disclaim, or escalate."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Where detection sits at request time",
+            "steps": [
+              {
+                "label": "Model output",
+                "sub": "draft answer + sources"
+              },
+              {
+                "label": "Run detectors",
+                "sub": "grounding, consistency, confidence"
+              },
+              {
+                "label": "Combine signals",
+                "sub": "score / risk verdict"
+              },
+              {
+                "label": "Decide",
+                "sub": "pass · abstain · disclaim · escalate",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "1. Grounding (faithfulness) checks"
+        },
+        {
+          "type": "p",
+          "md": "If your answer is built on retrieved context — the normal case in [RAG](/learn/rag/rag-fundamentals/what-is-rag) — the most powerful check is simple: *is every claim in the answer actually supported by the retrieved passages?* This is a **grounding** or **faithfulness** check. You break the answer into individual claims and verify each one against the context. A claim that appears nowhere in the sources is an unsupported claim, and unsupported claims are where hallucinations hide."
+        },
+        {
+          "type": "p",
+          "md": "The cheapest version is an **LLM-as-judge** pass: hand a second model the retrieved context and the draft answer and ask it to flag any sentence not entailed by the context. It's the same idea as a [natural language inference](/learn/llm-fundamentals/llm-basics/what-is-an-llm) check — *does the source entail this claim, contradict it, or neither?* Neither and contradict both mean trouble."
+        },
+        {
+          "type": "h3",
+          "text": "2. Self-consistency sampling"
+        },
+        {
+          "type": "p",
+          "md": "When there is no source to check against (open-ended generation), you can exploit a known property: models tend to be *consistent* about facts they actually know and *erratic* about facts they're inventing. So ask the same question two or three times (using a non-zero temperature so answers can vary) and compare. If the key facts agree across samples, confidence rises; if each run gives a different name, number, or date, that disagreement is a strong hallucination signal."
+        },
+        {
+          "type": "h3",
+          "text": "3. Confidence and weak signals"
+        },
+        {
+          "type": "p",
+          "md": "Some models expose **token log-probabilities** — how probable the model thought each generated token was. Stretches of low-probability tokens often coincide with fabricated spans. It's a noisy signal, not a verdict, but cheap to collect and useful as one input among several. You can also simply *ask the model to rate its own confidence*, though self-reported confidence is famously unreliable on its own."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Which detector for which situation",
+            "columns": [
+              {
+                "title": "Grounding check",
+                "accent": true,
+                "items": [
+                  "Needs retrieved context",
+                  "Best for RAG / source-backed answers",
+                  "Catches unsupported claims",
+                  "Cost: one extra judge call"
+                ]
+              },
+              {
+                "title": "Self-consistency",
+                "items": [
+                  "No source needed",
+                  "Best for open-ended Q&A",
+                  "Catches invented facts",
+                  "Cost: 2–3× generations"
+                ]
+              },
+              {
+                "title": "Confidence signals",
+                "items": [
+                  "Needs log-probs or self-rating",
+                  "Best as a cheap pre-filter",
+                  "Catches low-certainty spans",
+                  "Cost: near zero, but noisy"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The practical pattern is a funnel: run the near-free confidence signal on every request, and only spend money on the expensive grounding or self-consistency check when the cheap signal looks shaky or the request is high-stakes. That keeps average latency and cost low while still covering the dangerous tail."
+        }
+      ]
+    },
+    {
+      "id": "worked-example",
+      "title": "A worked grounding check",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Here is the core of a runtime grounding check for a RAG answer. We extract the claims, ask a judge model whether the retrieved context supports each one, and turn the result into a decision. This is deliberately small — the shape matters more than the lines."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "grounding_check.py",
+          "code": "from anthropic import Anthropic\nimport json\n\nclient = Anthropic()\n\nJUDGE = \"\"\"You are a strict fact-checker. Given CONTEXT and an ANSWER,\nlist every factual claim in the ANSWER and mark each as:\n  \"supported\"   - directly stated by the CONTEXT\n  \"unsupported\" - not found in the CONTEXT\n  \"contradicted\"- the CONTEXT says otherwise\nReply ONLY with JSON: {\\\"claims\\\": [{\\\"text\\\": \\\"...\\\", \\\"verdict\\\": \\\"...\\\"}]}\"\"\"\n\ndef grounding_verdict(context: str, answer: str) -> dict:\n    msg = client.messages.create(\n        model=\"claude-sonnet-4-6\",\n        max_tokens=600,\n        system=JUDGE,\n        messages=[{\"role\": \"user\",\n                   \"content\": f\"CONTEXT:\\n{context}\\n\\nANSWER:\\n{answer}\"}],\n    )\n    claims = json.loads(msg.content[0].text)[\"claims\"]\n    bad = [c for c in claims if c[\"verdict\"] != \"supported\"]\n    return {\"grounded\": len(bad) == 0, \"problem_claims\": bad}\n\nverdict = grounding_verdict(retrieved_context, draft_answer)\nif not verdict[\"grounded\"]:\n    answer = abstain_or_escalate(verdict[\"problem_claims\"])  # don't ship as-is"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Force the judge to return structured JSON and validate it — a detector that sometimes returns prose is its own reliability problem. See [LLM output schema validation](/learn/production-llmops/guardrails-reliability/llm-output-schema-validation) for making that robust."
+        },
+        {
+          "type": "p",
+          "md": "Notice what the check does *not* do: it doesn't decide if the answer is *good*, only if it's *grounded in the provided sources*. That's the right scope for a runtime guardrail. Quality is judged offline; faithfulness is judged live."
+        }
+      ]
+    },
+    {
+      "id": "what-to-do-when-flagged",
+      "title": "What to do when a hallucination is flagged",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Detection is only half the job. The product decision — what happens to a flagged answer — is what users actually feel. There are four standard responses, roughly in order of how aggressively they intervene."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Response",
+            "What the user sees",
+            "When to use it"
+          ],
+          "rows": [
+            [
+              "**Abstain**",
+              "\"I don't have a confident answer for that.\"",
+              "High-stakes domains where a wrong answer is worse than no answer"
+            ],
+            [
+              "**Disclaim**",
+              "The answer, plus \"please verify — I'm not certain.\"",
+              "Medium-stakes; the answer is probably useful but shaky"
+            ],
+            [
+              "**Retry / repair**",
+              "A fresh answer after re-retrieving or re-prompting",
+              "When the failure looks fixable (bad chunks, missing context)"
+            ],
+            [
+              "**Escalate to a human**",
+              "A handoff, or a queued reply from an agent",
+              "Critical paths: legal, medical, billing, account actions"
+            ]
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "Routing a flagged answer",
+            "root": {
+              "label": "Hallucination flagged",
+              "accent": true
+            },
+            "children": [
+              {
+                "label": "Low stakes",
+                "sub": "→ disclaim & ship"
+              },
+              {
+                "label": "Fixable cause",
+                "sub": "→ re-retrieve & retry"
+              },
+              {
+                "label": "High stakes",
+                "sub": "→ abstain or escalate"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The deeper principle: **abstaining is a feature, not a failure.** A system that knows when to say \"I'm not sure\" is more trustworthy than one that always answers. Wiring these paths in is part of how you [handle LLM failures](/learn/production-llmops/guardrails-reliability/handle-llm-failures) gracefully rather than letting every uncertain answer leak through."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Whatever you choose, **log it**. Every flag, every verdict, and every action becomes the dataset you'll use to tune thresholds and measure your detector. A guardrail you can't observe is a guardrail you can't improve."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "**Treating the judge as ground truth.** Your LLM-as-judge can hallucinate too. Keep it narrow (one claim at a time, structured output), and remember it has a false-positive *and* a false-negative rate you should measure.",
+            "**Ignoring the latency budget.** A grounding check is a whole extra model call. Running the expensive detector on 100% of traffic can double your latency and cost. Gate it behind a cheap pre-filter and reserve it for risky or high-stakes requests.",
+            "**One threshold for everything.** The bar for a casual chatbot and for a medical lookup is not the same. Tie your abstain/escalate threshold to the stakes of the request, not a single global number.",
+            "**Confusing confidence with correctness.** Low token probability suggests *uncertainty*, not *falsehood* — and a model can be fluently, confidently wrong. Use confidence as one weak input, never as the sole gate.",
+            "**No feedback loop.** If you never compare flags against real outcomes (user reports, human review), you can't tell whether your detector is catching real hallucinations or just annoying users with false alarms."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic layered detector is running, the field opens up in a few directions worth knowing."
+        },
+        {
+          "type": "p",
+          "md": "**Claim-level verification with external tools.** Beyond checking against your own retrieved context, you can verify high-stakes claims against an authoritative source at request time — re-querying your database, calling a search tool, or looking up a record. This turns detection into a small verification loop and overlaps with how [agentic systems](/learn/ai-agents/agent-fundamentals/what-is-an-ai-agent) decide to double-check themselves. It is slower and pricier, so it's reserved for the claims that truly matter (a quoted price, a legal citation, an account balance)."
+        },
+        {
+          "type": "p",
+          "md": "**Sampling-based methods.** Research approaches like SelfCheckGPT formalize the self-consistency idea: generate several samples and score how much the facts in the main answer agree with the rest. The intuition is the same one above — disagreement across samples flags likely fabrication — but with a more principled aggregation than a simple vote."
+        },
+        {
+          "type": "p",
+          "md": "**Calibration and thresholds.** The real engineering work is choosing where to draw the line. Every threshold trades **false positives** (blocking good answers, frustrating users) against **false negatives** (letting hallucinations through). You tune this on logged data, and you'll likely want different thresholds per route. This is where online detection rejoins offline measurement: you need a labeled set to know whether your live detector is actually calibrated."
+        },
+        {
+          "type": "p",
+          "md": "**Where detection lives in the stack.** In a mature setup these checks don't sit in your application code — they sit in a shared layer (an [LLM gateway](/learn/production-llmops/llmops-fundamentals/what-is-llm-gateway) or a guardrails service) so every team gets the same protection and the same logs. From there it composes with the rest of your reliability tooling: [output validation](/learn/production-llmops/guardrails-reliability/llm-output-validation), [content moderation](/learn/production-llmops/guardrails-reliability/llm-content-moderation), and [failure handling](/learn/production-llmops/guardrails-reliability/handle-llm-failures)."
+        },
+        {
+          "type": "p",
+          "md": "The honest bottom line, unchanged for years: no runtime detector is perfect, because deciding whether a fluent sentence is true is, in general, as hard as the original task. The goal is not zero hallucinations reaching users — it's catching enough of the *costly* ones, cheaply enough to run on every request, and degrading gracefully when you're unsure. A system that knows the limits of its own knowledge beats one that always sounds certain."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is hallucination detection in an LLM application?",
+      "a": "It's a runtime check that runs after the model generates an answer but before the user sees it, estimating whether that specific answer is likely fabricated. Common signals are grounding checks against retrieved context, self-consistency across multiple samples, and token-confidence scores. When an answer looks risky, the system can abstain, add a disclaimer, retry, or route to a human."
+    },
+    {
+      "q": "How do you detect hallucinations in a RAG system at runtime?",
+      "a": "Run a grounding (faithfulness) check: break the answer into individual claims and verify each one against the retrieved passages, usually with an LLM-as-judge that marks claims as supported, unsupported, or contradicted. Any unsupported or contradicted claim flags the answer. This works because in RAG you always have the source text to check against."
+    },
+    {
+      "q": "What is a grounding check or faithfulness check?",
+      "a": "It tests whether every claim in the answer is actually supported by the source documents you provided, rather than invented by the model. It's a yes/no judgment about *faithfulness to the sources*, not about whether the answer is good overall. It's the strongest hallucination signal available whenever your answer is built on retrieved context."
+    },
+    {
+      "q": "Can token confidence or log-probabilities catch hallucinations?",
+      "a": "Partly. Low token probabilities often line up with fabricated spans, so they're a useful cheap signal — but they're noisy, because a model can be confidently wrong and uncertain about something true. Treat confidence as one weak input combined with grounding and consistency checks, never as the only gate."
+    },
+    {
+      "q": "What should an app do when it detects a likely hallucination?",
+      "a": "Pick a response based on the stakes: abstain (\"I'm not sure\") for high-risk questions, add a disclaimer for medium-risk ones, retry after re-retrieving context if the cause looks fixable, or escalate to a human for critical paths like legal, medical, or billing. Always log the flag and the action so you can tune thresholds later."
+    },
+    {
+      "q": "Is hallucination detection the same as RAG evaluation?",
+      "a": "No. RAG evaluation is offline — it measures how often your whole system hallucinates across a test set before you ship. Hallucination detection is online — it runs on every live request and drives a real-time decision about that one answer. They share faithfulness ideas but do different jobs, and you generally need both."
+    }
+  ],
+  "related": [
+    "what-are-llm-guardrails",
+    "llm-output-validation",
+    "handle-llm-failures",
+    "llm-output-schema-validation",
+    "what-is-llm-gateway"
+  ],
+  "furtherReading": [
+    {
+      "title": "Reduce hallucinations — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-hallucinations"
+    },
+    {
+      "title": "SelfCheckGPT: Zero-Resource Hallucination Detection (arXiv)",
+      "url": "https://arxiv.org/abs/2303.08896"
+    },
+    {
+      "title": "Survey of Hallucination in Natural Language Generation (arXiv)",
+      "url": "https://arxiv.org/abs/2202.03629"
+    }
+  ]
+}

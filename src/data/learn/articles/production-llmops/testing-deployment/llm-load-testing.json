@@ -1,0 +1,409 @@
+{
+  "slug": "llm-load-testing",
+  "title": "How to Load Test an LLM App Before It Hits Real Traffic",
+  "shortTitle": "Load Testing",
+  "seoTitle": "How to Load Test an LLM App Before Real Traffic",
+  "metaDescription": "Load testing LLM apps is different — token throughput, concurrency limits, and rate caps all bite. Learn what to measure and how to find your real ceiling.",
+  "keywords": [
+    "llm load testing",
+    "load test llm app",
+    "tokens per second throughput",
+    "llm concurrency limit",
+    "stress test llm api"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You'll understand how to stress-test an LLM app realistically — measuring token throughput and concurrency limits, not just request counts — before launch.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**Load testing** means sending your app a flood of fake traffic *before* real users arrive, so you discover where it slows down, queues up, or falls over — on your terms, in a test, not at 9am on launch day in front of customers."
+        },
+        {
+          "type": "p",
+          "md": "For a normal web service this is well-trodden: you fire thousands of requests per second at it, watch the response times, and find the point where it can't keep up. An LLM app *looks* like just another web service, so people reach for the same playbook. That's the trap. An LLM request behaves nothing like a database lookup."
+        },
+        {
+          "type": "p",
+          "md": "Picture a regular API call as a vending machine: you press a button, a snack drops out, done in a fraction of a second. An LLM call is more like ordering a custom sandwich at a busy deli. It takes real time, the time varies wildly depending on what you ordered, and there's a line. One person ordering is fine. A hundred people ordering at once, behind a single sandwich-maker who can only assemble so many at a time, and the *queue* — not the sandwich — becomes the problem."
+        },
+        {
+          "type": "p",
+          "md": "Load testing an LLM app is about measuring that deli under pressure: how fast each order comes out, how long the line gets, and how many people you can serve at once before everything grinds to a crawl."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This article assumes you already know your app works correctly on a single request. Load testing measures *performance under concurrency* — speed and capacity — not whether the answers are good. For answer quality, see [testing LLM apps](/learn/production-llmops/testing-deployment/testing-llm-apps)."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "LLM apps break the assumptions baked into every classic load-testing tool, and each broken assumption is a way to get a falsely reassuring green light."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Responses are slow and variable.** A typical API responds in milliseconds. An LLM might take 2 seconds for a short reply and 40 seconds for a long one. A tool tuned to flag anything over 500ms as a failure is useless here, and an *average* latency hides the long, painful tail.",
+            "**Throughput is measured in tokens, not requests.** \"500 requests per second\" tells you almost nothing, because one request might generate 20 tokens and another 2,000. The real currency is **tokens per second**. A model that handles 50 short requests/sec may handle only 5 long ones — same hardware, ten times fewer requests.",
+            "**Concurrency, not request rate, is the real limit.** What strains an LLM backend is the number of requests *in flight at the same time* (each one occupying memory and a slice of the GPU for many seconds), not how fast new ones arrive. Fifty requests that each take 20 seconds means roughly fifty live at once — a very different load than fifty quick requests that finish instantly.",
+            "**You may not even be testing your own ceiling.** If you call a hosted API, the provider's **rate limits** will throttle you long before you find the model's true capacity. Your load test ends up measuring the provider's cap, not your app."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The cost of skipping this is a specific, ugly failure mode. Your app feels snappy in the demo with one user. You launch. Traffic climbs. Requests start *queueing* faster than they drain. The wait before the first word appears — **time to first token** — stretches from one second to thirty. Timeouts cascade, retries pile *more* load onto an already-drowning backend, and the whole thing collapses. Load testing is how you find that cliff edge in a controlled test and decide what to do about it, rather than discovering it live."
+        },
+        {
+          "type": "p",
+          "md": "It's a core part of getting from a working prototype to something that survives contact with real traffic — see [from prototype to production](/learn/production-llmops/llmops-fundamentals/llm-prototype-to-production)."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A load test has the same shape regardless of what you're testing: define realistic traffic, ramp the pressure up in stages, measure the right numbers, and watch for the point where they fall apart. The LLM-specific work is in choosing realistic traffic and measuring the *right* numbers."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "The load-testing loop",
+            "steps": [
+              {
+                "label": "Define traffic",
+                "sub": "realistic prompt + response sizes"
+              },
+              {
+                "label": "Ramp concurrency",
+                "sub": "10 → 50 → 100 in flight"
+              },
+              {
+                "label": "Measure",
+                "sub": "TTFT, tokens/sec, tail latency"
+              },
+              {
+                "label": "Find the cliff",
+                "sub": "where latency blows up",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Step 1 — Use realistic prompt and response sizes"
+        },
+        {
+          "type": "p",
+          "md": "Garbage in, garbage results. If you stress-test with a 5-token prompt and a 5-token reply, you're measuring a workload no real user has. Sample real (or realistic) traffic: how long are actual prompts, how long are typical answers, what's the mix of short and long? A summarizer that ingests 4,000-token documents stresses the backend completely differently from a chatbot trading one-line messages. Drive your test with sizes that match what you'll actually serve."
+        },
+        {
+          "type": "h3",
+          "text": "Step 2 — Ramp concurrency, not just request rate"
+        },
+        {
+          "type": "p",
+          "md": "Instead of (or alongside) \"requests per second,\" control the number of **concurrent in-flight requests**. Start with a handful, hold steady, record the numbers, then step up: 10, 25, 50, 100 simultaneous requests. Because each LLM request lives for many seconds, concurrency is what actually fills the backend's memory and compute. You're hunting for the concurrency level where the system stops keeping up."
+        },
+        {
+          "type": "h3",
+          "text": "Step 3 — Measure the metrics that matter for LLMs"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Metric",
+            "What it means",
+            "Why it matters under load"
+          ],
+          "rows": [
+            [
+              "Time to first token (TTFT)",
+              "Delay before the first output token appears",
+              "Drives perceived speed in streaming UIs; the first thing to balloon when a queue forms"
+            ],
+            [
+              "Tokens per second (per request)",
+              "How fast text streams out once started",
+              "Falls as the GPU is shared across more concurrent requests"
+            ],
+            [
+              "Total throughput (tokens/sec, all users)",
+              "Aggregate tokens the system emits per second",
+              "The true capacity number; plateaus at saturation"
+            ],
+            [
+              "End-to-end latency (p50 / p95 / p99)",
+              "Full request time, at median and the tail",
+              "The tail (p95/p99) is where real users feel pain — never trust the average"
+            ],
+            [
+              "Error / throttle rate",
+              "Failed, timed-out, or rate-limited requests",
+              "A spike here means you've passed the ceiling"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The key insight is that these metrics move *together* in a recognizable pattern as you push harder. Below capacity, adding concurrency raises total throughput while latency barely moves — the system has room. At saturation, total throughput flattens (the backend is maxed out) but **TTFT and tail latency climb steeply**, because new requests now wait in a queue before they even start. That knee in the curve is your real ceiling."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Two regimes as you add load",
+            "columns": [
+              {
+                "title": "Below capacity",
+                "accent": true,
+                "items": [
+                  "Add concurrency → throughput rises",
+                  "TTFT stays low and flat",
+                  "Tail latency barely moves",
+                  "Few or no timeouts",
+                  "The system has headroom"
+                ]
+              },
+              {
+                "title": "Past the knee (saturated)",
+                "items": [
+                  "Add concurrency → throughput flat",
+                  "TTFT climbs steeply (queueing)",
+                  "p95/p99 latency explodes",
+                  "Timeouts and retries appear",
+                  "You've found the ceiling"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "a-worked-example",
+      "title": "A worked example",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Here's the whole idea in a small async script — no special framework. It launches a fixed number of concurrent workers, each repeatedly sending a realistic request and timing two things: time to first token and total time. Run it at several concurrency levels and compare."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "loadtest.py — minimal concurrency sweep",
+          "code": "import asyncio, time, statistics\n\nCONCURRENCY = 25          # in-flight requests to hold steady\nDURATION_S  = 60          # how long to sustain the load\nPROMPT = \"Summarize the following report:\\n\" + \"...\" * 1000  # realistic size\n\nlatencies, ttfts, errors = [], [], 0\n\nasync def call_streaming():\n    \"\"\"Send one streaming request; return (ttft, total) in seconds.\"\"\"\n    start = time.perf_counter()\n    first = None\n    async for token in stream_llm(PROMPT):   # your provider's stream call\n        if first is None:\n            first = time.perf_counter()       # first token arrived\n    end = time.perf_counter()\n    return (first - start), (end - start)\n\nasync def worker(deadline):\n    global errors\n    while time.perf_counter() < deadline:\n        try:\n            ttft, total = await call_streaming()\n            ttfts.append(ttft); latencies.append(total)\n        except Exception:\n            errors += 1                        # timeouts + rate-limits count here\n\nasync def main():\n    deadline = time.perf_counter() + DURATION_S\n    await asyncio.gather(*[worker(deadline) for _ in range(CONCURRENCY)])\n    pct = lambda xs, p: sorted(xs)[int(len(xs) * p)]\n    print(f\"requests:    {len(latencies)}  errors: {errors}\")\n    print(f\"TTFT  p50/p95: {pct(ttfts,.5):.2f}s / {pct(ttfts,.95):.2f}s\")\n    print(f\"total p50/p95: {pct(latencies,.5):.2f}s / {pct(latencies,.95):.2f}s\")\n\nasyncio.run(main())"
+        },
+        {
+          "type": "p",
+          "md": "Now run it as a *sweep* — the same script at rising concurrency — and read the table it produces. The pattern below is the shape you're looking for: throughput keeps climbing, then stalls, while the p95 latency quietly detonates."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Concurrency",
+            "Total tokens/sec",
+            "TTFT p95",
+            "Latency p95",
+            "Errors"
+          ],
+          "rows": [
+            [
+              "10",
+              "rising",
+              "0.8s",
+              "9s",
+              "0%"
+            ],
+            [
+              "25",
+              "rising",
+              "1.4s",
+              "12s",
+              "0%"
+            ],
+            [
+              "50",
+              "near peak",
+              "4.0s",
+              "26s",
+              "0%"
+            ],
+            [
+              "75",
+              "flat (saturated)",
+              "11s",
+              "55s",
+              "3%"
+            ],
+            [
+              "100",
+              "flat",
+              "24s",
+              "timeout",
+              "18%"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The numbers above are an *illustration of the shape*, not real benchmarks for any model — yours will differ. What's universal is the knee: somewhere between 50 and 75 here, throughput stops rising but latency and errors take off. That band is your safe operating ceiling; plan to run *below* it and add capacity before you reach it. Purpose-built tools (locust, k6, or LLM-specific harnesses) automate this sweep and the token accounting."
+        }
+      ]
+    },
+    {
+      "id": "the-rate-limit-trap",
+      "title": "The rate-limit trap with hosted APIs",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "There's a special wrinkle that catches almost everyone testing against a hosted LLM API. You crank up concurrency expecting to find the model's limit, and instead you slam into a wall of `429 Too Many Requests` errors at a fixed point. You haven't found the *model's* ceiling — you've found the *provider's account rate limit*, which is usually expressed as requests-per-minute and tokens-per-minute on your account tier."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "What your load test actually hits first",
+            "root": {
+              "label": "Your load test ramps up"
+            },
+            "children": [
+              {
+                "label": "Hosted API",
+                "sub": "hits account rate limit (429) — measures the cap, not the model",
+                "accent": true
+              },
+              {
+                "label": "Self-hosted model",
+                "sub": "hits real GPU/memory saturation — measures true capacity"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "This changes what your test even means:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**On a hosted API, you are testing the rate limit, not the model.** That's still useful — it tells you the real ceiling *your app* will hit in production, since the same limit applies live. But don't mistake it for the model's raw throughput.",
+            "**Test the system as it will actually run.** If production goes through the hosted API, load-test through the hosted API (request a limit increase first if needed), because the limit *is* part of your real ceiling. The two questions — 'what can my app do?' and 'what can the model do?' — have different answers.",
+            "**True stress testing of capacity means self-hosting.** Only when you run the model yourself (your own GPU server, or an inference engine like vLLM) does ramping concurrency push against real GPU memory and compute. That's the only setup where the load test measures the model's genuine saturation point rather than an account quota."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Don't paper over rate limits with aggressive automatic retries during a load test. Retried-on-429 requests pile *more* traffic onto a throttled endpoint and distort every number you collect. Count throttles as a distinct outcome and read them as the signal they are — you've reached a limit."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "**Reporting the average latency.** Averages lie about LLMs because the distribution has a long tail. Half your users feeling great and 5% timing out averages to 'fine.' Always report p95 and p99, never just the mean.",
+            "**Counting requests instead of tokens.** 'We handle 1,000 requests/sec' is meaningless without the token sizes behind those requests. Report tokens per second, and state the prompt/response sizes you tested with.",
+            "**Unrealistic prompts.** Testing with tiny toy inputs measures a workload no user has. The input and output lengths dominate LLM cost and latency, so they must mirror production.",
+            "**Ignoring streaming.** If your app streams tokens to users, total latency isn't the metric they feel — TTFT is. A 30-second response that starts streaming in 1 second feels fast; one that's silent for 15 seconds feels broken. Measure both.",
+            "**No warm-up and no steady state.** The first requests after a cold start are slow and unrepresentative. Discard a warm-up window, then measure during sustained, steady load.",
+            "**Forgetting the rest of the system.** Real requests also hit your [retrieval](/learn/production-llmops/llmops-fundamentals/production-llm-stack), database, and any tool calls. A load test that only times the model call can miss a bottleneck that's actually in your own glue code."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics click, a few deeper ideas explain *why* LLM backends behave the way they do under load — and what to do beyond a single sweep."
+        },
+        {
+          "type": "p",
+          "md": "**Batching is why throughput and latency trade off.** Modern inference servers don't process one request at a time; they *batch* many concurrent requests through the GPU together (continuous batching, as in vLLM). This is brilliant for total throughput — more concurrency packs the GPU more efficiently — but it's exactly why *per-request* speed drops as concurrency rises: each request shares the GPU with its batch-mates. Understanding this turns the confusing 'throughput up, latency up, both at once' result into something you'd predict. The deeper background lives in [training vs inference](/learn/production-llmops/llmops-fundamentals/training-vs-inference)."
+        },
+        {
+          "type": "p",
+          "md": "**Prefill vs decode.** An LLM request has two phases with different cost shapes: *prefill* reads the whole prompt at once (compute-heavy, scales with input length) and *decode* generates output one token at a time (memory-bandwidth-heavy, scales with output length). A long-prompt/short-answer workload (summarization) stresses the backend differently from a short-prompt/long-answer one (story generation). This is why one realistic traffic profile can't stand in for another — test the mix you'll actually serve."
+        },
+        {
+          "type": "p",
+          "md": "**From load test to capacity plan.** The point of finding the knee isn't the number itself; it's deciding what to do. If your ceiling is below your expected traffic, your options are: add replicas behind a load balancer, route overflow across providers (see [provider failover](/learn/production-llmops/llmops-fundamentals/llm-provider-failover)), send cheaper requests to smaller models with [model routing](/learn/production-llmops/llmops-fundamentals/llm-model-routing), or apply backpressure — a queue with a sensible timeout — so that under overload you degrade gracefully instead of melting down."
+        },
+        {
+          "type": "p",
+          "md": "**Load testing never ends at launch.** A model upgrade, a prompt change that lengthens outputs, or a new feature can shift your whole performance curve. Re-run the sweep before any [model upgrade rollout](/learn/production-llmops/testing-deployment/llm-model-upgrade-rollout), and pair it with continuous [observability](/learn/production-llmops/observability-monitoring/what-is-llm-observability) in production, so the real traffic you measured in a test is the same thing you keep watching live. A load test tells you where the cliff is; observability tells you how close you're driving to it."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "How is load testing an LLM app different from a normal API?",
+      "a": "Three things change. Responses take seconds (not milliseconds) and vary widely, so averages mislead — report p95/p99. Throughput is measured in tokens per second, not requests per second, because requests differ enormously in size. And the real limit is *concurrent in-flight requests*, since each one occupies the backend for many seconds, rather than how fast new requests arrive."
+    },
+    {
+      "q": "Should I measure requests per second or tokens per second?",
+      "a": "Tokens per second. A request that generates 20 tokens and one that generates 2,000 are wildly different workloads, so 'requests per second' hides the real cost. Track tokens per second (per request and in aggregate), and always state the prompt and response sizes you tested with."
+    },
+    {
+      "q": "What is time to first token and why does it matter under load?",
+      "a": "Time to first token (TTFT) is the delay before the first piece of output appears. In a streaming UI it's what users actually feel as 'speed.' It's also the first metric to balloon when the system saturates: new requests start waiting in a queue before they even begin generating, so TTFT climbing steeply is a classic sign you've passed your capacity ceiling."
+    },
+    {
+      "q": "Why do I keep getting 429 errors when I load test a hosted LLM API?",
+      "a": "You're hitting the provider's account rate limit (requests-per-minute or tokens-per-minute on your tier), not the model's capacity. That's still your real production ceiling, so it's worth knowing, but it means you're measuring the quota, not the model. To stress the model's true saturation point you'd need to self-host it."
+    },
+    {
+      "q": "Can I load test against a hosted API or do I need to self-host the model?",
+      "a": "Both are valid, but they answer different questions. Testing through the hosted API measures what *your app* can do in production, including the rate limit you'll actually face — so test the way you'll run. Self-hosting (e.g. with vLLM) is the only way to push against real GPU memory and compute and find the model's genuine throughput ceiling."
+    },
+    {
+      "q": "What concurrency level should I test up to?",
+      "a": "Ramp in stages (for example 10, 25, 50, 100 concurrent in-flight requests) and keep going until you find the 'knee': the point where total throughput flattens while TTFT, tail latency, and error rate climb sharply. That knee is your ceiling. Plan to run comfortably below it and add capacity before traffic reaches it."
+    }
+  ],
+  "related": [
+    "testing-llm-apps",
+    "llm-ab-testing",
+    "shadow-mode-llm-testing",
+    "production-llm-stack",
+    "what-is-llm-observability",
+    "llm-prototype-to-production"
+  ],
+  "furtherReading": [
+    {
+      "title": "vLLM Documentation",
+      "url": "https://docs.vllm.ai/"
+    },
+    {
+      "title": "Locust — open-source load testing tool",
+      "url": "https://docs.locust.io/"
+    },
+    {
+      "title": "Grafana k6 — load testing documentation",
+      "url": "https://grafana.com/docs/k6/latest/"
+    }
+  ]
+}

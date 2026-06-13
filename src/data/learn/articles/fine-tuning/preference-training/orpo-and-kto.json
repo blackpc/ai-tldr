@@ -1,0 +1,379 @@
+{
+  "slug": "orpo-and-kto",
+  "title": "ORPO and KTO: Newer Alternatives to DPO, Explained",
+  "shortTitle": "ORPO & KTO",
+  "seoTitle": "ORPO vs KTO vs DPO: Preference Methods Compared",
+  "metaDescription": "ORPO folds alignment into a single SFT pass; KTO learns from thumbs-up/down labels instead of pairs. Learn how both differ from DPO and when each fits.",
+  "keywords": [
+    "what is orpo fine-tuning",
+    "what is kto alignment",
+    "orpo vs dpo",
+    "kto vs dpo",
+    "preference optimization without pairs",
+    "odds ratio preference optimization"
+  ],
+  "difficulty": "advanced",
+  "oneLiner": "Learn how ORPO merges preference alignment into supervised fine-tuning and how KTO trains on simple good/bad labels, plus when each beats classic DPO.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**ORPO** and **KTO** are two preference-training methods that came after [DPO](/learn/fine-tuning/preference-training/what-is-dpo). They chase the same goal as DPO and [RLHF](/learn/fine-tuning/preference-training/what-is-rlhf) — make a model answer the way humans prefer — but each removes a different piece of friction that DPO still carries."
+        },
+        {
+          "type": "p",
+          "md": "Picture training a new barista. DPO is the standard way: first you teach them the menu and the basic moves (a supervised stage), then, in a second pass, you show them pairs of drinks — *this one is good, this one is bad* — and nudge them toward the good ones. Two stages, and you also keep a frozen copy of the trainee around as a reference to compare against."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**ORPO** (*Odds Ratio Preference Optimization*) folds those two stages into one. While the barista learns the menu, the very same lesson also says *and prefer this over that* — so there is no separate preference pass and no frozen reference copy to keep in memory. One training run, done.",
+            "**KTO** (*Kahneman-Tversky Optimization*) changes the *data* instead of the stages. It does not need matched good/bad pairs at all. It learns from a loose pile of individual drinks each marked simply *thumbs-up* or *thumbs-down* — exactly the kind of feedback that piles up naturally from real users."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "ORPO comes from a 2024 paper by Hong, Lee, and Thorne (*ORPO: Monotonic Preference Optimization without Reference Model*). KTO comes from Ethayarajh and colleagues at Stanford / Contextual AI, and is named after the *prospect theory* of psychologists Daniel Kahneman and Amos Tversky — the idea that people feel losses more sharply than equivalent gains."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "DPO already simplified alignment a lot, but it left two practical pain points. ORPO and KTO each remove one of them, and which pain you feel decides which method helps you."
+        },
+        {
+          "type": "h3",
+          "text": "Pain point 1 — two stages and a reference model (ORPO's target)"
+        },
+        {
+          "type": "p",
+          "md": "DPO assumes you have already done a [supervised fine-tuning (SFT)](/learn/fine-tuning/fine-tuning-basics/what-is-fine-tuning) pass, and then it runs a *second* pass on the preference data. It also keeps a frozen reference copy of the model in memory to stop the policy drifting too far. That means two training runs to manage and roughly two model copies of GPU memory. ORPO merges the SFT objective and the preference objective into **one loss in one pass, with no reference model** — less pipeline to babysit, and a smaller memory footprint. For a small team fine-tuning on limited hardware, dropping a stage and a model copy is a real win."
+        },
+        {
+          "type": "h3",
+          "text": "Pain point 2 — preference pairs are expensive to collect (KTO's target)"
+        },
+        {
+          "type": "p",
+          "md": "DPO needs *(prompt, chosen, rejected)* triples: for every prompt, two answers, with a human deciding which is better. That ranked-pair data is slow and costly to gather. But most real products already collect a different, cheaper signal — a thumbs-up / thumbs-down button, a deleted reply, a regenerated answer, a support ticket marked resolved or not. Each of these is a *single* answer with a *binary* good/bad label, not a pair. KTO learns directly from that unpaired binary feedback, so you can align a model on data you are probably already sitting on."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "A quick way to remember the split: **ORPO simplifies the *training pipeline*; KTO simplifies the *data you must collect*.** They are not rivals — you could even run ORPO on paired data and KTO on binary data for two different products."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Both methods are still *supervised* training — a forward pass, a loss, backprop — like DPO. The differences are in what the loss looks at. Here is the full landscape next to plain DPO."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "DPO vs ORPO vs KTO at a glance",
+            "columns": [
+              {
+                "title": "DPO",
+                "items": [
+                  "Needs a prior SFT model",
+                  "Separate preference pass",
+                  "Frozen reference model required",
+                  "Data: chosen / rejected pairs"
+                ]
+              },
+              {
+                "title": "ORPO",
+                "accent": true,
+                "items": [
+                  "Starts from a base model",
+                  "SFT + preference in ONE pass",
+                  "No reference model",
+                  "Data: chosen / rejected pairs"
+                ]
+              },
+              {
+                "title": "KTO",
+                "items": [
+                  "Usually needs a prior SFT model",
+                  "Separate preference pass",
+                  "Frozen reference model required",
+                  "Data: single good / bad labels"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "ORPO — the odds-ratio trick in one pass"
+        },
+        {
+          "type": "p",
+          "md": "ORPO's loss has two parts added together. The first is the ordinary SFT loss: maximize the probability of the *chosen* answer, exactly as plain instruction-tuning would. The second is a small **odds-ratio penalty** that compares how likely the model is to produce the chosen answer versus the rejected one, and pushes those apart. Because the SFT term already pins the model to good answers, ORPO does not need a separate reference model to hold it in place — the supervised term plays that role."
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "title": "the shape of the ORPO loss",
+          "code": "L_ORPO = L_SFT  +  λ * L_OR\n\nwhere:\n  L_SFT = standard cross-entropy on the CHOSEN answer\n          (the normal \"learn to produce good text\" loss)\n\n  L_OR  = -log sigmoid( log[ odds(chosen)  / odds(rejected) ] )\n          odds(y) = P(y | x) / (1 - P(y | x))\n          (pushes chosen's odds above rejected's odds)\n\n  λ     = weight on the preference term (small, e.g. 0.1)\n\nNo reference model. One loss. One training pass over a base model."
+        },
+        {
+          "type": "p",
+          "md": "The intuition: the *odds ratio* asks \"how many times more likely is the good answer than the bad one?\" Maximizing it widens the gap gently, while the SFT term keeps the model anchored to fluent, correct text. The result is a single stage that both teaches the task and instills the preference."
+        },
+        {
+          "type": "h3",
+          "text": "KTO — learning from thumbs-up and thumbs-down"
+        },
+        {
+          "type": "p",
+          "md": "KTO never compares two answers to the same prompt. Instead, every training example is one *(prompt, answer)* with a single label: **desirable** or **undesirable**. The loss, borrowed from Kahneman and Tversky's prospect theory, rewards the model for raising the probability of desirable answers and penalizes it for raising the probability of undesirable ones — but it weights a *loss* (an undesirable example) more heavily than an equivalent *gain*, mirroring how humans are loss-averse. Like DPO, it uses a frozen reference model as a baseline to measure each answer against."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "KTO training — unpaired binary feedback",
+            "steps": [
+              {
+                "label": "Collect single answers",
+                "sub": "from real product usage"
+              },
+              {
+                "label": "Label each one",
+                "sub": "desirable or undesirable"
+              },
+              {
+                "label": "Score vs reference",
+                "sub": "how far above/below baseline"
+              },
+              {
+                "label": "Apply KTO loss",
+                "sub": "lift good, push down bad (loss-averse)",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Because the examples are unpaired, you do not need both a good and a bad answer for the *same* prompt. A pile of liked answers and a pile of disliked answers — even to entirely different prompts — is enough. KTO does ask you to keep the two piles from being wildly imbalanced; if one label dominates, you tune a weight to rebalance them (more on that below)."
+        }
+      ]
+    },
+    {
+      "id": "worked-example-trl",
+      "title": "A worked example with TRL",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Hugging Face's **TRL** library ships an `ORPOTrainer` and a `KTOTrainer`, so the code looks almost identical to the [DPO](/learn/fine-tuning/preference-training/what-is-dpo) example — the difference is the data format and whether a reference model is passed. Both snippets are minimal; real runs add evaluation, LoRA, and memory tricks."
+        },
+        {
+          "type": "h3",
+          "text": "ORPO — one pass, no reference model"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "orpo_train.py",
+          "code": "from datasets import load_dataset\nfrom transformers import AutoModelForCausalLM, AutoTokenizer\nfrom trl import ORPOTrainer, ORPOConfig\n\n# Start from a BASE model (no separate SFT step needed)\nmodel_name = \"Qwen/Qwen3-0.6B\"\nmodel = AutoModelForCausalLM.from_pretrained(model_name)\ntokenizer = AutoTokenizer.from_pretrained(model_name)\n\n# Same pair format as DPO: prompt / chosen / rejected\ndata = load_dataset(\"json\", data_files=\"pairs.jsonl\", split=\"train\")\n\nconfig = ORPOConfig(\n    output_dir=\"orpo-model\",\n    beta=0.1,            # weight on the odds-ratio (preference) term\n    num_train_epochs=1,\n)\n\ntrainer = ORPOTrainer(\n    model=model,         # NOTE: no ref_model argument exists\n    args=config,\n    train_dataset=data,\n    processing_class=tokenizer,\n)\ntrainer.train()"
+        },
+        {
+          "type": "h3",
+          "text": "KTO — unpaired good/bad labels"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "kto_train.py",
+          "code": "from datasets import load_dataset\nfrom transformers import AutoModelForCausalLM, AutoTokenizer\nfrom trl import KTOTrainer, KTOConfig\n\nmodel_name = \"Qwen/Qwen3-0.6B\"   # an SFT checkpoint works best\nmodel = AutoModelForCausalLM.from_pretrained(model_name)\ntokenizer = AutoTokenizer.from_pretrained(model_name)\n\n# Each row: 'prompt', 'completion', 'label' (True = desirable, False = not)\n# No pairing — rows are independent single answers.\ndata = load_dataset(\"json\", data_files=\"binary.jsonl\", split=\"train\")\n\nconfig = KTOConfig(\n    output_dir=\"kto-model\",\n    beta=0.1,\n    # rebalance if you have far more 'good' rows than 'bad' (or vice versa)\n    desirable_weight=1.0,\n    undesirable_weight=1.0,\n)\n\ntrainer = KTOTrainer(\n    model=model,\n    args=config,\n    train_dataset=data,\n    processing_class=tokenizer,\n)\ntrainer.train()"
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Watch the **label balance** in KTO. If 95% of your rows are thumbs-up, the model barely learns what \"bad\" looks like. The `desirable_weight` / `undesirable_weight` knobs scale each side of the loss so the rarer label still gets heard — start by setting them roughly inversely proportional to how common each label is."
+        }
+      ]
+    },
+    {
+      "id": "which-to-pick",
+      "title": "Which method to pick",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The decision almost always comes down to one question: **what does your data look like?** Pick the method that matches the feedback you can actually collect, not the one with the newest paper."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Your situation",
+            "Best fit",
+            "Why"
+          ],
+          "rows": [
+            [
+              "You have clean (prompt, chosen, rejected) pairs",
+              "DPO or ORPO",
+              "Both consume pairs; choose ORPO to also drop the SFT stage and the reference model"
+            ],
+            [
+              "You only have thumbs-up / thumbs-down on single answers",
+              "KTO",
+              "It is the one method built for unpaired binary feedback — no need to fabricate pairs"
+            ],
+            [
+              "You want the simplest possible pipeline (one run)",
+              "ORPO",
+              "SFT + preference in a single pass, no reference model to load"
+            ],
+            [
+              "You are tight on GPU memory",
+              "ORPO",
+              "No frozen reference copy means roughly one model in memory instead of two"
+            ],
+            [
+              "Your good/bad labels are heavily imbalanced",
+              "KTO (with weights)",
+              "The desirable/undesirable weights are designed for exactly this"
+            ],
+            [
+              "You need a reusable, inspectable scorer",
+              "RLHF reward model",
+              "None of DPO/ORPO/KTO produce a standalone reward model"
+            ]
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "A quick decision guide",
+            "root": {
+              "label": "What feedback do you have?",
+              "sub": "match data to method"
+            },
+            "children": [
+              {
+                "label": "Ranked pairs + want one stage",
+                "sub": "→ ORPO"
+              },
+              {
+                "label": "Ranked pairs + already have SFT",
+                "sub": "→ DPO"
+              },
+              {
+                "label": "Single good/bad labels only",
+                "sub": "→ KTO"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "A useful real-world pattern: collect binary feedback from production (cheap, abundant) and align with **KTO**; if you later run a careful human-labeling round that produces true pairs, switch to **ORPO** or **DPO** for that higher-quality batch. The methods are tools in the same drawer, chosen by the data on hand."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics click, a few nuances separate a demo from a solid run."
+        },
+        {
+          "type": "p",
+          "md": "**ORPO needs a *base* model, not an instruct model.** ORPO's whole point is that it *does* the SFT itself. If you start from a model that has already been instruction-tuned and run ORPO on top, you are double-teaching the format and can wash out the original tuning. The intended recipe is base model → ORPO → done. Starting from an already-aligned checkpoint is a common beginner mistake."
+        },
+        {
+          "type": "p",
+          "md": "**KTO tolerates noisy, real-world labels — within reason.** Because it never compares two answers head-to-head, it is more forgiving of the messy, inconsistent feedback that real users generate (one person's thumbs-up is another's thumbs-down). But that same looseness means a single bad answer mislabeled as \"good\" pulls the model the wrong way with no paired counter-example to balance it. Light filtering of obviously wrong labels still pays off."
+        },
+        {
+          "type": "p",
+          "md": "**The `beta` knob still matters.** As in [DPO](/learn/fine-tuning/preference-training/what-is-dpo), `beta` controls how strongly the preference signal pulls the model. Too high and the model overfits the preference data and gets brittle; too low and the alignment barely moves the needle. The common starting point is around 0.1 for all three methods, then tune by watching both a held-out preference accuracy and a general capability check so you do not trade away skills you already had — see [how to evaluate a fine-tuned model](/learn/fine-tuning/fine-tuning-basics/evaluate-fine-tuned-model)."
+        },
+        {
+          "type": "p",
+          "md": "**These are *offline* methods.** Like DPO, ORPO and KTO train on a fixed dataset and never generate fresh answers from the current model mid-training. That makes them cheap and stable, but it means they cannot self-improve on tasks with a checkable right answer the way online RL can. For math, code, or anything with a verifier, teams reach for online methods like GRPO instead. ORPO and KTO shine for *helpfulness, tone, and safety* alignment on data you already have."
+        },
+        {
+          "type": "p",
+          "md": "**Where they sit in the bigger picture.** ORPO and KTO are siblings of DPO in the preference-tuning family, which itself sits on top of [supervised fine-tuning](/learn/fine-tuning/fine-tuning-basics/what-is-fine-tuning) and is usually run cheaply with [LoRA](/learn/fine-tuning/lora-and-peft/what-is-lora) adapters rather than full fine-tuning. Understanding all of them as variations on one idea — *nudge the model toward preferred behavior with a supervised-style loss* — is the durable takeaway. The differences are about pipeline shape and data format, not about a fundamentally new kind of learning."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is ORPO in fine-tuning?",
+      "a": "ORPO (Odds Ratio Preference Optimization) is a preference-alignment method that merges supervised fine-tuning and preference learning into a single training pass. Its loss combines the normal SFT cross-entropy on the chosen answer with a small odds-ratio term that pushes the chosen answer's probability above the rejected one's. Unlike DPO, it needs no separate SFT stage and no frozen reference model."
+    },
+    {
+      "q": "What is KTO alignment?",
+      "a": "KTO (Kahneman-Tversky Optimization) is a method that aligns a model using *unpaired* binary feedback — each example is a single answer labeled simply desirable or undesirable, rather than a chosen/rejected pair. Its loss is based on prospect theory and is loss-averse, weighting bad examples more heavily than equivalent good ones. It is ideal when you have thumbs-up/thumbs-down data but no ranked pairs."
+    },
+    {
+      "q": "What is the difference between ORPO and DPO?",
+      "a": "Both train on (prompt, chosen, rejected) pairs, but ORPO does the supervised fine-tuning and the preference alignment in one combined pass and uses no reference model, while DPO assumes you already have an SFT model and runs a separate preference pass that keeps a frozen reference copy in memory. ORPO is simpler to run and uses less GPU memory; DPO is the more established default."
+    },
+    {
+      "q": "What is the difference between KTO and DPO?",
+      "a": "The main difference is the data they need. DPO requires matched pairs — two answers to the same prompt with one marked better. KTO needs only single answers each marked good or bad, with no pairing, which is far cheaper to collect from real product usage. Both still use a frozen reference model. Use KTO when you have binary feedback, DPO when you have ranked pairs."
+    },
+    {
+      "q": "Can you do preference optimization without pairs?",
+      "a": "Yes — that is exactly what KTO is for. It learns from unpaired examples, each carrying a single desirable/undesirable label, so you never have to produce two competing answers for the same prompt. This makes it possible to align a model on the thumbs-up/thumbs-down, deletions, and regenerations that products already log."
+    },
+    {
+      "q": "Does ORPO need a reference model?",
+      "a": "No. That is one of its selling points. Because ORPO includes the supervised fine-tuning loss in the same objective, the SFT term anchors the model and there is no need for a separate frozen reference copy. This cuts the memory requirement to roughly one model instead of the two that DPO and KTO use."
+    },
+    {
+      "q": "Are ORPO and KTO better than DPO?",
+      "a": "Not universally — they solve different problems. ORPO is better when you want a single-stage pipeline with no reference model; KTO is better when you only have unpaired binary feedback. If you already have clean preference pairs and an SFT model, plain DPO remains a perfectly good, well-tested choice. Pick the method that matches your data and pipeline constraints."
+    }
+  ],
+  "related": [
+    "what-is-dpo",
+    "what-is-rlhf",
+    "what-is-fine-tuning",
+    "what-is-lora",
+    "evaluate-fine-tuned-model"
+  ],
+  "furtherReading": [
+    {
+      "title": "ORPO: Monotonic Preference Optimization without Reference Model (Hong et al., arXiv)",
+      "url": "https://arxiv.org/abs/2403.07691"
+    },
+    {
+      "title": "KTO: Model Alignment as Prospect Theoretic Optimization (Ethayarajh et al., arXiv)",
+      "url": "https://arxiv.org/abs/2402.01306"
+    },
+    {
+      "title": "ORPOTrainer — Hugging Face TRL documentation",
+      "url": "https://huggingface.co/docs/trl/orpo_trainer"
+    },
+    {
+      "title": "KTOTrainer — Hugging Face TRL documentation",
+      "url": "https://huggingface.co/docs/trl/kto_trainer"
+    }
+  ]
+}

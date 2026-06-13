@@ -1,0 +1,407 @@
+{
+  "slug": "llm-circuit-breaker",
+  "title": "Circuit Breakers for LLM Calls: Failing Fast When a Provider Is Down",
+  "shortTitle": "Circuit Breakers",
+  "seoTitle": "Circuit Breakers for LLM Calls: Fail Fast on Outages",
+  "metaDescription": "A circuit breaker stops hammering a failing LLM provider and fails fast instead. Learn the open/half-open/closed states and how it protects your app.",
+  "keywords": [
+    "llm circuit breaker",
+    "fail fast llm",
+    "circuit breaker pattern ai",
+    "provider outage llm",
+    "half-open circuit"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You'll understand how a circuit breaker detects a failing LLM provider, stops sending doomed requests, and lets the system recover instead of piling up timeouts.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Your app calls an LLM provider on every request. Most of the time it answers in a second or two. Then the provider has a bad five minutes — an outage, a rate-limit spike, a regional hiccup — and every call starts timing out after 30 seconds. The natural reflex is to retry. But now each of your users is firing three doomed requests, each waiting the full timeout, and your own servers fill up with threads stuck waiting for a service that is already on the floor. You don't just fail; you fail *slowly* and *expensively*, and you pile more load onto the thing that's already broken."
+        },
+        {
+          "type": "p",
+          "md": "A **circuit breaker** is a small wrapper around that LLM call that watches it fail. Once failures cross a threshold, the breaker *trips* — it flips open and stops letting calls through at all. For a cooldown window, every call returns instantly with a fallback (a cached answer, a cheaper backup model, or a polite \"try again shortly\") instead of waiting 30 seconds to fail. After the cooldown, it cautiously lets one test request through to see if the provider has recovered."
+        },
+        {
+          "type": "p",
+          "md": "The name is borrowed straight from the electrical panel in your house. When a circuit draws too much current, the breaker snaps open and cuts the power — not to be annoying, but to stop a small fault from burning the house down. You don't rewire anything; you just flip it back on once the problem is fixed. A software circuit breaker does the same job: it isolates a failing dependency so one sick service can't drag your whole app down with it."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The pattern predates LLMs by a decade — it comes from Michael Nygard's book *Release It!* and was popularized by Netflix's Hystrix library. LLM calls are just an unusually good fit: they're slow, expensive per request, and routed through third-party providers you don't control."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "An LLM call is the worst kind of dependency to leave unprotected. It's **slow** (seconds, not milliseconds), **expensive** (you pay per token even for calls that ultimately fail), and **out of your hands** (the model lives on someone else's servers, behind a rate limiter you can't see). When it goes bad, the damage spreads faster than with a normal API."
+        },
+        {
+          "type": "h3",
+          "text": "Retries alone make an outage worse"
+        },
+        {
+          "type": "p",
+          "md": "The intuitive fix for a flaky call is to retry it. That works for a *transient blip* — one packet dropped, one momentary 503. It is exactly the wrong move during a *real outage*. If the provider is down, every retry is another guaranteed failure that still costs you a timeout's worth of waiting and, on many providers, still counts against your rate limit. Worse, when thousands of clients all retry a struggling service at once, they create a **retry storm** that keeps the provider pinned down and stops it from recovering. Retries treat the symptom; the breaker treats the situation."
+        },
+        {
+          "type": "h3",
+          "text": "Stuck calls exhaust your own resources"
+        },
+        {
+          "type": "p",
+          "md": "Every request waiting 30 seconds for a dead provider holds a connection, a thread or async task, and a slice of memory the whole time. Under steady traffic, those stuck calls accumulate faster than they drain. Your connection pool empties, new requests queue, and parts of your app that have *nothing to do with the LLM* start timing out too. This is a **cascading failure**: one slow dependency takes the rest of the system with it. A breaker caps the bleeding by failing fast — a tripped breaker returns in microseconds, so nothing piles up."
+        },
+        {
+          "type": "list",
+          "ordered": false,
+          "items": [
+            "**Latency stays bounded.** A user gets a fast fallback in 50ms instead of a spinner that resolves to an error after 30 seconds.",
+            "**Cost is contained.** You stop paying for — and stop waiting on — calls that are doomed to fail.",
+            "**The provider can recover.** You stop hammering it, which is often what lets it come back at all.",
+            "**Failures are local.** The LLM feature degrades; checkout, search, and login keep working."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The circuit breaker is one specific tool inside the broader discipline of [handling LLM failures](/learn/production-llmops/guardrails-reliability/handle-llm-failures/) and building [reliability guardrails](/learn/production-llmops/guardrails-reliability/what-are-llm-guardrails/). It pairs naturally with retries (for blips) and fallback routing (for outages) — together they cover the full range of \"the model call didn't work.\""
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A circuit breaker is a tiny **state machine** with three states. It sits between your code and the LLM client, counts outcomes, and decides whether the next call is allowed through. Understanding the three states is understanding the whole pattern."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "The three states and how they connect",
+            "steps": [
+              {
+                "label": "CLOSED",
+                "sub": "calls flow normally"
+              },
+              {
+                "label": "→ failures cross threshold",
+                "sub": "trip the breaker"
+              },
+              {
+                "label": "OPEN",
+                "sub": "fail fast, no calls",
+                "accent": true
+              },
+              {
+                "label": "→ cooldown elapses",
+                "sub": "time to probe"
+              },
+              {
+                "label": "HALF-OPEN",
+                "sub": "one trial call"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Closed: the normal, healthy state"
+        },
+        {
+          "type": "p",
+          "md": "**Closed** is the everyday state — the circuit is intact, so calls flow through to the provider. The breaker simply watches each outcome and keeps a running tally of recent failures. As long as failures stay below the threshold, it does nothing but observe. (The naming trips people up: *closed* means working, like a closed electrical circuit that conducts. *Open* means broken.)"
+        },
+        {
+          "type": "h3",
+          "text": "Open: tripped — fail fast"
+        },
+        {
+          "type": "p",
+          "md": "When failures cross the threshold, the breaker **trips** and moves to **Open**. Now it short-circuits: every incoming call is rejected *immediately* without even touching the provider. This is the whole point — instead of 30-second timeouts stacking up, callers get an instant rejection and run their fallback path. The breaker starts a cooldown timer (say 30 seconds) and stays open until it expires."
+        },
+        {
+          "type": "h3",
+          "text": "Half-open: a cautious probe"
+        },
+        {
+          "type": "p",
+          "md": "When the cooldown ends, the breaker moves to **Half-open** and lets a *single* trial request through. This is the recovery test. If that probe **succeeds**, the provider is healthy again — the breaker resets to Closed and traffic resumes. If the probe **fails**, the provider is still down — the breaker snaps back to Open and waits another cooldown. Half-open is what stops the breaker from dumping your full traffic onto a service the instant the timer expires, which would just trip it again."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "The recovery loop a breaker runs during an outage",
+            "steps": [
+              {
+                "label": "Open: reject all, wait cooldown"
+              },
+              {
+                "label": "Half-open: send ONE probe"
+              },
+              {
+                "label": "Probe fails → back to Open"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "What counts as a failure, and what trips it"
+        },
+        {
+          "type": "p",
+          "md": "Two design choices define a breaker. First, **what counts as a failure?** Usually: a timeout, a 5xx server error, a 429 rate-limit response, or a connection error. A clean 400 (your bad request) generally should *not* count — that's your bug, not the provider's outage. Second, **when does it trip?** The two common triggers are a **failure rate** (e.g. more than 50% of the last 20 calls failed) and **latency** (e.g. calls are taking longer than 10 seconds, which is a sign of trouble before they outright fail). Rate-based thresholds are more robust than a raw count because they scale with your traffic."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Knob",
+            "What it controls",
+            "Typical starting point"
+          ],
+          "rows": [
+            [
+              "Failure threshold",
+              "How much failure trips the breaker",
+              "50% of a rolling window of 20 calls"
+            ],
+            [
+              "Cooldown / reset timeout",
+              "How long Open lasts before probing",
+              "10–60 seconds"
+            ],
+            [
+              "Half-open trial calls",
+              "Probes allowed before deciding",
+              "1 (sometimes a small handful)"
+            ],
+            [
+              "Call timeout",
+              "When a single call is declared failed",
+              "Your p99 latency + margin"
+            ],
+            [
+              "Minimum throughput",
+              "Calls needed before stats count",
+              "5–20 (avoids tripping on one fluke)"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Set a **minimum throughput** so a single failed call on a quiet endpoint can't trip the breaker. \"1 out of 1 failed\" is 100% failure but means nothing. Wait until you have enough calls in the window for the rate to be meaningful."
+        }
+      ]
+    },
+    {
+      "id": "worked-example",
+      "title": "A worked example in code",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Here's the entire idea in about 40 lines of Python — no library, just enough to make the state machine concrete. A real implementation would use a thread-safe counter and a rolling window, but the logic is exactly this."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "circuit_breaker.py",
+          "code": "import time\n\nclass CircuitBreaker:\n    def __init__(self, threshold=5, cooldown=30):\n        self.threshold = threshold      # consecutive failures to trip\n        self.cooldown = cooldown        # seconds to stay open\n        self.failures = 0\n        self.state = \"closed\"\n        self.opened_at = 0.0\n\n    def call(self, fn, *args, **kwargs):\n        # OPEN: reject fast, unless the cooldown has elapsed.\n        if self.state == \"open\":\n            if time.monotonic() - self.opened_at < self.cooldown:\n                raise CircuitOpen(\"breaker is open, failing fast\")\n            self.state = \"half-open\"   # cooldown done — allow one probe\n\n        try:\n            result = fn(*args, **kwargs)   # the real LLM call\n        except Exception:\n            self._on_failure()\n            raise\n        else:\n            self._on_success()\n            return result\n\n    def _on_success(self):\n        # A probe (or normal call) worked: provider is healthy.\n        self.failures = 0\n        self.state = \"closed\"\n\n    def _on_failure(self):\n        self.failures += 1\n        # A failed probe in half-open re-opens immediately.\n        if self.state == \"half-open\" or self.failures >= self.threshold:\n            self.state = \"open\"\n            self.opened_at = time.monotonic()\n\nclass CircuitOpen(Exception):\n    pass"
+        },
+        {
+          "type": "p",
+          "md": "And here's how you'd wrap an LLM call with it, falling back to a backup model when the primary breaker is open:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "using the breaker with a fallback",
+          "code": "primary = CircuitBreaker(threshold=5, cooldown=30)\n\ndef ask(prompt):\n    try:\n        # Try the primary provider through its breaker.\n        return primary.call(call_primary_model, prompt)\n    except CircuitOpen:\n        # Breaker is open — don't even try. Use the backup instantly.\n        return call_backup_model(prompt)\n    except Exception:\n        # A real failure slipped through (and was counted). Degrade.\n        return \"Our assistant is briefly unavailable. Please retry shortly.\""
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Notice the `CircuitOpen` branch returns in microseconds and never touches the provider. That instant rejection — not the error handling — is what protects your system during an outage."
+        }
+      ]
+    },
+    {
+      "id": "breaker-vs-retry-vs-timeout",
+      "title": "Breaker vs retry vs timeout vs fallback",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "These four patterns are constantly confused because they all deal with \"the call might fail.\" They're not alternatives — they're layers that work together, each handling a different shape of failure."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Four reliability patterns, four jobs",
+            "columns": [
+              {
+                "title": "Timeout",
+                "items": [
+                  "Caps how long ONE call waits",
+                  "Turns a hang into a clean failure",
+                  "Prerequisite for everything else",
+                  "Without it, a breaker can't detect slowness"
+                ]
+              },
+              {
+                "title": "Retry",
+                "items": [
+                  "Re-attempts a single failed call",
+                  "Great for transient blips",
+                  "Dangerous during a real outage",
+                  "Use with backoff + jitter + a cap"
+                ]
+              },
+              {
+                "title": "Circuit breaker",
+                "accent": true,
+                "items": [
+                  "Tracks failures ACROSS calls",
+                  "Stops calling a dead provider",
+                  "Lets the provider recover",
+                  "Protects YOUR resources"
+                ]
+              },
+              {
+                "title": "Fallback",
+                "items": [
+                  "What to do INSTEAD of the call",
+                  "Backup model, cache, or stub answer",
+                  "Runs when the breaker is open",
+                  "Keeps the feature usable"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The clean mental model: a **timeout** decides when one call has failed, a **retry** handles a one-off blip, a **circuit breaker** notices that failures have become a *pattern* and stops the bleeding, and a **fallback** is the plan B the breaker hands off to. A robust LLM call uses all four — short timeout, a retry or two with jitter, wrapped in a breaker, with a fallback for when the breaker opens."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Put retries *inside* the breaker, not around it. If you retry an already-open breaker, you defeat the fail-fast behavior. The breaker should be the outermost guard; retries handle blips on calls it actually lets through."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A breaker is simple to add and easy to misconfigure. Most problems come from thresholds that are too eager, too timid, or measuring the wrong thing."
+        },
+        {
+          "type": "list",
+          "ordered": false,
+          "items": [
+            "**No timeout underneath it.** A breaker can only react to failures it can see. If a call can hang for 30 seconds, the breaker is blind for 30 seconds. Always set an aggressive call timeout *first* — it's the foundation the breaker stands on.",
+            "**Threshold too sensitive.** Trip on one or two failures and the breaker flaps open and closed on normal noise, hurting availability more than the occasional error did. Use a rolling failure *rate* plus a minimum throughput.",
+            "**Cooldown too long or too short.** Too short, and you re-hammer a provider that hasn't recovered. Too long, and you keep serving fallbacks well after the provider is healthy. 10–60 seconds is the usual range; tune it to how fast your provider recovers.",
+            "**Counting client errors as outages.** A 400 or a content-policy refusal is *your* request being wrong, not the provider being down. Counting those trips the breaker for bugs it can't fix. Only count timeouts, 5xx, 429, and connection errors.",
+            "**A breaker per process, with no shared view.** If you run 50 instances, each learns about the outage independently and trips on its own schedule. That's often fine, but be aware your effective failure rate is spread across them; some setups share breaker state via Redis for faster, unified tripping.",
+            "**No fallback behind it.** A breaker that opens and just throws errors faster isn't much better than no breaker. The value is in *what you do instead* — a backup model, a cached response, or a graceful degraded answer."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The three-state machine is the core, but production systems layer more on top. A few directions worth knowing once the basics click."
+        },
+        {
+          "type": "p",
+          "md": "**Per-provider and per-model breakers.** Don't share one breaker across every provider. If OpenAI's API is down but Anthropic's is fine, a single global breaker would block both. Give each provider — and often each model — its own breaker so a failure in one is isolated. This is exactly the machinery that makes [provider failover](/learn/production-llmops/llmops-fundamentals/llm-provider-failover/) work: when the primary's breaker opens, [model routing](/learn/production-llmops/llmops-fundamentals/llm-model-routing/) sends traffic to a healthy secondary."
+        },
+        {
+          "type": "p",
+          "md": "**Where the breaker lives.** You can implement it in your own code, but it's increasingly handled by an [LLM gateway](/learn/production-llmops/llmops-fundamentals/what-is-llm-gateway/) — a proxy that sits in front of all your providers and applies timeouts, retries, breakers, and failover centrally, so every service in your company gets the same protection without re-implementing it. Tools like Envoy and service meshes (Istio, Linkerd) also provide circuit breaking at the network layer, independent of your application code."
+        },
+        {
+          "type": "p",
+          "md": "**Bulkheads.** A close cousin of the breaker. A bulkhead caps how many concurrent calls a given dependency can use — say, a pool of 20 slots for the LLM. Even if those calls hang, they can only consume 20 slots; the 21st request fails fast instead of stealing a thread from the rest of the app. Breakers stop calling a *broken* service; bulkheads stop a *slow* service from monopolizing resources. Real systems use both."
+        },
+        {
+          "type": "p",
+          "md": "**Observability is non-negotiable.** A silent breaker is dangerous — if it opens and nobody notices, you might serve degraded answers for hours. Emit a metric and an alert on every state transition, track how long the breaker spends open, and log every fallback served. A spike in \"breaker open\" events is often your *earliest* signal that a provider is having trouble, before users even complain."
+        },
+        {
+          "type": "p",
+          "md": "**The honest tradeoff.** A breaker trades a little availability for a lot of stability: when it's open, you *are* refusing requests you might have served, on the bet that most would have failed anyway and the rest aren't worth the risk of a cascade. Tuned too aggressively, it becomes a self-inflicted outage; tuned too loosely, it never fires when you need it. The durable lesson is that a breaker is not a fire-and-forget setting — it's a control you watch, measure, and adjust against the real failure patterns of the providers you depend on."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is a circuit breaker in the context of LLM calls?",
+      "a": "It's a wrapper around your LLM API call that watches it fail. When failures cross a threshold, the breaker *trips open* and rejects further calls instantly — failing fast with a fallback instead of waiting on timeouts — then probes the provider periodically to see when it has recovered. It's the classic software circuit-breaker pattern applied to a slow, expensive, third-party dependency."
+    },
+    {
+      "q": "What are the three states of a circuit breaker?",
+      "a": "**Closed** (healthy — calls flow through and failures are counted), **Open** (tripped — calls are rejected immediately for a cooldown period), and **Half-open** (after the cooldown, a single trial call is allowed; success resets to Closed, failure returns to Open). Note that *closed* means working and *open* means broken, like an electrical circuit."
+    },
+    {
+      "q": "Why isn't retrying enough — why do I need a circuit breaker?",
+      "a": "Retries are right for a transient blip but wrong for a real outage. During an outage, every retry is another guaranteed, costly failure, and thousands of clients retrying at once create a *retry storm* that keeps the provider down. A circuit breaker notices the pattern and stops calling entirely, which protects your own resources and gives the provider room to recover."
+    },
+    {
+      "q": "What is a half-open circuit, and why is it needed?",
+      "a": "Half-open is the recovery-test state. After the open cooldown expires, the breaker lets exactly one trial request through. If it succeeds, the breaker closes and normal traffic resumes; if it fails, the breaker re-opens for another cooldown. Without half-open, the breaker would dump your full traffic onto the provider the moment the timer expired and likely trip again instantly."
+    },
+    {
+      "q": "What should count as a failure for tripping the breaker?",
+      "a": "Timeouts, 5xx server errors, 429 rate-limit responses, and connection errors — signals the provider is unhealthy. A clean 400 or a content-policy refusal is your request being wrong, not an outage, and counting those would trip the breaker for bugs it can't fix. Many breakers also trip on latency (calls getting slow) before they outright fail."
+    },
+    {
+      "q": "What happens to a request when the circuit breaker is open?",
+      "a": "It's rejected immediately — in microseconds, without ever touching the provider — and your fallback runs instead. Common fallbacks are routing to a cheaper backup model, returning a cached answer, or serving a graceful \"temporarily unavailable\" message. The instant rejection is what prevents stuck calls from piling up and cascading into a wider outage."
+    }
+  ],
+  "related": [
+    "handle-llm-failures",
+    "llm-provider-failover",
+    "llm-model-routing",
+    "what-is-llm-gateway",
+    "what-are-llm-guardrails"
+  ],
+  "furtherReading": [
+    {
+      "title": "CircuitBreaker — Martin Fowler",
+      "url": "https://martinfowler.com/bliki/CircuitBreaker.html"
+    },
+    {
+      "title": "Circuit Breaker pattern — Azure Architecture Center",
+      "url": "https://learn.microsoft.com/en-us/azure/architecture/patterns/circuit-breaker"
+    },
+    {
+      "title": "Circuit breaking — Envoy proxy docs",
+      "url": "https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/circuit_breaking"
+    }
+  ]
+}

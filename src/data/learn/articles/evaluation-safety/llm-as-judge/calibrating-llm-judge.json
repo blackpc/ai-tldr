@@ -1,0 +1,345 @@
+{
+  "slug": "calibrating-llm-judge",
+  "title": "How to Calibrate an LLM Judge Against Human Scores",
+  "shortTitle": "Calibrating a Judge",
+  "seoTitle": "How to Calibrate an LLM Judge Against Human Scores",
+  "metaDescription": "An LLM judge is only trustworthy if it agrees with humans. Learn how to calibrate a judge: label a sample, measure agreement, and tune the rubric until it matches.",
+  "keywords": [
+    "calibrate llm judge",
+    "llm judge human agreement",
+    "validate llm as a judge",
+    "tune judge rubric",
+    "trustworthy ai judge"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You'll understand the loop for making an LLM judge trustworthy: compare it to human labels, find where it disagrees, and fix the rubric.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "An [LLM judge](/learn/evaluation-safety/llm-as-judge/llm-as-a-judge-explained) is a language model you ask to grade other model outputs — was this answer helpful, is this summary faithful, which of these two replies is better? It is fast and cheap, which is why people use it to score thousands of test cases. But there is a catch: a judge that scores confidently and *wrongly* is worse than no judge at all, because it gives you a number you trust when you shouldn't."
+        },
+        {
+          "type": "p",
+          "md": "**Calibrating an LLM judge** means tuning it until its scores line up with what careful humans would say. You don't take the judge's word for it — you check it against a small set of human-labeled examples, find where it disagrees, fix the rubric or prompt, and repeat. Only once the judge reliably matches human judgment do you let it grade at scale."
+        },
+        {
+          "type": "p",
+          "md": "Think of a new teaching assistant grading a stack of essays. Before you let them grade the whole class alone, you both grade the same ten essays, then sit down and compare. Where you gave a B and they gave an A, you ask *why* — and you discover they were rewarding long answers regardless of quality. You clarify the grading guide, they re-grade, you compare again. After a couple of rounds their grades match yours closely enough that you trust them with the rest. Calibrating an LLM judge is exactly that loop, with the model as the TA and your rubric as the grading guide."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Calibration is a *process*, not a one-time setting. \"Judge–human agreement\" is the **number** you measure (covered in its own article); calibration is the **loop** that uses that number to make the judge better."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Teams reach for an LLM judge because human grading doesn't scale: you can't pay people to read 5,000 chatbot transcripts every time you change a prompt. The judge promises the same signal for a fraction of the cost and time. But that promise only holds if the judge agrees with humans. An uncalibrated judge quietly fails in ways that are hard to spot."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**You ship the wrong model.** Your judge says version B beats version A, you deploy B, and real users find it worse — because the judge was rewarding something humans don't care about (verbosity, confident tone, a particular format).",
+            "**You optimize toward the judge's blind spots.** If you tune your product to maximize the judge's score, you inherit every bias the judge has. The metric goes up; the product gets worse. This is [Goodhart's law](https://en.wikipedia.org/wiki/Goodhart%27s_law) in action.",
+            "**You can't defend the number.** When a stakeholder asks \"how do we know this 87% is real?\", \"the model said so\" is not an answer. \"It agrees with our human labels 91% of the time on a held-out set\" is."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Calibration is what turns a judge from a vibe into a measurement. Once you can state how closely the judge tracks human labels, its scores become evidence you can act on — and you know exactly how much to trust them. It is the difference between an [eval suite](/learn/evaluation-safety/evaluation-basics/how-to-build-eval-suite) you believe and one you merely hope is right."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Calibrate the judge **before** you use it to compare models — not after you've already made a decision. A judge validated against humans is a tool; an unvalidated one is a guess wearing a lab coat."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Calibration is a loop with five steps. You build a small **gold set** of human-labeled examples, run the judge on it, measure how often they agree, inspect every disagreement, then fix the rubric or prompt and run again. You stop when agreement is high enough and the remaining disagreements are ones reasonable humans would also have."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "The calibration loop",
+            "steps": [
+              {
+                "label": "Label a gold set",
+                "sub": "humans score N examples"
+              },
+              {
+                "label": "Run the judge",
+                "sub": "judge scores the same N"
+              },
+              {
+                "label": "Measure agreement",
+                "sub": "where do they match?"
+              },
+              {
+                "label": "Inspect disagreements",
+                "sub": "find the pattern"
+              },
+              {
+                "label": "Fix rubric / prompt",
+                "sub": "then loop again"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Step 1 — Build a gold set"
+        },
+        {
+          "type": "p",
+          "md": "Collect a sample of real outputs and have humans score each one carefully against a clear rubric. This is your ground truth — see [building a golden dataset](/learn/evaluation-safety/evaluation-basics/golden-dataset-llm-testing). You don't need thousands: 50–200 examples is enough to start, as long as they cover the range you care about — easy cases, hard cases, and the edge cases where you suspect the judge might slip. Deliberately include examples that are *bad* in different ways, not just a pile of good answers."
+        },
+        {
+          "type": "h3",
+          "text": "Step 2 — Run the judge on the same examples"
+        },
+        {
+          "type": "p",
+          "md": "Give the judge the identical rubric and the identical examples the humans scored, and collect its scores. Critically, the judge must grade *blind* — it should not see the human labels. You now have two columns: the human score and the judge score for every example."
+        },
+        {
+          "type": "h3",
+          "text": "Step 3 — Measure agreement"
+        },
+        {
+          "type": "p",
+          "md": "Compare the two columns. For pass/fail or category judgments, the simplest measure is **agreement rate**: the fraction of examples where the judge's label equals the human's. For finer analysis, **Cohen's kappa** corrects for the agreement you'd get by random chance (raw agreement can look high just because most answers pass). For 1–5 ratings, correlation between the human and judge scores tells you whether they move together. Whatever you pick, you want a single number you can watch go up across rounds."
+        },
+        {
+          "type": "h3",
+          "text": "Step 4 — Inspect the disagreements"
+        },
+        {
+          "type": "p",
+          "md": "This is where the real work happens — and the step people skip. Pull up every case where the judge and the human disagreed and read them. You're hunting for a *pattern*, not one-off noise. Common patterns map directly to known [judge biases](/learn/evaluation-safety/llm-as-judge/llm-judge-biases): the judge favoring the longer answer, the more confident tone, the answer that happens to be first, or its own writing style."
+        },
+        {
+          "type": "h3",
+          "text": "Step 5 — Fix the rubric or prompt, then loop"
+        },
+        {
+          "type": "p",
+          "md": "Once you've named the pattern, change the judge to remove it. Usually that means making the rubric more explicit (\"do not reward length; a correct one-sentence answer scores the same as a correct paragraph\") or restructuring the prompt (ask for a short reasoning step before the score, define each score level concretely, add a worked example). Then re-run from Step 2. Each loop should push agreement up and shrink the cluster of disagreements you can't explain."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Tune the judge against the gold set, but **report your final agreement number on examples the judge has never been tuned on** (a held-out slice). Otherwise you risk overfitting the judge to those specific examples — agreement looks great on the gold set and collapses on fresh data."
+        }
+      ]
+    },
+    {
+      "id": "a-worked-example",
+      "title": "A worked example",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Suppose you're building a support assistant and you want a judge that scores each answer **pass** or **fail** on whether it correctly resolves the customer's question. You hand-label 100 transcripts, run the judge, and get an agreement rate of **78%**. Not good enough to trust. You read the 22 disagreements and notice something: almost all of them are cases where the human said *fail* but the judge said *pass* — and every one is a long, polite, confident answer that is actually wrong. The judge is being fooled by tone and length."
+        },
+        {
+          "type": "p",
+          "md": "Here is roughly what the first-pass judge prompt looked like — vague, which is the root cause:"
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "title": "before — too vague",
+          "code": "You are grading a customer support answer.\nQuestion: {question}\nAnswer: {answer}\n\nIs this a good answer? Reply \"pass\" or \"fail\"."
+        },
+        {
+          "type": "p",
+          "md": "You rewrite it to pin down exactly what \"pass\" means and to explicitly neutralize the length-and-tone bias you found:"
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "title": "after — explicit rubric, bias named",
+          "code": "You are grading a customer support answer for CORRECTNESS ONLY.\n\nQuestion: {question}\nReference facts: {reference}\nAnswer: {answer}\n\nRules:\n- PASS only if the answer is factually correct AND resolves the question.\n- FAIL if any claim contradicts the reference facts, even slightly.\n- Do NOT reward length, politeness, or confidence. A wrong answer that\n  sounds confident still FAILS. A correct one-sentence answer PASSES.\n\nFirst write one sentence checking each claim against the reference facts.\nThen output exactly: PASS or FAIL."
+        },
+        {
+          "type": "p",
+          "md": "You re-run on the same 100 transcripts. Agreement jumps to **91%**, and the remaining 9 disagreements are genuinely borderline — cases two humans on your team also argue about. That's your signal to stop tuning: the judge now disagrees with you about as often as your own graders disagree with each other. You lock the prompt and report 91% agreement, measured on a held-out set you didn't tune against."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Asking the judge to *check each claim before scoring* (as in the \"after\" prompt) usually lifts agreement on its own. A judge that reasons first grades more like a careful human than one that blurts a label."
+        }
+      ]
+    },
+    {
+      "id": "what-to-fix-vs-accept",
+      "title": "What to fix versus what to accept",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Not every disagreement is a bug in the judge. Some are noise you should accept and stop chasing. Knowing the difference keeps you from over-tuning. Use the pattern of the disagreement to decide what to do."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "What you see in the disagreements",
+            "What it usually means",
+            "What to do"
+          ],
+          "rows": [
+            [
+              "Judge favors the longer / more verbose answer",
+              "Length bias",
+              "Add an explicit \"do not reward length\" rule to the rubric"
+            ],
+            [
+              "Judge favors the first option in a pairwise compare",
+              "Position bias",
+              "Run each pair in both orders and average, or randomize order"
+            ],
+            [
+              "Judge rewards confident tone over correctness",
+              "Style / sycophancy bias",
+              "Tell it to grade correctness only; supply reference facts"
+            ],
+            [
+              "Scores cluster at one value (everything is a 4)",
+              "Rubric levels aren't distinct",
+              "Define each score level concretely with an example"
+            ],
+            [
+              "Disagreements are scattered, no pattern",
+              "Irreducible noise",
+              "Accept it — humans disagree here too; stop tuning"
+            ],
+            [
+              "Humans disagree with each other on the same cases",
+              "Ambiguous rubric",
+              "Fix the rubric for the humans first, then re-label"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The last two rows are the ones beginners miss. If your own human graders only agree with *each other* 90% of the time, an LLM judge that agrees with them 90% of the time is already as good as a human — pushing for 99% is chasing noise. Measure your human-to-human agreement first; it sets the ceiling for what's achievable."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "**Skipping the gold set entirely.** \"The scores look reasonable\" is not calibration. Without human labels you have nothing to compare against and no way to know the judge is wrong. This is the cardinal sin — see [LLM-judge pitfalls](/learn/evaluation-safety/llm-as-judge/llm-judge-pitfalls).",
+            "**Reporting raw agreement on a stacked set.** If 95% of your examples should pass, a judge that says \"pass\" to everything scores 95% agreement while being useless. Use chance-corrected measures (Cohen's kappa) and make sure your gold set includes plenty of genuine failures.",
+            "**Tuning and reporting on the same examples.** Tune on the gold set, but report on a held-out slice. Otherwise you're grading your own homework and the number won't survive contact with new data.",
+            "**Changing the rubric only for the judge.** If you clarify the rubric to fix the judge, the *humans* must re-label against the same updated rubric — otherwise you're comparing the judge to labels made under different rules.",
+            "**Re-calibrating only at the start.** A judge calibrated on last quarter's data can drift as your inputs change or as you swap the underlying model. Re-check agreement periodically, and always after changing the judge model or prompt."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Swapping the judge to a newer or different model **invalidates your calibration**. Agreement is a property of one specific (model + prompt + rubric) combination. Change any of the three and you must re-measure before trusting the scores again."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The basic loop — gold set, agreement, inspect, fix, repeat — covers most needs. A few directions matter once you're running judges seriously."
+        },
+        {
+          "type": "p",
+          "md": "**Pick the right agreement metric for your task.** For binary pass/fail, agreement rate plus Cohen's kappa is plenty. For ordinal 1–5 ratings, use a rank correlation (Spearman) or weighted kappa, which counts a 4-vs-5 disagreement as smaller than a 1-vs-5. For [pairwise judging](/learn/evaluation-safety/llm-as-judge/pairwise-vs-rubric-judging), measure how often the judge picks the same winner a human did, and watch for position bias by testing both orderings. The metric you optimize should match how you'll actually use the scores — see [eval metrics explained](/learn/evaluation-safety/evaluation-basics/llm-eval-metrics-explained)."
+        },
+        {
+          "type": "p",
+          "md": "**Calibrate the humans, too.** Your gold labels are only as good as the people who made them. If two annotators disagree often, the rubric is ambiguous — fix it for the humans before you ever blame the judge. Human-to-human agreement is both a quality check on your labels and the practical ceiling for judge agreement."
+        },
+        {
+          "type": "p",
+          "md": "**Few-shot the rubric.** Putting two or three worked examples — each a sample answer with the correct score and a one-line reason — directly in the judge prompt is one of the most reliable ways to lift agreement. The judge anchors on your standard instead of guessing what \"good\" means. This often beats a longer prose rubric."
+        },
+        {
+          "type": "p",
+          "md": "**Bias-aware judging.** Beyond fixing biases in the rubric, structural fixes help: randomize or swap option order to cancel position bias, strip formatting that leaks which answer came from which model, and consider an ensemble of judges (or the same judge run several times) where you take the majority vote. None of these replace calibration — they reduce the variance the calibration loop then measures."
+        },
+        {
+          "type": "p",
+          "md": "**The honest limits.** A calibrated judge agrees with *your* humans on *your* gold set — it is not an oracle of universal truth. If your humans share a blind spot, the judge will too. If your gold set doesn't cover a kind of input, you have no idea how the judge handles it. Calibration narrows uncertainty; it never removes it. Treat the agreement number as a confidence level, re-measure when anything changes, and keep a human in the loop for the decisions that matter most. For where the judge fits in a full testing strategy, see [code- vs model-graded evals](/learn/evaluation-safety/evaluation-basics/code-vs-model-graded-evals)."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "How many human-labeled examples do I need to calibrate an LLM judge?",
+      "a": "Start with 50–200 carefully labeled examples that cover easy cases, hard cases, and edge cases — including plenty of genuine failures, not just good answers. That's enough to spot disagreement patterns and measure agreement. Use a larger held-out set later to report a final, trustworthy number."
+    },
+    {
+      "q": "What agreement score is good enough for an LLM judge?",
+      "a": "There's no universal threshold — the realistic ceiling is your human-to-human agreement. If two human graders agree 90% of the time, a judge that agrees with them 90% of the time is already as good as a human, and chasing higher is chasing noise. Measure human-to-human agreement first, then aim to match it."
+    },
+    {
+      "q": "Why does my LLM judge disagree with human scores?",
+      "a": "Usually a bias: rewarding longer or more confident answers, favoring whichever option comes first, or preferring its own writing style. Read every disagreement to find the pattern, then make the rubric explicit about ignoring it (for example, \"do not reward length\") and re-run the loop."
+    },
+    {
+      "q": "What's the difference between calibrating a judge and measuring judge–human agreement?",
+      "a": "Agreement is the number — the fraction of cases where the judge matches human labels. Calibration is the loop that uses that number to improve the judge: measure, inspect disagreements, fix the rubric or prompt, and repeat until agreement is high enough."
+    },
+    {
+      "q": "Do I need to re-calibrate if I change the judge model?",
+      "a": "Yes. Agreement is a property of a specific combination of model, prompt, and rubric. Swapping to a newer or different judge model — or editing the prompt or rubric — invalidates your previous calibration, so re-measure agreement on a held-out set before trusting the new scores."
+    },
+    {
+      "q": "Should I tune and report agreement on the same examples?",
+      "a": "No. Tune the judge against your gold set, but report your final agreement number on a held-out slice the judge was never tuned on. Otherwise you overfit the judge to those specific examples and the number won't hold up on fresh data."
+    }
+  ],
+  "related": [
+    "llm-as-a-judge-explained",
+    "llm-judge-pitfalls",
+    "llm-judge-biases",
+    "pairwise-vs-rubric-judging",
+    "golden-dataset-llm-testing",
+    "how-to-build-eval-suite"
+  ],
+  "furtherReading": [
+    {
+      "title": "Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena (arXiv)",
+      "url": "https://arxiv.org/abs/2306.05685"
+    },
+    {
+      "title": "Cohen's kappa — Wikipedia",
+      "url": "https://en.wikipedia.org/wiki/Cohen%27s_kappa"
+    },
+    {
+      "title": "Define your evaluation criteria — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+    }
+  ]
+}

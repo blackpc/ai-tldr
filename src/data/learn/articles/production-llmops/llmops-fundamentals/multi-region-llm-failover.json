@@ -1,0 +1,351 @@
+{
+  "slug": "multi-region-llm-failover",
+  "title": "Multi-Region LLM Deployment: Failover and Data Residency Basics",
+  "shortTitle": "Multi-Region LLM Deployment",
+  "seoTitle": "Multi-Region LLM Deployment: Failover & Data Residency",
+  "metaDescription": "Learn how to deploy LLM apps across regions for lower latency and resilience, and how data residency rules shape where prompts and logs can live.",
+  "keywords": [
+    "multi-region llm deployment",
+    "llm data residency",
+    "regional llm failover",
+    "llm latency by region",
+    "gdpr llm prompts"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You'll understand why and how teams run LLM apps in more than one region, and how residency rules constrain where prompts and logs are allowed to go.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you build an app on top of an LLM, your code and the model both run in some physical data center, in some part of the world. **Multi-region deployment** means running that app in more than one geographic location — say one copy in the US, one in Europe — instead of a single spot."
+        },
+        {
+          "type": "p",
+          "md": "Picture a coffee chain. One shop downtown works fine until the morning rush, a power cut, or a flood shuts it down — then everyone is stranded. Open a second and third branch in other neighborhoods and two things improve at once: customers walk to whichever shop is closest (faster service), and if one branch closes, the others keep pouring coffee (resilience). Multi-region LLM deployment is the same move applied to software."
+        },
+        {
+          "type": "p",
+          "md": "There is a third reason that is special to AI apps and easy to miss: **data residency**. Some of your branches may legally only be allowed to serve customers from their own region, because the prompts those customers send — and the logs you keep of them — contain personal data that the law says must *stay* in that region. So multi-region is partly about speed, partly about staying online, and partly about keeping data where it is allowed to be."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Two ideas that sound alike but are not the same: a **region** is a geographic area (for example *eu-west*), while a **provider** is the company serving the model (OpenAI, Anthropic, a cloud, your own GPUs). [Provider failover](/learn/production-llmops/llmops-fundamentals/llm-provider-failover) swaps *who* serves the model when one is down. Multi-region failover swaps *where* the request runs. You often want both."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Running in a single region is the right starting point — it is simpler and cheaper. You graduate to multiple regions when one of three pressures shows up."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Latency.** Network round-trips are bound by the speed of light and real cable routes. A user in Sydney calling a server in Virginia pays a fixed tax of a few hundred milliseconds on *every* request, before the model even starts thinking. For chat that streams tokens, that delay is felt on first response. Putting a copy of the app near the user removes most of that tax.",
+            "**Resilience.** Whole regions do go down — a bad deploy, a network partition, a cloud provider's regional incident, even a fiber cut. If your only copy lives there, your product is simply offline until it recovers. A second region that can take over turns an outage into a blip.",
+            "**Data residency and compliance.** Rules like the EU's GDPR, plus sector rules in healthcare and finance, can require that personal data be processed and stored inside a specific jurisdiction. If EU users' prompts must stay in the EU, you need an EU region that handles them end to end — and you must make sure the model call *and* the logs honor that boundary."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who cares most? Teams shipping to users on more than one continent, anything handling regulated or personal data, and any product where being down for an hour is a real business loss. If your users are all in one country and a short outage is survivable, you can happily ignore this for now — it adds genuine cost and complexity, so adopt it because a real pressure demands it, not for its own sake. This is one of the operational concerns that [LLMOps](/learn/production-llmops/llmops-fundamentals/what-is-llmops) exists to handle."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A multi-region setup has three moving parts: a way to **route** each user to a region, **two or more full copies** of your app (each able to reach a model), and a **health check** that notices when a region is sick and steers traffic away from it."
+        },
+        {
+          "type": "h3",
+          "text": "Routing: getting users to the right region"
+        },
+        {
+          "type": "p",
+          "md": "Routing usually happens before your app even runs, at the DNS or load-balancer layer. **Geo-routing** (often called latency-based or geo-DNS routing) sends each request to the nearest healthy region by default. For residency, you layer a *rule* on top: EU users are pinned to the EU region regardless of which is closer, because the law — not latency — decides where their data may go. Most clouds and CDNs expose both knobs."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "One entry point fans out to regional copies",
+            "root": {
+              "label": "Global router",
+              "sub": "geo + residency rules"
+            },
+            "children": [
+              {
+                "label": "US region",
+                "sub": "app + model endpoint"
+              },
+              {
+                "label": "EU region",
+                "sub": "app + model endpoint",
+                "accent": true
+              },
+              {
+                "label": "APAC region",
+                "sub": "app + model endpoint"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Failover: surviving a sick region"
+        },
+        {
+          "type": "p",
+          "md": "Each region is monitored by a **health check** — a small request fired every few seconds. While a region answers, it keeps its traffic. When it starts failing or times out, the router marks it unhealthy and reroutes new requests to a healthy region. The flip is automatic; the goal is that users barely notice. Note the residency tension here: if your EU region dies, *can* you legally fail EU users over to the US? Sometimes yes, sometimes no — that policy decision has to be made on purpose, not left to a default."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "What a failover looks like",
+            "steps": [
+              {
+                "label": "Request arrives",
+                "sub": "at global router"
+              },
+              {
+                "label": "Check health",
+                "sub": "is target region OK?"
+              },
+              {
+                "label": "Primary down?",
+                "sub": "health check failing"
+              },
+              {
+                "label": "Reroute",
+                "sub": "to healthy region"
+              },
+              {
+                "label": "Serve response",
+                "sub": "user barely notices",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Reaching the model: two patterns"
+        },
+        {
+          "type": "p",
+          "md": "Inside each region, your app still has to call a model. There are two broad patterns, and they are easy to confuse:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Provider-side regional endpoints.** Major model providers and clouds offer the same model in several regions — for example an EU endpoint that processes and (per the provider's terms) keeps data in the EU. Your regional app simply calls the matching regional endpoint. Least work, but you depend on which regions the provider actually offers.",
+            "**Your own multi-region gateway.** You run a thin proxy — an [LLM gateway](/learn/production-llmops/llmops-fundamentals/what-is-llm-gateway) — in each region. It owns the [routing](/learn/production-llmops/llmops-fundamentals/llm-model-routing) and [provider failover](/learn/production-llmops/llmops-fundamentals/llm-provider-failover) logic, so your app code stays simple and the policy lives in one place. More control and one consistent interface, but it is infrastructure you now operate."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "The classic, expensive mistake lives here: an EU app calls a model correctly *in-region*, then ships the prompt and response to a **central logging or [observability](/learn/production-llmops/observability-monitoring/what-is-llm-observability/) service in the US**. The model call was compliant; the log was not. Prompts and completions are data too — route logs by the same residency rules as the requests that produced them."
+        }
+      ]
+    },
+    {
+      "id": "provider-endpoint-vs-gateway",
+      "title": "Provider regional endpoints vs your own gateway",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Both patterns get a model running in the right region. The difference is who owns the routing and failover logic, and how much you can bend it."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Aspect",
+            "Provider regional endpoints",
+            "Your own multi-region gateway"
+          ],
+          "rows": [
+            [
+              "Setup effort",
+              "Low — call the regional URL",
+              "Higher — you deploy a proxy per region"
+            ],
+            [
+              "Routing control",
+              "Limited to regions the provider offers",
+              "Full — your rules, your fallback order"
+            ],
+            [
+              "Failover scope",
+              "Within that provider",
+              "Across regions AND providers"
+            ],
+            [
+              "Residency guarantee",
+              "Per the provider's regional terms",
+              "You enforce it in one place"
+            ],
+            [
+              "Vendor lock-in",
+              "Higher — coupled to one provider",
+              "Lower — swap providers behind one interface"
+            ],
+            [
+              "Who operates it",
+              "The provider",
+              "You (more to monitor and patch)"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "A common path is to start with provider regional endpoints because they are nearly free to adopt, then introduce your own gateway once you need cross-provider failover, central residency rules, or a single place to attach logging and cost controls. The two also combine well: a gateway *in each region* that calls that region's provider endpoint."
+        }
+      ]
+    },
+    {
+      "id": "worked-example",
+      "title": "A worked example: a two-region EU/US app",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Suppose you serve a support assistant to both US and EU customers. You decide: US users go to a US region; EU users are *pinned* to an EU region for residency; if either region is unhealthy, US can fail over to EU but EU users **never** fail over to the US (their data must stay in the EU — better a brief error than an illegal transfer)."
+        },
+        {
+          "type": "p",
+          "md": "The routing decision your gateway makes per request is small and explicit. The point is that residency is a *hard* rule checked before any latency or health logic."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "region_router.py (illustrative)",
+          "code": "# Health is updated by a background health-check loop.\nHEALTH = {\"us\": True, \"eu\": True}\n\ndef pick_region(user_region: str) -> str:\n    if user_region == \"eu\":\n        # Residency is a HARD rule: EU data stays in the EU.\n        if HEALTH[\"eu\"]:\n            return \"eu\"\n        raise ServiceUnavailable(\"EU region down; US failover not permitted\")\n\n    # US (and everyone else) prefer US, may fall back to EU.\n    if HEALTH[\"us\"]:\n        return \"us\"\n    if HEALTH[\"eu\"]:\n        return \"eu\"  # allowed for non-EU users\n    raise ServiceUnavailable(\"all regions down\")\n\ndef handle(request):\n    region = pick_region(request.user_region)\n    answer = call_model_in(region, request.prompt)\n    # Log to the SAME region we served from — never a central US sink.\n    log_in(region, request.prompt, answer)\n    return answer"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Notice the last line: logging goes to the *same* region that served the request. If you remember one thing from this article, make it this — the residency boundary has to wrap the prompt, the model call, **and** the log, or you have a leak no model fixes."
+        },
+        {
+          "type": "p",
+          "md": "In production you would not hand-roll all of this. DNS or load-balancer geo-routing handles the first hop, health checks run continuously, and a gateway library carries the per-provider failover. Your code stays close to the small policy above — the rest is configuration."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Multi-region looks tidy in a diagram and bites in the details. The frequent failures:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Leaky logs.** As above — compliant model calls but a central log or trace sink in a forbidden region. The most common and most costly mistake, because it is invisible until an audit.",
+            "**Failover that breaks residency.** A generic \"send EU traffic to US when EU is down\" rule looks resilient and is illegal for regulated data. Decide per data class whether cross-region failover is even allowed.",
+            "**Untested failover.** A standby region nobody exercises rots quietly — stale config, expired keys, a model version that no longer exists. If you never run a drill, you will discover the gap during the real outage.",
+            "**Inconsistent model versions.** If the US region runs a newer model than the EU region, the *same* prompt yields different answers depending on where the user landed. Pin versions and roll them out together.",
+            "**Forgetting the data store.** The model call may be in-region, but your database, cache, vector store, and queue must respect residency too. Multi-region the *app* and the *data*, not just the model."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "\"In-region\" is a property of your whole request path — entry point, app, model, database, cache, *and* logs. One link in another jurisdiction breaks the guarantee. Map the full path before you claim residency."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics click, a few harder edges are worth knowing."
+        },
+        {
+          "type": "p",
+          "md": "**Active-active vs active-passive.** In *active-passive* the second region sits idle until failover — simpler, but you pay for a region doing nothing and only learn it works during a crisis. In *active-active* every region serves live traffic all the time, so failover is just \"send less here, more there\" and the standby is never cold. Active-active costs more steady-state but fails over more smoothly; it is the usual choice once uptime really matters."
+        },
+        {
+          "type": "p",
+          "md": "**Capacity headroom.** If two regions normally split traffic 50/50 and one dies, the survivor must absorb *everyone*. If it was already near its rate limits or GPU capacity, it will fall over too — a cascading failure. Size each region to carry more than its steady share, and watch your provider rate limits, which are often per-region."
+        },
+        {
+          "type": "p",
+          "md": "**Stateful data is the hard part.** Routing stateless requests is easy; keeping *data* consistent across regions is the genuinely difficult problem in distributed systems. Conversation history, a [RAG](/learn/rag/rag-fundamentals/what-is-rag) vector index, user profiles — replicating these across regions raises consistency and, again, residency questions. Many teams keep per-region data isolated precisely to sidestep both at once."
+        },
+        {
+          "type": "p",
+          "md": "**Observability must be regional too.** You still need one view of health across all regions, but the underlying prompt and trace data has to be stored per residency rules. The fix is to keep raw data in-region and aggregate only non-sensitive metrics centrally — see [LLM observability](/learn/production-llmops/observability-monitoring/what-is-llm-observability/) and [tracing](/learn/production-llmops/observability-monitoring/llm-tracing-explained) for how that plumbing works."
+        },
+        {
+          "type": "p",
+          "md": "**Read the provider's actual terms.** \"EU endpoint\" does not automatically mean \"all data stays in the EU forever.\" Abuse-monitoring, caching, and retention policies vary by provider and can move or hold data differently from the inference itself. For anything regulated, confirm the specifics in writing rather than assuming — that contract, not the diagram, is what an auditor checks."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is multi-region LLM deployment?",
+      "a": "It means running your LLM application in more than one geographic location instead of a single data center. You keep a full copy of the app — able to call a model — in each region, then route each user to the nearest healthy one. The payoffs are lower latency, the ability to survive a regional outage, and keeping regulated data inside its required jurisdiction."
+    },
+    {
+      "q": "How does regional LLM failover work?",
+      "a": "A health check fires a small request at each region every few seconds. While a region answers, it keeps its traffic; when it starts failing, the router marks it unhealthy and steers new requests to a healthy region automatically. The aim is that users barely notice the switch. For regulated data you must decide in advance whether cross-region failover is even legally allowed."
+    },
+    {
+      "q": "Where can I store LLM prompts under GDPR?",
+      "a": "Under GDPR, prompts that contain EU users' personal data generally need to be processed and stored within the EU (or a jurisdiction with an adequate legal basis for transfer). That means an EU region for the model call AND for any logs, traces, or caches of those prompts. The frequent mistake is calling the model in-region but shipping prompt logs to a central US service — that log is its own data transfer."
+    },
+    {
+      "q": "What is the difference between provider failover and multi-region failover?",
+      "a": "Provider failover swaps *who* serves the model — for example switching from one model vendor to another when the first is down. Multi-region failover swaps *where* the request runs — moving traffic from a failing geographic region to a healthy one. They solve different failure modes, and resilient systems usually use both together."
+    },
+    {
+      "q": "Do I need a multi-region setup for my LLM app?",
+      "a": "Probably not at first. A single region is simpler and cheaper, and it is the right default. Move to multiple regions when you feel real pressure: users on more than one continent who notice the latency, an outage that would cost real money, or a law that forces certain data to stay in a specific jurisdiction."
+    },
+    {
+      "q": "Should I use a provider's regional endpoint or my own gateway?",
+      "a": "Start with the provider's regional endpoints — they are almost free to adopt and require only calling a region-specific URL. Move to your own multi-region gateway when you need failover across providers, one central place to enforce residency, or a single interface to attach logging and cost controls. The two combine well: a gateway in each region that calls that region's provider endpoint."
+    }
+  ],
+  "related": [
+    "what-is-llm-gateway",
+    "llm-provider-failover",
+    "llm-model-routing",
+    "what-is-llmops",
+    "what-is-llm-observability"
+  ],
+  "furtherReading": [
+    {
+      "title": "GDPR — full regulation text (EUR-Lex)",
+      "url": "https://eur-lex.europa.eu/eli/reg/2016/679/oj"
+    },
+    {
+      "title": "AWS Well-Architected — Reliability Pillar",
+      "url": "https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/welcome.html"
+    },
+    {
+      "title": "LiteLLM documentation (multi-provider LLM gateway)",
+      "url": "https://docs.litellm.ai/"
+    }
+  ]
+}

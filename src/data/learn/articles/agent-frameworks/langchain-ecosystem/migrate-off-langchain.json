@@ -1,0 +1,362 @@
+{
+  "slug": "migrate-off-langchain",
+  "title": "How to Migrate Off LangChain Without a Rewrite",
+  "shortTitle": "Migrating Off LangChain",
+  "seoTitle": "How to Migrate Off LangChain Without a Rewrite",
+  "metaDescription": "Outgrown LangChain? Learn an incremental path off it — isolate prompts and tools, swap one layer at a time, and keep shipping instead of doing a big rewrite.",
+  "keywords": [
+    "migrate off langchain",
+    "replace langchain with raw api",
+    "langchain alternative migration",
+    "remove langchain dependency",
+    "langchain to native sdk migration"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Get a practical, incremental plan for moving off LangChain — extracting your prompts and tool logic, replacing one layer at a time — without a risky big-bang rewrite.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "[LangChain](/learn/agent-frameworks/langchain-ecosystem/what-is-langchain) is a popular toolkit for building LLM apps. It bundles chains, prompt templates, tool wrappers, memory, retrieval, and dozens of integrations behind one set of abstractions. That bundle is great when you start — but as an app matures, teams often want to drop it: to cut a heavy dependency, to debug what's actually being sent to the model, or to control prompts and retries directly."
+        },
+        {
+          "type": "p",
+          "md": "*Migrating off LangChain* means replacing those abstractions with code you own — usually the provider's own SDK (the `anthropic` or `openai` client) plus a few small helpers. The trap people fear is the **big-bang rewrite**: rip everything out and rebuild from scratch in one painful pull request. This article is about the opposite: a staged, low-risk path where the app keeps working the whole way."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like renovating a house while still living in it. You don't demolish all four walls at once. You redo one room, check that the plumbing and power still work, then move to the next. Each room is shippable on its own, and if something breaks you only have one room to look at — not the entire house."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Migrating off a framework is not the same as proving the framework was wrong. LangChain may have been the *right* choice to get to market fast. Outgrowing it is a normal, healthy stage — not an admission of a mistake."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Most teams don't migrate for fashion. They migrate because a specific pain has become expensive. The usual reasons:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Opaque prompts.** A framework assembles the final prompt for you, so when an answer goes wrong it's hard to see the exact string the model received. Owning the prompt makes debugging concrete.",
+            "**Dependency weight and churn.** A large framework pulls in many transitive packages and ships frequent breaking changes. Each upgrade can cost a day of fixing imports that moved or arguments that were renamed.",
+            "**Leaky abstractions.** The moment you need behavior the abstraction didn't anticipate — a custom retry, a streaming detail, a provider-specific parameter — you end up fighting the framework instead of using it.",
+            "**Cost and latency control.** Hidden extra calls (for routing, parsing, or memory) add tokens and milliseconds you can't easily see or tune.",
+            "**Hiring and onboarding.** Raw SDK code reads like the provider's own docs. A new engineer can understand a direct API call faster than a deep chain of framework objects."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "But the honest counterweight: sometimes you should **stay**. If LangChain is working, your team knows it, and you lean on its integrations or [LangSmith](/learn/agent-frameworks/langchain-ecosystem/what-is-langsmith) tracing, migrating is pure cost with little upside. Migration earns its keep only when a real, recurring pain is bigger than the work to remove it. Decide *why* first — then the staged plan below keeps the *how* cheap."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How a staged migration works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The core idea is the **strangler pattern**, borrowed from legacy-system migrations: wrap the old code behind your own interface, then quietly replace what's behind that interface one piece at a time. Callers never see the swap. You're never more than one small change away from a working app."
+        },
+        {
+          "type": "p",
+          "md": "A migration moves through five stages. The first two add no risk at all — they're just measurement and insulation — and they're where most of the safety comes from."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "The five stages, in order",
+            "steps": [
+              {
+                "label": "Inventory",
+                "sub": "what do you actually use?"
+              },
+              {
+                "label": "Isolate",
+                "sub": "wrap it behind your own interface"
+              },
+              {
+                "label": "Replace",
+                "sub": "swap one layer at a time"
+              },
+              {
+                "label": "Verify",
+                "sub": "golden tests after each swap"
+              },
+              {
+                "label": "Drop dep",
+                "sub": "remove the package",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "1. Inventory — what do you actually use?"
+        },
+        {
+          "type": "p",
+          "md": "You almost certainly use a small fraction of LangChain. List every import and group it into four buckets: **LLM calls**, **prompt templates**, **tools / function calling**, and **retrieval / vector store**. Anything else (memory, output parsers, callbacks) is usually a thin layer you can reimplement in a few lines. The inventory tells you the real size of the job — it's normally far smaller than it feels."
+        },
+        {
+          "type": "h3",
+          "text": "2. Isolate — wrap the framework behind your own interface"
+        },
+        {
+          "type": "p",
+          "md": "Before changing any behavior, hide LangChain behind a thin interface that *you* define. Your app stops calling LangChain directly and calls your `LLM` and `Retriever` types instead. At this point the implementation still uses LangChain underneath — nothing functionally changed — but now there's exactly one place to swap each capability."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "One interface, two interchangeable implementations",
+            "root": {
+              "label": "Your app",
+              "sub": "calls your interface only",
+              "accent": true
+            },
+            "children": [
+              {
+                "label": "LangChain impl",
+                "sub": "old — still works today"
+              },
+              {
+                "label": "Native SDK impl",
+                "sub": "new — swap in per layer"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "3–5. Replace, verify, drop"
+        },
+        {
+          "type": "p",
+          "md": "Now replace the implementation behind your interface one layer at a time — typically LLM calls first (the simplest), then retrieval, then tools. After each swap you run a **golden test** set (recorded inputs and known-good outputs) to confirm behavior didn't drift, ship it, and move on. When the last caller of LangChain is gone, you delete the import and remove the package. The dependency drops out only at the very end, when nothing references it."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Keep both implementations behind a feature flag during the swap. If the native version misbehaves in production, flip back to the LangChain implementation in seconds instead of redeploying."
+        }
+      ]
+    },
+    {
+      "id": "worked-example",
+      "title": "A worked example: replacing the LLM layer",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Here's the isolate-then-replace pattern in concrete code. Step one defines an interface and a *thin* LangChain-backed implementation — no behavior change yet, just insulation:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "step 1 — isolate behind your own interface",
+          "code": "from typing import Protocol\nfrom langchain_anthropic import ChatAnthropic\n\nclass LLM(Protocol):\n    def complete(self, system: str, user: str) -> str: ...\n\n# Old implementation: still LangChain under the hood.\nclass LangChainLLM:\n    def __init__(self):\n        self._model = ChatAnthropic(model=\"claude-sonnet-4-6\")\n\n    def complete(self, system: str, user: str) -> str:\n        msg = self._model.invoke(\n            [(\"system\", system), (\"human\", user)]\n        )\n        return msg.content\n\n# Your app depends ONLY on the LLM interface now.\nllm: LLM = LangChainLLM()"
+        },
+        {
+          "type": "p",
+          "md": "Step two writes a second implementation of the *same* interface using the native Anthropic SDK directly. The rest of your app doesn't change a line — it still calls `llm.complete(...)`."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "step 2 — native implementation of the same interface",
+          "code": "from anthropic import Anthropic\n\nclass NativeLLM:\n    def __init__(self):\n        self._client = Anthropic()  # reads ANTHROPIC_API_KEY\n\n    def complete(self, system: str, user: str) -> str:\n        msg = self._client.messages.create(\n            model=\"claude-sonnet-4-6\",\n            max_tokens=1024,\n            system=system,                       # system is its own param\n            messages=[{\"role\": \"user\", \"content\": user}],\n        )\n        return msg.content[0].text\n\n# The ONLY line that changes to switch implementations:\nllm: LLM = NativeLLM()"
+        },
+        {
+          "type": "p",
+          "md": "That single-line swap is the whole point of stage 2. Because every caller went through the `LLM` interface, replacing LangChain with the native SDK touches one line and nothing else. Run your golden tests, ship, and the LLM layer is migrated. Then repeat the exact same move for retrieval and tools."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Notice the small but real differences the framework was hiding: `system` is a top-level parameter, `max_tokens` is required, and the response text lives at `msg.content[0].text`. Owning these details is the cost — and the benefit — of dropping the abstraction. Always confirm parameter names against the provider's current docs."
+        }
+      ]
+    },
+    {
+      "id": "what-replaces-what",
+      "title": "What replaces each LangChain piece",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Each LangChain capability has a plain-code or small-library equivalent. Seeing the mapping up front removes most of the fear — almost nothing here is hard."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "LangChain piece",
+            "Native replacement",
+            "Effort"
+          ],
+          "rows": [
+            [
+              "`ChatAnthropic` / `ChatOpenAI`",
+              "Provider SDK (`anthropic`, `openai`) directly",
+              "Low"
+            ],
+            [
+              "`PromptTemplate`",
+              "An f-string or a tiny render function",
+              "Low"
+            ],
+            [
+              "Output parsers",
+              "Ask for JSON + `json.loads`, or the SDK's structured-output / tool feature",
+              "Low"
+            ],
+            [
+              "Tools / function calling",
+              "The provider's native tool-use API + your own dispatch dict",
+              "Medium"
+            ],
+            [
+              "Memory",
+              "A list of past messages you store and pass in",
+              "Low"
+            ],
+            [
+              "Retriever / vector store",
+              "Your DB client directly (pgvector, Qdrant, Pinecone, FAISS)",
+              "Medium"
+            ],
+            [
+              "Agent executor loop",
+              "A `while` loop: call model, run tool, append result, repeat",
+              "Medium"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The two genuinely substantive layers are **tools** and the **agent loop**. The rest is mostly deleting indirection. If your app is *agent-shaped* — a model deciding which tools to call in a loop — you may prefer a leaner purpose-built option over hand-rolling, such as the [Claude Agent SDK](/learn/agent-frameworks/provider-agent-sdks/what-is-claude-agent-sdk), rather than going all the way to raw API calls. Migration doesn't have to mean *zero* framework; it can mean *a better-fitting* one."
+        }
+      ]
+    },
+    {
+      "id": "pitfalls",
+      "title": "Common pitfalls (and how to avoid them)",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Migrations go wrong in predictable ways. Almost every failure comes from skipping the measurement and insulation stages and jumping straight to ripping code out."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**The big-bang rewrite.** Replacing everything in one branch means a huge, untestable diff and weeks with no shippable state. Always migrate one layer behind the interface instead.",
+            "**No golden tests.** Without recorded input/output pairs you can't tell whether a swap changed behavior. Capture real cases *before* you touch anything — that test set is your safety net.",
+            "**Forgetting the hidden prompt.** The framework injected wording into your prompts (formatting rules, tool instructions). Drop it naively and quality can dip. Log the exact final prompt LangChain sends, then reproduce it in your native version.",
+            "**Re-implementing the whole framework.** It's tempting to rebuild a generic chain engine. Don't — you only need the narrow slice your app uses. Rebuilding LangChain badly is worse than keeping LangChain.",
+            "**Migrating with no reason.** If you can't name the concrete pain, you're spending real effort for a cleaner import list. That's rarely worth it."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Capture golden tests against the *current* LangChain behavior before stage 2, not after. Once you've changed the code you no longer have a trustworthy reference for what \"correct\" looked like."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the mechanical swap is done, a few subtler topics decide whether the migration actually pays off."
+        },
+        {
+          "type": "p",
+          "md": "**Don't lose observability.** A common reason migrations regret-spiral is that the team gives up the tracing they had from [LangSmith](/learn/agent-frameworks/langchain-ecosystem/what-is-langsmith). Before you delete it, decide what replaces it — OpenTelemetry spans around each model call, or another LLM-observability tool. Going dark on traces right when you change your call layer is the worst possible time."
+        },
+        {
+          "type": "p",
+          "md": "**Partial migration is a valid end state.** You don't have to reach zero LangChain. Many teams keep its loaders and integrations for one-off ingestion scripts while running their hot request path on native SDKs. Migrate the latency- and cost-sensitive code; leave the convenience code alone if it isn't hurting."
+        },
+        {
+          "type": "p",
+          "md": "**Migrating off ≠ migrating to nothing.** Two endpoints are common. One is *no framework at all* — a deliberate choice with its own tradeoffs, covered in [building an agent without a framework](/learn/agent-frameworks/choosing-a-framework/agent-without-framework). The other is *a different framework* that fits better; [how to choose an agent framework](/learn/agent-frameworks/choosing-a-framework/choose-agent-framework) and the broader [framework comparison](/learn/agent-frameworks/choosing-a-framework/agent-framework-comparison) help you avoid swapping one ill-fitting tool for another."
+        },
+        {
+          "type": "p",
+          "md": "**Beware LangChain vs LangGraph confusion.** If your real problem is a tangled multi-step *control flow*, the answer might be staying in the ecosystem and moving to its graph-based sibling rather than leaving entirely — see [LangChain vs LangGraph](/learn/agent-frameworks/langchain-ecosystem/langchain-vs-langgraph). Make sure you're solving the dependency problem, not mislabeling an architecture problem as one."
+        },
+        {
+          "type": "p",
+          "md": "The durable lesson: a framework is a bet that its abstractions match your needs. When they stop matching, the cheapest exit is never a rewrite — it's an interface you control, swapped out one tested layer at a time, with the app shippable at every step."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Should I migrate off LangChain or just stay?",
+      "a": "Stay unless you can name a concrete, recurring pain — opaque prompts, dependency churn, leaky abstractions, or cost you can't tune. If LangChain works and your team is productive with it, migrating is mostly cost with little upside. Migrate only when the pain clearly outweighs the work to remove it."
+    },
+    {
+      "q": "How do I move off LangChain without a big rewrite?",
+      "a": "Use the strangler pattern. First inventory what you actually use, then wrap it behind your own interfaces (like an `LLM` and `Retriever` type), then replace the implementation one layer at a time — LLM calls, then retrieval, then tools. The app stays shippable after every step, and you drop the package only when nothing imports it anymore."
+    },
+    {
+      "q": "What replaces LangChain when I remove it?",
+      "a": "Mostly the provider's own SDK (such as `anthropic` or `openai`) plus small helpers. Prompt templates become f-strings, memory becomes a message list you store, retrieval becomes a direct call to your vector DB, and the agent loop becomes a plain `while` loop. For agent-heavy apps, a leaner purpose-built option like the Claude Agent SDK can replace the agent layer."
+    },
+    {
+      "q": "Will migrating off LangChain change my model's output?",
+      "a": "It can, because the framework often injected extra wording into your prompts. Log the exact final prompt LangChain sends, reproduce it in your native code, and run golden tests (recorded inputs with known-good outputs) after each swap. If outputs drift, the hidden prompt text is the usual culprit."
+    },
+    {
+      "q": "Do I have to remove LangChain completely?",
+      "a": "No. Partial migration is a perfectly valid end state. Many teams keep LangChain's document loaders and integrations for ingestion scripts while running the latency- and cost-sensitive request path on native SDKs. Migrate what's hurting and leave the rest."
+    },
+    {
+      "q": "How do I keep observability after dropping LangSmith?",
+      "a": "Decide on a replacement before you remove tracing, not after. Common options are OpenTelemetry spans around each model and tool call, or another LLM-observability tool. Losing traces at the exact moment you change your call layer makes debugging much harder, so plan the swap together."
+    }
+  ],
+  "related": [
+    "what-is-langchain",
+    "langchain-vs-langgraph",
+    "agent-without-framework",
+    "choose-agent-framework",
+    "what-is-claude-agent-sdk",
+    "what-is-langsmith"
+  ],
+  "furtherReading": [
+    {
+      "title": "Anthropic Messages API — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/api/messages"
+    },
+    {
+      "title": "Tool use with Claude — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/tool-use"
+    },
+    {
+      "title": "LangChain Documentation",
+      "url": "https://docs.langchain.com/"
+    },
+    {
+      "title": "StranglerFigApplication — Martin Fowler",
+      "url": "https://martinfowler.com/bliki/StranglerFigApplication.html"
+    }
+  ]
+}

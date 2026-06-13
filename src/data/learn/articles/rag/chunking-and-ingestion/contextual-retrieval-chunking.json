@@ -1,0 +1,361 @@
+{
+  "slug": "contextual-retrieval-chunking",
+  "title": "What Is Contextual Retrieval? Adding Context to Chunks",
+  "shortTitle": "Contextual Retrieval",
+  "seoTitle": "What Is Contextual Retrieval? Context-Aware Chunking",
+  "metaDescription": "Isolated chunks lose the document they came from. Contextual retrieval prepends a short summary to each chunk so retrieval finds it. Here's how it works.",
+  "keywords": [
+    "contextual retrieval",
+    "contextual chunking",
+    "context-aware chunks rag",
+    "prepend context to chunks",
+    "improve chunk retrieval"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You'll learn how prepending document-level context to each chunk fixes the 'orphaned chunk' problem and lifts retrieval accuracy.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A normal [RAG](/learn/rag/rag-fundamentals/what-is-rag) pipeline slices your documents into small passages called [chunks](/learn/rag/chunking-and-ingestion/what-is-chunking-in-rag), turns each one into an [embedding](/learn/embeddings-vector-databases/embeddings-explained/what-are-embeddings), and stores it for search. The problem: a chunk pulled out of a long report often forgets where it came from. A passage might say *\"The company grew revenue 3% over the previous quarter\"* — but which company? Which quarter? The surrounding pages had the answer; the chunk on its own does not."
+        },
+        {
+          "type": "p",
+          "md": "**Contextual retrieval** fixes this by giving every chunk a short note explaining its situation *before* you embed it. You prepend one or two sentences like *\"This chunk is from ACME Corp's Q2 2024 earnings filing; it discusses quarterly revenue.\"* Now the chunk carries its own context. When someone searches for *\"ACME Q2 revenue growth,\"* this passage finally matches — because the words it was missing are now attached to it."
+        },
+        {
+          "type": "p",
+          "md": "Think of a box of old photographs with no labels. A single photo of a beach tells you almost nothing — whose holiday, what year, which country? Someone who writes a caption on the back of each photo (*\"Maria's trip to Portugal, summer 2019\"*) makes the whole box searchable. Contextual retrieval is that caption-writer, run automatically over every chunk in your knowledge base."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The term was popularized by Anthropic in a 2024 write-up. The core idea is simple and provider-neutral: use a cheap LLM pass to generate a *situating summary* for each chunk, glue it onto the chunk text, then embed and index the combined version."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Retrieval is the part of RAG that most often fails quietly. The model can only answer from chunks the retriever actually finds — if the right passage never surfaces, no amount of clever prompting saves the answer. Contextual retrieval attacks the single biggest cause of *missed* chunks: passages that lost the words a searcher would use to find them."
+        },
+        {
+          "type": "h3",
+          "text": "The orphaned-chunk problem"
+        },
+        {
+          "type": "p",
+          "md": "When you split a document, references that pointed to earlier text get stranded. These orphaned references show up constantly:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Pronouns and back-references** — *\"it,\" \"this method,\" \"the company,\" \"as described above\"* — point to something that lived in a different chunk.",
+            "**Implicit subjects** — a paragraph deep in a contract about \"the tenant\" never repeats whose contract it is.",
+            "**Shared headings** — a row in a financial table means nothing once the column headers and the year are three chunks away.",
+            "**Section context** — a troubleshooting step assumes you read the section title that named the product."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Each of these makes a chunk *semantically poorer* than it should be. Its embedding ends up pointing at a vague region of meaning, so a real user query that names the company or the quarter sails right past it. The chunk is in your database; it just never wins the similarity contest."
+        },
+        {
+          "type": "p",
+          "md": "A builder cares because this is *free recall* you are leaving on the table. The fix doesn't require a fancier embedding model, a bigger vector store, or a smarter retriever. It just makes each chunk describe itself honestly before indexing — and that lifts the share of questions where the correct passage actually shows up in the top results."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Contextual retrieval is an *ingestion-time* technique. It changes nothing about how you query — it only changes what you store. You add one extra step between chunking and embedding: for each chunk, ask a cheap LLM to write a short summary that situates the chunk inside its full document, then prepend that summary to the chunk text."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Where the context step slots into ingestion",
+            "steps": [
+              {
+                "label": "Document",
+                "sub": "the whole file"
+              },
+              {
+                "label": "Chunk",
+                "sub": "split into passages"
+              },
+              {
+                "label": "Generate context",
+                "sub": "LLM situates each chunk",
+                "accent": true
+              },
+              {
+                "label": "Prepend + embed",
+                "sub": "context + chunk → vector"
+              },
+              {
+                "label": "Store",
+                "sub": "vector + keyword index"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Generating the situating summary"
+        },
+        {
+          "type": "p",
+          "md": "For each chunk you send the LLM two things: the *whole document* (or a large slice of it) and the *one chunk* you want to describe. You ask it for a 1–2 sentence summary whose only job is to place that chunk in context — never to answer a question or add facts. The prompt looks roughly like this:"
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "title": "the contextualizing prompt",
+          "code": "Here is the full document:\n<document>\n{{WHOLE_DOCUMENT}}\n</document>\n\nHere is one chunk taken from it:\n<chunk>\n{{CHUNK_TEXT}}\n</chunk>\n\nWrite a short (1-2 sentence) context that situates this chunk\nwithin the overall document, so it can be retrieved on its own.\nState what document and section it comes from and what it covers.\nAnswer with the context only, nothing else."
+        },
+        {
+          "type": "p",
+          "md": "The model returns something like *\"From ACME Corp's Q2 2024 10-Q, Financial Results section: this passage reports quarterly revenue and its change versus Q1.\"* You then store `context + \"\\n\\n\" + original_chunk` as the text you embed and index. The original chunk stays intact; you only *prepended* a header."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "stack",
+            "title": "What actually gets indexed",
+            "layers": [
+              {
+                "label": "Situating context (LLM-generated)",
+                "sub": "\"From ACME Q2 2024 10-Q, Financial Results…\"",
+                "accent": true
+              },
+              {
+                "label": "Original chunk text (unchanged)",
+                "sub": "\"Revenue grew 3% over the previous quarter…\""
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Why it lifts recall"
+        },
+        {
+          "type": "p",
+          "md": "The combined text now contains the named entities, dates, and section labels a real query is likely to use. Its embedding shifts toward the right region of meaning, and — just as important — the added words also help *keyword* search. That is why contextual retrieval pairs naturally with [hybrid search](/learn/rag/retrieval-and-reranking/what-is-hybrid-search): you index the contextualized chunk in both a vector index and a keyword (BM25) index, so an exact term like *\"10-Q\"* or *\"ACME\"* can match even when the embedding is fuzzy. The two methods reinforce each other on the same enriched text."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "A cheap, fast model is enough for the context step — you are not asking it to reason, just to describe. Many teams also apply prompt caching: send the full document once, then generate context for all its chunks against the cached copy to cut cost dramatically."
+        }
+      ]
+    },
+    {
+      "id": "worked-example",
+      "title": "A worked example",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Take this raw chunk pulled from the middle of a 40-page employee handbook. On its own it is nearly unsearchable:"
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "title": "raw chunk (orphaned)",
+          "code": "Employees may carry over up to 5 unused days into the next year.\nAnything beyond that is forfeited unless approved by a manager."
+        },
+        {
+          "type": "p",
+          "md": "What is this about? A human reading the section heading knows it is the *vacation* policy, but the chunk never says the word \"vacation,\" \"leave,\" or \"PTO.\" Embed it as-is and a query like *\"how many vacation days can I roll over?\"* may never retrieve it. Now here is the contextualized version that gets stored instead:"
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "title": "contextualized chunk (indexed)",
+          "code": "From the ACME 2024 Employee Handbook, \"Paid Time Off\" section:\nthis passage explains the annual carry-over rule for unused\nvacation (PTO) days.\n\nEmployees may carry over up to 5 unused days into the next year.\nAnything beyond that is forfeited unless approved by a manager."
+        },
+        {
+          "type": "p",
+          "md": "The chunk now contains *vacation*, *PTO*, *carry-over*, and *handbook* — the exact words a real question would use. Here is the small ingestion loop that produces it. The retrieval code afterward is unchanged from ordinary RAG."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "contextualize.py",
+          "code": "from anthropic import Anthropic\n\nclient = Anthropic()\n\nCONTEXT_PROMPT = (\n    \"Here is the full document:\\n<document>\\n{doc}\\n</document>\\n\\n\"\n    \"Here is a chunk from it:\\n<chunk>\\n{chunk}\\n</chunk>\\n\\n\"\n    \"Write 1-2 sentences situating this chunk in the document so it\\n\"\n    \"can be retrieved on its own. Answer with the context only.\"\n)\n\ndef contextualize(document: str, chunk: str) -> str:\n    msg = client.messages.create(\n        model=\"claude-haiku-4-5\",   # cheap, fast model is enough\n        max_tokens=120,\n        messages=[{\n            \"role\": \"user\",\n            \"content\": CONTEXT_PROMPT.format(doc=document, chunk=chunk),\n        }],\n    )\n    context = msg.content[0].text.strip()\n    return f\"{context}\\n\\n{chunk}\"   # prepend, keep original intact\n\n# INGESTION: build the enriched text you embed AND keyword-index.\nenriched = [contextualize(full_doc, c) for c in chunks]\n# index `enriched` in both a vector store and a BM25 store, then\n# query exactly as in any other RAG pipeline."
+        }
+      ]
+    },
+    {
+      "id": "contextual-vs-semantic-chunking",
+      "title": "Contextual retrieval vs semantic chunking",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "These two are easy to confuse because both aim to make chunks retrieve better — but they work on different axes. *Semantic chunking* is about **where** to cut: it tries to draw chunk boundaries along topic shifts so each chunk is internally coherent. Contextual retrieval is about **what** to do with the chunk after you cut it: enrich it with situating context. They are complementary, not rivals — you can split smartly *and* contextualize."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Aspect",
+            "Semantic chunking",
+            "Contextual retrieval"
+          ],
+          "rows": [
+            [
+              "Question it answers",
+              "Where should the chunk boundaries go?",
+              "What context is each chunk missing?"
+            ],
+            [
+              "What it changes",
+              "The split points between chunks",
+              "The text stored for each chunk"
+            ],
+            [
+              "Main goal",
+              "Keep each chunk on one topic",
+              "Restore lost document-level context"
+            ],
+            [
+              "Extra cost",
+              "Embedding/compute at split time",
+              "One LLM call per chunk at ingest"
+            ],
+            [
+              "Helps keyword search?",
+              "Indirectly",
+              "Directly — adds searchable terms"
+            ],
+            [
+              "Can combine with the other?",
+              "Yes",
+              "Yes"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "If your chunks are already a sensible size, contextual retrieval usually buys you more than re-tuning split points. For the deeper tradeoffs on how to slice in the first place, see [chunking strategies compared](/learn/rag/chunking-and-ingestion/chunking-strategies-compared) and [chunk size and overlap](/learn/rag/chunking-and-ingestion/chunk-size-and-overlap)."
+        }
+      ]
+    },
+    {
+      "id": "the-cost-tradeoff",
+      "title": "The cost tradeoff and when to use it",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Nothing here is free. The whole technique trades *more ingestion work* for *better retrieval*, and you should be clear-eyed about that bill before turning it on for a million documents."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**One LLM call per chunk.** A corpus of 100,000 chunks means 100,000 generation calls during ingestion. With a small model and prompt caching this is cheap per call, but it is a real, one-time pre-processing cost and adds latency to indexing.",
+            "**Slightly larger index.** Each stored chunk grows by a sentence or two, so embedding and storage costs tick up a little.",
+            "**Re-runs on updates.** Change a document and you must re-contextualize its chunks — the context summary depends on the whole document, so an edit can shift it.",
+            "**Zero added cost at query time.** This is the upside: retrieval and generation are exactly as fast and cheap as before. You paid once, up front."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Keep the situating context purely *descriptive*. If the LLM starts adding facts, opinions, or answers into the summary, it can inject errors that the chunk's source never contained — a fresh hallucination surface. The prompt must constrain it to *placing* the chunk, not *interpreting* it."
+        },
+        {
+          "type": "p",
+          "md": "Use contextual retrieval when chunks are full of back-references and shared context — long reports, contracts, financial filings, technical manuals, knowledge bases with deep sections. Skip it when each chunk is already self-contained, like a FAQ where every entry repeats its own subject, or short standalone product blurbs. As always, [measure before and after](/learn/rag/chunking-and-ingestion/chunking-strategies-compared): run a real query set and check whether the correct chunk shows up in your top results more often once contextualized."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Contextual retrieval is one improvement in a stack of them, and it composes well with the rest of the retrieval pipeline. A few directions once the basics click."
+        },
+        {
+          "type": "p",
+          "md": "**Stack it with reranking.** Contextualizing improves which chunks get *recalled* into the candidate set; a [reranker](/learn/rag/retrieval-and-reranking/what-is-reranking) then improves which of those candidates rise to the top. Retrieve broadly over contextualized, hybrid-indexed chunks, then rerank narrowly with a cross-encoder. The two stages fix different failure modes — recall vs precision — so using both compounds the gains rather than overlapping."
+        },
+        {
+          "type": "p",
+          "md": "**Index the context, but show the model the chunk.** A subtle design choice: you embed and keyword-index the *contextualized* text so it is findable, but at generation time you can feed the model the original chunk (or the chunk plus its short context). The situating summary's job is retrieval, not necessarily the final prompt — though including a one-line context often helps the model understand the snippet too."
+        },
+        {
+          "type": "p",
+          "md": "**Document-level vs section-level context.** Sending the *entire* document for every chunk is wasteful on very long files and can dilute the summary. A common refinement is to situate a chunk within its immediate section or a sliding window of neighbors rather than the whole document — cheaper, and often sharper, when documents are huge."
+        },
+        {
+          "type": "p",
+          "md": "**Related ideas worth knowing.** *Contextual chunk headers* (deterministically prepending the document title and heading path, no LLM needed) are a cheaper cousin that catches the easy cases. *Sentence-window* and *parent-document* retrieval attack the same orphaning problem differently — they retrieve on small units but return a larger surrounding span to the model. And combining context with [hybrid search](/learn/rag/retrieval-and-reranking/what-is-hybrid-search) is the configuration most production teams converge on."
+        },
+        {
+          "type": "p",
+          "md": "The durable lesson is the same one that governs all of RAG: your system is only as good as what the retriever surfaces. Contextual retrieval is valuable precisely because it improves that surfacing at the cheapest possible layer — the chunk's own text — without touching the model, the embeddings, or the query path."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is contextual retrieval in RAG?",
+      "a": "It is an ingestion-time technique where you use an LLM to write a short summary situating each chunk inside its full document, then prepend that summary to the chunk before embedding and indexing it. This restores context the chunk lost when it was split out, so retrieval finds it more reliably. It changes only what you store, not how you query."
+    },
+    {
+      "q": "How is contextual retrieval different from semantic chunking?",
+      "a": "Semantic chunking decides *where* to cut a document so each chunk stays on one topic. Contextual retrieval decides *what* to add to a chunk after cutting — a situating context line. One changes boundaries, the other enriches text. They are complementary and can be used together."
+    },
+    {
+      "q": "Does contextual retrieval actually improve accuracy?",
+      "a": "It improves *recall* — the chance the correct chunk appears in your retrieved results — by adding the named entities, dates, and section labels that real queries use. It helps most on documents full of back-references like reports, contracts, and manuals. You should still measure it on your own query set, and it stacks well with hybrid search and reranking."
+    },
+    {
+      "q": "What does contextual retrieval cost?",
+      "a": "Mainly one extra LLM call per chunk during ingestion, plus a slightly larger index. Using a small, fast model and prompt caching keeps the per-call cost low, but it is a real one-time pre-processing expense and adds indexing latency. There is no added cost at query time — retrieval and generation run exactly as before."
+    },
+    {
+      "q": "Do I embed the context plus the chunk, or just the context?",
+      "a": "You prepend the short context to the original chunk and embed (and keyword-index) the combined text. The original chunk stays intact; the context is just a header that makes the whole thing more findable. At generation time you can feed the model the chunk with or without its context line."
+    },
+    {
+      "q": "Should I use a big or small model to generate the context?",
+      "a": "A small, cheap model is usually enough — you are asking it to describe where a chunk sits, not to reason or answer. Keep the prompt strictly descriptive so it never invents facts, and use prompt caching on the full document to drive the per-chunk cost down across a large corpus."
+    }
+  ],
+  "related": [
+    "what-is-chunking-in-rag",
+    "chunking-strategies-compared",
+    "chunk-size-and-overlap",
+    "what-is-rag",
+    "rag-pipeline-explained"
+  ],
+  "furtherReading": [
+    {
+      "title": "Introducing Contextual Retrieval — Anthropic",
+      "url": "https://www.anthropic.com/news/contextual-retrieval"
+    },
+    {
+      "title": "Prompt caching — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching"
+    },
+    {
+      "title": "Embeddings — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/embeddings"
+    }
+  ]
+}

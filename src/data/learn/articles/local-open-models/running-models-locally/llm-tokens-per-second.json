@@ -1,0 +1,338 @@
+{
+  "slug": "llm-tokens-per-second",
+  "title": "Tokens per Second Explained: How to Measure Local LLM Speed",
+  "shortTitle": "Tokens per Second",
+  "seoTitle": "Tokens per Second: Measuring Local LLM Speed",
+  "metaDescription": "What tokens per second means, the difference between prompt and generation speed, and what counts as 'fast enough' for chat versus batch work on local hardware.",
+  "keywords": [
+    "what is tokens per second llm",
+    "how to measure llm speed",
+    "prompt eval vs generation speed",
+    "good tokens per second local llm",
+    "llm benchmark tokens per second"
+  ],
+  "difficulty": "beginner",
+  "oneLiner": "You will know how to read and measure tokens-per-second numbers, and judge whether a setup is fast enough before you commit to a model.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you run a [local LLM](/learn/local-open-models/running-models-locally/what-is-local-llm), the model doesn't write whole sentences at once. It produces text one *token* at a time — a token being a small chunk of text, roughly three-quarters of a word on average. **Tokens per second** (often written **tok/s** or **t/s**) is simply how many of those chunks the model can produce each second. It's the headline number people quote when they say a setup feels \"fast\" or \"painfully slow.\""
+        },
+        {
+          "type": "p",
+          "md": "Picture someone reading a book aloud to you. A fast, fluent reader runs ahead of your eyes; a slow one makes you wait, word by word, for the sentence to finish. Tokens per second is the model's reading-aloud speed. At 40 tok/s the words pour out faster than you can read them. At 3 tok/s you watch each word appear like a 1990s dial-up web page loading line by line."
+        },
+        {
+          "type": "p",
+          "md": "There's a catch most people miss: there isn't *one* speed. A model has two very different jobs in a single request, and each has its own tokens-per-second number. First it has to *read your prompt* — every word of the question, the system instructions, and any pasted documents. Then it has to *write the answer*. These two phases run at wildly different speeds and are bottlenecked by completely different things. If you only ever look at one number, you'll be surprised when a long prompt suddenly feels slow even though the model \"benchmarks fast.\""
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The two phases have names worth knowing: reading the prompt is **prefill** (also called *prompt processing* or *prompt eval*), and writing the answer is **decode** (also called *generation* or *eval*). Tools like llama.cpp and Ollama report both as separate tok/s figures."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "If you're choosing a model or a piece of hardware to run it on, tokens per second is the single number that decides whether the experience is pleasant or unusable. A model can be smart, well-quantized, and free, and still be the wrong choice because it crawls on your machine. Speed is a feature."
+        },
+        {
+          "type": "p",
+          "md": "It matters most because *your* comfortable speed depends entirely on what you're doing:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Interactive chat.** You're reading along as the model types. The honest target is to beat your own reading speed — most people read 5 to 8 words per second, so anything above roughly 10 tok/s feels live, and 20+ feels effortless. Below ~5 tok/s, chatting becomes a chore.",
+            "**Coding assistants and autocomplete.** Here latency is brutal. You want the suggestion *now*, before you've typed the next character. Slow generation breaks your flow, so coding setups push for high tok/s and short prompts.",
+            "**Bulk or batch jobs.** Summarizing 10,000 documents overnight? You don't watch it. Total throughput matters, not per-token feel. A setup that's too slow to chat with can be perfectly fine for a job that runs while you sleep."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "It also matters for budgeting hardware. The reason a bigger or differently-quantized model runs slower is usually *memory bandwidth*, not raw compute — and that single fact, explained below, predicts performance better than the GPU's advertised TFLOPS. Understanding tok/s is how you read a benchmark and know whether a given GPU, Mac, or laptop will actually be comfortable before you spend the money. For the hardware side, see [local LLM hardware requirements](/learn/local-open-models/running-models-locally/local-llm-hardware-requirements)."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A single request flows through the two phases, and each produces its own tokens-per-second number. Understanding what bottlenecks each one is the whole game."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "One request, two speeds",
+            "steps": [
+              {
+                "label": "Your prompt",
+                "sub": "e.g. 2,000 tokens"
+              },
+              {
+                "label": "Prefill",
+                "sub": "read prompt — compute-bound, fast"
+              },
+              {
+                "label": "First token",
+                "sub": "the wait you feel (TTFT)"
+              },
+              {
+                "label": "Decode",
+                "sub": "write answer — bandwidth-bound",
+                "accent": true
+              },
+              {
+                "label": "Answer streams out",
+                "sub": "token by token"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Prefill: reading the prompt"
+        },
+        {
+          "type": "p",
+          "md": "In prefill, the model processes *every token of your prompt at once*. Because all the tokens are already known, the hardware can crunch them in parallel — a big matrix multiply that uses the GPU's compute units efficiently. Prefill is therefore **compute-bound** and usually fast: hundreds or even thousands of tokens per second. The cost of prefill scales with prompt length, so a giant prompt (a long document, a big system message) takes real time before *any* answer appears. That delay is **time to first token (TTFT)** — the pause you stare at after hitting enter."
+        },
+        {
+          "type": "h3",
+          "text": "Decode: writing the answer"
+        },
+        {
+          "type": "p",
+          "md": "Decode is different and slower. The model generates one token, then must feed that token back in to generate the next — it can't predict token 50 until it has produced token 49. This is *sequential*, so there's no parallelism to exploit. For each and every token, the hardware has to read the model's entire set of weights out of memory. That's the bottleneck: not how fast the chip can multiply, but how fast it can *move the weights from memory to the compute units*. Decode is **memory-bandwidth-bound**."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "A rough rule of thumb for decode speed: **tokens per second ≈ memory bandwidth ÷ model size in memory.** A 4 GB quantized model on a GPU with ~400 GB/s of bandwidth gives roughly 400 ÷ 4 = ~100 tok/s as a ceiling (real numbers land lower due to overhead). Halve the model's size with [quantization](/learn/local-open-models/quantization-and-formats/what-is-quantization) and you roughly double decode speed — same hardware."
+        },
+        {
+          "type": "p",
+          "md": "This is why the headline spec to check before buying isn't the GPU's TFLOPS — it's its **memory bandwidth** (GB/s). It's also why an Apple Silicon Mac with unified memory can run big models respectably: lots of fast, wide memory. And it's why a model that barely fits in your VRAM runs fine but the moment it spills into slow system RAM, decode falls off a cliff — system RAM has a fraction of the bandwidth of GPU memory."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Why the two phases behave so differently",
+            "columns": [
+              {
+                "title": "Prefill (prompt)",
+                "items": [
+                  "Processes all prompt tokens in parallel",
+                  "Compute-bound (uses GPU math units)",
+                  "Fast: 100s–1000s tok/s",
+                  "Cost grows with prompt length",
+                  "Determines time to first token"
+                ]
+              },
+              {
+                "title": "Decode (generation)",
+                "accent": true,
+                "items": [
+                  "One token at a time, strictly sequential",
+                  "Memory-bandwidth-bound",
+                  "Slower: the number people quote",
+                  "Roughly constant per token",
+                  "Determines how fast text streams"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "reading-the-timings",
+      "title": "Reading the timing output",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You don't have to guess these numbers — llama.cpp prints them after every generation, and Ollama exposes them too. Once you know which line is which, you can diagnose a slow setup in seconds. (For background on the engines, see [what is llama.cpp](/learn/local-open-models/running-models-locally/what-is-llama-cpp) and [what is Ollama](/learn/local-open-models/running-models-locally/what-is-ollama).)"
+        },
+        {
+          "type": "p",
+          "md": "Here's a typical llama.cpp footer, lightly trimmed:"
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "title": "llama.cpp timing output",
+          "code": "prompt eval time =    512.30 ms /   256 tokens (   2.00 ms per token,  499.71 tokens per second)\n       eval time =   4810.55 ms /   200 tokens (  24.05 ms per token,   41.58 tokens per second)\n      total time =   5322.85 ms /   456 tokens"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**prompt eval** = prefill. Here, 256 prompt tokens read at ~500 tok/s — fast, because it's parallel and compute-bound.",
+            "**eval** = decode. Here, 200 tokens generated at ~42 tok/s — this is the speed you *feel* as the answer streams. This is the number to quote.",
+            "**ms per token** is just the reciprocal. 24 ms/token = 1000 ÷ 24 ≈ 42 tok/s. Lower ms is better."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Ollama gives you the same breakdown if you ask for it. Run with verbose mode and read `prompt eval rate` (prefill) and `eval rate` (decode):"
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "title": "see Ollama's speed numbers",
+          "code": "ollama run llama3.2 --verbose\n# after a reply, Ollama prints:\n#   prompt eval rate:   480.12 tokens/s   <- prefill\n#   eval rate:           38.94 tokens/s   <- decode (the one to watch)"
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Don't compare a single token's worth of generation — speeds aren't stable until the model warms up and there are enough tokens to average. Generate at least 100–200 tokens before trusting a decode number, and run it twice (the first run pays a one-time model-load cost)."
+        }
+      ]
+    },
+    {
+      "id": "what-counts-as-fast",
+      "title": "What counts as 'fast enough'?",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "There's no universal pass mark — it depends on the task. The table below is a practical feel-guide for *decode* speed (the generation number). Treat it as rough orientation, not a benchmark."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Decode speed",
+            "How it feels",
+            "Good for"
+          ],
+          "rows": [
+            [
+              "< 3 tok/s",
+              "Painful. Slower than reading; you wait on every line.",
+              "Patience-testing only; offline batch if you must."
+            ],
+            [
+              "3–8 tok/s",
+              "Usable but sluggish. Roughly matches slow reading.",
+              "Casual chat, single-shot questions, overnight jobs."
+            ],
+            [
+              "10–20 tok/s",
+              "Comfortable. Keeps pace with or beats your reading.",
+              "Everyday chat, writing help, Q&A."
+            ],
+            [
+              "20–50 tok/s",
+              "Snappy. Text outruns your eyes.",
+              "Interactive chat, light coding assistance."
+            ],
+            [
+              "50+ tok/s",
+              "Instant-feeling. Latency disappears.",
+              "Coding autocomplete, agents, high-volume work."
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Two honest caveats. First, **prefill speed matters separately** for long prompts: a 30 tok/s decode setup still feels slow to *start* if you paste a 10,000-token document and prefill is weak — that's a long TTFT, not a slow stream. Second, **throughput ≠ feel** for batch work. If you're processing many requests at once, total tokens-per-second across the whole batch can be far higher than the per-request number, because the hardware fills idle time. A server doing 8 requests in parallel may post a big aggregate tok/s while each individual stream looks modest."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "On a phone or low-power laptop, even 5–10 tok/s is a real achievement and perfectly fine for chat — see [running LLMs on a phone](/learn/local-open-models/running-models-locally/run-llms-on-a-phone). \"Fast enough\" is relative to the device and the job, not an absolute."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics click, a few nuances explain most of the surprises people hit when they start measuring seriously."
+        },
+        {
+          "type": "p",
+          "md": "**Decode slows as context grows.** As the conversation gets longer, the model must attend to a growing *KV cache* (the stored keys and values for every previous token). That cache eats memory bandwidth too, so decode speed gradually drops over a long chat. A model posting 40 tok/s at the start of a session may be at 30 tok/s ten thousand tokens in. Benchmarks taken on a short prompt flatter real long-conversation speed."
+        },
+        {
+          "type": "p",
+          "md": "**Quantization buys speed and memory, not magic.** Because decode is bandwidth-bound, shrinking the model with quantization speeds up generation roughly in proportion to how much smaller it gets — and lets bigger models fit in VRAM in the first place. The trade is a small quality cost at aggressive levels. This is why the [GGUF format](/learn/local-open-models/quantization-and-formats/what-is-gguf) ships a model in many quant sizes; you pick the largest one that fits and still hits your target tok/s."
+        },
+        {
+          "type": "p",
+          "md": "**Batching boosts throughput, not single-stream speed.** Serving engines built for many users (like vLLM) process multiple requests together, which raises *aggregate* tokens per second dramatically because the weights, read once from memory, serve several sequences at the same time. For a single local user typing one message, batching does nothing — your decode speed is what it is."
+        },
+        {
+          "type": "p",
+          "md": "**Watch out for thermal throttling and offloading.** A laptop that benchmarks at 25 tok/s cold can sag after a few minutes as it heats up and the chip downclocks. And if part of the model is offloaded to CPU/system RAM because it doesn't fit in VRAM, the slow-memory portion drags the whole decode rate down — sometimes by an order of magnitude. When a number looks mysteriously bad, check whether the model fully fits in fast memory first."
+        },
+        {
+          "type": "p",
+          "md": "The durable mental model: **prefill is compute-bound and fast, decode is memory-bandwidth-bound and is the number you feel.** Quote the decode (eval) rate, check memory bandwidth before you buy hardware, keep the whole model in fast memory, and pick a quant size that hits the tok/s your task actually needs — chat, coding, or batch."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is a good tokens per second for a local LLM?",
+      "a": "For interactive chat, aim for at least 10 tok/s of generation (decode) speed; 20+ feels effortless because it outruns your reading. Below ~5 tok/s chatting gets tedious. For overnight batch jobs you don't watch, even 3–5 tok/s can be fine — \"good\" depends entirely on the task."
+    },
+    {
+      "q": "What is the difference between prompt eval and generation speed?",
+      "a": "Prompt eval (prefill) is how fast the model *reads your prompt* — it processes all prompt tokens in parallel, so it's compute-bound and usually fast (hundreds of tok/s). Generation (decode) is how fast it *writes the answer* one token at a time, which is sequential and limited by memory bandwidth, so it's slower. The generation number is the one you feel as the text streams out."
+    },
+    {
+      "q": "Why is my LLM slow even though I have a powerful GPU?",
+      "a": "Generation speed is capped by memory bandwidth, not raw compute, so a GPU with huge TFLOPS but modest bandwidth can still feel slow. The other common cause is the model not fitting fully in VRAM: once part of it spills into slower system RAM (offloading), decode speed drops sharply. Check bandwidth and whether the whole model fits in fast memory."
+    },
+    {
+      "q": "How do I measure tokens per second in Ollama?",
+      "a": "Run the model with the verbose flag, for example `ollama run llama3.2 --verbose`, and after each reply Ollama prints `prompt eval rate` (prefill speed) and `eval rate` (decode speed). The `eval rate` is the generation tokens-per-second you should quote. Generate at least 100 tokens and run it twice, since the first run pays a one-time model-load cost."
+    },
+    {
+      "q": "Does quantization make a model faster?",
+      "a": "Yes, usually. Because generation is limited by how fast the model's weights move through memory, shrinking the model with quantization speeds up decode roughly in proportion to the size reduction, and lets bigger models fit in fast VRAM. The cost is a small drop in output quality at aggressive quantization levels."
+    },
+    {
+      "q": "Why does my local LLM slow down during a long conversation?",
+      "a": "As context grows, the model stores keys and values for every previous token (the KV cache), and reading that growing cache consumes memory bandwidth on every new token. Since decode is bandwidth-bound, tokens per second gradually falls as the conversation gets longer, even on the same hardware and model."
+    }
+  ],
+  "related": [
+    "local-llm-hardware-requirements",
+    "what-is-llama-cpp",
+    "what-is-ollama",
+    "what-is-quantization",
+    "run-llms-on-mac",
+    "what-is-local-llm"
+  ],
+  "furtherReading": [
+    {
+      "title": "llama.cpp — README and tools (GitHub)",
+      "url": "https://github.com/ggml-org/llama.cpp"
+    },
+    {
+      "title": "Ollama documentation (GitHub)",
+      "url": "https://github.com/ollama/ollama/tree/main/docs"
+    },
+    {
+      "title": "vLLM documentation — performance and throughput",
+      "url": "https://docs.vllm.ai/"
+    }
+  ]
+}

@@ -1,0 +1,304 @@
+{
+  "slug": "speculative-decoding-local",
+  "title": "What Is Speculative Decoding? Faster Local Inference with a Draft Model",
+  "shortTitle": "Speculative Decoding Locally",
+  "seoTitle": "What Is Speculative Decoding? Faster Local Inference",
+  "metaDescription": "Speculative decoding uses a small draft model to guess tokens a big model verifies, speeding up generation with no quality loss. How it works and how to enable it.",
+  "keywords": [
+    "what is speculative decoding",
+    "speculative decoding llama.cpp",
+    "draft model inference speedup",
+    "speculative decoding vllm",
+    "faster local llm generation"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You will understand how a tiny draft model lets a large model generate faster without changing its output, and how to turn it on locally.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A language model generates text one token at a time. To produce each token, it runs a full forward pass over the whole network — billions of parameters, all of memory read once — and then appends a single word-piece. Then it does the entire thing again for the next token. For a [local model](/learn/local-open-models/running-models-locally/what-is-local-llm) on your own GPU, this is the slow part: most of the time isn't spent *computing*, it's spent shuttling those giant weights from memory for every single token."
+        },
+        {
+          "type": "p",
+          "md": "**Speculative decoding** speeds this up with a clever trick: it pairs your big, accurate model with a tiny, fast **draft model**. The small model races ahead and *guesses* the next several tokens. The big model then checks all of those guesses **in a single pass** instead of one pass per token. Whatever guesses the big model agrees with are accepted for free; the first wrong guess is corrected and the rest are thrown away. Same output, fewer slow passes."
+        },
+        {
+          "type": "p",
+          "md": "Picture an editor and a fast typist working together. The typist (the draft model) bangs out the next sentence as a quick guess. The editor (the big model) reads the whole sentence at once and says \"yes, yes, yes — no, that word's wrong.\" Everything up to the mistake is kept; the editor fixes that one word, and the typist starts again from there. The editor still approves every word, so the final text is exactly what the editor would have written alone — it just got there with far less re-reading."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The key promise is that speculative decoding is **lossless**. The big model verifies every token, so the output is statistically identical to running the big model by itself. You are trading some extra compute (running two models) for fewer slow memory passes — and on memory-bound local hardware, that trade usually wins."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Generating tokens one at a time is *memory-bound*, not compute-bound. On a consumer GPU running a 30B model, the bottleneck is reading every weight from VRAM for each token — the arithmetic units sit mostly idle, waiting on memory. That means a forward pass that checks **five** tokens at once costs almost the same wall-clock time as a pass that produces **one**. Speculative decoding exploits exactly this gap: if the draft's guesses are good, you get several accepted tokens for roughly the price of one."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Lower latency.** Interactive chat feels sluggish when tokens trickle out. Speculative decoding can lift tokens-per-second by 1.5×–3× on suitable workloads, with no change to the answer.",
+            "**No quality cost.** Unlike quantization, which shrinks the model and can subtly degrade it, speculation leaves the big model's output identical. You don't have to choose between speed and accuracy.",
+            "**Better hardware use.** A local GPU is often starved for work between memory reads. Verifying a batch of draft tokens fills that idle compute, so you extract more from the card you already own.",
+            "**Free to try.** Both [llama.cpp](/learn/local-open-models/running-models-locally/what-is-llama-cpp) and [vLLM](/learn/local-open-models/inference-and-serving/vllm-explained) support it with a couple of flags. If it doesn't help your workload, you turn it off — there's no risk to output quality."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who cares most? Anyone running a large model locally for *single-stream* interactive use — coding assistants, local chatbots, agent loops where you wait on each response. Speculation shines exactly where you have spare compute and a latency problem, which is the typical situation for one user driving one big model on one GPU."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The loop is **draft, then verify**. A small draft model proposes a short run of candidate tokens. The big *target* model evaluates all of them in one forward pass and decides — token by token — how many to keep. Then the cycle repeats from wherever the keep-streak ended."
+        },
+        {
+          "type": "h3",
+          "text": "Step 1 — the draft model guesses ahead"
+        },
+        {
+          "type": "p",
+          "md": "Starting from the text so far, the small draft model autoregressively generates a handful of tokens — say 4 or 8. Because it's tiny (often 10×–50× smaller than the target), these guesses are cheap and fast. They are just a *proposal*; nothing is committed yet."
+        },
+        {
+          "type": "h3",
+          "text": "Step 2 — the target model verifies in one pass"
+        },
+        {
+          "type": "p",
+          "md": "Now the big model processes the original text **plus all the drafted tokens together** in a single forward pass. Because transformers compute the probability of every position in parallel during a forward pass, the target gets its own prediction for each drafted slot at once — that's why checking 8 tokens costs about the same as generating 1."
+        },
+        {
+          "type": "h3",
+          "text": "Step 3 — accept the matching prefix, correct the first miss"
+        },
+        {
+          "type": "p",
+          "md": "Walking left to right, the target accepts each drafted token as long as it agrees with what the target itself would have produced (under a precise probabilistic acceptance test). At the **first** disagreement, it discards the draft from that point on, substitutes its own correct token, and the loop restarts. The math guarantees the kept sequence is drawn from exactly the target's own distribution — hence lossless."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "The draft-then-verify loop",
+            "steps": [
+              {
+                "label": "Draft guesses N tokens",
+                "sub": "small fast model"
+              },
+              {
+                "label": "Target verifies all N",
+                "sub": "one forward pass"
+              },
+              {
+                "label": "Accept matching prefix",
+                "sub": "keep good guesses"
+              },
+              {
+                "label": "Correct first mismatch",
+                "sub": "target's own token"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "A worked picture: the draft proposes `the cat sat on the`. The target verifies and agrees with `the cat sat on` but would have written `a` instead of `the` at the last slot. So it accepts the first four tokens, replaces the fifth with `a`, and starts the next round from there. Five tokens of progress, one big-model pass — when the draft is right, you fly; when it's wrong, you fall back to roughly normal speed for that round."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The whole speedup hinges on the **acceptance rate** — what fraction of drafted tokens the target keeps. A draft that agrees with the target 70% of the time on predictable text gives a big win; one that's frequently wrong adds overhead with little gain. Acceptance rate, not raw draft speed, is the number to watch."
+        }
+      ]
+    },
+    {
+      "id": "when-it-helps",
+      "title": "When it helps and when it doesn't",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Speculative decoding is not a universal speed button. Its payoff depends on two things: how *predictable* the text is (does the draft guess right often?) and how much *idle compute* you have to spend on verification. Match the workload to those conditions."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Situation",
+            "Speculation helps?",
+            "Why"
+          ],
+          "rows": [
+            [
+              "Code, boilerplate, structured output",
+              "Strongly",
+              "Highly predictable — the small draft nails most tokens, so acceptance is high"
+            ],
+            [
+              "Single user, one big model on a GPU",
+              "Yes",
+              "Memory-bound and compute-idle — exactly the gap speculation fills"
+            ],
+            [
+              "Chat / general prose",
+              "Often",
+              "Moderate predictability; typically a solid 1.5×–2× on consumer hardware"
+            ],
+            [
+              "High-throughput batched serving",
+              "Sometimes not",
+              "Big batches already saturate the GPU; little idle compute left to spend"
+            ],
+            [
+              "Highly creative or random output",
+              "Weakly",
+              "Low acceptance rate — the draft and target disagree too often"
+            ],
+            [
+              "No good small model in the family",
+              "Hard to set up",
+              "Draft and target must share a tokenizer; a mismatch breaks verification"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The tension with batching is worth understanding. Techniques like [continuous batching](/learn/local-open-models/inference-and-serving/continuous-batching) win by keeping the GPU busy across *many* concurrent requests, which already removes the idle compute speculation needs. So speculation is most valuable for **latency-sensitive, single-stream** local use, and less so for a server packing dozens of users onto one card. They're not enemies — they optimize different regimes."
+        }
+      ]
+    },
+    {
+      "id": "enabling-it-locally",
+      "title": "Enabling it locally",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The golden rule for picking a draft model: it must be **small, fast, and from the same family** as the target, so they share a tokenizer and a similar style of prediction. Common pairings are a 1B draft with a 30B–70B target. A draft that's too big erases the speedup; one from a different family (different tokenizer) won't verify correctly at all."
+        },
+        {
+          "type": "h3",
+          "text": "llama.cpp"
+        },
+        {
+          "type": "p",
+          "md": "[llama.cpp](/learn/local-open-models/running-models-locally/what-is-llama-cpp) exposes speculative decoding through a draft-model flag. You load your main GGUF as usual and point `--model-draft` at a small companion model from the same family; the related flags control how many tokens to draft per round."
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "title": "llama.cpp with a draft model",
+          "code": "# Main 70B target + small 1B draft from the same family.\n# --draft-max sets how many tokens the draft proposes per round.\nllama-server \\\n  --model       models/llama-70b-instruct.Q4_K_M.gguf \\\n  --model-draft models/llama-1b-instruct.Q4_K_M.gguf \\\n  --draft-max 8 \\\n  --draft-min 1 \\\n  -ngl 99"
+        },
+        {
+          "type": "h3",
+          "text": "vLLM"
+        },
+        {
+          "type": "p",
+          "md": "[vLLM](/learn/local-open-models/inference-and-serving/vllm-explained) enables speculation through a configuration object describing the draft method and how many tokens to speculate. The classic mode uses a separate small draft model; vLLM also supports draft-free variants (see Going deeper). Always confirm the exact key names against the version of vLLM you have installed — the speculative-decoding config has evolved across releases."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "vLLM with a draft model",
+          "code": "from vllm import LLM, SamplingParams\n\n# A small draft model verified by the larger target model.\n# num_speculative_tokens = how many tokens to draft each round.\nllm = LLM(\n    model=\"meta-llama/Llama-3.1-70B-Instruct\",\n    speculative_config={\n        \"model\": \"meta-llama/Llama-3.2-1B-Instruct\",\n        \"num_speculative_tokens\": 5,\n    },\n)\n\nout = llm.generate(\n    [\"Write a Python function that reverses a string.\"],\n    SamplingParams(max_tokens=200),\n)\nprint(out[0].outputs[0].text)"
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Always **benchmark with and without** speculation on *your* prompts and hardware. The speedup is workload-dependent: a poor draft, a too-large `num_speculative_tokens`, or an already-saturated GPU can make it slower than plain decoding. Measure tokens-per-second both ways before committing."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The version above — a separate small model as the drafter — is the original form, sometimes called *draft-model* speculative decoding. A lot of the field since then has been about getting the speedup *without* maintaining a second model, plus tuning the knobs that govern acceptance."
+        },
+        {
+          "type": "p",
+          "md": "**Self-speculation and draft-free methods.** Keeping a matched draft model around is a hassle, so newer methods generate the guesses from the target itself. **Medusa** bolts extra prediction heads onto the big model to propose multiple future tokens at once. **EAGLE** drafts from the target's own internal features for high acceptance. **Lookahead decoding** and **prompt lookahead** skip a model entirely, guessing tokens from n-gram patterns already in the text — cheap and surprisingly effective on repetitive or code-heavy output."
+        },
+        {
+          "type": "p",
+          "md": "**Tree-based verification.** Instead of drafting one straight line of tokens, advanced methods draft a small *tree* of alternative continuations and verify many branches in a single target pass. This raises the odds that *some* path is accepted, squeezing out more tokens per verification — the approach behind several of the highest-throughput speculative methods."
+        },
+        {
+          "type": "p",
+          "md": "**Tuning the draft length.** The tokens-per-round setting (`--draft-max`, `num_speculative_tokens`) is a balance. Too few and you rarely benefit; too many and rejected guesses waste work, since everything after the first miss is thrown away. The sweet spot depends on your acceptance rate, so it's worth sweeping a few values. Some implementations adapt the length automatically based on recent acceptance."
+        },
+        {
+          "type": "p",
+          "md": "**The honest limits.** Speculation costs extra VRAM for the draft model and extra compute per round, so on a GPU that's already compute-bound (large batches, heavy [serving](/learn/local-open-models/inference-and-serving/what-is-inference-server) workloads) the gains shrink or vanish. It also can't fix a fundamentally slow target model — it only removes redundant memory passes. The durable mental model: speculative decoding converts *spare compute* into *fewer slow steps*, lossless and reversible. Where you have idle compute and a latency problem, turn it on; where the GPU is already full, reach for batching or quantization instead. For the bigger picture of running fast locally, compare [Ollama vs vLLM](/learn/local-open-models/inference-and-serving/ollama-vs-vllm) and check your [hardware requirements](/learn/local-open-models/running-models-locally/local-llm-hardware-requirements)."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is speculative decoding in simple terms?",
+      "a": "It's a way to make a large language model generate text faster by pairing it with a small, fast *draft* model. The draft guesses several next tokens, and the big model verifies them all in a single pass, accepting the correct guesses and fixing the first wrong one. The output is identical to running the big model alone — it just gets there with fewer slow steps."
+    },
+    {
+      "q": "Does speculative decoding change the model's output or reduce quality?",
+      "a": "No. It is *lossless*: the big target model verifies every token, so the final text is statistically identical to normal decoding. Unlike quantization, which can subtly degrade a model, speculation only removes redundant work — the quality is exactly the same."
+    },
+    {
+      "q": "How do I enable speculative decoding in llama.cpp?",
+      "a": "Load your main model as usual and add a `--model-draft` flag pointing to a small companion model from the same family (same tokenizer), then tune `--draft-max` for how many tokens to propose per round. Always benchmark tokens-per-second with and without the draft model, since the speedup depends on your workload."
+    },
+    {
+      "q": "How do I turn on speculative decoding in vLLM?",
+      "a": "Pass a speculative configuration when constructing the `LLM`, naming a small draft model and the number of speculative tokens per round. The exact config key names have changed across vLLM versions, so check the docs for the version you have installed, and confirm the draft and target share a tokenizer."
+    },
+    {
+      "q": "Why doesn't speculative decoding always make generation faster?",
+      "a": "Its benefit depends on having idle compute and a high acceptance rate. On a GPU already saturated by large batches there's little spare compute to use, and on unpredictable or very creative text the draft is often wrong, so rejected guesses waste work. In those cases it can be no faster — or even slower — than plain decoding."
+    },
+    {
+      "q": "What makes a good draft model for speculative decoding?",
+      "a": "A draft model should be much smaller than the target (often 10×–50×), fast to run, and from the *same family* so they share a tokenizer and similar prediction style. A common pairing is a 1B draft with a 30B–70B target. A mismatched tokenizer breaks verification, and a too-large draft erases the speedup."
+    }
+  ],
+  "related": [
+    "vllm-explained",
+    "what-is-llama-cpp",
+    "continuous-batching",
+    "ollama-vs-vllm",
+    "what-is-inference-server",
+    "local-llm-hardware-requirements"
+  ],
+  "furtherReading": [
+    {
+      "title": "Fast Inference from Transformers via Speculative Decoding (arXiv)",
+      "url": "https://arxiv.org/abs/2211.17192"
+    },
+    {
+      "title": "Speculative Decoding — vLLM docs",
+      "url": "https://docs.vllm.ai/en/latest/features/spec_decode.html"
+    },
+    {
+      "title": "llama.cpp — GitHub",
+      "url": "https://github.com/ggml-org/llama.cpp"
+    }
+  ]
+}

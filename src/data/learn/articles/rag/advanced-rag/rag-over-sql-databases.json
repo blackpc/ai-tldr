@@ -1,0 +1,385 @@
+{
+  "slug": "rag-over-sql-databases",
+  "title": "RAG Over Structured Data: Text-to-SQL vs Vector Retrieval",
+  "shortTitle": "RAG Over Structured Data",
+  "seoTitle": "RAG Over Structured Data: Text-to-SQL vs Vectors",
+  "metaDescription": "Vector search is wrong for rows and numbers. Learn when to answer questions over databases with text-to-SQL instead of embeddings, and how to combine both.",
+  "keywords": [
+    "rag over structured data",
+    "text-to-sql vs rag",
+    "rag for databases",
+    "query database with llm",
+    "structured data retrieval llm"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You'll learn why embedding rows rarely works and when to let the LLM write SQL against your database instead.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Classic [RAG](/learn/rag/rag-fundamentals/what-is-rag) was built for *text*: manuals, wiki pages, support tickets. You chunk the documents, turn each chunk into an [embedding](/learn/embeddings-vector-databases/embeddings-explained/what-are-embeddings), and at question time you fetch the chunks whose meaning is closest to the question. That works beautifully for *\"what does our refund policy say?\"* — a question whose answer is a passage of prose sitting in one place."
+        },
+        {
+          "type": "p",
+          "md": "But a huge amount of the world's useful data isn't prose. It's **rows in a database**: orders, payments, users, events, line items. Ask *\"how much revenue did we make in Germany last quarter?\"* and there is no paragraph anywhere that contains that answer. The answer has to be *computed* — by adding up thousands of rows that match a filter. Similarity search has nothing to grab."
+        },
+        {
+          "type": "p",
+          "md": "The fix is to stop treating the database like a pile of text and start treating it like a database. Instead of embedding rows, you let the model **write a query**. The user asks a question in plain English, the LLM translates it into **SQL**, the database runs that SQL, and the model explains the result. This is called **text-to-SQL**, and for structured data it usually beats vector retrieval handily."
+        },
+        {
+          "type": "p",
+          "md": "Think of two different librarians. One is great at *finding the right book* when you describe a topic — that's vector RAG. The other doesn't fetch books at all; you tell them *\"count how many members joined in March who live in Berlin\"* and they walk to the records room and tally it for you. A spreadsheet question needs the second librarian. Embedding the books won't help you count."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "\"Structured data\" means data with a fixed schema — tables, columns, types — that you query with a language like SQL. \"Unstructured data\" means free text, images, audio. RAG over structured data is mostly about generating the right query; RAG over unstructured data is mostly about retrieving the right passage."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The most common beginner mistake with RAG is to dump every row of a table into a vector store and expect it to answer numeric questions. It fails in ways that are easy to predict once you see *why*."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Aggregations have no nearest neighbor.** *\"What's the average order value?\"* requires reading every order and dividing. Vector search returns the *k* rows most similar to the question — it never adds, averages, or counts. There is no embedding of \"the average.\"",
+            "**Exact filters get fuzzy.** *\"Orders over $500 placed after January 1\"* is a precise boolean condition. Semantic search ranks by *similarity*, so it might return a $480 order because the text looks close. A `WHERE` clause is exact; cosine distance is not.",
+            "**Joins are invisible to embeddings.** *\"Which customers in our loyalty tier haven't ordered in 90 days?\"* spans two or three tables linked by keys. A vector of a single row knows nothing about the rows it's related to. SQL joins are exactly the tool for this; embeddings are not.",
+            "**Freshness and truth.** A database is the source of truth and changes every second. Re-embedding a table on every write is wasteful and always slightly stale. Querying the live table is both fresher and exact."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who cares? Anyone building an assistant on top of a real application database — analytics chatbots, \"ask your data\" internal tools, customer-facing dashboards where users type questions instead of clicking filters, BI copilots. The moment a question involves a number, a date range, a count, or a join, you've left the comfort zone of vector RAG and entered text-to-SQL territory."
+        },
+        {
+          "type": "p",
+          "md": "The deeper point: **the retrieval method has to match the data's shape.** Prose → semantic search. Tables → generated queries. Entities and relationships → a [knowledge graph](/learn/rag/advanced-rag/what-is-graphrag). Picking the wrong one isn't a tuning problem you can fix with a better embedding model — it's the wrong tool for the job."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Text-to-SQL is its own little pipeline. The model never sees the table data up front — it sees the *schema* (table and column names, types, maybe a few example rows), writes a query, the query runs, and only then does the model read the result to phrase an answer."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Text-to-SQL — one question",
+            "steps": [
+              {
+                "label": "Question",
+                "sub": "\"revenue in DE last quarter?\""
+              },
+              {
+                "label": "Schema in prompt",
+                "sub": "tables, columns, types"
+              },
+              {
+                "label": "LLM writes SQL",
+                "sub": "SELECT SUM(...) WHERE ..."
+              },
+              {
+                "label": "Run on database",
+                "sub": "read-only, with limits"
+              },
+              {
+                "label": "LLM explains rows",
+                "sub": "grounded answer",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Notice what gets retrieved here: not document chunks, but the **schema**. For a small database you can paste the whole schema into the prompt. For a database with hundreds of tables, the schema itself is too big — so you use *vector RAG on the schema*: embed each table's description, retrieve only the handful of tables relevant to the question, and show the model just those. RAG didn't disappear; it moved from retrieving data to retrieving *the schema needed to query the data*."
+        },
+        {
+          "type": "h3",
+          "text": "A concrete example of the prompt"
+        },
+        {
+          "type": "p",
+          "md": "The model's job is translation, so the prompt hands it the schema and the question and asks for SQL only:"
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "title": "the text-to-SQL prompt (simplified)",
+          "code": "You translate questions into a single read-only SQL query for PostgreSQL.\nUse ONLY the tables and columns below. Never write to the database.\n\nSchema:\n  orders(id, customer_id, country, total_cents, created_at)\n  customers(id, name, tier, signup_date)\n\nRules: return one SELECT; add LIMIT 100 unless aggregating.\n\nQuestion: How much revenue did we make in Germany last quarter?\nSQL:"
+        },
+        {
+          "type": "p",
+          "md": "The model emits something like the query below, your code runs it on the database, and the rows come back. Then you make a *second* call: hand the model the original question plus the result rows and ask it to answer in plain English. Two model calls — one to write the query, one to explain the result."
+        },
+        {
+          "type": "code",
+          "lang": "sql",
+          "title": "what the model generates",
+          "code": "SELECT SUM(total_cents) / 100.0 AS revenue_eur\nFROM orders\nWHERE country = 'DE'\n  AND created_at >= '2026-01-01'\n  AND created_at <  '2026-04-01';"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Always run generated SQL through a **read-only** database role. The model should be physically unable to `DROP`, `DELETE`, or `UPDATE` anything, no matter what it writes. Permissions are your safety net when the prompt isn't."
+        }
+      ]
+    },
+    {
+      "id": "text-to-sql-vs-vector-rag",
+      "title": "Text-to-SQL vs vector RAG: which to use",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "These two approaches aren't competitors so much as tools for different question shapes. The table makes the split concrete."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Question / data",
+            "Vector RAG",
+            "Text-to-SQL"
+          ],
+          "rows": [
+            [
+              "\"What's our refund policy?\"",
+              "Best fit — answer is one passage",
+              "Wrong tool — no table holds prose"
+            ],
+            [
+              "\"How many orders shipped in May?\"",
+              "Can't count rows",
+              "Best fit — a COUNT query"
+            ],
+            [
+              "\"Top 5 customers by spend\"",
+              "No ranking, no sum",
+              "Best fit — ORDER BY + LIMIT"
+            ],
+            [
+              "\"Find tickets about login bugs\"",
+              "Best fit — semantic match",
+              "Weak — needs exact keywords"
+            ],
+            [
+              "\"Avg delivery time by region\"",
+              "No aggregation",
+              "Best fit — GROUP BY"
+            ],
+            [
+              "\"Summarize this contract\"",
+              "Best fit — retrieve clauses",
+              "Not applicable"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The pattern: if the answer is **already written somewhere** as text, retrieve it (vector RAG). If the answer must be **computed from rows** — counted, summed, filtered, joined, ranked — generate a query (text-to-SQL). Numbers, dates, and aggregates are the tell that you want SQL."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Match the tool to the data",
+            "columns": [
+              {
+                "title": "Vector RAG",
+                "accent": true,
+                "items": [
+                  "Unstructured text: docs, tickets, PDFs",
+                  "Answer is a passage to find",
+                  "Fuzzy, meaning-based matching",
+                  "\"What does X say about Y?\""
+                ]
+              },
+              {
+                "title": "Text-to-SQL",
+                "items": [
+                  "Structured rows in a database",
+                  "Answer is a number to compute",
+                  "Exact filters, joins, aggregates",
+                  "\"How many / how much / which top?\""
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "hybrid-routing",
+      "title": "Hybrid systems: routing the question",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Real products get both kinds of question, often in the same chat. *\"What's our return policy, and how many returns did we process last week?\"* is half prose, half arithmetic. So mature systems put a **router** in front: a step that decides whether a question goes to vector RAG, to text-to-SQL, or to both, then merges the answers."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "A router sends each question to the right backend",
+            "root": {
+              "label": "Router",
+              "sub": "classify the question"
+            },
+            "children": [
+              {
+                "label": "Vector RAG",
+                "sub": "policy & doc questions"
+              },
+              {
+                "label": "Text-to-SQL",
+                "sub": "counts, sums, filters",
+                "accent": true
+              },
+              {
+                "label": "Both, then merge",
+                "sub": "mixed questions"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The router is usually just an LLM call (or a small classifier) that reads the question and the available tools and picks one. This is the same idea as [agentic RAG](/learn/rag/advanced-rag/what-is-agentic-rag): instead of a single fixed retrieve-then-generate path, the model is given retrieval *and* a query tool and decides which to use. A SQL-backed table and a vector index become two tools the agent can call, and the agent can even chain them — query the database, then look up an explanation in the docs."
+        },
+        {
+          "type": "p",
+          "md": "This also pairs naturally with [hybrid retrieval](/learn/rag/advanced-rag/hybrid-rag-explained), where you blend semantic and keyword search for text. The full picture: keyword + vector for prose, text-to-SQL for tables, and a router choosing among them per question."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "A simpler version skips the router entirely: expose `query_database` and `search_docs` as tools to a single agent and let it decide. Fewer moving parts, but you lean harder on the model's judgment and your tool descriptions."
+        }
+      ]
+    },
+    {
+      "id": "guardrails",
+      "title": "Guardrails text-to-SQL needs",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Letting a language model write queries against your production database sounds alarming, and without guardrails it should. The good news is that a handful of layers make it safe and reliable. Treat these as non-negotiable, not nice-to-haves."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Read-only credentials.** Connect with a role that can only `SELECT`. Even a perfect prompt can be talked into a destructive query via [prompt injection](/learn/prompt-engineering/prompt-injection-security/what-is-prompt-injection) in the data; permissions stop it at the database, not the prompt.",
+            "**Allow-list the schema.** Show the model only the tables and columns it's allowed to touch. Hide sensitive columns (passwords, internal flags, other tenants' data) so they never enter a query in the first place.",
+            "**Statement validation.** Before executing, parse the generated SQL and reject anything that isn't a single `SELECT` — no semicolons stacking multiple statements, no `DROP`/`DELETE`/`UPDATE`/`INSERT`, no comments hiding a second query.",
+            "**Force limits and timeouts.** Inject a `LIMIT` and set a query timeout so a model that writes a giant cross-join can't melt your database or return a million rows.",
+            "**Row-level security for multi-tenant apps.** If users should see only their own data, enforce it in the database (row-level security), never by trusting the model to add the right `WHERE user_id = ...`.",
+            "**Return the SQL for transparency.** Show users (or at least your logs) the exact query that produced an answer, so a wrong number can be debugged and a [citation](/learn/rag/advanced-rag/add-citations-to-rag) points at the real source."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Never paste raw user text straight into a query you build by hand alongside the model's SQL — that's classic SQL injection. Let the model produce a parameterized query, validate it, and run it through your driver's safe execution path. The LLM writing SQL does not excuse you from the usual database hygiene."
+        },
+        {
+          "type": "h3",
+          "text": "Reliability, not just safety"
+        },
+        {
+          "type": "p",
+          "md": "Beyond safety, generated SQL is often *wrong* in subtle ways — a missed `WHERE`, the wrong date boundary, a join on the wrong key. Three habits help: give the model a few **example question/SQL pairs** for your schema (few-shot), add short **column descriptions** so it knows that `total_cents` is in cents, and **catch database errors** so you can feed the error message back and let the model fix its own query. A retry-on-error loop dramatically raises the success rate."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Text-to-SQL is an old research area that LLMs revived. The naive version — paste schema, generate one query — works for clean, small databases and falls apart on messy enterprise ones. The frontier is mostly about closing that gap."
+        },
+        {
+          "type": "p",
+          "md": "**Schema linking at scale.** Enterprise databases have hundreds of tables with cryptic names. The hard part becomes *which tables does this question even touch?* Systems embed table and column descriptions, retrieve the relevant subset per question (RAG on the schema), and sometimes maintain a curated \"semantic layer\" — friendly names, documented metrics, and pre-defined joins — that the model queries instead of raw tables. A good semantic layer often matters more than a better model."
+        },
+        {
+          "type": "p",
+          "md": "**Self-correction loops.** The most reliable systems don't trust the first query. They run it, and on a database error or an obviously empty/odd result, they feed the problem back to the model to revise — sometimes several rounds. This is where text-to-SQL becomes properly *agentic*, and it connects to the broader idea of an [agent](/learn/ai-agents/agent-fundamentals/what-is-an-ai-agent) that observes results and acts again."
+        },
+        {
+          "type": "p",
+          "md": "**Beyond SQL: APIs, graphs, and tools.** The same principle — *generate a query, don't embed the data* — applies past relational tables. For data behind an API, the model generates an API call. For richly connected entities, a [knowledge graph](/learn/rag/advanced-rag/what-is-graphrag) with a graph query often beats both SQL and vectors on multi-hop questions. The unifying lesson is that retrieval should fit the data's structure, and structured data wants a structured query."
+        },
+        {
+          "type": "p",
+          "md": "**Evaluation is genuinely hard.** \"Did it return the right number?\" needs a ground-truth answer to compare against, and a query can be subtly wrong while looking plausible. Teams build sets of question/expected-result pairs and check *execution accuracy* — does the generated query produce the same rows as the gold query? Without that, you're shipping confident numbers you can't trust. The durable takeaway: vector RAG and text-to-SQL solve different halves of \"talk to my data,\" and knowing which half a question belongs to is most of the battle — see [when not to use RAG](/learn/rag/rag-fundamentals/when-not-to-use-rag) for the cases where neither is the answer."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Can I use a vector database for SQL data?",
+      "a": "You can store rows in a vector database, but it's the wrong tool for most database questions. Vector search finds *similar* rows; it can't count, sum, filter precisely, or join tables. For questions that compute a number from many rows, use text-to-SQL — let the model write a query and run it on the real database instead."
+    },
+    {
+      "q": "What is text-to-SQL?",
+      "a": "Text-to-SQL is a technique where an LLM translates a plain-English question into a SQL query against your database schema. Your code runs that query, gets the rows back, and the model explains the result. It's how you answer questions over structured data (counts, sums, filters, joins) that vector retrieval can't handle."
+    },
+    {
+      "q": "Is text-to-SQL safe to run on a production database?",
+      "a": "Only with guardrails. Connect using a read-only role so the model physically can't modify data, validate that the generated SQL is a single SELECT, force a LIMIT and a query timeout, and allow-list which tables and columns the model can see. With those layers, letting an LLM query the database is safe and practical."
+    },
+    {
+      "q": "How do I handle a database with hundreds of tables?",
+      "a": "Don't paste the whole schema — it won't fit and confuses the model. Embed each table's description and retrieve only the tables relevant to the question (vector RAG on the *schema*), or maintain a curated semantic layer with friendly names and documented joins. The model then writes SQL against just the relevant subset."
+    },
+    {
+      "q": "Should I combine text-to-SQL with regular RAG?",
+      "a": "Often yes. Real apps get both prose questions (\"what's our policy?\") and numeric ones (\"how many orders last week?\"). A router or agent classifies each question and sends it to vector RAG, to text-to-SQL, or to both, then merges the answers. This hybrid setup is the standard approach for \"ask your data\" products."
+    },
+    {
+      "q": "Why does the model sometimes generate wrong SQL?",
+      "a": "Common causes are an unclear schema (it doesn't know `total_cents` is in cents), ambiguous questions, or a tricky join. Fixes include adding short column descriptions, giving a few example question/SQL pairs, and catching database errors so you can feed the error back and let the model correct its own query in a retry loop."
+    }
+  ],
+  "related": [
+    "what-is-agentic-rag",
+    "hybrid-rag-explained",
+    "what-is-graphrag",
+    "when-not-to-use-rag",
+    "what-is-rag",
+    "add-citations-to-rag"
+  ],
+  "furtherReading": [
+    {
+      "title": "Spider: A Large-Scale Text-to-SQL Dataset (arXiv)",
+      "url": "https://arxiv.org/abs/1809.08887"
+    },
+    {
+      "title": "SQL Q&A over a database — LangChain Docs",
+      "url": "https://python.langchain.com/docs/tutorials/sql_qa/"
+    },
+    {
+      "title": "PostgreSQL: GRANT and database roles",
+      "url": "https://www.postgresql.org/docs/current/sql-grant.html"
+    }
+  ]
+}

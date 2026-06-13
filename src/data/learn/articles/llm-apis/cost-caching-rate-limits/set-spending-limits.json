@@ -1,0 +1,365 @@
+{
+  "slug": "set-spending-limits",
+  "title": "How to Set Spending Limits and Budget Alerts on LLM APIs",
+  "shortTitle": "Spending Limits & Alerts",
+  "seoTitle": "Set Spending Limits & Budget Alerts on LLM APIs",
+  "metaDescription": "A runaway loop can burn your budget overnight. Learn the provider spend caps, usage alerts, and app-side guardrails that stop a surprise five-figure bill.",
+  "keywords": [
+    "set spending limit openai api",
+    "llm api budget alerts",
+    "prevent runaway llm api costs",
+    "usage limit per api key",
+    "cap llm spend safeguards"
+  ],
+  "difficulty": "beginner",
+  "oneLiner": "Put hard and soft guardrails on your LLM spend — provider caps, budget alerts, and app-side limits — so a bug or abuse can't drain your account.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you build on top of an [LLM API](/learn/llm-apis/api-basics/what-is-llm-api), you don't pay a flat monthly fee. You pay per token — a few fractions of a cent for every word the model reads and writes. One request costs almost nothing. A million requests in an afternoon, because of a bug or an attacker, can cost more than your rent."
+        },
+        {
+          "type": "p",
+          "md": "**Spending limits and budget alerts** are the guardrails that stop that from happening. A *spending limit* is a hard ceiling: when your usage hits the cap, the provider starts refusing requests, so the bill can't keep climbing. A *budget alert* is a soft warning: when you cross a threshold you set — say 50% or 90% of your budget — the provider emails you so you can react *before* you hit the wall."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like the fuel gauge and the fuel-tank size in a car. The alert is the low-fuel light blinking at you on the dashboard. The hard limit is the physical size of the tank — no matter how hard you press the pedal, you simply can't burn more than what's in there. Good cost safety uses both: the light to give you warning, the tank size as the thing that cannot be exceeded."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This guide is about *not getting a surprise bill*. It is a different job from *estimating* a bill in advance (see [LLM API pricing](/learn/llm-apis/cost-caching-rate-limits/llm-api-pricing)) or *lowering* the bill with techniques like [prompt caching](/learn/llm-apis/cost-caching-rate-limits/prompt-caching-explained). You want all three, but guardrails are the one you set up on day one and hope to never need."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Plain LLM usage is metered and uncapped by default. That combination is what makes the horror stories possible. A few ways the bill runs away on its own:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**A runaway loop.** Your agent calls the model, the model asks to call a tool, the tool calls the model again — and a logic bug means it never stops. Each iteration is cheap; ten thousand of them overnight are not.",
+            "**A leaked API key.** A key committed to a public GitHub repo gets scraped within minutes. Whoever finds it can run requests on *your* account until you notice and revoke it.",
+            "**An abusive user.** If your app lets the public send prompts, one bad actor can script thousands of long requests, or paste a huge document into every message, and you pay for all of it.",
+            "**An honest mistake.** You point a batch job at the wrong dataset, or a retry-on-error path retries forever, or you ship a `while True` without a break. No malice required."
+          ],
+          "ordered": false
+        },
+        {
+          "type": "p",
+          "md": "What makes this scary is the *speed*. Token billing has no natural friction — there is no warehouse to empty, no inventory to run out of. A misbehaving script can spend a month's budget in an hour while you sleep. By the time the monthly invoice would have told you, the money is already gone."
+        },
+        {
+          "type": "p",
+          "md": "Who should care? Everyone, but especially **solo developers and small teams** without a finance department watching the dashboard, and **anyone exposing the model to end users**. The good news: the fix is mostly configuration, not code. Most of these guardrails take ten minutes to set up and then protect you forever."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Cost safety works in *layers*, like a fortress with several walls. No single control is enough on its own — but stacked together they make a runaway bill almost impossible. The outer wall is set by the provider; the inner walls you build into your own app, where you have far more context about what *should* be allowed."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "stack",
+            "title": "Defense in depth — outer wall to inner wall",
+            "layers": [
+              {
+                "label": "Provider hard spend cap",
+                "sub": "the absolute ceiling — requests fail past it",
+                "accent": true
+              },
+              {
+                "label": "Provider budget alerts",
+                "sub": "email warnings at thresholds you set"
+              },
+              {
+                "label": "Per-key / per-project budgets",
+                "sub": "blast radius if one key leaks"
+              },
+              {
+                "label": "App-side guardrails",
+                "sub": "max_tokens, per-user quotas, kill switch"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "The two provider-level controls"
+        },
+        {
+          "type": "p",
+          "md": "Every major provider gives you two things in the billing or usage-limits section of their console. The first is a **monthly spend cap** (sometimes called a usage limit or budget): a hard dollar amount for the billing period. Cross it and the API starts returning errors instead of running your requests — the wall does its job. The second is **usage alerts**: one or more dollar thresholds that, when crossed, trigger an email. Alerts never block anything; they just tell you to look."
+        },
+        {
+          "type": "p",
+          "md": "The mechanism is simple. The provider continuously sums your token usage, converts it to dollars at the [pricing](/learn/llm-apis/cost-caching-rate-limits/llm-api-pricing) for each model, and compares the running total against your thresholds. An alert threshold fires a notification; the hard cap flips your account into a blocked state for the rest of the period."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "What happens as spend climbs through the period",
+            "steps": [
+              {
+                "label": "$0",
+                "sub": "normal — requests run"
+              },
+              {
+                "label": "50% threshold",
+                "sub": "alert email #1"
+              },
+              {
+                "label": "90% threshold",
+                "sub": "alert email #2"
+              },
+              {
+                "label": "Hard cap hit",
+                "sub": "API returns errors",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "The inner walls you build yourself"
+        },
+        {
+          "type": "p",
+          "md": "The provider cap protects the *account*. But by the time it fires, you've already spent the whole budget — it's a last resort, not a strategy. The controls that actually keep day-to-day spend sane live in your own code, because only your app knows that *this* user should get 20 requests an hour, not 20,000. The main app-side levers:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**A `max_tokens` ceiling on every request.** This caps how long a single *response* can be, which directly caps its cost. Setting it is the single highest-leverage habit in this whole guide.",
+            "**Per-user rate and quota caps.** Limit how many requests (or tokens) one user or one API key can spend per minute, hour, or day. A leaked key or one abusive user then hits *your* limit long before it hits the provider's.",
+            "**A kill switch.** A single config flag or feature toggle that lets you stop all model calls instantly when something looks wrong — without redeploying."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Hard caps and soft alerts are not either/or. Set the alerts low so you get *warned* early, and set the hard cap at the number that would genuinely hurt so it *blocks* before disaster. The alert is for you; the cap is for the worst case where you're not watching."
+        }
+      ]
+    },
+    {
+      "id": "a-day-one-checklist",
+      "title": "A day-one checklist",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Here is the practical setup a solo dev or small team should put in place the first day they ship something on an LLM API. It is roughly fifteen minutes of work and it covers every failure mode above."
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Set a monthly hard spend cap** in the provider console at a number that would hurt but not bankrupt you. This is your fortress wall.",
+            "**Add budget alerts** at a few thresholds (for example 50%, 80%, 95% of the cap) so you hear about trouble before the wall stops you.",
+            "**Put `max_tokens` on every request** — don't rely on the model to be brief. Pick the smallest value your use case tolerates.",
+            "**Use separate API keys per project or environment** so dev, staging, and prod each have their own blast radius, and a leak in one doesn't drain the others.",
+            "**Add a per-user rate limit** in your own app if end users can trigger model calls. Even a generous limit stops the worst abuse.",
+            "**Store keys in environment variables or a secret manager**, never in source code — see [API keys explained](/learn/llm-apis/api-basics/api-keys-explained). A key that never ships in a commit can't be scraped from your repo.",
+            "**Add a kill switch** — a single flag you can flip to halt all model calls without a deploy."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Below is the cheapest, most universal guardrail in code: a `max_tokens` ceiling on a single request. It caps the *output* length, and since output tokens are billed at a higher rate than input on most models, this is where a verbose or looping model does the most damage."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "max_tokens — the per-request cost ceiling",
+          "code": "from anthropic import Anthropic\n\nclient = Anthropic()  # reads ANTHROPIC_API_KEY from the environment, never hardcoded\n\nresponse = client.messages.create(\n    model=\"claude-opus-4-8\",\n    # Hard ceiling on the response length. Even if the model wants to\n    # ramble, it cannot produce more than this many output tokens, so\n    # the cost of this single call has a known upper bound.\n    max_tokens=500,\n    messages=[{\"role\": \"user\", \"content\": \"Summarize this ticket in two sentences.\"}],\n)\n\nprint(response.content[0].text)\nprint(\"input tokens:\", response.usage.input_tokens)\nprint(\"output tokens:\", response.usage.output_tokens)"
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "`max_tokens` caps *one* response. It does **not** cap a loop. If your agent calls the model in a `while` loop, a tiny `max_tokens` on each call still adds up to a huge bill across thousands of iterations. Always pair a per-call `max_tokens` with a maximum-iterations counter on any loop or agent — the two solve different problems."
+        }
+      ]
+    },
+    {
+      "id": "hard-cap-vs-soft-alert",
+      "title": "Hard caps vs soft alerts vs app-side limits",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Beginners often think they need to pick one control. You don't — they protect different things at different times. This table makes the division of labor concrete."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Control",
+            "Where it lives",
+            "What it does",
+            "When it saves you"
+          ],
+          "rows": [
+            [
+              "Hard spend cap",
+              "Provider console",
+              "Blocks all requests past a dollar ceiling",
+              "The worst case — you're asleep and a key leaked"
+            ],
+            [
+              "Budget alert",
+              "Provider console",
+              "Emails you at a threshold; blocks nothing",
+              "Early warning so you act before the cap"
+            ],
+            [
+              "Per-key budget",
+              "Provider console (per key/project)",
+              "Caps spend on one key without touching others",
+              "One leaked key drains itself, not your whole account"
+            ],
+            [
+              "max_tokens",
+              "Your request code",
+              "Caps the length (cost) of one response",
+              "Every single call, all the time"
+            ],
+            [
+              "Per-user quota",
+              "Your app",
+              "Caps requests/tokens per user or session",
+              "One abusive user can't outspend everyone else"
+            ],
+            [
+              "Kill switch",
+              "Your app config",
+              "Stops all model calls instantly",
+              "The moment you spot something wrong"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Read the table top to bottom as *coarse to fine*. The provider cap is a blunt, account-wide instrument that fires once, late. The app-side controls are precise and fire constantly, on every request, with full knowledge of who is asking and why. The cap is the safety net under the high wire; the app-side limits are you holding the balance pole the whole way across."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Most people who get burned had *some* protection — it just had a hole in it. The usual gaps:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Setting an alert but no hard cap.** An alert that arrives at 3 a.m. while you sleep stops nothing. If the cap matters, it has to *block*, not just notify.",
+            "**A hard cap set too high to matter.** A `$5,000` monthly cap on a hobby project isn't a guardrail — it's a number a runaway loop will happily reach. Set the cap near what you actually expect to spend, not near what you could afford to lose.",
+            "**No `max_tokens`, trusting the model to stop.** Without an explicit ceiling, a single confused request can generate the maximum the model allows. Always set it.",
+            "**Capping per request but not per loop.** As the callout above warned: small per-call limits still sum to disaster across thousands of iterations. Bound the loop too.",
+            "**One key for everything.** If dev, prod, and that script you ran once all share a key, a leak or a bug in any of them spends the same pool — and you can't tell which is which when you investigate.",
+            "**Forgetting the alerts are lagged.** Provider usage dashboards and alerts can trail real spend by minutes to an hour. They are a backstop, not a real-time tripwire — your own app-side limits are the only thing that reacts instantly."
+          ],
+          "ordered": false
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Treat a leaked key as already abused. The moment a key might have been exposed — pushed to a repo, pasted in a chat, baked into a mobile app — rotate it immediately. Don't wait to confirm misuse; by the time you can confirm it, the spending has happened. Per-project keys make this painless: revoke the one, leave the rest running."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The checklist above is enough for most apps. Once the basics are in place, a few more advanced ideas help as you grow."
+        },
+        {
+          "type": "p",
+          "md": "**Spend tracking in your own database.** Provider dashboards aggregate everything into one number. To answer *which feature* or *which customer* is expensive, log the `usage` block returned with every response (input tokens, output tokens, model) to your own store and roll it up yourself. That per-feature visibility is also what lets you bill customers fairly or set per-customer budgets that the provider has no way to know about."
+        },
+        {
+          "type": "p",
+          "md": "**Cheaper models and routing.** Not every request needs your most capable model. Routing simple tasks to a smaller, cheaper model is a cost control in its own right — a request that costs a fifth as much is, in effect, a five-fold higher implicit budget. See [how to choose an LLM model](/learn/llm-apis/api-basics/how-to-choose-llm-model). Combine this with caching and batching where latency allows: [prompt caching](/learn/llm-apis/cost-caching-rate-limits/prompt-caching-explained) makes repeated context far cheaper, and the [batch API](/learn/llm-apis/cost-caching-rate-limits/llm-batch-api) typically runs non-urgent work at a discount."
+        },
+        {
+          "type": "p",
+          "md": "**Distinguish a cost stop from a rate-limit stop.** When the provider blocks you, the reason matters. A spend-cap block is a billing state you fix by raising the cap or waiting for the next period. A `429` is a *rate* limit — too many requests too fast — and is fixed by backing off and retrying, not by spending more. Confusing the two leads to retry loops that make a rate-limit problem worse. See [how to handle 429 errors](/learn/llm-apis/cost-caching-rate-limits/handle-429-errors) and the broader [LLM API errors](/learn/llm-apis/api-basics/llm-api-errors) guide."
+        },
+        {
+          "type": "p",
+          "md": "**Defense in depth is the durable lesson.** No single control is sufficient, and any one of them can be misconfigured. The reason cost runaways still make headlines is almost always a *single* missing layer — an alert with no cap, a cap with no per-call ceiling, a shared key with no rotation plan. Stack the layers, set the numbers to values that would actually hurt, and the worst a bug or an attacker can do is bounded. That bound, decided by you in advance instead of by a runaway script at 3 a.m., is the whole point."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "How do I set a spending limit on the OpenAI or Anthropic API?",
+      "a": "In the provider's console, open the billing or usage-limits section. You'll find two settings: a hard monthly spend cap (a dollar ceiling that blocks requests once reached) and usage alerts (email thresholds that warn but don't block). Set both — a low alert for early warning and a hard cap at the number that would genuinely hurt."
+    },
+    {
+      "q": "What's the difference between a budget alert and a hard spend limit?",
+      "a": "A budget alert only *notifies* you when spend crosses a threshold — it never stops anything. A hard spend limit *blocks* requests once you hit the cap, so the bill physically cannot climb higher that period. Use alerts to react early and the hard cap as the last-resort wall for when you're not watching."
+    },
+    {
+      "q": "How do I stop a runaway loop from running up a huge LLM API bill?",
+      "a": "Put `max_tokens` on every request to cap each response, and add a maximum-iterations counter to any agent or loop so it can't call the model forever. The per-call limit and the per-loop limit solve different problems — you need both. Back them with a provider hard spend cap as a final safety net."
+    },
+    {
+      "q": "Does max_tokens limit how much I get charged?",
+      "a": "It limits the *output* of a single response, which is usually the priciest part of a request since output tokens cost more than input on most models. It does not limit input cost (a huge prompt still costs a lot to read) and it does not limit a loop that calls the model many times. It's a per-response ceiling, not a per-account one."
+    },
+    {
+      "q": "Should I use a separate API key for each project?",
+      "a": "Yes. Separate keys per project or environment limit the blast radius: if one key leaks or one app has a bug, only that key's budget is at risk, and you can revoke it without disrupting everything else. Many providers also let you set per-key budgets, so each key carries its own cap."
+    },
+    {
+      "q": "How fast do providers detect overspending?",
+      "a": "Usage dashboards and budget alerts can lag real spend by minutes up to about an hour, so they're a backstop rather than a real-time tripwire. That lag is exactly why app-side guardrails matter — your own per-user quotas and max_tokens limits react instantly, while the provider's accounting catches up afterward."
+    }
+  ],
+  "related": [
+    "llm-api-pricing",
+    "prompt-caching-explained",
+    "handle-429-errors",
+    "llm-batch-api",
+    "api-keys-explained",
+    "how-to-choose-llm-model"
+  ],
+  "furtherReading": [
+    {
+      "title": "Rate Limits — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/api/rate-limits"
+    },
+    {
+      "title": "Errors — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/api/errors"
+    },
+    {
+      "title": "OpenAI Platform Documentation",
+      "url": "https://platform.openai.com/docs"
+    }
+  ]
+}

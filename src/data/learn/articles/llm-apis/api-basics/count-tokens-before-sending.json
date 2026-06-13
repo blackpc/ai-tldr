@@ -1,0 +1,316 @@
+{
+  "slug": "count-tokens-before-sending",
+  "title": "How to Count Tokens Before You Send an API Request",
+  "shortTitle": "Counting Tokens Pre-Request",
+  "seoTitle": "Count Tokens Before Sending an LLM API Request",
+  "metaDescription": "Measure a prompt's token count before you call the API to avoid context overflows and surprise bills. Covers tokenizers, count endpoints, and budgeting.",
+  "keywords": [
+    "count tokens before api call",
+    "anthropic count tokens endpoint",
+    "tiktoken count tokens python",
+    "estimate tokens before sending prompt",
+    "avoid context window overflow api"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Measure how many tokens a request will use before you send it, so you can budget context, predict cost, and never hit an overflow error in production.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you send a request to an [LLM API](/learn/llm-apis/api-basics/what-is-llm-api), you are not charged by the word or the sentence. You are charged by the **token** — the small chunk of text the model actually reads (see [what is a token](/learn/llm-fundamentals/tokens-and-tokenization/what-is-a-token)). Every prompt you send has a token count, and that number controls two things you care about: how much the request costs, and whether it even fits inside the model's [context window](/learn/llm-fundamentals/context-windows/what-is-a-context-window)."
+        },
+        {
+          "type": "p",
+          "md": "**Counting tokens before you send** means measuring that number *while you are still building the request*, not after the bill arrives or after the API rejects it. It is the difference between weighing your suitcase at home and finding out at the airport that it is overweight."
+        },
+        {
+          "type": "p",
+          "md": "Think of an airline check-in. The plane has a strict weight limit, and you pay by the kilogram. A careful traveler puts the bag on a bathroom scale before leaving the house: if it is too heavy, they take something out *now*, calmly, instead of repacking in a panic at the desk while a queue forms behind them. Counting tokens before sending is that bathroom scale for your API requests — a quick local check that lets you fix problems before they become errors or surprise charges."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This article is about the *API workflow* — measuring a request's size at call time. If you want to understand *how* text becomes tokens in the first place, read [how tokenization works](/learn/llm-fundamentals/tokens-and-tokenization/how-tokenization-works). Here we assume you already know what a token is and focus on counting them in practice."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "If you build anything real on an LLM API, two failures will eventually bite you, and both are preventable by counting tokens up front."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Context overflow.** Every model has a maximum number of tokens it can read in one request. Go over it and the API returns an error instead of an answer (often a `400` or a `request_too_large`). In a chatbot, this usually happens silently as the conversation grows — turn 20 is fine, turn 21 tips over the limit, and your app crashes for that one user. A pre-send count catches it before the call.",
+            "**Surprise cost.** You pay for every input token on every call. A prompt that quietly grew from 2,000 to 60,000 tokens (because you kept appending history, or pasted a huge document) costs 30x more — and you only notice on the invoice. Knowing the count beforehand lets you budget, warn, or trim.",
+            "**Wasted round-trips.** Sending an oversized request, waiting for the rejection, then trimming and resending burns time and latency. Counting locally is far faster than learning the size from a failed API call.",
+            "**Room for the answer.** The context window is shared between your input *and* the model's output. If your prompt fills the window to the brim, there is no room left for a reply. You need to leave headroom, and you can only do that if you know your input size."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who needs this? Anyone running [multi-turn conversations](/learn/llm-apis/api-basics/multi-turn-conversations) (chatbots, agents), anyone feeding large documents in, and anyone whose costs need to be predictable. If your prompt size never changes and is tiny, you can skip it. The moment prompt size varies — which is almost always — counting earns its keep."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "There are two ways to get a token count before sending: ask the provider's **count-tokens endpoint** (exact, one network call), or estimate it **locally** with a tokenizer library (instant, approximate). Both feed the same decision: *does this request fit my budget and the context window?*"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "The pre-send check",
+            "steps": [
+              {
+                "label": "Assemble request",
+                "sub": "system + history + new message"
+              },
+              {
+                "label": "Count tokens",
+                "sub": "endpoint or local tokenizer"
+              },
+              {
+                "label": "Compare to budget",
+                "sub": "context window − reply headroom"
+              },
+              {
+                "label": "Fits?",
+                "sub": "trim if not, then send",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Option A: the provider's count-tokens endpoint (exact)"
+        },
+        {
+          "type": "p",
+          "md": "Most providers expose an endpoint that takes the *same request body* you are about to send and returns its token count — without generating any output. With the Anthropic SDK it is `client.messages.count_tokens(...)`, which calls `POST /v1/messages/count_tokens` and returns an `input_tokens` number. The crucial detail: pass the **exact same `model`, `messages`, `system`, and `tools`** you will use for the real call, because the count includes all of them, not just your visible text."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "count before you send (Anthropic SDK)",
+          "code": "from anthropic import Anthropic\n\nclient = Anthropic()\n\nmessages = [\n    {\"role\": \"user\", \"content\": \"Summarize this contract...\"},\n]\n\n# Ask the API how big this request is — no answer is generated.\ncount = client.messages.count_tokens(\n    model=\"claude-opus-4-8\",   # same model you'll call\n    messages=messages,\n)\nprint(count.input_tokens)      # e.g. 1843\n\n# Only send the real request if it fits your budget.\nif count.input_tokens < 50_000:\n    reply = client.messages.create(\n        model=\"claude-opus-4-8\",\n        max_tokens=1024,\n        messages=messages,\n    )"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Token counts are **model-specific** — pass the same model ID you'll use for inference. Different model families can tokenize the same text differently, so a number measured on one model is not guaranteed to hold for another."
+        },
+        {
+          "type": "h3",
+          "text": "Option B: a local tokenizer (fast, approximate)"
+        },
+        {
+          "type": "p",
+          "md": "If you need a count instantly and offline — say, to update a live character counter as a user types — you run a tokenizer library in your own code. OpenAI publishes `tiktoken` for its models; other providers offer their own. The trade-off is that a *local* count is only exact when the library matches the *exact* model you are calling, and it usually cannot see the extra tokens the provider adds for message structure. Treat a local count as a good estimate, and reserve the endpoint for the moment a precise answer matters (right before a borderline send)."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "**Do not use `tiktoken` to count tokens for a non-OpenAI model like Claude.** It is OpenAI's tokenizer and uses different rules — it typically undercounts Claude tokens by roughly 15-20% on English, and by more on code or non-English text. An undercount is the dangerous direction: you think you are safely under the limit, then the real request overflows. For an exact Claude count, use the provider's count-tokens endpoint."
+        }
+      ]
+    },
+    {
+      "id": "what-the-count-includes",
+      "title": "What the count actually includes",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The single biggest source of confusion is assuming your token count equals the length of the text you wrote. It does not. A request is more than your message — and you pay for all of it. This is exactly why a local `len(text) / 4` guess drifts from reality, and why the count-tokens endpoint (which sees the *assembled* request) is more trustworthy."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Part of the request",
+            "Counted as input?",
+            "Easy to forget?"
+          ],
+          "rows": [
+            [
+              "Your user message text",
+              "Yes",
+              "No — this is the obvious part"
+            ],
+            [
+              "The system prompt / instructions",
+              "Yes",
+              "Yes — it is sent on every call"
+            ],
+            [
+              "The full conversation history",
+              "Yes",
+              "Yes — it grows silently each turn"
+            ],
+            [
+              "Tool / function definitions",
+              "Yes",
+              "Yes — schemas can be large"
+            ],
+            [
+              "Message structure markers",
+              "Yes",
+              "Yes — invisible formatting tokens"
+            ],
+            [
+              "The model's reply",
+              "No (that's output)",
+              "Billed separately, at a higher rate"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Two practical lessons fall out of this table. First, in a [multi-turn conversation](/learn/llm-apis/api-basics/multi-turn-conversations) the *history* is resent on every call, so your input count climbs with each turn even if each new message is short. Second, a long system prompt or a big set of tool definitions is a fixed tax paid on every single request — worth counting once and keeping an eye on."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Because the endpoint counts the same `system` and `tools` you pass to the real call, the simplest reliable habit is to build your request object *once*, hand it to the count endpoint, and — if it fits — hand the very same object to the create call. One source of truth, no drift."
+        }
+      ]
+    },
+    {
+      "id": "budgeting-and-trimming",
+      "title": "Budgeting input against the context window",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Counting is only half the job. The point of the number is to make a decision: *send as-is*, or *trim first*. The budget you compare against is not the whole context window — you must subtract room for the reply."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "stack",
+            "title": "How the context window gets spent",
+            "layers": [
+              {
+                "label": "Context window (total)",
+                "sub": "e.g. 200,000 tokens"
+              },
+              {
+                "label": "Reply headroom (max_tokens)",
+                "sub": "reserve this for the model's answer"
+              },
+              {
+                "label": "Your input budget",
+                "sub": "what's left for prompt + history + tools",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The rule of thumb is simple: **input budget = context window − the `max_tokens` you'll request for the reply − a small safety margin.** If your counted input exceeds that budget, trim before sending. The most common trimming strategies for a chat history are to drop the oldest turns, or to summarize them into a short note that costs far fewer tokens."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "trim history until the request fits",
+          "code": "MODEL = \"claude-opus-4-8\"\nCONTEXT_WINDOW = 200_000     # look this up for your model\nREPLY_HEADROOM = 2_000       # the max_tokens you'll ask for\nSAFETY_MARGIN  = 500\n\nbudget = CONTEXT_WINDOW - REPLY_HEADROOM - SAFETY_MARGIN\n\ndef count(messages):\n    return client.messages.count_tokens(\n        model=MODEL, messages=messages,\n    ).input_tokens\n\n# Drop the oldest turns until the request fits the budget.\nwhile count(messages) > budget and len(messages) > 1:\n    messages.pop(0)   # remove the oldest message\n\nreply = client.messages.create(\n    model=MODEL, max_tokens=REPLY_HEADROOM, messages=messages,\n)"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Don't call the count endpoint on every keystroke or inside a hot loop — it's a network round-trip and consumes a request from your rate limit. Count when the prompt actually changes (a new message added, a document attached), cache the result, and reuse it."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic pre-send check is in place, a few finer points separate a toy from a robust production setup."
+        },
+        {
+          "type": "p",
+          "md": "**Counts are estimates of cost, not the final bill.** The pre-send count tells you the *input* tokens. Your total cost also includes the *output* tokens the model generates, which you cannot know until the reply arrives — and output is usually priced higher than input. To predict total spend, add your input count to your `max_tokens` ceiling for a worst-case estimate, then check the real `usage` numbers the API returns on the response to learn the actual output size. This is also how you decide [which model to call](/learn/llm-apis/api-basics/how-to-choose-llm-model): a cheaper model may let a bigger prompt stay within budget."
+        },
+        {
+          "type": "p",
+          "md": "**Tokenizers can change between model versions.** A newer model in the same family often shares a tokenizer with its predecessor, so counts carry over — but not always. When you migrate to a different model, do not assume the old numbers hold. Re-measure a representative sample by calling the count endpoint once with each model and comparing, then re-baseline your budgets, cost calculators, and overflow thresholds. A blanket multiplier (\"add 10%\") is a guess; an actual recount is the truth."
+        },
+        {
+          "type": "p",
+          "md": "**Counting interacts with prompt caching.** If your provider caches a stable prefix of your prompt (a long system prompt, fixed instructions) to make repeat calls cheaper, the *counted* token total stays the same but the *cost* of those cached tokens drops sharply on subsequent calls. So a high token count is not automatically a high bill once caching is in play — read the response's usage breakdown to see how many tokens were billed fresh versus served from cache."
+        },
+        {
+          "type": "p",
+          "md": "**Overflow is not the only error to plan for.** Counting tokens prevents context-overflow errors, but a production client still needs to handle the rest — rate limits, transient server errors, malformed requests. Token counting is one layer of defense; pair it with proper [API error handling](/learn/llm-apis/api-basics/llm-api-errors) so the request that *does* go out fails gracefully when something else goes wrong. The durable principle: measure the request before you send it, leave room for the answer, and never trust a local estimate from the wrong tokenizer when an exact count is one cheap call away."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "How do I count tokens before sending a request to the Claude API?",
+      "a": "Call the count-tokens endpoint with the exact same `model`, `messages`, `system`, and `tools` you plan to send. In the Anthropic SDK it is `client.messages.count_tokens(...)` (Python) or `client.messages.countTokens(...)` (TypeScript), which calls `POST /v1/messages/count_tokens` and returns `input_tokens`. It does not generate any output, so it is fast and not billed as a normal request."
+    },
+    {
+      "q": "Can I use tiktoken to count tokens for Claude?",
+      "a": "No. `tiktoken` is OpenAI's tokenizer and uses different rules than Claude, so it typically undercounts Claude tokens by roughly 15-20% on plain English, and by more on code or non-English text. Use a count for the same model family you will actually call. For an exact Claude count, use the provider's count-tokens endpoint instead of any local OpenAI-style estimator."
+    },
+    {
+      "q": "Why does my local token count not match the API's count?",
+      "a": "A local estimate ignores the extra tokens the provider adds for message structure, the system prompt, tool definitions, and special formatting markers. Those are real input tokens you pay for but never see. The count-tokens endpoint measures the fully assembled request, so it is always closer to the truth than a raw `len(text)/4` style guess."
+    },
+    {
+      "q": "Does calling the count-tokens endpoint cost money or use my rate limit?",
+      "a": "The count-tokens endpoint is designed to be cheap and does not produce or bill output tokens. It does count against a request-per-minute limit, so do not call it in a tight loop on every keystroke. Cache the count for a given prompt and only recount when the prompt actually changes."
+    },
+    {
+      "q": "How do I stop my conversation from overflowing the context window?",
+      "a": "Before each call, count the tokens for the full request (history plus the new message) and compare it to the model's context window minus your `max_tokens` for the reply. If the request is too big, trim the oldest turns or summarize them until it fits. This pre-check is what turns a crash into a graceful trim."
+    },
+    {
+      "q": "Are token counts the same across different models?",
+      "a": "Not always. Different model families can use different tokenizers, so the same text can produce different counts. Newer Claude models in the same family often share a tokenizer, but you should still pass the specific model ID to the count endpoint rather than assume a number measured on one model applies to another."
+    }
+  ],
+  "related": [
+    "how-to-call-llm-api",
+    "llm-api-errors",
+    "what-is-llm-api",
+    "multi-turn-conversations",
+    "how-to-choose-llm-model"
+  ],
+  "furtherReading": [
+    {
+      "title": "Token Counting — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/token-counting"
+    },
+    {
+      "title": "Context Windows — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/context-windows"
+    },
+    {
+      "title": "tiktoken — OpenAI tokenizer (GitHub)",
+      "url": "https://github.com/openai/tiktoken"
+    },
+    {
+      "title": "OpenAI API — Managing tokens",
+      "url": "https://platform.openai.com/docs/guides/text-generation"
+    }
+  ]
+}

@@ -1,0 +1,383 @@
+{
+  "slug": "handle-streaming-errors",
+  "title": "How to Handle Errors Mid-Stream: Dropped Connections and Partial Replies",
+  "shortTitle": "Mid-Stream Errors",
+  "seoTitle": "Handling Mid-Stream LLM Errors & Dropped Connections",
+  "metaDescription": "A stream can fail after it starts, leaving you with half an answer. Learn to detect mid-stream errors, handle partial output, and retry without double-billing.",
+  "keywords": [
+    "streaming connection dropped llm",
+    "handle error during sse stream",
+    "partial response llm retry",
+    "stream interrupted mid response",
+    "retry streamed llm call safely"
+  ],
+  "difficulty": "advanced",
+  "oneLiner": "Learn what to do when a stream dies after it starts — detecting the failure, salvaging partial output, and retrying safely without paying twice.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You've already learned how [streaming](/learn/llm-apis/streaming-structured-outputs/llm-streaming-explained) works: the API holds the connection open and pushes the model's answer to you a token at a time. This article is about the moment that connection *breaks while it's running* — after the bytes have already started flowing, with half an answer on the screen."
+        },
+        {
+          "type": "p",
+          "md": "Picture a friend reading you a long recipe over the phone. Halfway through step 4, the call drops. You're left holding *part* of a recipe. Three questions hit you at once: did you actually lose the call, or is your friend just pausing to turn the page? Is the half-recipe you wrote down good enough to start cooking, or useless? And if you call back, will they start over from the top, or pick up where they left off — and either way, are you now paying for two phone calls?"
+        },
+        {
+          "type": "p",
+          "md": "A streaming LLM call has exactly those three failure questions. A normal HTTP request gives you one clean signal: a status code at the start, then the whole body. Streaming flips that — the server sends `200 OK` the instant it *begins*, long before it knows whether it will finish. So an error that arrives **after** the 200 doesn't look like an HTTP error at all. It looks like text that simply stops, or a connection that goes quiet, or a special error message buried *inside* the stream. Handling those well is the difference between an app that recovers gracefully and one that freezes on a half-answer forever."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The key mental shift: with streaming, **HTTP status is not the success signal**. A `200` means \"the stream opened,\" not \"the response is complete.\" The real success signal is the *terminal event* at the end of the stream — and your job is to detect when that event never arrives."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Mid-stream failures are common precisely because streams stay open for a long time — 10, 30, sometimes 60+ seconds for a long answer. That's a wide window for something to go wrong, and the things that go wrong are everyday infrastructure, not exotic bugs:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**The user's network drops.** A phone leaves Wi-Fi range, a laptop sleeps, a tunnel swallows a mobile connection mid-answer.",
+            "**A proxy or load balancer times out.** Many gateways kill any connection that's been \"idle\" (no new bytes) for N seconds. A model that pauses to think can trip that idle timer even though nothing is actually broken.",
+            "**The server restarts or the upstream hiccups.** A deploy, an autoscaling event, or a transient provider error lands *while* tokens are streaming.",
+            "**The model itself signals an error mid-stream** — the provider can send an `error` event inside the SSE stream (for example, an overload that hit after generation started)."
+          ],
+          "ordered": false
+        },
+        {
+          "type": "p",
+          "md": "Why a builder should care: the naive happy-path streaming loop handles *none* of these. It assumes the loop runs until the model says it's done. When the stream dies early, that loop either hangs forever waiting for bytes that will never come, or it exits silently and shows the user a frozen half-answer with no error and no retry button. Both are worse than a clean failure — the user can't tell whether to wait, refresh, or give up."
+        },
+        {
+          "type": "p",
+          "md": "And there's a money angle that plain request/response code never has to think about. If you retry a streamed call that had *already produced output* before it died, you can be billed for the tokens twice — and if that call triggered side effects (wrote to a database, sent a message, called a tool), a blind retry can do those things twice too. Recovering safely means retrying in a way that doesn't double-charge or double-act. That's the [idempotency](/learn/llm-apis/streaming-structured-outputs/handle-streaming-errors) problem, and it's the hard half of this topic."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "To handle a mid-stream failure you first have to *detect* it. There are three distinct failure shapes, and they surface differently. Here's the full life-cycle, with the failure points marked."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Where a stream can fail after the 200",
+            "steps": [
+              {
+                "label": "HTTP 200",
+                "sub": "stream opens — not \"done\""
+              },
+              {
+                "label": "deltas flow",
+                "sub": "tokens arrive one by one"
+              },
+              {
+                "label": "FAILURE POINT",
+                "sub": "error event · silent drop · idle stall",
+                "accent": true
+              },
+              {
+                "label": "terminal event",
+                "sub": "message_stop / [DONE] — the real success signal"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "The three failure shapes"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Failure",
+            "What you observe",
+            "How to detect it"
+          ],
+          "rows": [
+            [
+              "**In-band error event**",
+              "The stream is healthy, then sends an `error` event instead of more text",
+              "Switch on event type; treat `error` as a distinct, non-text branch"
+            ],
+            [
+              "**Hard disconnect**",
+              "The byte stream ends abruptly with no terminal event",
+              "The read loop ends *without* ever seeing `message_stop` / `[DONE]`"
+            ],
+            [
+              "**Idle stall**",
+              "Bytes simply stop arriving; the socket stays open but silent",
+              "An inactivity timer fires — no chunk within N seconds"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The single most important rule ties them together: **track whether you saw the terminal event.** Every well-formed stream ends with one — on the Anthropic [Claude API](/learn/llm-apis/streaming-structured-outputs/llm-streaming-explained) it's `message_stop` (preceded by a `message_delta` that carries the stop reason and token usage); OpenAI-style streams end with a literal `data: [DONE]` marker. If your loop exits and you *never* set a \"saw terminal event\" flag, the response is incomplete — no matter how much text you collected. That one boolean is your truth source."
+        },
+        {
+          "type": "h3",
+          "text": "Detecting the silent stall with a timeout"
+        },
+        {
+          "type": "p",
+          "md": "A hard disconnect ends the loop, so it's self-announcing. The sneaky one is the *idle stall*: the connection stays open but no bytes arrive, and a naive `for`-loop will wait forever. The fix is an **inactivity timeout** — a timer you reset on every chunk. If it ever fires, you treat the stream as dead and stop waiting."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "detect a mid-stream failure (Anthropic SDK)",
+          "code": "import anthropic\n\nclient = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from the env\n\ndef stream_answer(prompt: str):\n    text = \"\"\n    completed = False  # <- the truth source: did we see the terminal event?\n    try:\n        with client.messages.stream(\n            model=\"claude-opus-4-8\",\n            max_tokens=1024,\n            messages=[{\"role\": \"user\", \"content\": prompt}],\n        ) as stream:\n            for chunk in stream.text_stream:   # yields decoded text deltas\n                text += chunk\n                yield chunk                    # forward to the UI live\n            # We only reach here if the SDK saw the full life-cycle.\n            final = stream.get_final_message()\n            completed = final.stop_reason is not None\n    except anthropic.APIError as e:\n        # An error event or a transport failure surfaced as an exception.\n        # `text` still holds whatever streamed before the break.\n        return {\"text\": text, \"completed\": False, \"error\": str(e)}\n\n    return {\"text\": text, \"completed\": completed, \"error\": None}"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The official SDKs do a lot of this for you: they parse the SSE life-cycle, raise a typed exception on an in-band `error` event or a dropped socket, and expose `get_final_message()` / `finalMessage()` so you can confirm a clean finish. Reach for the SDK before hand-rolling a parser — but you still own the *policy*: what to render on a partial, and whether to retry."
+        }
+      ]
+    },
+    {
+      "id": "rendering-partial-output",
+      "title": "What to show when only part of the answer arrived",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once you've detected the failure and salvaged the partial `text`, you have a product decision: what does the user see? The wrong answer is \"nothing\" (a frozen half-answer with no explanation) or \"a silent retry that wipes what they were reading.\" Decide based on *what kind of content* streamed."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Content type",
+            "What a partial is worth",
+            "Recommended move"
+          ],
+          "rows": [
+            [
+              "Prose / chat answer",
+              "Often still readable and useful",
+              "Keep it on screen, append a clear \"connection lost\" marker, offer **Retry** or **Continue**"
+            ],
+            [
+              "Structured output (JSON)",
+              "Usually **unparseable** — a half-object with a dangling brace",
+              "Discard the partial; retry the whole call (don't try to \"fix\" broken JSON)"
+            ],
+            [
+              "A tool call's arguments",
+              "Incomplete arguments are unusable",
+              "Discard; the action must not run on partial input"
+            ],
+            [
+              "Code",
+              "Partial code may be syntactically broken",
+              "Show it read-only with a warning; never auto-run it"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The JSON row is the big trap. Mid-stream, structured output is *invalid by definition* — you stopped somewhere inside the object. There's no safe way to parse `{\"name\": \"Ali` into a usable value. So for anything a machine will consume, treat a partial as zero and retry; only free-form text earns the \"keep and show\" treatment. (This is why the streaming-structured-outputs topic exists at all — see [structured outputs explained](/learn/llm-apis/streaming-structured-outputs/structured-outputs-explained).)"
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Never let a frozen half-answer just sit there. The worst UX is a response that stops mid-sentence with no spinner, no error, and no button — the user can't tell if it's still loading or permanently stuck. Always resolve the stream into one of two visible states: **complete**, or **failed with a way forward**."
+        }
+      ]
+    },
+    {
+      "id": "retrying-without-double-billing",
+      "title": "Retrying safely without double-billing or double-acting",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Now the hard part. You decided to retry — how do you do it without paying twice or triggering side effects twice? The honest truth first: an LLM stream generally **cannot be resumed token-perfect.** The SSE spec has a `Last-Event-ID` header for resuming feeds, but model streams don't replay from a byte offset — the provider has no \"continue exactly where the socket died\" endpoint. So a \"retry\" almost always means *generating again from the start*, and that has cost and side-effect consequences you have to manage."
+        },
+        {
+          "type": "h3",
+          "text": "Cap retries and back off"
+        },
+        {
+          "type": "p",
+          "md": "First, don't retry forever and don't retry instantly. A dropped stream is often transient (a network blip), but a persistent failure (a bad prompt, a real outage) will just keep failing. Use a small retry cap with exponential backoff — and only retry failures that are plausibly transient."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "steps": [
+              {
+                "label": "stream dies mid-answer"
+              },
+              {
+                "label": "is it retryable + under the cap?"
+              },
+              {
+                "label": "wait (backoff)"
+              },
+              {
+                "label": "re-issue the call"
+              },
+              {
+                "label": "clean finish → done"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "This is the same backoff machinery you'd use for a [rate-limit / 429](/learn/llm-apis/api-basics/llm-api-errors) response — but note the difference: a 429 happens *before* any output, so retrying it is cheap and obviously safe. A mid-stream drop happens *after* output, so retrying it is the expensive, side-effect-laden case. Same tool, higher stakes."
+        },
+        {
+          "type": "h3",
+          "text": "The double-billing reality"
+        },
+        {
+          "type": "p",
+          "md": "If the model produced 400 output tokens, then the stream died, then you retry and it produces 400 again — you pay for roughly 800 output tokens to get one answer. There's no way around paying for the *first*, abandoned generation; the provider already did that work. Your levers are: (1) retry as few times as possible (the cap), and (2) capture usage when you *can*. Token usage arrives in the terminal `message_delta` event, so a stream that died before that point gives you no usage number for the partial — you simply absorb that cost. Log every retry so a runaway loop shows up in your cost dashboards instead of silently burning budget."
+        },
+        {
+          "type": "h3",
+          "text": "Idempotency: the side-effect half"
+        },
+        {
+          "type": "p",
+          "md": "Double-*billing* is annoying; double-*acting* is dangerous. If the streamed call did something — created an order, sent an email, ran a tool — a blind retry can do it again. The fix is **idempotency**: make \"do this once\" safe to call twice. Two practical patterns:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Idempotency key.** Generate one stable key per logical user request and attach it to any downstream side-effecting call. The receiving system dedupes on that key, so a retry that repeats the action is recognized and ignored. Reuse the *same* key across the original attempt and its retries.",
+            "**Commit on completion only.** Don't perform side effects from inside the stream loop as tokens arrive. Buffer the model's output, wait for the terminal event, and only *then* execute the action. A stream that dies mid-way performed no side effect, so retrying it is clean by construction."
+          ]
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "retry a streamed call with a cap, backoff, and a stable key",
+          "code": "import time, uuid\nimport anthropic\n\nclient = anthropic.Anthropic()\n\ndef stream_with_retry(prompt: str, max_attempts: int = 3):\n    request_key = str(uuid.uuid4())  # SAME key for all attempts of this request\n    for attempt in range(max_attempts):\n        text = \"\"\n        try:\n            with client.messages.stream(\n                model=\"claude-opus-4-8\",\n                max_tokens=1024,\n                messages=[{\"role\": \"user\", \"content\": prompt}],\n            ) as stream:\n                for chunk in stream.text_stream:\n                    text += chunk\n                final = stream.get_final_message()      # confirms the terminal event\n            # Reached only on a clean finish. Do side effects HERE, keyed by\n            # request_key so a prior partial attempt can't double-act.\n            commit_result(text, idempotency_key=request_key)\n            return text\n        except anthropic.APIError:\n            if attempt == max_attempts - 1:\n                raise                                   # give up; surface to the user\n            time.sleep(2 ** attempt)                     # 1s, 2s, 4s backoff\n    return None"
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Retrieved or streamed content is *data*, never commands — and side effects are *commitments*, not running tallies. Keeping side effects outside the token loop (the \"commit on completion only\" pattern) is the single highest-leverage habit here: it makes every mid-stream death automatically safe to retry, because nothing irreversible happened before the terminal event."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The patterns above cover the common cases. A few advanced wrinkles matter once you run streaming at scale or in a relay architecture."
+        },
+        {
+          "type": "h3",
+          "text": "The proxy-buffering trap masquerades as a stall"
+        },
+        {
+          "type": "p",
+          "md": "Before you blame the model for an idle stall, rule out your own stack. A reverse proxy with response buffering on, a gzip layer, a serverless gateway, or a CDN can *hold* the token stream and release it in clumps — which looks exactly like a stall, then a burst. When debugging \"my stream froze,\" test directly against the provider first to confirm the stream is healthy, then bisect each hop. A real mid-stream error and a buffering artifact need opposite fixes, so don't conflate them."
+        },
+        {
+          "type": "h3",
+          "text": "Relays multiply the failure surface"
+        },
+        {
+          "type": "p",
+          "md": "Most production apps don't stream the model straight to the browser — a server sits in the middle, consuming the model stream and re-emitting its own SSE feed to the client. That means there are now *two* streams that can die independently: model→server and server→browser. A clean strategy is to make the server the source of truth: it buffers what the model produced, and if the browser connection drops, the client reconnects and the server replays from its buffer rather than re-calling the model. This turns an expensive model retry into a cheap buffer replay for the browser-side failure."
+        },
+        {
+          "type": "h3",
+          "text": "Distinguish retryable from terminal failures"
+        },
+        {
+          "type": "p",
+          "md": "Not every mid-stream death deserves a retry. A transient network drop or a transient overload (`529`-style) is worth retrying. A malformed request, an auth failure, or a content refusal will fail identically every time — retrying just wastes money and time. Inspect the failure: if the provider sent an in-band `error` event, its type tells you whether it's retryable; if it was a raw transport drop, treat it as retryable but under the cap. When in doubt, fail loud and let a human or a higher layer decide, rather than looping."
+        },
+        {
+          "type": "h3",
+          "text": "Backpressure on slow consumers"
+        },
+        {
+          "type": "p",
+          "md": "A separate-but-related reliability concern: if your downstream consumer (a browser, a database write) can't keep up with how fast tokens arrive, chunks pile up in memory. Production relays respect backpressure — they pause reading from the model when the consumer's buffer is full — using the streaming primitives the platform provides rather than pushing every chunk into an unbounded array. An out-of-memory crash mid-stream is just another way to lose a response, and it's entirely self-inflicted."
+        },
+        {
+          "type": "p",
+          "md": "The durable lesson: treat the *terminal event*, not the HTTP status, as your definition of success; salvage partials only when they're free-form text; and make every retry safe by keeping side effects out of the token loop. Get those three right and a dropped connection becomes a recoverable hiccup instead of a frozen, double-charged mess."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "How do I detect that an LLM stream failed after it already started?",
+      "a": "Track whether you saw the stream's terminal event (`message_stop` on the Claude API, or `data: [DONE]` on OpenAI-style streams). If your read loop ends without that event, the response is incomplete. For a silent stall where bytes stop but the socket stays open, add an inactivity timeout that you reset on every chunk and treat as a failure if it fires."
+    },
+    {
+      "q": "My streamed response stopped halfway with no error. What happened?",
+      "a": "The connection most likely dropped mid-stream — a network blip, a proxy idle-timeout, or a server hiccup — and your code is waiting for tokens that will never arrive. The fix is to detect the missing terminal event (and add an inactivity timeout), then resolve the UI into either a complete state or a clear \"connection lost, retry?\" state instead of leaving a frozen half-answer."
+    },
+    {
+      "q": "Can I resume an interrupted LLM stream from where it broke?",
+      "a": "Generally no. Unlike the SSE `Last-Event-ID` resume mechanism for ordinary event feeds, LLM streams can't be replayed token-perfect from a byte offset — providers have no \"continue exactly here\" endpoint. A retry means generating again from the start, so plan for the cost and side-effect consequences rather than expecting a seamless resume."
+    },
+    {
+      "q": "Will retrying a streamed call charge me twice?",
+      "a": "If the first attempt already produced output before it died, yes — you pay for that abandoned generation plus the retry, because the provider already did the work. You can't reclaim the first cost, so minimize damage with a small retry cap and exponential backoff, and log every retry so runaway loops show up in your cost dashboards."
+    },
+    {
+      "q": "How do I retry safely if the call had side effects like sending an email or writing to a database?",
+      "a": "Use idempotency. Either attach a stable idempotency key (the same key across the original attempt and all retries) so the receiving system dedupes repeated actions, or — better — only perform side effects after the terminal event, buffering output and committing once on a clean finish. A stream that died mid-way then performed no side effect, making the retry safe by construction."
+    },
+    {
+      "q": "What should I render to the user when only part of the answer streamed in?",
+      "a": "It depends on the content. Free-form prose is often still readable — keep it on screen, mark it as interrupted, and offer Retry. But partial JSON, partial tool-call arguments, and partial code are unusable or unsafe: discard them and retry the whole call rather than trying to parse or run a half-finished result."
+    }
+  ],
+  "related": [
+    "llm-streaming-explained",
+    "structured-outputs-explained",
+    "llm-api-errors",
+    "how-to-call-llm-api",
+    "sdk-vs-raw-http"
+  ],
+  "furtherReading": [
+    {
+      "title": "Anthropic — Streaming Messages (Claude API docs)",
+      "url": "https://docs.anthropic.com/en/api/messages-streaming"
+    },
+    {
+      "title": "Anthropic — Handling stop reasons",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons"
+    },
+    {
+      "title": "MDN — Using server-sent events",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events"
+    },
+    {
+      "title": "WHATWG HTML Standard — Server-sent events",
+      "url": "https://html.spec.whatwg.org/multipage/server-sent-events.html"
+    }
+  ]
+}

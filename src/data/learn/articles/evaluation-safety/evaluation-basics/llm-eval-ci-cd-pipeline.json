@@ -1,0 +1,400 @@
+{
+  "slug": "llm-eval-ci-cd-pipeline",
+  "title": "Running LLM Evals in CI/CD: Gating Every Prompt Change",
+  "shortTitle": "Eval in CI/CD",
+  "seoTitle": "Running LLM Evals in CI/CD: Gate Every Prompt Change",
+  "metaDescription": "How to wire LLM evals into your CI/CD pipeline so a pull request that lowers quality fails the build. Pass thresholds, flaky-test handling, and cost control.",
+  "keywords": [
+    "llm evals in ci cd",
+    "automated eval pipeline",
+    "gate prompt changes ci",
+    "eval pass threshold",
+    "continuous evaluation llm"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You'll understand how to make evals a pipeline gate so quality regressions block a merge instead of reaching production.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Your codebase already has tests. When you change a function, the test suite runs automatically, and if you broke something, the build goes red and the merge is blocked. **Running LLM evals in CI/CD** is the same idea applied to the *quality* of an AI feature: every time someone edits a prompt, swaps a model, or tweaks retrieval, a set of [evals](/learn/evaluation-safety/evaluation-basics/what-are-llm-evals) runs and decides whether the change is allowed to ship."
+        },
+        {
+          "type": "p",
+          "md": "The everyday analogy is a quality-control checkpoint at the end of a factory line. The line keeps producing — engineers keep editing prompts — but nothing leaves the building until it passes inspection. If a batch scores below the bar, the checkpoint stops it, an alarm flashes, and a human looks before anything reaches a customer. CI/CD is the conveyor belt; the eval suite is the inspector standing at the gate."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This article is about the **plumbing** — where evals run, how to gate a merge, and how to keep cost and flakiness under control. It assumes you already have a working eval suite. If you need to *design* the tests themselves, start with [how to build an eval suite](/learn/evaluation-safety/evaluation-basics/how-to-build-eval-suite) and [regression testing for prompts](/learn/evaluation-safety/evaluation-basics/regression-testing-llm-prompts). Here we wire that suite into the pipeline."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A prompt is code, but it doesn't behave like code. Add a single sentence to a system prompt to fix one annoying edge case, and you can silently break ten other cases you never thought to check. Nothing throws an error. The output still *looks* fluent. The regression only surfaces days later, in production, as a slow trickle of confused users or a support ticket spike."
+        },
+        {
+          "type": "p",
+          "md": "Manual checking doesn't scale. \"I tried five questions and they looked fine\" is how regressions get merged. The whole point of putting evals in CI/CD is to remove human discipline from the loop: the gate runs on *every* pull request, scores against the same fixed dataset every time, and blocks the merge automatically when quality drops. Nobody has to remember to run it."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Catch regressions before they ship.** A prompt change that drops accuracy from 92% to 78% fails the build instead of reaching users.",
+            "**Make quality a number, not a vibe.** Reviewers see a concrete score delta on the PR (\"+2.1% faithfulness, -0.4% on the refund test set\") instead of arguing about whether an output \"feels\" better.",
+            "**Move safely and faster.** Engineers experiment with prompts and models freely, because the gate is the safety net. A bad idea is cheap when it's caught in CI.",
+            "**Build an audit trail.** Every merge has a recorded score. When something does slip through, you can see exactly which change moved the metric."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "This is the difference between an AI feature you *hope* still works and one you can *prove* didn't get worse on this commit. For anything customer-facing, that proof is the line between a demo and a product."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "An eval gate is a normal CI job with three moving parts: a **fixed dataset** of test cases (the [golden dataset](/learn/evaluation-safety/evaluation-basics/golden-dataset-llm-testing)), a **runner** that feeds each case to your AI feature and scores the output, and a **threshold check** that turns the aggregate score into a pass/fail exit code. CI already knows how to react to an exit code — a non-zero exit fails the build and blocks the merge."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "What happens on every pull request",
+            "steps": [
+              {
+                "label": "PR opened",
+                "sub": "prompt / model change"
+              },
+              {
+                "label": "CI triggers",
+                "sub": "eval job starts"
+              },
+              {
+                "label": "Run eval suite",
+                "sub": "dataset → outputs → scores"
+              },
+              {
+                "label": "Compare to threshold",
+                "sub": "pass bar / baseline"
+              },
+              {
+                "label": "Gate",
+                "sub": "merge blocked or allowed",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Where the eval job lives"
+        },
+        {
+          "type": "p",
+          "md": "The runner is the same script you'd run locally — it just exits non-zero on failure so CI notices. In a config like GitHub Actions, you attach it to pull-request events:"
+        },
+        {
+          "type": "code",
+          "lang": "yaml",
+          "title": ".github/workflows/eval.yml",
+          "code": "name: llm-eval-gate\non:\n  pull_request:\n    paths:\n      - 'prompts/**'\n      - 'src/llm/**'\njobs:\n  eval:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: pip install -r requirements.txt\n      - name: Run evals\n        env:\n          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}\n        run: python run_evals.py --threshold 0.85 --sample 60"
+        },
+        {
+          "type": "p",
+          "md": "The `paths` filter is doing real work: the gate only runs when something that *can* affect quality changes — the prompt files or the LLM-calling code — so a README edit doesn't burn API credits. The runner script does the scoring and decides the exit code:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "run_evals.py (the core gate)",
+          "code": "import sys, argparse\n\ndef run_suite(threshold: float, sample: int) -> None:\n    cases = load_dataset(sample=sample)   # your golden dataset\n    passed = 0\n    for case in cases:\n        output = call_feature(case.input)  # the prompt/model under test\n        score = grade(case, output)        # code check or LLM judge\n        passed += int(score >= case.min_score)\n\n    rate = passed / len(cases)\n    print(f\"pass rate: {rate:.1%}  ({passed}/{len(cases)})\")\n\n    # Exit code is the gate. Non-zero => CI fails => merge blocked.\n    if rate < threshold:\n        print(f\"FAIL: {rate:.1%} below threshold {threshold:.0%}\")\n        sys.exit(1)\n    print(\"PASS\")\n\nif __name__ == \"__main__\":\n    p = argparse.ArgumentParser()\n    p.add_argument(\"--threshold\", type=float, default=0.85)\n    p.add_argument(\"--sample\", type=int, default=0)  # 0 = full set\n    a = p.parse_args()\n    run_suite(a.threshold, a.sample)"
+        },
+        {
+          "type": "p",
+          "md": "`grade()` is whatever your suite uses — an exact-match or regex [code check](/learn/evaluation-safety/evaluation-basics/code-vs-model-graded-evals) for structured answers, or an [LLM-as-a-judge](/learn/evaluation-safety/llm-as-judge/llm-as-a-judge-explained) call for open-ended quality. The CI mechanics are identical either way; only the grader changes."
+        }
+      ]
+    },
+    {
+      "id": "pre-merge-vs-nightly",
+      "title": "Pre-merge gate vs nightly run",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Not every eval belongs on the critical path of a pull request. Running 2,000 LLM-judged cases on every commit is slow and expensive, and it makes engineers dread opening a PR. The standard pattern is to split evals into a **fast pre-merge gate** and a **slow nightly run**."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Two places evals run",
+            "columns": [
+              {
+                "title": "Pre-merge gate",
+                "accent": true,
+                "items": [
+                  "Runs on every PR",
+                  "Small, fast, cheap sample",
+                  "Blocks the merge on fail",
+                  "Must finish in minutes",
+                  "Catches obvious regressions"
+                ]
+              },
+              {
+                "title": "Nightly / scheduled",
+                "items": [
+                  "Runs once a day on main",
+                  "Full dataset, expensive judges",
+                  "Alerts a channel, doesn't block",
+                  "Can take an hour",
+                  "Catches slow drift + rare cases"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The pre-merge gate is a tripwire: a tight, representative slice of your dataset that runs in a few minutes and catches the breakage that matters most. The nightly run is the deep sweep: the full golden dataset, the more expensive judge model, and the rare edge cases — run against the main branch on a schedule, posting a score report to a dashboard or chat channel. Because nightly doesn't block a human, it can afford to be thorough."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Pick the pre-merge sample so it covers your highest-risk categories, not just a random slice. If 80% of your traffic is refund questions, the gate should over-weight refund cases — that's where a regression hurts most."
+        }
+      ]
+    },
+    {
+      "id": "thresholds-flakiness-cost",
+      "title": "Thresholds, flakiness, and cost",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Three practical problems decide whether your gate is loved or ripped out within a month: setting a pass bar that isn't arbitrary, stopping the gate from failing at random, and keeping the API bill sane."
+        },
+        {
+          "type": "h3",
+          "text": "Set the threshold against a baseline, not a guess"
+        },
+        {
+          "type": "p",
+          "md": "A fixed bar like \"must score 90%\" is brittle: too high and good PRs get blocked, too low and real regressions sneak through. The more robust approach is a **relative gate** — compare the PR's score to the current main-branch baseline and fail only if it drops by more than a small tolerance. This lets quality climb over time while still catching backsliding."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Gate style",
+            "Rule",
+            "Risk"
+          ],
+          "rows": [
+            [
+              "Absolute",
+              "Fail if score < 85%",
+              "Brittle; blocks good PRs or misses small drops"
+            ],
+            [
+              "Relative",
+              "Fail if score < baseline − 2%",
+              "Needs a stored baseline; baseline can drift down slowly"
+            ],
+            [
+              "Per-category",
+              "Fail if any subset drops > 5%",
+              "Catches narrow regressions a global average hides"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "A global average can hide a disaster: overall score holds steady while one critical category quietly collapses. Tracking a few per-category thresholds alongside the headline number catches that."
+        },
+        {
+          "type": "h3",
+          "text": "Tame flaky failures"
+        },
+        {
+          "type": "p",
+          "md": "LLMs are non-deterministic, and an LLM judge is itself an LLM, so the *same* PR can pass once and fail the next run. A gate that fails randomly trains engineers to hit \"re-run\" until it goes green — which defeats the entire purpose. Reduce variance instead of ignoring it:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Set `temperature` to 0** for both the feature under test and the judge, so outputs are as stable as the API allows.",
+            "**Use a margin, not a knife-edge.** A 2–3 point tolerance below baseline absorbs normal run-to-run noise without letting real regressions through.",
+            "**Aggregate over many cases.** A 60-case pass rate is far steadier than a 5-case one; the more cases, the smaller the random swing.",
+            "**Pin the judge model version.** A silent model update on the grader can shift every score at once. Pin an exact version and upgrade it deliberately, re-baselining when you do."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Don't paper over flakiness with blind auto-retries. If a gate needs three retries to pass, the noise is too high — fix the variance (bigger sample, temperature 0, wider margin) instead of hiding it. A gate that everyone re-runs until green is no gate at all. See [LLM judge pitfalls](/learn/evaluation-safety/llm-as-judge/llm-judge-pitfalls)."
+        },
+        {
+          "type": "h3",
+          "text": "Control API cost"
+        },
+        {
+          "type": "p",
+          "md": "Every eval case is one (or more) paid API calls, and the gate runs on every push to an open PR. Without limits the bill grows with your team's activity. Standard levers:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Sample, don't run everything.** Pre-merge runs a fixed subset (say 60 cases); the full set is reserved for nightly.",
+            "**Cache by input hash.** If the prompt and model didn't change for a given case, reuse the stored result instead of re-calling. A [prompt caching](/learn/evaluation-safety/evaluation-basics/regression-testing-llm-prompts) layer skips most of the work on repeat runs.",
+            "**Filter by changed paths.** As in the workflow above, don't run the gate when no prompt or LLM code changed.",
+            "**Use a cheaper grader where you can.** Reserve the expensive judge model for genuinely open-ended cases; grade structured outputs with free code checks."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "reporting-on-the-pr",
+      "title": "Reporting score deltas on the PR",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A red or green check is the minimum, but the gate is far more useful when it posts the *numbers* directly onto the pull request. The reviewer should see, without leaving the PR, how this change moved every metric versus the baseline."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Metric",
+            "Baseline",
+            "This PR",
+            "Δ"
+          ],
+          "rows": [
+            [
+              "Overall pass rate",
+              "91.2%",
+              "93.0%",
+              "+1.8%"
+            ],
+            [
+              "Faithfulness",
+              "0.88",
+              "0.90",
+              "+0.02"
+            ],
+            [
+              "Refund test set",
+              "94%",
+              "89%",
+              "-5% ⚠"
+            ],
+            [
+              "Avg latency",
+              "1.9s",
+              "2.4s",
+              "+0.5s"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "This little table turns a vague review into a precise one. The overall number went *up*, which a single pass/fail check would have waved through — but the refund subset dropped 5 points, and now the reviewer can see it and ask why. Most CI systems let a job post a comment back to the PR via an API; a few lines in your runner can format this table and post it. The point is to make the tradeoff visible, so a human decides knowingly instead of trusting a green checkmark."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Store each merge's scores keyed by commit. Over time that history becomes a quality graph: you can see exactly which commit moved a metric, spot slow drift the nightly run is catching, and answer \"when did this get worse?\" in seconds."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic gate is solid, the refinements are about precision and trust — making the gate fail for the right reasons and at the right moments."
+        },
+        {
+          "type": "p",
+          "md": "**Baseline management is harder than it looks.** Where do you store the main-branch baseline, and when do you update it? A common pattern: the nightly run on main writes the new baseline, and PR gates compare against that stored value. The trap is *baseline creep* — if you let a 1% drop through on each of ten PRs, you've lost 10% with every individual change looking innocent. Per-category gates and an absolute floor underneath the relative gate guard against this slow erosion."
+        },
+        {
+          "type": "p",
+          "md": "**Separate retrieval failures from generation failures.** In a [RAG](/learn/rag/rag-fundamentals/what-is-rag) system, a quality drop might come from worse retrieval or from a worse prompt. If your eval only scores the final answer, you can't tell which, and you'll waste time fixing the wrong layer. Score the retrieval step and the generation step separately so the gate points at the actual culprit."
+        },
+        {
+          "type": "p",
+          "md": "**Watch the cost and latency metrics, not just quality.** A prompt change that adds 1,200 tokens of examples might nudge accuracy up 1% while doubling your per-call cost and latency. A mature gate tracks tokens, dollars, and response time alongside the quality score, and can fail a PR that improves accuracy at an unacceptable price."
+        },
+        {
+          "type": "p",
+          "md": "**Close the loop with production.** The strongest eval pipelines feed real production failures back into the golden dataset. When a user reports a bad answer, that case becomes a permanent regression test, so the same mistake can never silently return. Your dataset grows toward exactly the cases that hurt you, and the gate gets sharper over time."
+        },
+        {
+          "type": "p",
+          "md": "**Know the gate's limits.** A passing gate means \"no worse than baseline on the cases we thought to test\" — not \"correct.\" The blind spots are the inputs missing from your dataset. CI evals catch regressions; they don't discover problems you never wrote a case for. That's why the nightly deep sweep, ongoing dataset growth, and human spot-checks stay part of the system. The gate is a floor under quality, not a ceiling on what you need to watch."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Should LLM evals run on every pull request or just nightly?",
+      "a": "Both, split by cost. Run a small, fast sample as a pre-merge gate on every PR so obvious regressions block the merge in minutes. Run the full dataset with expensive judges nightly against the main branch — it can take an hour and alerts a channel instead of blocking a human."
+    },
+    {
+      "q": "How do I set an eval pass threshold without blocking good PRs?",
+      "a": "Prefer a relative gate over a fixed number: compare the PR's score to the current main-branch baseline and fail only if it drops by more than a small tolerance (around 2–3 points). That margin absorbs the normal run-to-run noise of non-deterministic models while still catching real regressions, and it lets quality climb over time."
+    },
+    {
+      "q": "Why do my eval gates fail randomly, and how do I fix it?",
+      "a": "LLMs and LLM judges are non-deterministic, so the same PR can pass once and fail next time. Reduce the variance: set temperature to 0 for the feature and the judge, aggregate over many cases (60 is far steadier than 5), pin the exact judge model version, and use a tolerance margin instead of a knife-edge threshold. Don't mask flakiness with blind retries."
+    },
+    {
+      "q": "How do I keep eval CI costs from exploding?",
+      "a": "Sample instead of running everything on each PR, cache results by input hash so unchanged cases skip the API call, filter CI to run only when prompt or LLM code changes, and grade structured outputs with free code checks — reserving the expensive judge model for genuinely open-ended cases. Save the full, costly run for the nightly job."
+    },
+    {
+      "q": "What is continuous evaluation for LLMs?",
+      "a": "Continuous evaluation means your eval suite runs automatically and repeatedly — as a gate on every code or prompt change, and on a schedule against production-like traffic — rather than as a one-off check. It treats quality the way CI treats correctness: measured on every change, with regressions blocking a merge or raising an alert."
+    },
+    {
+      "q": "Can an eval gate hide a regression while overall score goes up?",
+      "a": "Yes — a global average can stay flat or rise while one critical category quietly collapses. Guard against it with per-category thresholds (fail if any important subset drops more than a few points) and by posting the full score delta table on the PR so reviewers see each metric, not just the headline number."
+    }
+  ],
+  "related": [
+    "how-to-build-eval-suite",
+    "what-are-llm-evals",
+    "golden-dataset-llm-testing",
+    "code-vs-model-graded-evals",
+    "llm-as-a-judge-explained",
+    "llm-judge-pitfalls"
+  ],
+  "furtherReading": [
+    {
+      "title": "GitHub Actions — workflow syntax and triggers",
+      "url": "https://docs.github.com/en/actions"
+    },
+    {
+      "title": "Evaluation tools and grading — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/test-and-evaluate/eval-tool"
+    },
+    {
+      "title": "OpenAI Evals (GitHub)",
+      "url": "https://github.com/openai/evals"
+    }
+  ]
+}

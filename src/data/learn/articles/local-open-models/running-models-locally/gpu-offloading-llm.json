@@ -1,0 +1,386 @@
+{
+  "slug": "gpu-offloading-llm",
+  "title": "What Is GPU Offloading? Running Big Models on a Small GPU",
+  "shortTitle": "GPU Offloading",
+  "seoTitle": "What Is GPU Offloading? Run Big Models on a Small GPU",
+  "metaDescription": "GPU offloading splits a model between VRAM and system RAM so a model that's too big for your card still runs. Learn how layers are split and why speed drops.",
+  "keywords": [
+    "what is gpu offloading llm",
+    "n-gpu-layers ollama llama.cpp",
+    "split model between gpu and cpu",
+    "run model bigger than vram",
+    "partial gpu offload speed"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You will understand how splitting model layers between VRAM and RAM lets you run a model too big for your GPU, and exactly why each offloaded layer slows you down.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Your graphics card has a small, very fast pool of memory called **VRAM**. To run a [local LLM](/learn/local-open-models/running-models-locally/what-is-local-llm/) at full speed, the whole model has to fit inside that VRAM. The problem: a 13B or 70B model is often bigger than the 8GB, 12GB, or 16GB of VRAM a typical consumer GPU has. Load it normally and you get the dreaded `out of memory` error."
+        },
+        {
+          "type": "p",
+          "md": "**GPU offloading** is the middle ground. Instead of \"all on the GPU\" or \"nothing runs,\" you put *some* of the model's layers on the GPU and leave the *rest* in your regular system RAM, where the CPU handles them. The model still runs end to end — it's just split across two kinds of memory."
+        },
+        {
+          "type": "p",
+          "md": "Picture a busy kitchen. The chef's countertop (VRAM) is tiny but right under their hands — instant reach. The pantry (system RAM) is much bigger but across the room. If a recipe needs more ingredients than fit on the counter, you keep the ones you use constantly within arm's reach and walk to the pantry for the rest. Dinner still gets made. It's just slower every time you have to cross the room."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The knob that controls this is famously named **`n-gpu-layers`** in [llama.cpp](/learn/local-open-models/running-models-locally/what-is-llama-cpp/) (and `num_gpu` in [Ollama](/learn/local-open-models/running-models-locally/what-is-ollama/)). It's just a number: \"how many of the model's layers should live on the GPU.\" Everything above that number stays on the CPU."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Most beginners hit \"out of memory,\" assume the model simply won't run on their machine, and give up or download a smaller model. Offloading is the option they didn't know existed: a model that's *too big for your VRAM* can still run usefully, as long as you accept it will be slower than a model that fits entirely on the GPU."
+        },
+        {
+          "type": "p",
+          "md": "This matters because it changes what hardware can do:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**You can run a class of model your GPU \"can't\" hold.** An 8GB card can't fit a 13B model in full, but it can hold maybe 20 of its 40 layers — enough to roughly double the speed versus running entirely on CPU.",
+            "**It's a dial, not a switch.** You're not stuck choosing between \"fast but tiny\" and \"big but CPU-only.\" You trade VRAM for speed gradually, finding the most layers your card can hold.",
+            "**It pairs perfectly with [quantization](/learn/local-open-models/quantization-and-formats/what-is-quantization/).** A 4-bit quantized model is several times smaller, so far more of its layers fit in the same VRAM. Quantization shrinks each layer; offloading places the layers. Together they're how people run surprisingly large models on modest GPUs."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The honest tradeoff: every layer you push to the CPU is slower than a layer on the GPU, and the *first* layer you spill across the VRAM boundary is where speed falls off a cliff (more on that below). Offloading buys you capability at the cost of throughput — and knowing exactly how that trade works is the difference between a setup that's usable and one that crawls."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A transformer model is a stack of near-identical **layers** (also called blocks). A token's data flows up through layer 1, then 2, then 3, all the way to the top, and then a final step turns the result into the next token. Each layer holds a chunk of the model's weights, and crucially, the layers run *in order* — layer 5 needs the output of layer 4 before it can start."
+        },
+        {
+          "type": "p",
+          "md": "Offloading exploits this structure. You assign the **bottom N layers to the GPU** and leave the rest on the CPU. As a token flows up the stack, the GPU computes its share at full speed; then the data crosses over to system RAM and the CPU finishes the remaining layers. The split is by *layer*, not by splitting individual layers in half."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "stack",
+            "title": "A 40-layer model split across two devices",
+            "layers": [
+              {
+                "label": "Output / token sampling",
+                "sub": "on whichever device holds the top"
+              },
+              {
+                "label": "Layers 21–40 → CPU + system RAM",
+                "sub": "slow: limited by RAM bandwidth"
+              },
+              {
+                "label": "Layers 1–20 → GPU VRAM",
+                "sub": "fast: n-gpu-layers = 20",
+                "accent": true
+              },
+              {
+                "label": "Input embedding",
+                "sub": "token → vector"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "What n-gpu-layers actually does"
+        },
+        {
+          "type": "p",
+          "md": "When you set `n-gpu-layers` to 20 on a 40-layer model, the loader copies the weights for layers 1–20 into VRAM and keeps layers 21–40 in ordinary RAM. At inference time the GPU and CPU hand the data back and forth across the **PCIe bus** that connects them. That hand-off is the slow part: PCIe is far slower than the GPU's own internal memory, and system RAM is far slower than VRAM."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "A token's journey through a split model",
+            "steps": [
+              {
+                "label": "Input",
+                "sub": "prompt token"
+              },
+              {
+                "label": "GPU layers",
+                "sub": "1–20, fast",
+                "accent": true
+              },
+              {
+                "label": "Cross PCIe",
+                "sub": "hand off to CPU"
+              },
+              {
+                "label": "CPU layers",
+                "sub": "21–40, slow"
+              },
+              {
+                "label": "Next token",
+                "sub": "repeat for every token"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Two common edge cases. If you set `n-gpu-layers` *higher than the layer count* (people often just use a big number like 99 or 999), the loader simply puts **every** layer on the GPU — that's how you say \"full GPU\" without counting. If you set it to **0**, you get pure CPU inference, no GPU involvement at all. Everything in between is partial offload."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "There's a fixed cost beyond the layers: the **KV cache** (the model's running memory of the conversation) and a compute buffer also need to live somewhere. They grow with your context length, so a long prompt can push you over the VRAM edge even when the layers themselves fit. Always leave headroom — don't fill VRAM to 100%."
+        }
+      ]
+    },
+    {
+      "id": "counting-layers-and-setting-the-knob",
+      "title": "Counting layers and setting the knob",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "To use the knob well, you need two numbers: how many layers the model has, and how much VRAM each layer costs. A rough rule: **VRAM per layer ≈ (model file size on disk) ÷ (number of layers)**, plus a bit of overhead. So a 7GB quantized file with 32 layers costs roughly 220MB per layer."
+        },
+        {
+          "type": "p",
+          "md": "llama.cpp prints the layer count and the split right in its startup log, which is the fastest way to see what's happening:"
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "title": "llama.cpp load log (abridged)",
+          "code": "llm_load_print_meta: n_layer          = 32\nllm_load_tensors: offloading 18 repeating layers to GPU\nllm_load_tensors: offloaded 18/33 layers to GPU\nllm_load_tensors:        CPU buffer size =  2150.55 MiB\nllm_load_tensors:      CUDA0 buffer size =  4810.20 MiB"
+        },
+        {
+          "type": "p",
+          "md": "Note the `33` — that's 32 transformer layers plus 1 for the output head. Setting `n-gpu-layers` to 33 (or any number ≥ 33) means \"fully on GPU.\" Here only 18 were offloaded, so 14 layers plus the output are still on the CPU."
+        },
+        {
+          "type": "h3",
+          "text": "The same idea in three tools"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Tool",
+            "How you set it",
+            "\"Full GPU\" shortcut"
+          ],
+          "rows": [
+            [
+              "llama.cpp (CLI)",
+              "`--n-gpu-layers 20` (or `-ngl 20`)",
+              "`-ngl 99`"
+            ],
+            [
+              "Ollama",
+              "`num_gpu` in a Modelfile or the API `options`",
+              "high `num_gpu`; auto-detects by default"
+            ],
+            [
+              "LM Studio",
+              "\"GPU Offload\" slider in the model load panel",
+              "drag slider to max"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "[Ollama](/learn/local-open-models/running-models-locally/how-to-run-ollama/) and [LM Studio](/learn/local-open-models/running-models-locally/lm-studio-vs-ollama/) try to auto-pick a sensible offload for your GPU, which is great for getting started. But auto-detection is conservative and sometimes wrong — knowing how to set the number by hand is how you squeeze out the last bit of speed."
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "title": "Setting offload by hand in two tools",
+          "code": "# llama.cpp: put 20 layers on the GPU, the rest on CPU\n./llama-cli -m model.gguf --n-gpu-layers 20 -p \"Hello\"\n\n# Ollama: override num_gpu for one request via the API\ncurl http://localhost:11434/api/generate -d '{\n  \"model\": \"llama3\",\n  \"prompt\": \"Hello\",\n  \"options\": { \"num_gpu\": 20 }\n}'"
+        }
+      ]
+    },
+    {
+      "id": "the-throughput-cliff",
+      "title": "The throughput cliff: why offloaded layers are so slow",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "LLM token generation is **memory-bandwidth bound**: for each new token the machine has to read every active weight out of memory, and the speed of that read dominates everything. This single fact explains the whole shape of offloading performance."
+        },
+        {
+          "type": "p",
+          "md": "VRAM on a modern GPU moves data at hundreds of gigabytes to over a terabyte per second. System RAM (DDR) moves it at roughly 50–100 GB/s — often **ten times slower**. So a layer on the CPU side isn't a little slower; it's an order of magnitude slower to feed. The result is a sharp, non-linear curve:"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Where your layers live, and what it costs",
+            "columns": [
+              {
+                "title": "All layers in VRAM",
+                "accent": true,
+                "items": [
+                  "Reads at full GPU bandwidth",
+                  "Fastest possible tokens/sec",
+                  "Limited by VRAM capacity",
+                  "The goal — if the model fits"
+                ]
+              },
+              {
+                "title": "A few layers on CPU",
+                "items": [
+                  "Most reads still fast",
+                  "Modest slowdown",
+                  "Lets a too-big model run",
+                  "The useful sweet spot"
+                ]
+              },
+              {
+                "title": "Most layers on CPU",
+                "items": [
+                  "Bottlenecked by slow RAM",
+                  "Tokens/sec drops sharply",
+                  "Often slower than expected",
+                  "Diminishing returns"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The practical takeaway: **the goal is to maximize layers on the GPU, because the curve is steep near the top.** Going from 30 to 32 layers offloaded (out of 33) can feel dramatically faster than going from 10 to 12, because those last layers are the difference between \"almost all fast reads\" and \"a chunk of slow ones.\" Even a single layer spilling to CPU has a cost — but the cost per layer is what compounds as the count grows."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Watch for **silent system-RAM spillover.** If you tell the GPU to hold more than fits, some drivers (especially recent NVIDIA ones on Windows) won't error — they quietly shuffle the overflow into system RAM behind your back. The model still runs, but *much* slower than expected, with no obvious clue why. If a higher `n-gpu-layers` makes things slower instead of faster, you've crossed that line — back it off."
+        }
+      ]
+    },
+    {
+      "id": "finding-the-best-layer-count",
+      "title": "A practical method to find the best layer count",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You don't need to compute VRAM budgets perfectly. The reliable method is to climb until it breaks, then step back one rung:"
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Start conservative.** Pick a number you're sure fits — for an 8GB card and a mid-size quantized model, try something like 15.",
+            "**Load and watch VRAM.** Run `nvidia-smi` (NVIDIA) or your GPU monitor while the model loads. Note how full VRAM is and confirm it didn't spill to system RAM.",
+            "**Climb by a few layers.** Raise `n-gpu-layers` by 4–8 and reload. Re-check VRAM usage and run a quick generation to read the tokens/sec.",
+            "**Find the ceiling.** Keep climbing until you either get an out-of-memory error or speed suddenly *drops* (the silent spillover from the warning above). That's one layer too many.",
+            "**Step back one notch and leave headroom.** Drop a couple of layers below the failure point so the KV cache for a long context still fits. That's your number."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Re-tune when you change **context length** or **quantization**. A bigger context needs a bigger KV cache (less room for layers); a smaller quant (say Q4 instead of Q6) makes each layer cheaper, so more layers fit. The best `n-gpu-layers` is specific to *this model file at this context size on this GPU* — see [GGUF format](/learn/local-open-models/quantization-and-formats/gguf-format-explained/) for how quant level affects file size."
+        },
+        {
+          "type": "p",
+          "md": "If you find you can only offload a handful of layers, that's a signal to step down a [quantization](/learn/local-open-models/quantization-and-formats/what-is-quantization/) level or pick a smaller model — a fully-GPU smaller model usually beats a barely-offloaded larger one. Check your card against the [local LLM hardware requirements](/learn/local-open-models/running-models-locally/local-llm-hardware-requirements/) to calibrate expectations."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The picture above is the everyday case — one GPU, one CPU, split by layer. A few nuances matter once you push further."
+        },
+        {
+          "type": "p",
+          "md": "**Prompt processing vs. generation behave differently.** Reading your prompt (the \"prefill\" phase) is compute-bound and parallel, so it stays fast even with offloaded layers. Generating tokens one at a time is the memory-bound part that offloading slows down. This is why a long document can be ingested quickly but then each new token crawls — the bottleneck moves between phases."
+        },
+        {
+          "type": "p",
+          "md": "**Apple Silicon changes the math.** Macs use *unified memory*: the CPU and GPU share one pool, so there's no slow PCIe hand-off and no hard VRAM wall in the same sense. On a Mac, \"offloading\" is less about splitting devices and more about how much of that shared memory the GPU is allowed to use — which is why [running LLMs on a Mac](/learn/local-open-models/running-models-locally/run-llms-on-mac/) often feels smoother than the VRAM size alone would suggest."
+        },
+        {
+          "type": "p",
+          "md": "**Not all layers are equal, and tools are getting smarter.** Beyond the simple bottom-N split, newer llama.cpp options let you keep specific heavy tensors — like the large mixture-of-experts feed-forward weights — on the GPU while spilling lighter ones, squeezing more speed from the same VRAM. The bottom-N model is the mental picture to start with; the implementations have grown more surgical."
+        },
+        {
+          "type": "p",
+          "md": "**Multi-GPU is the same idea, scaled.** With two cards, the layers split across both GPUs' VRAM (\"tensor\" or \"layer\" splitting). It's the same principle — put as many layers as possible on fast memory — just with more fast memory to spread across, and an extra GPU-to-GPU transfer cost to weigh."
+        },
+        {
+          "type": "p",
+          "md": "Where to go next: understand [quantization](/learn/local-open-models/quantization-and-formats/what-is-quantization/) and the [GGUF format](/learn/local-open-models/quantization-and-formats/what-is-gguf/) deeply, since the quant level is the single biggest lever on how many layers fit. Then the loop is simple: pick a quant that fits your VRAM with room to spare, offload as many layers as you safely can, and step down a size whenever the layer count gets too small to help."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What does n-gpu-layers do in llama.cpp and Ollama?",
+      "a": "It sets how many of the model's layers are loaded into GPU VRAM; every layer above that number stays in system RAM and runs on the CPU. In llama.cpp the flag is `--n-gpu-layers` (or `-ngl`); in Ollama the equivalent option is `num_gpu`. Setting it to 0 means CPU-only, and setting it higher than the layer count means the whole model goes on the GPU."
+    },
+    {
+      "q": "Can I run a model bigger than my VRAM?",
+      "a": "Yes — that's exactly what GPU offloading is for. You put as many layers as fit into VRAM and leave the rest in system RAM for the CPU to handle, so the model runs even though it doesn't fully fit on the card. The catch is that the CPU-side layers are much slower, so total speed drops the more layers you offload to RAM."
+    },
+    {
+      "q": "How do I know how many layers to offload?",
+      "a": "Start with a number you're sure fits, watch VRAM usage with a tool like `nvidia-smi` while the model loads, then raise `n-gpu-layers` a few at a time until you hit an out-of-memory error or speed suddenly drops. Step back a couple of layers from that point to leave headroom for the KV cache. The best value depends on the model, its quantization level, and your context length."
+    },
+    {
+      "q": "Why does my model get slower when I offload more layers to the GPU?",
+      "a": "If raising the layer count makes it slower instead of faster, you've likely overshot your VRAM. Some GPU drivers (notably NVIDIA on Windows) silently spill the overflow into system RAM instead of erroring, which is far slower than a clean split. Lower `n-gpu-layers` until it fits cleanly and the slowdown disappears."
+    },
+    {
+      "q": "Is partial GPU offload worth it, or should I just use CPU?",
+      "a": "Partial offload is almost always faster than pure CPU because the layers on the GPU read from much faster memory. Even getting half a model onto the GPU can roughly double throughput versus CPU-only. The exception is when you can only fit a handful of layers — then a smaller model that runs fully on the GPU usually beats a barely-offloaded large one."
+    },
+    {
+      "q": "Does quantization let me offload more layers?",
+      "a": "Yes. A 4-bit quantized model is several times smaller than the full-precision version, so each layer costs far less VRAM and many more layers fit on the same card. Quantization and offloading work together: quantization shrinks each layer, and offloading decides where the layers go."
+    }
+  ],
+  "related": [
+    "what-is-llama-cpp",
+    "what-is-ollama",
+    "what-is-quantization",
+    "local-llm-hardware-requirements",
+    "run-llms-on-mac",
+    "what-is-gguf"
+  ],
+  "furtherReading": [
+    {
+      "title": "llama.cpp — README (GitHub)",
+      "url": "https://github.com/ggml-org/llama.cpp"
+    },
+    {
+      "title": "Ollama — Documentation",
+      "url": "https://github.com/ollama/ollama/tree/main/docs"
+    },
+    {
+      "title": "Transformer (machine learning model) — Wikipedia",
+      "url": "https://en.wikipedia.org/wiki/Transformer_(deep_learning_architecture)"
+    }
+  ]
+}

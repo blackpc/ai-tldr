@@ -1,0 +1,397 @@
+{
+  "slug": "automatic-prompt-optimization",
+  "title": "What Is Automatic Prompt Optimization? (DSPy, OPRO, and More)",
+  "shortTitle": "Automatic Prompt Optimization",
+  "seoTitle": "Automatic Prompt Optimization: DSPy, OPRO Explained",
+  "metaDescription": "Automatic prompt optimization explained: how tools like DSPy and OPRO search for better prompts against an eval set, and when to optimize by machine vs by hand.",
+  "keywords": [
+    "what is automatic prompt optimization",
+    "dspy prompt optimization",
+    "opro optimization by prompting",
+    "automated prompt tuning",
+    "should i optimize prompts automatically"
+  ],
+  "difficulty": "advanced",
+  "oneLiner": "Understand how automatic prompt optimizers search for better wording and examples against a metric, what DSPy and OPRO actually do, and when it beats hand-tuning.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you write a prompt by hand, you are doing a kind of search. You try a wording, look at the output, change a word, add an example, try again. **Automatic prompt optimization** is that same loop, but a program drives it instead of you. You hand the system a *metric* (a way to score an answer as good or bad) and a set of test examples, and it proposes prompt variants, scores each one, keeps what works, and discards what doesn't."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like a coach running drills. You can't watch a player and *invent* the perfect technique from your head — you make them try fifty variations, time each one, and keep the fastest. The coach doesn't need to understand *why* a slightly different grip is faster; the stopwatch decides. An automatic prompt optimizer is the stopwatch plus the drill schedule: it doesn't \"understand\" your task, it just measures which prompt scores higher on your examples and climbs toward the winner."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The thing being optimized is not the model's weights — nothing is retrained. Only the *text fed to the model* changes: the instructions, the wording, the few-shot examples, sometimes the output format. That is why it's called prompt optimization, not [fine-tuning](/learn/fine-tuning/fine-tuning-basics/what-is-fine-tuning)."
+        },
+        {
+          "type": "p",
+          "md": "Two names you'll hear most: **DSPy**, a framework that *compiles* a prompt for you the way a compiler turns code into machine instructions, and **OPRO** (\"Optimization by PROmpting\"), a research method where a language model itself proposes better prompts. Both share one idea: stop guessing wording by hand and let a measured loop do the searching."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Hand-tuning prompts works fine for one prompt you'll use casually. It falls apart the moment you have a real system, and that is exactly where automatic optimization earns its keep."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Manual tuning doesn't scale.** A serious app has many prompts — a router, a summarizer, an extractor, a grader — chained together. Hand-tuning each one, then re-tuning them all every time you swap the model, is slow and never finishes.",
+            "**Humans are bad at prompt search.** We fixate on wording that *sounds* persuasive and ignore boring changes (reordering examples, dropping a sentence) that actually move the score. A measured loop has no such bias — it only believes the metric.",
+            "**Prompts are brittle across models.** A prompt tuned for one model can quietly get worse on the next one. If your prompt is *compiled from a metric*, you re-run the optimizer against the new model and get a fresh, fitted prompt instead of porting hand-crafted text and hoping.",
+            "**It makes prompting reproducible.** \"I tweaked it until it felt right\" is not something a teammate can rebuild. \"Here is the metric, the eval set, and the optimizer config\" is."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The honest catch: optimization is only as good as your metric and your examples. If your scoring function is sloppy, the optimizer will cheerfully find a prompt that games it — high score, useless answers. So this technique doesn't replace thinking about your task; it replaces the *tedious wording search* once you've already defined what \"good\" means. It sits at the machine-driven end of the same workflow as [A/B testing prompts](/learn/prompt-engineering/prompt-iteration/how-to-ab-test-prompts) and [prompt management](/learn/prompt-engineering/prompt-iteration/what-is-prompt-management)."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Strip away the branding and almost every automatic prompt optimizer is the same loop: **propose a candidate prompt, score it on your eval set, keep the good ones, propose new candidates informed by what scored well, repeat.** It is search over the space of possible prompts, guided by a number."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "The optimization loop",
+            "steps": [
+              {
+                "label": "Propose candidates",
+                "sub": "new instructions / examples"
+              },
+              {
+                "label": "Run on eval set",
+                "sub": "model answers each example"
+              },
+              {
+                "label": "Score with metric",
+                "sub": "accuracy, match, judge"
+              },
+              {
+                "label": "Select winners",
+                "sub": "keep the high scorers"
+              },
+              {
+                "label": "Refine",
+                "sub": "build next batch from winners"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Three ingredients make this possible, and you must supply all three:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**A metric** — a function that turns an answer into a score. Exact match against a known label, an F1 or BLEU number, a regex check, or an [LLM-as-a-judge](/learn/prompt-engineering/prompt-iteration/how-to-ab-test-prompts) that rates quality. Without a metric there is nothing to climb toward.",
+            "**An eval set** — labeled examples (input + the answer or quality you expect). Even 20–50 good examples is enough to start; the optimizer tries prompts against these.",
+            "**A search strategy** — the rule for proposing the next candidate. This is the part that differs between tools."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "OPRO: the model proposes its own prompts"
+        },
+        {
+          "type": "p",
+          "md": "OPRO (Optimization by PROmpting) uses a language model as the optimizer. You show it the prompts tried so far *with their scores*, sorted worst-to-best, and ask it: \"these are the instructions and how each one scored — write a new instruction that scores higher.\" The model reads the trajectory, spots the pattern, and proposes a fresh candidate. You score that, add it to the history, and ask again. The famous result from the OPRO paper is that an LLM discovered the instruction \"Take a deep breath and work on this problem step by step,\" which beat the human-written \"Let's think step by step\" on math benchmarks — a phrasing no person was likely to guess."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "OPRO — model optimizes the prompt",
+            "steps": [
+              {
+                "label": "Past prompts + scores",
+                "sub": "sorted history"
+              },
+              {
+                "label": "Optimizer LLM",
+                "sub": "\"write a better instruction\""
+              },
+              {
+                "label": "New candidate prompt",
+                "sub": "proposed wording"
+              },
+              {
+                "label": "Evaluate",
+                "sub": "score on eval set"
+              },
+              {
+                "label": "Add to history",
+                "sub": "loop back",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "DSPy: compile prompts from a program"
+        },
+        {
+          "type": "p",
+          "md": "DSPy takes a different angle. You don't write prompt strings at all. You declare a *signature* — the inputs and outputs of a step, like `question -> answer` — and DSPy treats the actual prompt as something to be *compiled*. You give it a metric and training examples, run an **optimizer** (DSPy calls them *teleprompters*, e.g. `BootstrapFewShot` or `MIPRO`), and it searches for the best instructions and the best few-shot examples to put in front of the model. The examples are often *bootstrapped*: DSPy runs your program on training inputs, keeps the runs that the metric says succeeded, and reuses those successful traces as demonstrations."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "the shape of a DSPy program (illustrative)",
+          "code": "import dspy\n\n# 1) Declare WHAT the step does, not the prompt wording.\nclass FactQA(dspy.Signature):\n    \"\"\"Answer the question from the given context.\"\"\"\n    context = dspy.InputField()\n    question = dspy.InputField()\n    answer = dspy.OutputField()\n\nqa = dspy.ChainOfThought(FactQA)   # adds reasoning automatically\n\n# 2) Define the metric: was the predicted answer correct?\ndef exact_match(example, pred, trace=None):\n    return example.answer.lower() == pred.answer.lower()\n\n# 3) Compile: the optimizer SEARCHES for good instructions + examples.\noptimizer = dspy.BootstrapFewShot(metric=exact_match)\ncompiled_qa = optimizer.compile(qa, trainset=train_examples)\n\n# compiled_qa now carries an optimized prompt you never hand-wrote."
+        },
+        {
+          "type": "p",
+          "md": "The key shift: in DSPy the *prompt is an artifact you compile*, not a string you maintain. Change the model and you recompile, the way you'd recompile code for a new CPU rather than rewriting it by hand."
+        }
+      ]
+    },
+    {
+      "id": "approaches-compared",
+      "title": "DSPy vs OPRO vs hand-tuning",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "These aren't strictly rivals — DSPy can use OPRO-style proposal *inside* its search — but it helps to see what each is really for."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Three ways to land on a prompt",
+            "columns": [
+              {
+                "title": "Hand-tuning",
+                "items": [
+                  "You write and tweak the text",
+                  "No metric or eval set needed",
+                  "Fast to start, hard to scale",
+                  "Biased toward what sounds good",
+                  "Best for one-off, simple prompts"
+                ]
+              },
+              {
+                "title": "OPRO",
+                "items": [
+                  "An LLM proposes new instructions",
+                  "Optimizes the instruction wording",
+                  "Finds phrasings humans miss",
+                  "Needs a metric + eval set",
+                  "Great for a single tricky prompt"
+                ]
+              },
+              {
+                "title": "DSPy",
+                "accent": true,
+                "items": [
+                  "You declare I/O, it compiles",
+                  "Optimizes instructions AND examples",
+                  "Handles multi-step pipelines",
+                  "Needs a metric + training set",
+                  "Best for whole systems"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Question",
+            "Hand-tuning",
+            "Automatic (DSPy / OPRO)"
+          ],
+          "rows": [
+            [
+              "Setup cost",
+              "Near zero",
+              "Define metric + collect eval set"
+            ],
+            [
+              "Who searches",
+              "You, by intuition",
+              "An algorithm, by score"
+            ],
+            [
+              "Re-tune for new model",
+              "Rewrite by hand",
+              "Re-run the optimizer"
+            ],
+            [
+              "Scales to many prompts",
+              "Poorly",
+              "Well"
+            ],
+            [
+              "Risk",
+              "Slow, inconsistent",
+              "Overfits / games a bad metric"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "when-its-worth-it",
+      "title": "When the setup cost pays off",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Automatic optimization has a real fixed cost: you must build a metric and gather labeled examples before it does anything. That cost is the same whether you have one prompt or fifty, so the math is simple — the more you'll reuse the metric, the more it pays off."
+        },
+        {
+          "type": "h3",
+          "text": "Reach for an optimizer when"
+        },
+        {
+          "type": "list",
+          "items": [
+            "You already have (or can cheaply build) an **eval set with clear right/wrong answers** — classification, extraction, math, retrieval QA. A crisp metric is the whole prerequisite.",
+            "You have a **multi-step pipeline** where hand-tuning each stage and their interaction is impractical. This is DSPy's home turf.",
+            "You **swap models often** and are tired of re-hand-tuning. Recompiling against the new model is far cheaper than rewriting.",
+            "Quality matters enough to **justify the eval investment** — a production feature, not a weekend script."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Just tune by hand when"
+        },
+        {
+          "type": "list",
+          "items": [
+            "It's a **one-off or low-stakes** prompt — the optimizer's setup costs more than you'd ever save.",
+            "**\"Good\" is subjective and hard to measure** — tone, brand voice, open-ended creative writing. If you can't score it reliably, the optimizer has nothing to climb. (An LLM-judge can help, but a shaky judge produces a shaky prompt.)",
+            "You **lack representative examples.** Optimizing against five unrealistic cases just overfits to those five.",
+            "The basics aren't done yet. Optimization can't rescue an unclear task — first fix [common prompting mistakes](/learn/prompt-engineering/prompt-iteration/common-prompting-mistakes) and write a clear baseline with [good structure](/learn/prompt-engineering/prompting-basics/structure-prompts-xml-markdown)."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "A pragmatic middle path: hand-write a solid baseline prompt first, *then* let an optimizer refine the few-shot examples and instruction wording around it. The human sets direction; the machine polishes. You rarely need to choose only one."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Most automatic-optimization failures aren't about the algorithm — they're about the metric and the data you fed it. The optimizer does exactly what you measured, which is the problem."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Metric gaming.** The optimizer maximizes your score, not your intent. If the metric rewards keyword overlap, you'll get keyword-stuffed answers that ace the number and fail real users. Sanity-check winning prompts on examples *by eye*.",
+            "**Overfitting the eval set.** A prompt tuned hard on 30 examples can memorize their quirks and flop on new inputs. Always hold out a **separate test set** the optimizer never sees, and judge final quality there.",
+            "**Tiny or skewed eval data.** Twenty examples that all look alike teach the optimizer a narrow trick. Diverse, representative examples matter more than clever search.",
+            "**Ignoring cost.** Every candidate is scored across the whole eval set, so a run can mean thousands of model calls. Budget for it, and start with cheap models before optimizing on an expensive one.",
+            "**Forgetting it can drift.** A prompt compiled six months ago against an old model may now be suboptimal. Optimization is something you *re-run*, not a one-time event."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "An optimizer will happily report a beautiful score on a prompt that is overfit, brittle, or gaming a weak metric. The number going up is not proof. Confirm on held-out data and read a sample of outputs before you ship."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic loop clicks, the interesting questions are about *what* you let the optimizer change and *how* it proposes candidates. A few directions worth knowing."
+        },
+        {
+          "type": "p",
+          "md": "**Instructions vs examples vs both.** Some optimizers only rewrite the instruction text (OPRO-style). Others, like DSPy's `BootstrapFewShot`, mainly select and order *few-shot examples*. The strongest setups (DSPy's `MIPRO` family) jointly search over instructions *and* example selection, because the two interact — the best wording depends on which demonstrations sit beside it. This connects directly to the [zero-shot vs few-shot](/learn/prompt-engineering/prompting-basics/zero-shot-vs-few-shot) tradeoff."
+        },
+        {
+          "type": "p",
+          "md": "**Search strategy.** Proposing candidates can be naive (random tweaks), evolutionary (mutate and combine the best survivors), or model-driven (OPRO's \"read the score history and write a better one\"). Bayesian methods like MIPRO try to be sample-efficient — spending fewer expensive evaluations to find a good prompt — which matters because each evaluation is a pile of API calls."
+        },
+        {
+          "type": "p",
+          "md": "**Optimizing reasoning steps, not just answers.** Because techniques like [chain-of-thought](/learn/prompt-engineering/reasoning-techniques/chain-of-thought-prompting) and [self-consistency](/learn/prompt-engineering/reasoning-techniques/self-consistency-prompting) change *how* the model thinks, optimizers can also tune those scaffolds — choosing which reasoning style and which exemplars produce the most reliable chains for your task, not just the final phrasing."
+        },
+        {
+          "type": "p",
+          "md": "**The frontier: compiling whole agent systems.** The real promise of DSPy is that an entire multi-module program — retriever, reasoner, checker — can be optimized end-to-end against one downstream metric, with the optimizer figuring out the right prompt for each module so the *system* scores well, not each piece in isolation. That's a meaningfully different mindset from prompt engineering as a craft: prompts become compiled artifacts of your program plus your data, and your real job moves to defining the right metric and gathering the right examples. The durable lesson is the one every section here repeats: an automatic optimizer is only ever as good as the metric and the data you point it at."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is automatic prompt optimization?",
+      "a": "It's letting a program search for a better prompt instead of hand-tuning it. You supply a metric (a way to score answers) and a set of test examples; the system proposes prompt variants, scores each one, keeps the winners, and proposes new candidates from there. Nothing about the model is retrained — only the text fed to it changes."
+    },
+    {
+      "q": "What does DSPy actually do?",
+      "a": "DSPy treats a prompt as something you *compile* rather than write by hand. You declare a step's inputs and outputs (a \"signature\") and give DSPy a metric plus training examples; an optimizer (a \"teleprompter\" like BootstrapFewShot or MIPRO) then searches for the best instructions and few-shot examples. When you change models, you recompile instead of rewriting prompts."
+    },
+    {
+      "q": "What is OPRO in prompt optimization?",
+      "a": "OPRO stands for \"Optimization by PROmpting.\" You show a language model the prompts tried so far along with their scores, and ask it to write a new instruction that should score higher. It loops, using the model itself as the optimizer. OPRO famously discovered the instruction \"Take a deep breath and work on this problem step by step,\" which beat the standard hand-written phrasing on math tasks."
+    },
+    {
+      "q": "Should I optimize prompts automatically or by hand?",
+      "a": "Optimize automatically when you have a clear, measurable metric, a representative eval set, and prompts you'll reuse or re-tune across models — especially multi-step pipelines. Tune by hand for one-off, low-stakes prompts or when \"good\" is subjective and hard to score. A common middle path is to hand-write a solid baseline, then let an optimizer polish the wording and examples."
+    },
+    {
+      "q": "Does automatic prompt optimization replace prompt engineering?",
+      "a": "No. It automates the tedious wording search *after* you've defined what \"good\" means, but you still must design a sound metric, gather representative examples, and sanity-check the winning prompt. A sloppy metric just teaches the optimizer to game it, so the human judgment moves from wording to evaluation rather than disappearing."
+    },
+    {
+      "q": "Why do optimized prompts sometimes fail on new inputs?",
+      "a": "Usually overfitting. A prompt tuned hard on a small eval set can memorize the quirks of those examples and flop on unseen inputs. Always hold out a separate test set the optimizer never sees, judge final quality there, and read a sample of real outputs before shipping."
+    }
+  ],
+  "related": [
+    "how-to-ab-test-prompts",
+    "what-is-prompt-management",
+    "common-prompting-mistakes",
+    "what-are-prompt-templates",
+    "chain-of-thought-prompting",
+    "zero-shot-vs-few-shot"
+  ],
+  "furtherReading": [
+    {
+      "title": "DSPy — Documentation",
+      "url": "https://dspy.ai/"
+    },
+    {
+      "title": "Large Language Models as Optimizers (OPRO, arXiv)",
+      "url": "https://arxiv.org/abs/2309.03409"
+    },
+    {
+      "title": "DSPy — GitHub repository",
+      "url": "https://github.com/stanfordnlp/dspy"
+    }
+  ]
+}

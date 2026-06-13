@@ -1,0 +1,356 @@
+{
+  "slug": "self-critique-self-refine-prompting",
+  "title": "Self-Critique and Self-Refine: Getting an LLM to Check Its Own Work",
+  "shortTitle": "Self-Critique & Self-Refine",
+  "seoTitle": "Self-Critique & Self-Refine: LLMs Checking Their Work",
+  "metaDescription": "How self-critique and self-refine prompting work: asking a model to find flaws in its own answer and revise it, when it helps, and when it just agrees with itself.",
+  "keywords": [
+    "self-critique prompting",
+    "self-refine prompting",
+    "ask llm to check its own answer",
+    "self-correction llm reasoning",
+    "does self-critique improve llm output"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn the critique-then-revise loop that catches a model's own mistakes, plus the honest limits — including when self-correction makes answers worse.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you write an email, you usually do two things: you write a first draft, then you read it back and fix the parts that are wrong, unclear, or rude. **Self-critique and self-refine** prompting asks a language model to do the same two-step move — first answer, then turn around and inspect its own answer for mistakes, and rewrite it."
+        },
+        {
+          "type": "p",
+          "md": "The whole idea is a loop of three roles played by the *same* model: a **generator** produces a draft, a **critic** points out specific flaws, and a **refiner** rewrites the draft using that feedback. You can repeat the critic-and-refine pass a few times until the answer stops changing or passes a check."
+        },
+        {
+          "type": "p",
+          "md": "Think of a writer and an editor who happen to be the same person at different moments. The writer is in 'produce' mode — get words on the page, don't stop to judge. The editor is in 'find problems' mode — read coldly, mark what's broken. Splitting these into separate steps works better than trying to write perfectly on the first pass, because *generating* and *judging* pull in opposite directions."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This family of techniques has names you'll see in papers: **Self-Refine** (generate → feedback → refine, looped) and **Reflexion** (the model writes a short 'reflection' on what went wrong and carries it into the next attempt). They share one engine: let the model critique itself, then revise."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A model's first answer is rarely its best answer. The first pass is fast, fluent, and often *almost* right — but it may skip an edge case, miscount, contradict a constraint you gave, or leave the tone wrong. Asking for a fresh, critical second look is one of the cheapest ways to catch those misses without a smarter model or more training."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**It separates two skills the model is bad at doing at once.** Producing text and evaluating text compete for attention in a single pass. Two passes — write, then judge — let the model spend its full effort on each.",
+            "**It catches concrete, checkable errors.** Code that doesn't run, JSON that doesn't parse, a math step that doesn't add up, a requirement you listed that the draft ignored. These are exactly the flaws a critique pass is good at flagging.",
+            "**It needs no fine-tuning.** Self-refine is pure prompting. You wire up two or three prompts and a loop. Any capable model can do it today, and you can add it to an existing system without retraining anything.",
+            "**It produces a feedback trail.** The critique step writes down *why* the answer changed. That trail is useful for debugging, for logging, and for letting a human review the reasoning."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who should care? Anyone whose output has a clear quality bar: code generation (does it compile and pass tests?), structured extraction (does it match the schema?), drafting with hard constraints (did it stay under the word limit, use the required tone, include every section?). The more *checkable* the task, the more self-critique helps. This is closely related to other [reasoning techniques](/learn/prompt-engineering/reasoning-techniques/chain-of-thought-prompting) that trade extra tokens for better answers."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Self-critique is not free and not always positive. On open-ended reasoning with no way to check the answer, a model often 'corrects' a *right* answer into a *wrong* one, or just agrees with whatever it wrote. We cover this honestly in the pitfalls below — it's the single most important thing to understand about the technique."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The core is a three-step cycle. Crucially, each step is a **separate prompt** (often a separate API call), not one giant instruction. Keeping the critic's prompt distinct from the generator's is what makes the critique sharp instead of self-congratulatory."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "The generate → critique → refine loop",
+            "steps": [
+              {
+                "label": "Generate",
+                "sub": "produce a draft answer"
+              },
+              {
+                "label": "Critique",
+                "sub": "list concrete flaws"
+              },
+              {
+                "label": "Refine",
+                "sub": "rewrite using the critique"
+              },
+              {
+                "label": "Check",
+                "sub": "good enough? else loop"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Step 1 — Generate"
+        },
+        {
+          "type": "p",
+          "md": "Get a first answer the normal way. Nothing special here — a plain prompt, maybe with [chain-of-thought](/learn/prompt-engineering/reasoning-techniques/chain-of-thought-prompting) if the task needs reasoning. This draft is allowed to be imperfect; that's the point."
+        },
+        {
+          "type": "h3",
+          "text": "Step 2 — Critique"
+        },
+        {
+          "type": "p",
+          "md": "Now start a *new* prompt that hands the model the original task plus its own draft, and asks it to act as a strict reviewer. The wording matters a lot. A vague 'Are you sure?' tends to make the model cave and apologize regardless of whether it was right. A specific critique prompt that names the criteria pulls out real, actionable feedback."
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "title": "a good critique prompt",
+          "code": "You are a strict reviewer. Below is a task and a candidate answer.\nList every concrete problem with the answer. Be specific:\n- Does it satisfy each requirement listed in the task?\n- Are there factual, logical, or arithmetic errors?\n- Is anything missing, ambiguous, or contradictory?\nIf the answer is already correct and complete, reply exactly: NO ISSUES.\n\nTask:\n{task}\n\nCandidate answer:\n{draft}"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Why a fresh prompt beats 'are you sure?': asking inside the same chat nudges the model toward agreeing with itself (it already committed to the answer), and 'are you sure?' is read as social pressure to change. A separate critique prompt with explicit *criteria* reframes the job as inspection, not defense. Give it the 'NO ISSUES' escape hatch so it can stop instead of inventing fake problems."
+        },
+        {
+          "type": "h3",
+          "text": "Step 3 — Refine"
+        },
+        {
+          "type": "p",
+          "md": "Feed the task, the draft, and the critique back in, and ask for a revised answer that fixes each listed issue. Then **check**: if the critique said 'NO ISSUES', or you've hit a max iteration count, or the answer stopped changing, stop. Otherwise loop the critique-and-refine pass again. The loop and its stop condition are the difference between a useful technique and an infinite back-and-forth."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "self_refine.py — the loop in ~25 lines",
+          "code": "from anthropic import Anthropic\n\nclient = Anthropic()\nMODEL = \"claude-sonnet-4-6\"\n\ndef ask(prompt):\n    msg = client.messages.create(\n        model=MODEL, max_tokens=1024,\n        messages=[{\"role\": \"user\", \"content\": prompt}],\n    )\n    return msg.content[0].text\n\ndef self_refine(task, max_iters=3):\n    draft = ask(task)                       # 1) GENERATE\n    for _ in range(max_iters):\n        critique = ask(                     # 2) CRITIQUE (fresh prompt)\n            f\"You are a strict reviewer. List concrete problems with the\\n\"\n            f\"answer, or reply exactly NO ISSUES.\\n\\n\"\n            f\"Task:\\n{task}\\n\\nAnswer:\\n{draft}\"\n        )\n        if \"NO ISSUES\" in critique:          # CHECK -> stop condition\n            break\n        draft = ask(                        # 3) REFINE\n            f\"Revise the answer to fix every issue.\\n\\n\"\n            f\"Task:\\n{task}\\n\\nAnswer:\\n{draft}\\n\\nIssues:\\n{critique}\"\n        )\n    return draft\n\nprint(self_refine(\"Write a Python function to check if a string is a palindrome, ignoring case and spaces. Include 3 test cases.\"))"
+        }
+      ]
+    },
+    {
+      "id": "worked-example",
+      "title": "A worked example",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Watch the loop catch a real mistake. The task: *'Write a function that returns the second-largest number in a list.'* A typical first draft sorts the list and returns the element at index `-2`."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "the generated draft (has a bug)",
+          "code": "def second_largest(nums):\n    return sorted(nums)[-2]\n\n# second_largest([5, 5, 3]) -> 5  (wrong: 5 isn't the *second* largest)\n# second_largest([7])       -> crashes (index out of range)"
+        },
+        {
+          "type": "p",
+          "md": "The critique prompt, given the task and this draft, returns specific, checkable feedback — not vague praise:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "Duplicates aren't handled. For `[5, 5, 3]` it returns `5`, but the second-*largest distinct* value is `3`.",
+            "Lists with fewer than two distinct values crash with an `IndexError` instead of failing gracefully.",
+            "No examples or tests are provided to demonstrate the edge cases."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The refine step takes that critique and rewrites the function to deduplicate first and guard the short-list case:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "the refined answer",
+          "code": "def second_largest(nums):\n    distinct = sorted(set(nums))\n    if len(distinct) < 2:\n        return None          # no well-defined second largest\n    return distinct[-2]\n\nassert second_largest([5, 5, 3]) == 3\nassert second_largest([7]) is None"
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Notice *why* this worked: the bug was **checkable**. 'Does it handle duplicates?' has a definite answer the model can reason about. Self-refine shines exactly here — code, math, schema-conformance, constraint-checking — and struggles where there's no objective signal to critique against."
+        }
+      ]
+    },
+    {
+      "id": "when-it-helps-vs-hurts",
+      "title": "When it helps vs when it hurts",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "This is the part most tutorials skip. Self-correction is not a universal upgrade. Research has shown that on some reasoning tasks, prompting a model to revise *without any external feedback* makes accuracy go **down** — the model second-guesses correct answers. Whether it helps hinges on one thing: is there a reliable signal telling the critic what 'wrong' looks like?"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Where self-critique pays off",
+            "columns": [
+              {
+                "title": "Tends to HELP",
+                "accent": true,
+                "items": [
+                  "Output is checkable (runs / parses / compiles)",
+                  "Hard constraints to verify against",
+                  "An external signal exists: tests, a linter, a schema, search results",
+                  "Tasks with clear right/wrong: format, syntax, arithmetic"
+                ]
+              },
+              {
+                "title": "Tends to HURT",
+                "items": [
+                  "Open-ended reasoning with no ground truth",
+                  "The model is already right and gets talked out of it",
+                  "Critique is vague ('are you sure?')",
+                  "No external feedback — model grades its own homework"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The practical rule: **the more your critic can lean on something outside the model, the more reliable the loop.** A critique that runs the code and reads the error message, validates JSON against a schema, or checks an answer against retrieved documents is grounded in reality. A critique that only re-reads the text and *feels* whether it's good is the case that often backfires."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Feedback source",
+            "Reliability",
+            "Example"
+          ],
+          "rows": [
+            [
+              "Run the code / tests",
+              "High",
+              "Use the actual error or failing assertion as the critique"
+            ],
+            [
+              "Validator / schema / parser",
+              "High",
+              "Reject output that doesn't match the JSON schema, then refine"
+            ],
+            [
+              "Retrieved documents",
+              "Medium",
+              "Critic checks claims against fetched sources"
+            ],
+            [
+              "Model's own judgment alone",
+              "Low–Medium",
+              "Useful for style/format, risky for factual correctness"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "**Infinite agreement loops.** Without a clear stop condition, the model can ping-pong between two versions, 'fixing' issues that aren't there. Always set a max iteration count *and* an explicit 'NO ISSUES' exit the critic can trigger.",
+            "**Sycophancy.** If you phrase the critique as 'Are you sure? I think it's wrong,' the model tends to apologize and change a correct answer. Use neutral, criteria-based wording and never imply the answer is wrong before the model has looked.",
+            "**Critiquing in the same conversation.** Leaving the draft in the chat history biases the model toward defending it. Send the critique as a fresh prompt where the draft is just text to review, not 'my answer'.",
+            "**Cost and latency explosion.** Each loop is 2–3 extra model calls. Three iterations can mean 7+ calls for one answer. Cap iterations and only loop when the task quality justifies the spend.",
+            "**Refining drift.** With each rewrite, the answer can wander away from a constraint it originally satisfied. Re-state the full task and all constraints in the refine prompt so nothing silently gets dropped.",
+            "**Fake problems.** A critic with no escape hatch will *always* find something to complain about, degrading a good answer. The 'reply NO ISSUES if correct' instruction is not optional."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "A strong upgrade: have a *different, stronger* model play the critic, or ground the critic in a tool. Letting a model both produce and grade with no outside check is the weakest configuration — it's the one most likely to confidently agree with itself."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The basic loop — generate, critique, refine, check — is the foundation. Here are the directions worth knowing once it clicks."
+        },
+        {
+          "type": "p",
+          "md": "**Reflexion-style memory.** Instead of just rewriting the answer, the model writes a short *reflection* ('my last attempt failed because I forgot to handle the empty-list case') and carries that note into the next attempt. The reflection acts as a lesson, which is especially useful in agent loops where the model retries a task many times. This pairs naturally with [context engineering](/learn/prompt-engineering/context-engineering/what-is-context-engineering) — the reflection becomes part of the context for the next try."
+        },
+        {
+          "type": "p",
+          "md": "**Self-critique vs self-consistency.** They're easy to confuse but different. [Self-consistency](/learn/prompt-engineering/reasoning-techniques/self-consistency-prompting) samples many independent answers and takes a majority vote — no critique, just aggregation. Self-refine produces one answer and iteratively improves it. They can be combined: generate several drafts, critique each, then vote. [Tree-of-thought](/learn/prompt-engineering/reasoning-techniques/tree-of-thought-prompting) goes further, exploring and pruning a branching set of partial solutions."
+        },
+        {
+          "type": "p",
+          "md": "**Reasoning models change the picture.** Newer [reasoning models](/learn/prompt-engineering/reasoning-techniques/reasoning-models-thinking-tokens) already do a kind of internal self-critique during their hidden 'thinking' phase — they question and revise before you ever see the output. That overlaps with what an external self-refine loop gives you, so on a strong reasoning model, an explicit critique pass may add less. The technique still earns its place when you can wire in a *real external check* (tests, a validator, retrieved facts) that the model can't perform on its own."
+        },
+        {
+          "type": "p",
+          "md": "**The honest takeaway.** Self-critique is a real, useful tool, not a magic 'make it correct' button. It reliably improves checkable outputs and grounded tasks; it can quietly degrade open-ended reasoning with no external signal. The durable lesson from the research is the same one that runs through all of [prompt engineering](/learn/prompt-engineering/prompting-basics/what-is-prompt-engineering): a model is a weak judge of its own work in a vacuum, so the value of self-correction comes mostly from the *feedback you can give the critic*, not from asking the model to try harder."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "Does self-critique actually improve LLM output?",
+      "a": "It depends on the task. On checkable outputs — code, structured data, math, constraint-following — asking the model to critique and revise reliably catches mistakes and improves quality. On open-ended reasoning with no way to verify the answer, self-correction can backfire and turn correct answers into wrong ones. The deciding factor is whether the critic has an external signal (tests, a schema, retrieved facts) to check against."
+    },
+    {
+      "q": "What is the difference between self-critique and self-refine?",
+      "a": "They describe the same idea at different scopes. Self-critique is the single act of asking a model to find flaws in its own answer. Self-Refine is the full loop: generate a draft, get critique feedback, rewrite, and repeat until the answer is good enough. In practice people use the terms interchangeably for the generate-critique-revise cycle."
+    },
+    {
+      "q": "Why does a fresh critique prompt work better than asking 'are you sure?'",
+      "a": "'Are you sure?' reads as social pressure, so the model tends to apologize and change even correct answers. A separate critique prompt that lists specific criteria reframes the task as neutral inspection rather than defending a position, and it pulls out concrete, actionable problems instead of a reflexive 'you're right, sorry.'"
+    },
+    {
+      "q": "How do I stop a self-refine loop from running forever?",
+      "a": "Use two stop conditions together: a maximum iteration count (often 2–3), and an explicit exit signal the critic can emit, like replying 'NO ISSUES' when the answer is already correct. You can also stop when the refined answer stops changing between iterations. Without these guards the model can ping-pong endlessly, inventing problems that aren't there."
+    },
+    {
+      "q": "Can self-correction make an answer worse?",
+      "a": "Yes. Research has shown that prompting a model to revise without external feedback can lower accuracy on some reasoning tasks, because the model second-guesses answers that were already right. It also risks sycophancy (caving under pressure) and drift (dropping a constraint during a rewrite). Ground the critique in a real check to avoid this."
+    },
+    {
+      "q": "Is self-critique still useful with modern reasoning models?",
+      "a": "Somewhat less, because reasoning models already self-critique internally during their hidden thinking phase. An explicit external loop adds the most value when you can give the critic a real check the model can't do alone — run tests, validate a schema, or compare against retrieved documents — rather than just asking it to re-read its own text."
+    }
+  ],
+  "related": [
+    "chain-of-thought-prompting",
+    "self-consistency-prompting",
+    "tree-of-thought-prompting",
+    "reasoning-models-thinking-tokens",
+    "what-is-context-engineering"
+  ],
+  "furtherReading": [
+    {
+      "title": "Self-Refine: Iterative Refinement with Self-Feedback (arXiv)",
+      "url": "https://arxiv.org/abs/2303.17651"
+    },
+    {
+      "title": "Reflexion: Language Agents with Verbal Reinforcement Learning (arXiv)",
+      "url": "https://arxiv.org/abs/2303.11366"
+    },
+    {
+      "title": "Large Language Models Cannot Self-Correct Reasoning Yet (arXiv)",
+      "url": "https://arxiv.org/abs/2310.01798"
+    }
+  ]
+}

@@ -1,0 +1,378 @@
+{
+  "slug": "what-is-smolagents",
+  "title": "What Is smolagents? Hugging Face's Code-First Agents",
+  "shortTitle": "smolagents",
+  "seoTitle": "What Is smolagents? Hugging Face Code Agents",
+  "metaDescription": "smolagents is Hugging Face's tiny agent library where the model writes Python code to act, not JSON tool calls. Learn the CodeAgent idea and when it shines.",
+  "keywords": [
+    "what is smolagents",
+    "huggingface smolagents tutorial",
+    "code agent vs tool calling agent",
+    "smolagents codeagent example",
+    "lightweight agent library python"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Learn how Hugging Face's smolagents takes a minimal, code-first approach — the model writes and runs Python to act instead of emitting JSON tool calls — and where that pattern wins.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**smolagents** is a tiny open-source agent library from Hugging Face. Like any [agent framework](/learn/agent-frameworks/choosing-a-framework/what-is-agent-framework), it wires a [language model](/learn/llm-fundamentals/llm-basics/what-is-an-llm) into a loop so it can *act* — call a search API, run a calculation, read a file — and not just chat. What makes smolagents different is *how* the model acts: instead of emitting a structured JSON request that names a tool and its arguments, the model **writes a short snippet of Python code**, and your system runs it."
+        },
+        {
+          "type": "p",
+          "md": "Picture two ways of asking an assistant to get something done. The first is a fill-in-the-blank form: \"Tool: `web_search`. Query: `weather in Tokyo`.\" The assistant can only pick a tool from a menu and fill the boxes. The second is handing the assistant a Python console and saying, \"Just write the code.\" It might write `results = web_search('weather in Tokyo'); print(results[0])` — looping, combining tools, and reacting to what comes back, all in a few lines. smolagents is built around that second style, which it calls a **CodeAgent**."
+        },
+        {
+          "type": "p",
+          "md": "The name is literal: it is a *small* library (\"smol\" is the meme spelling of \"small\"). The whole agent loop is a few hundred lines you can read in one sitting. It is *model-agnostic* — you can drive it with Claude, an OpenAI model, a local model, or anything on the Hugging Face Hub — and it leans on the Hub for ready-made tools and for sharing agents."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "smolagents is one orchestration option among several. It sits naturally beside heavier toolkits like [LlamaIndex](/learn/agent-frameworks/orchestration-frameworks/what-is-llamaindex), [CrewAI](/learn/agent-frameworks/orchestration-frameworks/what-is-crewai), and [Haystack](/learn/agent-frameworks/orchestration-frameworks/what-is-haystack). Its calling card is minimalism plus the code-first pattern."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The standard way an agent acts today is [function calling](/learn/llm-apis/function-calling/what-is-function-calling) (also called [tool use](/learn/ai-agents/tool-use/what-is-tool-use)): you describe each tool to the model, and it replies with JSON saying which one to invoke and with what arguments. That works well, but it has a ceiling. Each step is one tool call. To chain three tools, loop over a list, or branch on a result, the model must do a separate round-trip for every single action, and the orchestration logic has to live in *your* glue code."
+        },
+        {
+          "type": "p",
+          "md": "Writing code collapses many of those steps into one. Research from Hugging Face and others found that letting a model express actions *as code* — where a single block can call several tools, store intermediate values in variables, and loop — tends to need **fewer steps** and produces more reliable multi-tool behavior than emitting one JSON call at a time. Code is simply a more natural language for composition than a flat list of tool invocations, and models have seen enormous amounts of Python during training."
+        },
+        {
+          "type": "p",
+          "md": "Who should care about smolagents specifically?"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Builders who want to understand agents, not just use them.** The codebase is small enough to read end to end, so it is a great way to *see* the agent loop instead of treating it as a black box.",
+            "**Teams already in the Hugging Face ecosystem.** Tools, models, and even whole agents can be pulled from and pushed to the Hub, so sharing is built in.",
+            "**Tasks that are heavy on composition** — multi-step data wrangling, calling several APIs and combining results, anything where the action is naturally \"a bit of code\" rather than \"pick one tool.\"",
+            "**People who find big frameworks too heavy.** If [LangChain](/learn/agent-frameworks/orchestration-frameworks/what-is-llamaindex)-scale abstractions feel like overkill, a few-hundred-line library is refreshing."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Under the hood, smolagents runs a classic agent loop — closely related to the [ReAct pattern](/learn/ai-agents/agent-fundamentals/react-agent-pattern) of *reason, then act*. The twist is the **action** step: the model's output is a Python snippet, the snippet runs in a sandbox, whatever it prints comes back as an *observation*, and the loop repeats until the model calls a special `final_answer` tool."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "The CodeAgent loop",
+            "steps": [
+              {
+                "label": "Think",
+                "sub": "model reasons about the task"
+              },
+              {
+                "label": "Write code",
+                "sub": "emits a Python snippet"
+              },
+              {
+                "label": "Execute",
+                "sub": "run in a sandbox"
+              },
+              {
+                "label": "Observe",
+                "sub": "printed output → context"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Each tool you give the agent — a web search, a calculator, an API wrapper — is exposed inside that sandbox as a plain Python function the model can call by name. So the model isn't choosing from a menu; it is writing ordinary code that happens to call your functions. A single generated snippet can call two tools, do arithmetic on the results, and decide what to return, in one shot."
+        },
+        {
+          "type": "h3",
+          "text": "Defining a tool"
+        },
+        {
+          "type": "p",
+          "md": "A tool is just a Python function with a `@tool` decorator and a clear docstring. The decorator turns the function — and crucially its docstring and type hints — into a description the model reads, so it knows the tool exists and how to call it."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "a tool the agent can call",
+          "code": "from smolagents import tool\n\n@tool\ndef get_temperature(city: str) -> float:\n    \"\"\"Return the current temperature in Celsius for a city.\n\n    Args:\n        city: The city name, e.g. \"Tokyo\".\n    \"\"\"\n    data = call_weather_api(city)   # your real API call\n    return data[\"temp_c\"]"
+        },
+        {
+          "type": "h3",
+          "text": "Running a CodeAgent"
+        },
+        {
+          "type": "p",
+          "md": "You hand the agent a model and a list of tools, then call `run`. Behind the scenes it builds the system prompt, runs the loop above, and returns the final answer."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "a minimal CodeAgent",
+          "code": "from smolagents import CodeAgent, LiteLLMModel\n\n# Any provider works; here we drive it with a Claude model via LiteLLM.\nmodel = LiteLLMModel(model_id=\"claude-sonnet-4-6\")\n\nagent = CodeAgent(tools=[get_temperature], model=model)\n\nanswer = agent.run(\n    \"Is it warmer in Tokyo or in Paris right now, and by how much?\"\n)\nprint(answer)"
+        },
+        {
+          "type": "p",
+          "md": "Given that prompt, the model might generate a single snippet like `t = get_temperature('Tokyo'); p = get_temperature('Paris'); print(t - p)`. Two tool calls, one subtraction, one step — where a JSON tool-calling agent would have needed at least three separate round-trips. The printed difference becomes the observation, and the model then calls `final_answer` with a sentence for the user."
+        }
+      ]
+    },
+    {
+      "id": "code-agent-vs-tool-calling-agent",
+      "title": "Code agent vs JSON tool-calling agent",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The CodeAgent isn't the *only* style smolagents supports — it also ships a `ToolCallingAgent` that uses the familiar JSON approach. The interesting question is when each one wins. The difference is purely in how the model expresses an action."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Two ways for a model to act",
+            "columns": [
+              {
+                "title": "Code agent",
+                "accent": true,
+                "items": [
+                  "Action = a Python snippet",
+                  "Can loop, branch, and chain in one step",
+                  "Variables hold intermediate results",
+                  "Needs a code sandbox to be safe",
+                  "Strong on multi-tool composition"
+                ]
+              },
+              {
+                "title": "JSON tool-calling agent",
+                "items": [
+                  "Action = one structured tool call",
+                  "One tool per step, more round-trips",
+                  "Orchestration lives in your glue code",
+                  "No code execution — safer by default",
+                  "Strong on simple, discrete actions"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Situation",
+            "Better fit",
+            "Why"
+          ],
+          "rows": [
+            [
+              "Combine 3 API results into one answer",
+              "Code agent",
+              "One snippet does it; no per-call round-trips"
+            ],
+            [
+              "Loop over an unknown-length list",
+              "Code agent",
+              "A `for` loop is natural in code, awkward in JSON"
+            ],
+            [
+              "Call a single tool and stop",
+              "Either",
+              "Both handle one discrete action fine"
+            ],
+            [
+              "Run in a locked-down, no-exec environment",
+              "JSON agent",
+              "No arbitrary code means a smaller attack surface"
+            ],
+            [
+              "Model is weak at writing code",
+              "JSON agent",
+              "Structured calls are easier for smaller models"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "A useful mental model: a JSON tool-calling agent picks items off a *menu*; a code agent is handed a *kitchen*. The kitchen is more powerful and more dangerous — which is exactly why sandboxing matters."
+        }
+      ]
+    },
+    {
+      "id": "security-and-sandboxing",
+      "title": "Security: running model-written code safely",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The headline risk is obvious: you are executing code that a language model wrote. If that code runs with full access to your machine, a bad generation — or a [prompt injection](/learn/ai-agents/tool-use/what-is-tool-use) hiding in a web page the agent reads — could delete files, exfiltrate secrets, or make unintended network calls. This is the central trade-off of the code-first pattern, and smolagents takes it seriously."
+        },
+        {
+          "type": "p",
+          "md": "The library's default executor is a *restricted* Python interpreter: it only allows a small allow-list of imports, blocks dangerous built-ins, and caps how much the snippet can do. That cuts casual mistakes, but a restricted interpreter is **not** a true security boundary on its own."
+        },
+        {
+          "type": "p",
+          "md": "For anything facing untrusted input or running in production, you should isolate execution properly. smolagents supports running the generated code inside sandboxed environments — for example a container or a remote sandbox service — so even malicious code stays trapped."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "stack",
+            "title": "Layers of isolation, weakest to strongest",
+            "layers": [
+              {
+                "label": "Raw `exec()`",
+                "sub": "never do this — full host access"
+              },
+              {
+                "label": "Restricted interpreter",
+                "sub": "default; blocks most, not a hard boundary"
+              },
+              {
+                "label": "Container sandbox",
+                "sub": "isolated OS, limited network"
+              },
+              {
+                "label": "Remote / E2B sandbox",
+                "sub": "execution off your machine entirely",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Never run a code agent over untrusted input with the default in-process interpreter and call it secure. Treat model-written code like code from a stranger on the internet: run it in a sandbox you'd be comfortable letting an attacker control."
+        }
+      ]
+    },
+    {
+      "id": "hub-integration-and-multi-agent",
+      "title": "Hub integration and multi-agent setups",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Because it comes from Hugging Face, smolagents is wired into the Hub. You can pull a tool that someone else published as a Space and use it like a local function, and you can **push your own agent** to the Hub so others can load it in one line. Tools and agents become shareable artifacts, the same way models and datasets already are."
+        },
+        {
+          "type": "p",
+          "md": "It also supports **multi-agent** structures. A common pattern is a *manager* agent that hands sub-tasks to specialist agents — for example one agent that only does web research and another that only writes code — by exposing each sub-agent to the manager as if it were a tool."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "Manager delegating to specialists",
+            "root": {
+              "label": "Manager agent",
+              "sub": "plans, delegates, combines"
+            },
+            "children": [
+              {
+                "label": "Search agent",
+                "sub": "web research only"
+              },
+              {
+                "label": "Coding agent",
+                "sub": "data + calculations"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "And like most modern frameworks, smolagents can connect to tools exposed over the [Model Context Protocol](/learn/ai-agents/model-context-protocol/what-is-mcp), so an MCP server's tools become available to the agent without custom wrappers."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic loop clicks, a few finer points separate a toy demo from something you'd ship."
+        },
+        {
+          "type": "p",
+          "md": "**The code-first pattern needs a capable model.** A CodeAgent only shines when the underlying model writes correct Python reliably. With a weaker or smaller model, generated snippets fail to run, the agent burns steps recovering from syntax errors, and the JSON `ToolCallingAgent` — which constrains the model to a known shape — can be the more dependable choice. Match the agent style to the model's coding ability."
+        },
+        {
+          "type": "p",
+          "md": "**Minimal is a feature and a limit.** smolagents deliberately does *not* try to be a do-everything platform. It has no opinionated memory layer, no built-in [RAG](/learn/agent-frameworks/orchestration-frameworks/what-is-llamaindex) stack, no graph-based control flow. For document-heavy retrieval you might reach for LlamaIndex; for role-based crews, [CrewAI](/learn/agent-frameworks/orchestration-frameworks/what-is-crewai); for conversational multi-agent debate, [AutoGen](/learn/agent-frameworks/orchestration-frameworks/what-is-autogen). smolagents trades breadth for a clear, hackable core."
+        },
+        {
+          "type": "p",
+          "md": "**Observability matters more with code agents.** Because each step can do a lot, a single bad snippet can derail a run in surprising ways. Log every generated code block and every observation, and step through traces when a run goes wrong — the visibility into *what code ran* is one of the underrated upsides of the pattern."
+        },
+        {
+          "type": "p",
+          "md": "**Where to go next.** If you're deciding between libraries rather than learning one, the [agent framework comparison](/learn/agent-frameworks/choosing-a-framework/agent-framework-comparison) and [how to choose an agent framework](/learn/agent-frameworks/choosing-a-framework/choose-agent-framework) lay out the trade-offs side by side. The honest summary for smolagents: reach for it when you value a small, readable core and your tasks are composition-heavy enough that letting the model *write code* — safely sandboxed — beats handing it a menu of JSON tools."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is smolagents used for?",
+      "a": "smolagents is a lightweight Python library from Hugging Face for building [AI agents](/learn/ai-agents/agent-fundamentals/what-is-an-ai-agent) — models that take actions like searching, calculating, or calling APIs in a loop. Its distinctive feature is the CodeAgent, where the model writes Python code to act instead of emitting JSON tool calls. People use it for multi-step, composition-heavy tasks and for learning how agent loops actually work."
+    },
+    {
+      "q": "What is the difference between a code agent and a tool-calling agent?",
+      "a": "A tool-calling agent emits one structured JSON request per step naming a tool and its arguments. A code agent writes a snippet of Python that can call several tools, loop, branch, and store intermediate results in one step. Code is more expressive for composition, so it often needs fewer steps; JSON is simpler and safer because no arbitrary code runs."
+    },
+    {
+      "q": "Is smolagents safe? It runs model-generated code.",
+      "a": "It can be, but only with proper isolation. The default executor is a restricted Python interpreter that blocks most dangerous operations, but that is not a hard security boundary. For untrusted input or production, run the generated code in a real sandbox — a container or a remote execution service — so even malicious code stays contained."
+    },
+    {
+      "q": "Which models work with smolagents?",
+      "a": "It is model-agnostic. You can drive it with Claude, OpenAI models, local open-weight models, or anything on the Hugging Face Hub, through wrappers like LiteLLM or the Hub inference client. The CodeAgent works best with models that write correct Python reliably; weaker models often do better with the JSON `ToolCallingAgent`."
+    },
+    {
+      "q": "How is smolagents different from LangChain or CrewAI?",
+      "a": "smolagents is deliberately minimal — a few hundred readable lines centered on the code-first agent loop — with no built-in memory, RAG, or graph control flow. Bigger frameworks like CrewAI or LlamaIndex offer far more out of the box at the cost of more abstraction. Choose smolagents when you want a small, hackable core and the code-writing pattern; choose the others when you need their broader features."
+    }
+  ],
+  "related": [
+    "what-is-crewai",
+    "what-is-llamaindex",
+    "what-is-haystack",
+    "what-is-autogen",
+    "agent-framework-comparison",
+    "choose-agent-framework"
+  ],
+  "furtherReading": [
+    {
+      "title": "smolagents — Hugging Face docs",
+      "url": "https://huggingface.co/docs/smolagents"
+    },
+    {
+      "title": "smolagents — GitHub repository",
+      "url": "https://github.com/huggingface/smolagents"
+    },
+    {
+      "title": "ReAct: Synergizing Reasoning and Acting in Language Models (arXiv)",
+      "url": "https://arxiv.org/abs/2210.03629"
+    }
+  ]
+}

@@ -1,0 +1,320 @@
+{
+  "slug": "forcing-tool-use",
+  "title": "How to Force or Disable Tool Use: The tool_choice Parameter Explained",
+  "shortTitle": "Forcing Tool Use",
+  "seoTitle": "tool_choice Explained: Force or Disable LLM Tool Use",
+  "metaDescription": "By default the model decides whether to call a tool. Learn how tool_choice lets you force a specific tool, require any tool, or turn tools off entirely.",
+  "keywords": [
+    "tool_choice parameter explained",
+    "force llm to call a function",
+    "disable tool use llm",
+    "tool_choice auto required none",
+    "make model call specific tool"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "Control whether and which tool the model calls using tool_choice — auto, required, none, or a named tool — and know when forcing a call helps or backfires.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you give a language model a set of [tools](/learn/llm-apis/function-calling/what-is-function-calling), the default behavior is that **the model decides** whether to call one. It looks at the user's message, reads your tool descriptions, and chooses: call a tool, or just answer in plain text. That freedom is usually what you want — but not always."
+        },
+        {
+          "type": "p",
+          "md": "**`tool_choice`** is the one request parameter that takes that decision away from the model and hands it to you. With it, you can say *\"you must call a tool this turn,\"* *\"you must call this exact tool,\"* or *\"you are not allowed to call any tool — just talk.\"* It does not change what your tools do; it only changes whether and which one the model is required to reach for."
+        },
+        {
+          "type": "p",
+          "md": "Think of a kitchen with a head chef (the model) and a rack of labeled tools. By default you tell the chef *\"use whatever you think the dish needs.\"* `tool_choice` is you stepping in: *\"for this order, you must use the blender\"* (a named tool), or *\"use some appliance, your pick\"* (any tool), or *\"hands off the equipment, just describe the recipe out loud\"* (no tools). Same chef, same tools — you're just setting the rule for this one turn."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "`tool_choice` lives on the API request, alongside your `tools` list — it is **per-request**, so you can let the model decide on most turns and force a tool only on the turns where you need a guarantee."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Most of the time, letting the model choose (`auto`) is correct — that is the whole point of [function calling](/learn/llm-apis/function-calling/what-is-function-calling). But there are concrete situations where \"the model usually calls the tool\" is not good enough, and you need *\"the model always does X.\"* That is what `tool_choice` buys you."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Guaranteed structured output.** This is the most common reason. If you define one tool whose input schema *is* the JSON shape you want (a classification label, extracted fields, a sentiment score) and force the model to call it, you get back a structured object every single time — no \"Sure! Here is the JSON:\" preamble, no markdown fence to strip, no turn where the model just chats instead.",
+            "**Removing flakiness in a pipeline.** When a step in an automated flow *must* produce a tool call to continue — say, every customer message must be routed through a `categorize_ticket` tool — forcing the call removes the rare turn where the model decides to answer in prose and breaks your code downstream.",
+            "**Turning tools off for one turn.** Sometimes you have tools attached but, for a specific step, you want a plain natural-language answer — a final summary after all the data is gathered, or a safety check. Setting `tool_choice` to `none` keeps the tools defined (so the conversation history stays valid) while preventing another tool call this turn.",
+            "**Steering the first move.** In a multi-step agent you might know the first action must always be a `search` before anything else. Forcing that specific tool on the opening turn makes the agent deterministic where you need it to be."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The flip side — and the reason this is an *intermediate* topic, not a beginner one — is that forcing a tool is a sharp instrument. Force a call when no tool actually fits the user's request, and the model will still produce *something*: a tool call with **made-up or empty arguments**, because you left it no other option. We will come back to that failure mode, because it is the number-one way `tool_choice` backfires."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every major provider exposes the same four modes, just with slightly different spelling. You set the mode in the request; the model's behavior for that one response changes accordingly. Here is the decision the parameter controls:"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "What tool_choice decides for this turn",
+            "root": {
+              "label": "tool_choice",
+              "sub": "set on the request"
+            },
+            "children": [
+              {
+                "label": "auto",
+                "sub": "model decides: tool or text"
+              },
+              {
+                "label": "required / any",
+                "sub": "must call SOME tool",
+                "accent": true
+              },
+              {
+                "label": "specific tool",
+                "sub": "must call THIS named tool",
+                "accent": true
+              },
+              {
+                "label": "none",
+                "sub": "no tool calls allowed"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "The four modes"
+        },
+        {
+          "type": "list",
+          "ordered": false,
+          "items": [
+            "**Auto** — the default. The model is free to call a tool or to answer in plain text. Use this unless you have a specific reason not to.",
+            "**Required / Any** — the model must call at least one tool from your list, but it picks which one. Good when *some* tool action is mandatory but the right one depends on the input. (OpenAI calls this `required`; Anthropic calls it `any`.)",
+            "**A specific tool** — you name one tool and the model must call exactly that one. This is the structured-output trick and the \"force the first move\" lever. You pass the tool's name in the parameter.",
+            "**None** — the model may not call any tool this turn; it must answer in text. The tools stay defined and visible in the request, but they are off-limits for this response."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "What it looks like on the request"
+        },
+        {
+          "type": "p",
+          "md": "On the Claude API, `tool_choice` is an object with a `type`. Here is the same `get_weather` tool from [the function-calling walkthrough](/learn/llm-apis/function-calling/what-is-function-calling), but this time we *force* the model to call it:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "forcing a specific tool (Claude)",
+          "code": "import anthropic\n\nclient = anthropic.Anthropic()\n\ntools = [{\n    \"name\": \"get_weather\",\n    \"description\": \"Get the current weather for a given city.\",\n    \"input_schema\": {\n        \"type\": \"object\",\n        \"properties\": {\"city\": {\"type\": \"string\"}},\n        \"required\": [\"city\"],\n    },\n}]\n\nresp = client.messages.create(\n    model=\"claude-opus-4-8\",\n    max_tokens=1024,\n    tools=tools,\n    # Force this exact tool. The model MUST emit a get_weather call.\n    tool_choice={\"type\": \"tool\", \"name\": \"get_weather\"},\n    messages=[{\"role\": \"user\", \"content\": \"What's it like in Tokyo?\"}],\n)\n\n# resp.stop_reason is \"tool_use\"; the first block is the forced call.\ntool_call = next(b for b in resp.content if b.type == \"tool_use\")\nprint(tool_call.input)  # -> {\"city\": \"Tokyo\"}"
+        },
+        {
+          "type": "p",
+          "md": "Swap `{\"type\": \"tool\", \"name\": \"get_weather\"}` for `{\"type\": \"any\"}` and the model must call *some* tool but chooses which. Swap it for `{\"type\": \"none\"}` and it must answer in text. Swap it for `{\"type\": \"auto\"}` (or omit the parameter entirely) and you are back to the default, model-decides behavior."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "When you force a tool, the response stops at the tool call — the model does **not** also write a prose answer in the same turn. That is exactly what you want for structured output: you read the tool call's `input` directly and never parse free text."
+        }
+      ]
+    },
+    {
+      "id": "structured-output-trick",
+      "title": "The structured-output trick",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The single most useful application of `tool_choice` has nothing to do with \"calling a function\" in the usual sense. It is using a **forced single tool as a guaranteed JSON formatter.** You do not intend to *run* the tool at all — you define it purely so its input schema describes the shape you want back, then force the model to fill it in."
+        },
+        {
+          "type": "p",
+          "md": "Say you want to classify a support ticket into a fixed set of categories and always get a clean object. Define one tool whose schema *is* that object, force it, and read the result:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "forced tool as a structured-output formatter",
+          "code": "tools = [{\n    \"name\": \"record_classification\",\n    \"description\": \"Record the ticket category and urgency.\",\n    \"input_schema\": {\n        \"type\": \"object\",\n        \"properties\": {\n            \"category\": {\n                \"type\": \"string\",\n                \"enum\": [\"billing\", \"bug\", \"feature_request\", \"other\"],\n            },\n            \"urgency\": {\"type\": \"string\", \"enum\": [\"low\", \"med\", \"high\"]},\n        },\n        \"required\": [\"category\", \"urgency\"],\n    },\n}]\n\nresp = client.messages.create(\n    model=\"claude-opus-4-8\",\n    max_tokens=512,\n    tools=tools,\n    tool_choice={\"type\": \"tool\", \"name\": \"record_classification\"},\n    messages=[{\"role\": \"user\", \"content\": \"I was charged twice this month!\"}],\n)\n\nresult = next(b for b in resp.content if b.type == \"tool_use\").input\n# -> {\"category\": \"billing\", \"urgency\": \"high\"}  — always an object, never prose"
+        },
+        {
+          "type": "p",
+          "md": "Because the model is *required* to call `record_classification`, you never get a turn where it replies *\"This looks like a billing issue.\"* in plain English and breaks your parser. The `enum` constraints in the schema also push the model toward valid values. This was the standard way to get reliable structured data out of an LLM for a long time, and it still works everywhere [function calling](/learn/llm-apis/function-calling/what-is-function-calling) does."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Many providers now also offer a dedicated **structured outputs** / JSON-schema mode that constrains the response shape directly, without the tool indirection. If your provider has it, prefer it for pure formatting. The forced-tool trick remains valuable when you want the *same* call to optionally also do real work, or when you are already in a tool-using flow."
+        }
+      ]
+    },
+    {
+      "id": "modes-compared",
+      "title": "The four modes compared",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A side-by-side reference for when to reach for each mode, and the naming across the two providers you will meet most. The concept is identical; only the spelling differs."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Mode",
+            "OpenAI",
+            "Anthropic (Claude)",
+            "Use it when"
+          ],
+          "rows": [
+            [
+              "Model decides",
+              "`\"auto\"`",
+              "`{\"type\": \"auto\"}`",
+              "Default. The model should choose whether a tool is needed — almost all normal turns."
+            ],
+            [
+              "Must call some tool",
+              "`\"required\"`",
+              "`{\"type\": \"any\"}`",
+              "A tool action is mandatory but the right one depends on the input (e.g. route every message somewhere)."
+            ],
+            [
+              "Must call one named tool",
+              "`{\"type\":\"function\", \"function\":{\"name\":...}}`",
+              "`{\"type\": \"tool\", \"name\": ...}`",
+              "Structured output, or forcing a known first step in an agent."
+            ],
+            [
+              "No tools",
+              "`\"none\"`",
+              "`{\"type\": \"none\"}`",
+              "You want a plain text answer this turn but keep tools defined (final summary, safety check)."
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Two practical notes. First, with `any`/`required` and with a forced specific tool, providers typically also let you disable **parallel** tool calls (force at most one tool this turn) — handy when your downstream code expects a single call. Second, `none` is not the same as simply omitting your `tools` list: `none` keeps the tool definitions in the request (so prior tool calls in the conversation remain valid and the cache prefix is stable) while just forbidding a *new* call this turn."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Forcing tool use is powerful precisely because it removes the model's escape hatch — and that is also where it bites. Most problems come from forcing a call the situation does not actually support."
+        },
+        {
+          "type": "list",
+          "ordered": false,
+          "items": [
+            "**Forcing a tool when none fits → garbage arguments.** This is the big one. If you force `get_weather` but the user asked *\"what's your refund policy?\"*, the model still must emit a `get_weather` call — so it invents a `city` or sends an empty/nonsense value. A forced call **cannot** be the model's way of saying \"no tool applies here.\" Only force when you are confident a tool genuinely should fire.",
+            "**Losing the model's ability to ask a clarifying question.** Under `auto`, a model facing a vague request can reply in text: *\"Which city did you mean?\"* Force a tool and that option is gone — it will guess an argument instead of asking. If clarification matters, stay on `auto`.",
+            "**Forcing on every turn of a multi-step loop.** If you set `any`/`required` for the whole conversation, the model can never finish — it is obligated to keep calling tools and can loop indefinitely, because it is not allowed to write the final plain-text answer. Force on the turns that need it, then switch back to `auto` (or `none`) so the model can actually conclude.",
+            "**Trusting forced arguments without validation.** Forcing *which* tool fires does nothing to guarantee the *arguments* are sensible — they are still model-generated. Validate inputs before acting, exactly as you would for any [tool call](/learn/llm-apis/function-calling/tool-calling-best-practices).",
+            "**Assuming it disables hallucination.** `tool_choice` controls call *behavior*, not correctness. A forced classification tool can still pick the wrong category; it just guarantees you get *a* category in the right shape."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "A forced tool call removes the model's only way to signal \"I shouldn't call anything.\" If you cannot be sure a tool always applies to the incoming request, prefer `auto` and check `stop_reason` — let the model tell you whether it wanted a tool, rather than compelling one and getting fabricated inputs."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the four modes are clear, a few subtler points separate a working integration from a robust one."
+        },
+        {
+          "type": "p",
+          "md": "**Forcing a tool usually suppresses reasoning before the call.** On models that think before acting, requiring a specific tool tends to make the model jump straight to the call rather than reasoning first. For a simple extraction that is fine and faster. For a decision that benefits from deliberation (which of several tools, or whether the inputs are even valid), `auto` plus a clear instruction often produces a *better* call than forcing one. Force when you want determinism; leave it open when you want judgment."
+        },
+        {
+          "type": "p",
+          "md": "**`any`/`required` plus disable-parallel is the clean \"exactly one tool\" setting.** When a pipeline step must produce precisely one tool call — no zero, no two — combine \"must call some tool\" with the parallel-tool-use toggle off. That removes both the no-call case and the multi-call case in one move, so your handler can assume a single call."
+        },
+        {
+          "type": "p",
+          "md": "**`none` is a turn-level mute, not a teardown.** Keeping tools defined while forbidding their use this turn is the right pattern for the final step of an agent — gather data over several `auto`/`any` turns, then flip to `none` for a clean prose summary. Because the `tools` array is unchanged, you do not disturb the conversation history or [prompt-cache prefix](/learn/llm-apis/api-basics/what-is-llm-api); you have only changed the per-request rule."
+        },
+        {
+          "type": "p",
+          "md": "**Provider differences are spelling, not semantics.** The translation table above covers the two you will meet most. If you port code between providers, the mental model is unchanged — map `auto`/`any`(`required`)/specific/`none` across, and remember that the named-tool object shape differs (`{\"type\":\"tool\",\"name\":...}` on Claude versus a nested `function` object on OpenAI). For the exact request shapes and any newer options, the official tool-use docs are the source of truth."
+        },
+        {
+          "type": "p",
+          "md": "The durable takeaway: `tool_choice` is a small parameter with an outsized effect. Reach for the forced modes when you need a *guarantee* — structured output, a mandatory routing step, a deterministic first action — and stay on `auto` everywhere else, so the model keeps the freedom to do the obvious right thing, including declining to call a tool that doesn't fit. To go further, see [tool-calling best practices](/learn/llm-apis/function-calling/tool-calling-best-practices) and [defining function schemas](/learn/llm-apis/function-calling/defining-function-schemas), since good schemas are what make a forced call produce good arguments."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is the tool_choice parameter?",
+      "a": "`tool_choice` is a request parameter that controls whether and which tool a language model calls on a given turn. It has four modes: `auto` (the model decides), `required`/`any` (must call some tool), a specific named tool (must call exactly that one), and `none` (no tool calls allowed). It overrides the model's default freedom to pick."
+    },
+    {
+      "q": "How do I force an LLM to call a specific function?",
+      "a": "Set `tool_choice` to name that tool — on Claude, `tool_choice={\"type\": \"tool\", \"name\": \"your_tool\"}`; on OpenAI, `tool_choice={\"type\":\"function\",\"function\":{\"name\":\"your_tool\"}}`. The model is then required to emit a call to exactly that tool, and the response stops at the tool call instead of writing prose."
+    },
+    {
+      "q": "What is the difference between tool_choice auto, required, and none?",
+      "a": "`auto` lets the model choose between calling a tool and answering in text (the default). `required` (Anthropic: `any`) forces the model to call at least one tool but lets it pick which. `none` forbids any tool call this turn, so the model must answer in plain text while the tools stay defined."
+    },
+    {
+      "q": "Can I use a forced tool to get structured JSON output?",
+      "a": "Yes — this is one of the most common uses. Define a single tool whose input schema describes the JSON shape you want, force it with `tool_choice`, and read the tool call's `input`. You get a structured object every time, with no prose preamble to strip. Many providers also offer a dedicated structured-outputs mode that does this more directly."
+    },
+    {
+      "q": "What happens if I force a tool but no tool fits the request?",
+      "a": "The model still must produce a tool call, so it fabricates or leaves blank the arguments — there is no way for it to signal \"no tool applies.\" This is the main failure mode of forcing. Only force a tool when you are confident one genuinely should fire; otherwise use `auto` and check the stop reason."
+    },
+    {
+      "q": "How do I disable tool use for one turn without removing my tools?",
+      "a": "Set `tool_choice` to `none`. This forbids a new tool call on that turn while keeping the tool definitions in the request, so prior tool calls in the conversation stay valid and your prompt-cache prefix is undisturbed. It is the right pattern for a final plain-text summary after an agent has gathered its data."
+    }
+  ],
+  "related": [
+    "what-is-function-calling",
+    "tool-calling-best-practices",
+    "defining-function-schemas",
+    "what-is-llm-api",
+    "how-to-call-llm-api"
+  ],
+  "furtherReading": [
+    {
+      "title": "Tool use with Claude — Anthropic Docs",
+      "url": "https://docs.anthropic.com/en/docs/build-with-claude/tool-use"
+    },
+    {
+      "title": "Function calling guide — OpenAI Docs",
+      "url": "https://platform.openai.com/docs/guides/function-calling"
+    }
+  ]
+}

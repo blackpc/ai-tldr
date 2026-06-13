@@ -1,0 +1,334 @@
+{
+  "slug": "openrouter-explained",
+  "title": "What Is OpenRouter? One API for Hundreds of Models",
+  "shortTitle": "OpenRouter",
+  "seoTitle": "What Is OpenRouter? One API for Many LLM Models",
+  "metaDescription": "OpenRouter is a single endpoint that routes to models from many providers. Learn how it works, what it adds, what it costs, and when an aggregator helps.",
+  "keywords": [
+    "what is openrouter",
+    "openrouter vs direct api",
+    "single api for multiple llm models",
+    "llm model aggregator",
+    "openrouter pricing and routing"
+  ],
+  "difficulty": "beginner",
+  "oneLiner": "Learn how a model-aggregator endpoint lets you call hundreds of models through one key and one schema, and the tradeoffs versus going direct to each provider.",
+  "updated": "2026-06-13",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every model provider has its own front door. To use Claude you sign up with Anthropic and get an Anthropic key. To use GPT you sign up with OpenAI and get an OpenAI key. To use Gemini you go to Google. Each one has its own request format, its own billing dashboard, and its own list of error codes. If your app uses three models, you juggle three accounts, three keys, and three slightly different ways of asking the same thing."
+        },
+        {
+          "type": "p",
+          "md": "**OpenRouter** is a single front door that stands in front of all of them. You sign up once, get *one* API key, and send every request in *one* format to *one* endpoint. OpenRouter looks at which model you asked for, forwards your request to the real provider behind the scenes, gets the answer back, and hands it to you. It is an **aggregator** (it gathers many models in one place) and a **router** (it sends each call to the right provider). You get one invoice at the end of the month instead of several."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like a universal travel agent. Instead of booking each flight directly with each airline — separate logins, separate cards, separate apps — you tell one agent \"get me from A to B\" and they handle the airline behind the scenes. You still fly on a real airline's plane; the agent just removes the busywork of dealing with each one separately. OpenRouter is that agent for language models."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "OpenRouter is the best-known example, but the *pattern* is what matters: a proxy that speaks one schema and fans out to many model providers. Other gateways (cloud ones like AWS Bedrock and Google Vertex, and self-hosted ones like LiteLLM) do the same job in different ways. Learn the idea once and you can read any of them."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you build with [LLM APIs](/learn/llm-apis/api-basics/what-is-llm-api), you quickly hit a problem: no single model is best at everything, and the landscape changes constantly. A new, cheaper, or smarter model ships almost every month. If your code is hard-wired to one provider, trying a different one means new accounts, new SDKs, and rewriting your request code. An aggregator removes that friction."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Model variety from one key.** Reach Claude, GPT, Gemini, and dozens of open models (Llama, Mistral, Qwen, and more) through the same endpoint. Switching models is usually a one-line change — you just name a different model.",
+            "**Easy comparison.** Want to know whether a cheaper model is good enough for your task? With one key you can run the same prompt against five models and compare quality and price without five sign-ups.",
+            "**Failover and reliability.** Providers have outages and rate limits. A router can automatically retry on a backup model or another host of the same model, so a single provider hiccup doesn't take your app down.",
+            "**One bill, one budget.** Usage from every model shows up on a single invoice with a single spend limit. For a small team or a side project, that is far simpler than reconciling several provider accounts.",
+            "**Access to models you couldn't easily get.** Some open models are hosted by several companies. An aggregator lists them side by side so you can pick on price or speed without managing each host yourself."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who benefits most? Builders who are still **choosing** a model, apps that want a **safety net** if one provider fails, hobbyists who don't want a wall of separate accounts, and teams that value **one place to see all spend**. If you already know exactly which single model you need and run it at high volume, the calculus changes — we cover that tradeoff below."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "An aggregator is, at heart, a **proxy**: a server that receives your request, decides where to send it, forwards it, and relays the response back. Three things make it useful — a *unified schema* so every model takes the same request shape, a *router* that maps your chosen model to a real provider, and *metering* that counts tokens so it can bill you. Let's walk the path of a single call."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "The path of one request through an aggregator",
+            "steps": [
+              {
+                "label": "Your app",
+                "sub": "one API key"
+              },
+              {
+                "label": "One endpoint",
+                "sub": "unified request format"
+              },
+              {
+                "label": "Router",
+                "sub": "picks model + host",
+                "accent": true
+              },
+              {
+                "label": "Real provider",
+                "sub": "Anthropic / OpenAI / etc."
+              },
+              {
+                "label": "Response back",
+                "sub": "same shape, plus usage"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "One schema for everything"
+        },
+        {
+          "type": "p",
+          "md": "OpenRouter exposes an endpoint that follows the widely-used OpenAI **chat completions** request shape: a list of messages with roles like `system`, `user`, and `assistant` (see [messages, roles, and turns](/learn/llm-apis/api-basics/messages-roles-turns)). You set a `model` field — for example `anthropic/claude-3.5-sonnet` or `openai/gpt-4o` — and the router uses that string to decide where the call goes. Because the *request* looks the same regardless of which model you name, switching providers is just changing that one string."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Same code, different models — only the model string changes",
+          "code": "from openai import OpenAI\n\n# Point the standard OpenAI client at OpenRouter's endpoint.\nclient = OpenAI(\n    base_url=\"https://openrouter.ai/api/v1\",\n    api_key=\"sk-or-...\",  # ONE OpenRouter key, not a per-provider key\n)\n\ndef ask(model, question):\n    resp = client.chat.completions.create(\n        model=model,  # route by name; same request body either way\n        messages=[{\"role\": \"user\", \"content\": question}],\n    )\n    return resp.choices[0].message.content\n\n# Call Claude and GPT with identical code — just swap the model id.\nprint(ask(\"anthropic/claude-3.5-sonnet\", \"Say hi in five words.\"))\nprint(ask(\"openai/gpt-4o\", \"Say hi in five words.\"))"
+        },
+        {
+          "type": "h3",
+          "text": "Routing, fallback, and metering"
+        },
+        {
+          "type": "p",
+          "md": "When the router receives your call, it does three jobs. First it **selects a host**: a popular open model may be served by several companies, so the router can pick by price, speed, or your stated preference. Second it **handles failure**: if the chosen host is down or rate-limits you, it can fall back to another host or a model you nominated as a backup, so your request still succeeds. Third it **meters usage**: it counts the input and output tokens, applies the per-model rate, and records the cost so everything lands on one bill."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "One router fans out to many real providers",
+            "root": {
+              "label": "OpenRouter",
+              "sub": "one key, one schema",
+              "accent": true
+            },
+            "children": [
+              {
+                "label": "Anthropic",
+                "sub": "Claude models"
+              },
+              {
+                "label": "OpenAI",
+                "sub": "GPT models"
+              },
+              {
+                "label": "Google",
+                "sub": "Gemini models"
+              },
+              {
+                "label": "Open-model hosts",
+                "sub": "Llama, Mistral, Qwen…"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The key mental model: **OpenRouter does not run the models.** It runs no GPUs of its own for Claude or GPT — it forwards your call to Anthropic or OpenAI and relays their answer. What it adds is the convenience layer around them: one key, one format, routing, failover, and unified billing."
+        }
+      ]
+    },
+    {
+      "id": "aggregator-vs-direct",
+      "title": "Aggregator vs going direct",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The real question is rarely \"is OpenRouter good?\" but \"should I route through an aggregator or call each provider directly?\" Both are valid; they trade convenience against control. Here is the honest comparison."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Concern",
+            "Aggregator (OpenRouter)",
+            "Direct provider API"
+          ],
+          "rows": [
+            [
+              "Accounts & keys",
+              "One signup, one key for everything",
+              "One account + key per provider"
+            ],
+            [
+              "Request format",
+              "One unified schema for all models",
+              "Each provider's own SDK and schema"
+            ],
+            [
+              "Switching models",
+              "Change one model string",
+              "New SDK, possibly new code"
+            ],
+            [
+              "Billing",
+              "Single invoice, single budget cap",
+              "Separate invoice per provider"
+            ],
+            [
+              "Cost",
+              "Provider price, sometimes plus a markup",
+              "Provider's raw price, no middle layer"
+            ],
+            [
+              "Latency",
+              "One extra network hop through the proxy",
+              "Straight to the provider"
+            ],
+            [
+              "Newest features",
+              "May lag until the gateway adds them",
+              "Available the day the provider ships them"
+            ],
+            [
+              "Failover",
+              "Built in — retry on a backup model/host",
+              "You build retry logic yourself"
+            ],
+            [
+              "Data path",
+              "Your prompts pass through a third party",
+              "Prompts go only to the provider"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "A simple way to choose: an aggregator wins while you are **exploring** — comparing models, prototyping, wanting failover for free, or keeping billing simple. Going direct wins once you have **settled** — you know your single model, you run high volume where a markup adds up, you need the provider's newest feature on day one, or you have data-handling rules that forbid an extra hop. Many teams start on an aggregator and graduate to direct calls for the one model they commit to."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Because the aggregator speaks the standard chat-completions shape, the move from \"router\" to \"direct\" is often small. Provider SDKs like the [OpenAI API](/learn/llm-apis/provider-guides/openai-api-guide) and the [Claude API](/learn/llm-apis/provider-guides/claude-api-beginners-guide) are close enough that swapping the `base_url` and key gets you most of the way there."
+        }
+      ]
+    },
+    {
+      "id": "what-it-costs",
+      "title": "What it really costs",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Convenience is never entirely free. An aggregator adds three kinds of cost, and it helps to name them so you can judge whether the trade is worth it for your case. (We avoid quoting prices here — they change constantly — and stick to the *shape* of the cost.)"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**A possible markup.** The gateway may charge a little more than the provider's raw token price, or add a small platform fee, to fund the service. At low volume this is noise; at high volume it can become a real line item, so check before you scale.",
+            "**An extra network hop.** Your request travels to the router first, then to the provider, then back. That adds latency — usually small, but it exists, and it matters for chatty, real-time apps.",
+            "**A third party in the data path.** Your prompts and completions pass through the aggregator's servers, not just the model provider's. If you handle sensitive data, read their data policy as carefully as the provider's — see [LLM API data privacy](/learn/llm-apis/api-basics/llm-api-data-privacy).",
+            "**Feature lag and abstraction leaks.** Brand-new provider features (a new modality, a special parameter) may not be exposed through the gateway right away, and provider-specific quirks can get smoothed over or surface as unfamiliar [API errors](/learn/llm-apis/api-basics/llm-api-errors)."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Treat your aggregator key like any other secret — it can spend money across *every* model, so a leaked router key is broader than a single-provider one. Store it in an environment variable, never in client-side code, and set a spend cap. See [API keys explained](/learn/llm-apis/api-basics/api-keys-explained)."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic idea clicks, a few nuances separate a casual user from someone who runs an aggregator well in production."
+        },
+        {
+          "type": "p",
+          "md": "**Model names are not stable forever.** A model id like `anthropic/claude-3.5-sonnet` points at a specific model that providers eventually retire. Aggregators often offer a \"latest\" or auto-routing alias that always maps to a current model — convenient, but it means your behavior can shift under you. For reproducible results, pin a specific model id and update it deliberately. The skill of [choosing a model](/learn/llm-apis/api-basics/how-to-choose-llm-model) applies the same way whether you go direct or through a router."
+        },
+        {
+          "type": "p",
+          "md": "**The same open model can come from many hosts** at different prices, speeds, and context limits. Routers expose this as provider preferences: you might ask for the cheapest host, the fastest, or one that promises not to log your data. This is power and a footgun — two hosts of \"the same\" model can give subtly different outputs, so test the host, not just the model name."
+        },
+        {
+          "type": "p",
+          "md": "**Cloud gateways are the enterprise cousin** of this pattern. AWS Bedrock and Google Vertex AI also put many models behind one API, but they bill through your existing cloud account and keep traffic inside that cloud's trust boundary — handy for compliance. See [Bedrock and Vertex AI](/learn/llm-apis/provider-guides/bedrock-vertex-ai). For total control you can self-host a gateway (LiteLLM is a popular open-source one) and route to providers yourself, so no third party sits in the path. Same pattern, different owner of the proxy."
+        },
+        {
+          "type": "p",
+          "md": "**Watch the abstraction's edges.** A unified schema is a lowest-common-denominator: it exposes what *every* model shares, so a provider's unique tool-calling format, structured-output mode, or vision feature may be unavailable or mapped imperfectly. When you need a provider's full surface area, go direct to that provider's own API — for example the [Claude API](/learn/llm-apis/provider-guides/claude-api-beginners-guide) or the [Gemini API](/learn/llm-apis/provider-guides/gemini-api-getting-started). The durable rule: aggregators are excellent for breadth, exploration, and resilience; direct APIs win on depth, latency, and access to the very newest capabilities. Most mature systems use both — a router for the long tail of models, direct calls for the one or two they depend on."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is OpenRouter and how does it work?",
+      "a": "OpenRouter is a single API endpoint that proxies your requests to many model providers. You sign up once, get one API key, and send every call in one unified format. OpenRouter reads which model you named, forwards the request to the real provider (Anthropic, OpenAI, Google, or an open-model host), and relays the answer back — adding routing, failover, and one combined bill."
+    },
+    {
+      "q": "Is OpenRouter cheaper than calling the provider directly?",
+      "a": "Usually it is the provider's price, sometimes plus a small markup or platform fee that funds the service. At low or exploratory volume that difference is negligible and the convenience is worth it. At high, steady volume on one model, the markup and the extra network hop can add up, which is when many teams switch to calling that provider directly."
+    },
+    {
+      "q": "Does OpenRouter run the models itself?",
+      "a": "No. It runs no GPUs for Claude or GPT — it is a router that forwards your call to the real provider and relays their response. What it adds is the convenience layer: one key, one request format, automatic fallback to a backup model or host, and a single invoice across every model you use."
+    },
+    {
+      "q": "When should I use an aggregator versus a direct API?",
+      "a": "Use an aggregator while you are exploring — comparing models, prototyping, wanting free failover, or keeping billing simple with one key. Go direct once you have committed to a single model, run high volume where a markup matters, need the provider's newest features on day one, or have data rules that forbid an extra hop. Many teams use both."
+    },
+    {
+      "q": "Is it safe to send my data through OpenRouter?",
+      "a": "Your prompts and completions pass through the aggregator's servers in addition to the model provider's, so a third party sits in the data path. For sensitive workloads, read the gateway's data and logging policy as carefully as the provider's, prefer hosts that promise not to retain data, and consider a cloud gateway (Bedrock, Vertex) or a self-hosted one if you need traffic to stay inside your own trust boundary."
+    },
+    {
+      "q": "Can I switch models with OpenRouter without rewriting my code?",
+      "a": "Yes — that is the main appeal. Because every model uses the same request schema, switching is usually a one-line change: you name a different model string, like swapping anthropic/claude-3.5-sonnet for openai/gpt-4o, while the rest of your code stays the same."
+    }
+  ],
+  "related": [
+    "claude-api-beginners-guide",
+    "openai-api-guide",
+    "bedrock-vertex-ai",
+    "how-to-choose-llm-model",
+    "what-is-llm-api",
+    "llm-api-data-privacy"
+  ],
+  "furtherReading": [
+    {
+      "title": "OpenRouter — Documentation",
+      "url": "https://openrouter.ai/docs"
+    },
+    {
+      "title": "Chat Completions — OpenAI API reference",
+      "url": "https://platform.openai.com/docs/api-reference/chat"
+    },
+    {
+      "title": "LiteLLM — open-source LLM gateway (GitHub)",
+      "url": "https://github.com/BerriAI/litellm"
+    }
+  ]
+}
