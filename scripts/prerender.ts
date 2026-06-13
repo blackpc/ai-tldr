@@ -35,7 +35,14 @@ import { fileURLToPath } from "node:url";
 import feed from "../src/data/releases.json" with { type: "json" };
 import sweepsData from "../src/data/sweeps.json" with { type: "json" };
 import type { ReleaseItem } from "../src/data/schema";
-import { influencers } from "../src/data/influencers";
+import {
+  influencers,
+  type Influencer,
+  CATEGORY_META,
+  CATEGORY_ORDER,
+  REACH_LABEL,
+  PLATFORM_META,
+} from "../src/data/influencers";
 import {
   injectLearnLinksIntoHome,
   prerenderLearn,
@@ -597,9 +604,7 @@ function renderJsonLdHomeItemList(items: ReleaseItem[]): string {
  * influencer is marked up as a Person with handle, image, sameAs links,
  * and follower count via interactionStatistic.
  */
-function renderJsonLdInfluencers(
-  list: { id: string; name: string; realName?: string; handle: string; bio: string; image: string; url: string; followersRaw: number; platform: string; links?: { url: string }[] }[],
-): string {
+function renderJsonLdInfluencers(list: Influencer[]): string {
   return wrapJsonLd({
     "@context": "https://schema.org",
     "@type": "ProfilePage",
@@ -610,8 +615,9 @@ function renderJsonLdInfluencers(
     publisher: { "@id": `${SITE_URL}/#org` },
     mainEntity: {
       "@type": "ItemList",
-      itemListOrder: "https://schema.org/ItemListOrderDescending",
       numberOfItems: list.length,
+      // No interactionStatistic: we deliberately don't publish precise
+      // follower counts (zero-hallucination — reach is a coarse band only).
       itemListElement: list.map((p, i) => ({
         "@type": "ListItem",
         position: i + 1,
@@ -621,16 +627,15 @@ function renderJsonLdInfluencers(
           alternateName: p.name,
           identifier: p.handle,
           description: p.bio,
-          image: p.image.startsWith("http")
-            ? p.image
-            : `${SITE_URL}${p.image}`,
+          ...(p.image
+            ? {
+                image: p.image.startsWith("http")
+                  ? p.image
+                  : `${SITE_URL}${p.image}`,
+              }
+            : {}),
           url: p.url,
           sameAs: [p.url, ...(p.links?.map((l) => l.url) ?? [])],
-          interactionStatistic: {
-            "@type": "InteractionCounter",
-            interactionType: "https://schema.org/FollowAction",
-            userInteractionCount: p.followersRaw,
-          },
         },
       })),
     },
@@ -1004,6 +1009,68 @@ function injectLogBody(html: string, reports: SweepReportLite[]): string {
   return html;
 }
 
+/** Crawlable, role-grouped influencer directory for /influencers (the #root
+ *  was previously empty — only JSON-LD, nothing for crawlers to read or for
+ *  the Person markup to match against). React replaces this on hydration. */
+function renderInfluencersBody(list: Influencer[]): string {
+  const sections = CATEGORY_ORDER.map((cat) => {
+    const people = list.filter((p) => p.category === cat);
+    if (!people.length) return "";
+    const items = people
+      .map((p) => {
+        const reach = p.reach ? ` · ${REACH_LABEL[p.reach]}` : "";
+        const real = p.realName ? ` — ${escapeText(p.realName)}` : "";
+        const secondary = (p.links ?? [])
+          .map(
+            (l) =>
+              `<a href="${escapeAttr(l.url)}" rel="noopener">${escapeText(
+                PLATFORM_META[l.platform].label,
+              )}</a>`,
+          )
+          .join(" · ");
+        return (
+          `<li><a href="${escapeAttr(p.url)}" rel="noopener">` +
+          `<strong>${escapeText(p.name)}</strong></a>${real} ` +
+          `<span class="inf-x-meta">@${escapeText(p.handle)} · ${escapeText(
+            PLATFORM_META[p.platform].label,
+          )}${reach}</span>` +
+          `<p>${escapeText(p.bio)}</p>` +
+          (secondary ? `<p class="rls-links">${secondary}</p>` : "") +
+          `</li>`
+        );
+      })
+      .join("");
+    return (
+      `<section><h2>${escapeText(CATEGORY_META[cat].label)}</h2>` +
+      `<p>${escapeText(CATEGORY_META[cat].blurb)}</p>` +
+      `<ul class="inf-x-list">${items}</ul></section>`
+    );
+  }).join("");
+  return (
+    `<div class="page rls-body"><header class="page-head">` +
+    `<a class="brand" href="/" aria-label="AI/TLDR — home">` +
+    `<span class="brand-mark">█</span><p class="brand-name">AI/TLDR</p></a></header>` +
+    `<main class="rls-main"><article class="rls-article">` +
+    `<nav class="rls-crumbs" aria-label="Breadcrumb"><a href="/">AI/TLDR</a> › <span>Influencers</span></nav>` +
+    `<h1>Top AI Influencers to Follow</h1>` +
+    `<p class="rls-summary">${escapeText(
+      `${list.length} AI people worth following, grouped by what they actually do.`,
+    )}</p>` +
+    sections +
+    `<p class="rls-back"><a href="/">← All releases</a></p>` +
+    `</article></main></div>`
+  );
+}
+
+function injectInfluencersBody(html: string, list: Influencer[]): string {
+  html = html.replace("</head>", () => `  ${RELEASE_BODY_STYLE}\n  </head>`);
+  html = html.replace(
+    /<div id="root"><\/div>/,
+    () => `<div id="root">${renderInfluencersBody(list)}</div>`,
+  );
+  return html;
+}
+
 // ---- Static page meta ---------------------------------------------------
 // Title guidance:  primary keyword first, brand suffix, ≤60 chars.
 // Description guidance:  120–158 chars, natural keyword usage, CTA.
@@ -1019,13 +1086,13 @@ const HOME_META: PageMeta = {
 };
 
 const INFLUENCERS_META: PageMeta = {
-  title: "Top AI Influencers to Follow — 110 Creators Ranked | AI/TLDR",
+  title: `Top AI Influencers to Follow — ${influencers.length} People by Role | AI/TLDR`,
   description:
-    "The AI creators, researchers and newsletter authors worth following — ranked by reach across YouTube, X/Twitter, GitHub, podcasts, blogs and Substack.",
+    "The AI people worth following, grouped by what they actually do — frontier-lab founders, researchers, educators, engineers, tool creators, podcasts and newsletters.",
   canonical: INFLUENCERS_URL,
   ogType: "website",
   ogImage: DEFAULT_OG_IMAGE,
-  ogImageAlt: "Top AI influencers to follow — ranked by reach",
+  ogImageAlt: "Top AI influencers to follow, curated by role",
 };
 
 const LOG_META: PageMeta = {
@@ -1205,15 +1272,17 @@ async function main() {
   homeHtml = injectLearnLinksIntoHome(homeHtml);
   await writeHtml("index.html", homeHtml);
 
-  // 2. Influencers page — ProfilePage + ItemList of Person entries
-  await writeHtml(
-    "influencers/index.html",
-    injectMeta(
+  // 2. Influencers page — ProfilePage + ItemList of Person entries, plus a
+  //    crawlable role-grouped body (was an empty #root).
+  {
+    let infHtml = injectMeta(
       template,
       INFLUENCERS_META,
       renderJsonLdInfluencers(influencers),
-    ),
-  );
+    );
+    infHtml = injectInfluencersBody(infHtml, influencers);
+    await writeHtml("influencers/index.html", infHtml);
+  }
 
   // 3. Sweep log page — CollectionPage JSON-LD + crawlable changelog body
   {

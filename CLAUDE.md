@@ -76,6 +76,31 @@ Extra drafts from the initial run are parked in
   verified). Diagrams use the fixed DSL in `schema.ts` — never raw
   SVG/HTML.
 
+## Influencers page (/influencers)
+
+A curated directory of AI people, in `src/data/influencers.ts`
+(`InfluencersPage.tsx` + the `.inf-*` block in `App.css`).
+
+- **Organised by ROLE, not raw reach.** Each person has a `category`
+  (`labs` / `research` / `educators` / `engineering` / `tools` /
+  `voices`); the page renders one section per category (see
+  `CATEGORY_META` / `CATEGORY_ORDER`) with a role filter + search. Do
+  **not** revert to a single follower-count-sorted list — sorting an
+  *AI* directory by raw subscribers floats general megachannels
+  (freeCodeCamp, NetworkChuck) above the actual AI-defining voices.
+- **Reach is a coarse band, never a precise number.** `reach` is
+  `"1m" | "500k" | "100k"` (or absent = niche). This is deliberate:
+  exact counts go stale and can't be re-verified for 100+ people, which
+  would violate the zero-hallucination policy. Don't re-introduce
+  precise `followers`/`followersRaw` fields or a fake
+  `interactionStatistic` in the JSON-LD.
+- **Avatars**: `image?` is optional — a missing/404 image renders a
+  deterministic monogram (`.inf-avatar-mono`). Drop real headshots into
+  `public/influencers/<id>.{jpg,png,webp}` to replace a monogram.
+- **Same rules as the feed**: every bio/handle/URL must be web-verified
+  (roles change — e.g. people move between labs). The prerender injects
+  a crawlable role-grouped `#root` body for SEO.
+
 ## Build pipeline
 
 `bun run build` runs three steps in order:
