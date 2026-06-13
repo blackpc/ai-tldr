@@ -38,9 +38,18 @@ Extra drafts from the initial run are parked in
 `.claude/tmp/learn-archive/` for future expansion.
 
 - **Taxonomy**: `src/data/learn/taxonomy.json` — the canonical tree.
-  Every article's SEO metadata (`seoTitle`, `metaDescription`,
-  `keywords`, `difficulty`, `oneLiner`) lives here AND in the article
-  file; `scripts/check-learn.ts` fails the build if they differ.
+  Every article's SEO metadata (`title`, `shortTitle`, `seoTitle`,
+  `metaDescription`, `keywords`, `difficulty`, `oneLiner`) lives here AND
+  in the article file; `scripts/check-learn.ts` fails the build if they
+  differ.
+- **Two titles per article**: `title` is the keyword-rich H1 + `<title>`
+  source (SEO-bearing). `shortTitle` is a clean **bare-topic** label
+  (no "What is…/How to…" framing — the cat + sub heading already gives
+  context) shown on every listing card, breadcrumb leaf, related/prev-next
+  link, and 3D-city tower. New articles MUST set both. check-learn caps
+  `shortTitle` at 42 chars, forbids a leading interrogative or trailing
+  `?`, and requires it be unique within its subcategory and ≠ the
+  cat/sub title.
 - **Articles**: one JSON file per article at
   `src/data/learn/articles/<cat>/<sub>/<slug>.json`. Articles are
   STRUCTURED (typed sections/blocks, see `src/data/learn/schema.ts`),

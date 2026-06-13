@@ -38,7 +38,8 @@ function buildDistricts(): CityDistrict[] {
       title: sub.title,
       articles: sub.articles.map((a) => ({
         slug: a.slug,
-        title: a.title,
+        title: a.shortTitle,
+        searchTitle: a.title,
         difficulty: a.difficulty,
         href: learnArticlePath(cat.slug, sub.slug, a.slug),
       })),

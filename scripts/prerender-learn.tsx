@@ -452,7 +452,8 @@ export async function prerenderLearn(opts: {
             { name: "Learn AI", path: learnHubPath },
             { name: cat.title, path: catPath },
             { name: sub.title, path: subPath },
-            { name: article.title, path: artPath },
+            // mirror the visible breadcrumb (ArticleBody uses shortTitle here)
+            { name: article.shortTitle, path: artPath },
           ]),
         ].join("\n    ");
         await writeHtml(

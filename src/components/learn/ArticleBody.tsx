@@ -73,7 +73,7 @@ function RelatedCard({ loc }: { loc: LearnArticleLocation }) {
         <DifficultyBadge level={loc.article.difficulty} />
         <span className="lrn-rel-cat">{loc.subcategory.title}</span>
       </span>
-      <span className="lrn-rel-title">{loc.article.title}</span>
+      <span className="lrn-rel-title">{loc.article.shortTitle}</span>
       <span className="lrn-rel-line">{loc.article.oneLiner}</span>
     </a>
   );
@@ -112,7 +112,7 @@ export function ArticleBody({ article }: { article: LearnArticle }) {
                 label: loc.subcategory.title,
                 href: learnSubcategoryPath(loc.category.slug, loc.subcategory.slug),
               },
-              { label: article.title },
+              { label: article.shortTitle },
             ]}
           />
         )}
@@ -206,7 +206,7 @@ export function ArticleBody({ article }: { article: LearnArticle }) {
         {prev ? (
           <a className="lrn-pn-link lrn-pn-prev" href={locPath(prev)} data-internal="true">
             <span className="lrn-pn-dir">← PREV</span>
-            <span className="lrn-pn-title">{prev.article.title}</span>
+            <span className="lrn-pn-title">{prev.article.shortTitle}</span>
           </a>
         ) : (
           <span className="lrn-pn-spacer" />
@@ -214,7 +214,7 @@ export function ArticleBody({ article }: { article: LearnArticle }) {
         {next ? (
           <a className="lrn-pn-link lrn-pn-next" href={locPath(next)} data-internal="true">
             <span className="lrn-pn-dir">NEXT →</span>
-            <span className="lrn-pn-title">{next.article.title}</span>
+            <span className="lrn-pn-title">{next.article.shortTitle}</span>
           </a>
         ) : (
           <span className="lrn-pn-spacer" />

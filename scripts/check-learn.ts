@@ -89,6 +89,10 @@ for (const cat of taxonomy.categories) {
     validPaths.add(`/learn/${cat.slug}/${sub.slug}`);
 
     if (sub.articles.length === 0) err(sctx, "subcategory has no articles");
+    // shortTitle is the bare-topic listing label — must be clean (no
+    // interrogative framing the H1 keeps) and distinguishable within its
+    // track, since cards sit under the cat + sub heading already.
+    const shortSeen = new Map<string, string>();
     for (const ref of sub.articles) {
       const actx = `taxonomy:${ref.slug}`;
       if (!SLUG.test(ref.slug)) err(actx, "article slug not kebab-case");
@@ -96,6 +100,25 @@ for (const cat of taxonomy.categories) {
         err(actx, `article slug duplicated (also in ${bySlug.get(ref.slug)!.cat}/${bySlug.get(ref.slug)!.sub})`);
       bySlug.set(ref.slug, { cat: cat.slug, sub: sub.slug, ref });
       validPaths.add(`/learn/${cat.slug}/${sub.slug}/${ref.slug}`);
+
+      const st = ref.shortTitle;
+      if (!st?.trim()) err(actx, "missing shortTitle");
+      else {
+        if (st.length > 42) err(actx, `shortTitle ${st.length} chars (max 42)`);
+        if (/^(what|how|why|when|where|which|who)\b/i.test(st))
+          err(actx, `shortTitle starts with an interrogative ("${st}")`);
+        if (/\?$/.test(st)) err(actx, `shortTitle ends with "?" ("${st}")`);
+        if (/&(?:[a-z]+|#\d+);/.test(st))
+          err(actx, `HTML entity in shortTitle (write the literal character): "${st}"`);
+        if (st.toLowerCase() === sub.title.toLowerCase())
+          err(actx, "shortTitle equals its subcategory title");
+        if (st.toLowerCase() === cat.title.toLowerCase())
+          err(actx, "shortTitle equals its category title");
+        const lc = st.toLowerCase();
+        if (shortSeen.has(lc))
+          err(actx, `shortTitle "${st}" duplicated within subcategory (also ${shortSeen.get(lc)})`);
+        shortSeen.set(lc, ref.slug);
+      }
     }
   }
 }
@@ -264,6 +287,7 @@ function checkBlock(ctx: string, b: LearnBlock, counters: { words: number; visua
 
 const REF_FIELDS = [
   "title",
+  "shortTitle",
   "seoTitle",
   "metaDescription",
   "difficulty",

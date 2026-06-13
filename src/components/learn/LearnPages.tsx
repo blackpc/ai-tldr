@@ -175,7 +175,7 @@ function ArticleCard({
         style={img ? { backgroundImage: `url(${img})` } : undefined}
       />
       <span className="lrn-acard-body">
-        <span className="lrn-acard-title">{article.title}</span>
+        <span className="lrn-acard-title">{article.shortTitle}</span>
         <span className="lrn-acard-foot">
           <DifficultyBadge level={article.difficulty} />
           <span className="lrn-acard-arr" aria-hidden="true">
@@ -329,7 +329,7 @@ function LeadArticle({
     >
       <span className="lrn-lead-body">
         <span className="lrn-lead-eyebrow">01 · START HERE</span>
-        <span className="lrn-lead-title">{article.title}</span>
+        <span className="lrn-lead-title">{article.shortTitle}</span>
         <span className="lrn-lead-line">{article.oneLiner}</span>
         <span className="lrn-lead-foot">
           <DifficultyBadge level={article.difficulty} />
@@ -375,7 +375,7 @@ function SyllabusRow({
         style={img ? { backgroundImage: `url(${img})` } : undefined}
       />
       <span className="lrn-srow-main">
-        <span className="lrn-srow-title">{article.title}</span>
+        <span className="lrn-srow-title">{article.shortTitle}</span>
         <span className="lrn-srow-line">{article.oneLiner}</span>
       </span>
       <DifficultyBadge level={article.difficulty} />

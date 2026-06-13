@@ -26,8 +26,16 @@ export type LearnDifficulty = "beginner" | "intermediate" | "advanced";
 export interface LearnArticleRef {
   /** Globally-unique kebab-case slug, e.g. "what-is-rag". */
   slug: string;
-  /** H1 — clear, beginner-readable. */
+  /** H1 — clear, beginner-readable. The full keyword phrase; SEO-bearing. */
   title: string;
+  /**
+   * Short, bare-topic display label — used on listing cards, breadcrumbs,
+   * related links, prev/next and the 3D map. The category + subcategory
+   * already supply context, so this drops the "What is…/How to…" framing
+   * the H1 keeps. ≤ 42 chars, unique within its subcategory. Never used in
+   * a <title> tag or the article <h1> (those stay keyword-rich).
+   */
+  shortTitle: string;
   /** <title> tag content (brand suffix added by prerender). ≤ 65 chars. */
   seoTitle: string;
   /** Meta description, 90–165 chars. */

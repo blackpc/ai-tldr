@@ -37,7 +37,10 @@ import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 
 export interface CityArticle {
   slug: string;
+  /** Short bare-topic label shown on the tower. */
   title: string;
+  /** Full keyword-rich title — hidden, kept so search still matches it. */
+  searchTitle?: string;
   difficulty: string;
   href: string;
 }
@@ -58,6 +61,8 @@ export interface CityDistrict {
 export interface CityTowerInfo {
   slug: string;
   title: string;
+  /** Full keyword-rich title — kept for search matching only. */
+  searchTitle?: string;
   difficulty: string;
   href: string;
   district: string;
@@ -628,6 +633,7 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
           info: {
             slug: a.slug,
             title: a.title,
+            searchTitle: a.searchTitle,
             difficulty: a.difficulty,
             href: a.href,
             district: d.title,
@@ -1266,7 +1272,7 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
     let n = 0;
     const matched = new Set<string>();
     for (const t of towers)
-      if (t.info.title.toLowerCase().includes(q)) {
+      if (`${t.info.title} ${t.info.searchTitle ?? ""}`.toLowerCase().includes(q)) {
         matched.add(t.info.slug);
         n++;
       }
