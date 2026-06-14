@@ -1,0 +1,370 @@
+{
+  "slug": "outlines-constrained-generation",
+  "title": "What Is Outlines? Guaranteed Structured LLM Generation",
+  "shortTitle": "Outlines",
+  "seoTitle": "Outlines: Constrained, Schema-Guaranteed LLM Generation",
+  "metaDescription": "Outlines is a Python library for constrained generation that forces an LLM to produce output matching a JSON Schema, regex, or grammar, so the result always parses.",
+  "keywords": [
+    "outlines",
+    "what is outlines library",
+    "outlines constrained generation",
+    "outlines json schema",
+    "outlines vs instructor",
+    "outlines regex grammar"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You will understand how Outlines constrains an LLM's token sampling so the output is guaranteed to match a JSON Schema, regex, or grammar.",
+  "updated": "2026-06-14",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you ask an LLM to return JSON, you are really *hoping* it cooperates. Most of the time it does. But every so often it adds a chatty preamble (\"Sure, here is your JSON!\"), forgets a closing brace, invents a field, or stops mid-string because it ran out of tokens. Your `json.loads(...)` then throws, and a single malformed character takes down the request."
+        },
+        {
+          "type": "image",
+          "url": "/learn-media/dlg-632.jpg",
+          "alt": "Outlines — illustration",
+          "caption": "Outlines",
+          "credit": "datatalks.club"
+        },
+        {
+          "type": "p",
+          "md": "**Outlines** is a Python library that removes the hoping. Instead of letting the model write whatever it wants and *checking* the result afterwards, Outlines steers the model *while it writes* so the output **cannot** stray from the shape you asked for. You hand it a [JSON Schema](/learn/llm-apis/streaming-structured-outputs/structured-outputs-explained), a regular expression, or a grammar, and every token the model produces is forced to keep the output valid. This is called **constrained generation** (or **guaranteed structured generation**)."
+        },
+        {
+          "type": "p",
+          "md": "Think of those children's puzzles with shaped holes — a star, a square, a circle. A normal LLM is a toddler trying to push any block into any hole and hoping it fits. Outlines is a jig that physically blocks every wrong move: at each step it only lets the model reach for a block that *can* still fit the remaining holes. The model still chooses creatively among the valid options, but it is structurally incapable of producing a shape that won't fit."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Outlines is open source and maintained by the .txt (dottxt) team. It runs against open-weight models you host yourself (via Hugging Face Transformers, vLLM, llama.cpp, and similar) where it can reach the model's raw token scores — that direct access is what makes the guarantee possible."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "If you are building software *around* an LLM rather than just chatting with it, the model's output is rarely the final product — it is an input to the next function. That function expects a `dict` with known keys, an enum value it can branch on, or a number it can store. The moment the model returns something almost-but-not-quite valid, the whole pipeline stalls."
+        },
+        {
+          "type": "p",
+          "md": "The common workaround is **validate-and-retry**: ask for JSON, try to parse it, and if it fails, send the broken output back and beg the model to fix it. Libraries like Instructor popularized this loop. It works, but it has real costs."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Wasted tokens and latency.** Every failed attempt is a full generation you paid for, plus another round trip before you get a usable answer.",
+            "**No hard guarantee.** A retry loop *usually* converges, but on a bad day it can fail three times in a row and you still have nothing. You are reducing the probability of failure, not eliminating it.",
+            "**Hidden tail-latency.** Most requests succeed on the first try, so your average looks great — until the slow 1% that retried twice blows past your timeout budget."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Outlines attacks the problem at the source. Because invalid tokens are never even *sampled*, the output parses on the **first** try, every time, with no retry loop. You stop writing defensive `try/except` ladders and stop treating \"the model returned garbage\" as a runtime branch you have to handle. For pipelines that classify, extract fields, route requests, or call tools, that shift — from *hope and check* to *guaranteed by construction* — is the entire point."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Constrained generation guarantees the output is *structurally* valid — it parses, the keys exist, the enum value is from your list. It does **not** guarantee the values are *correct* or true. A schema can force a `price` field to be a number; it cannot force the *right* number. Structure and accuracy are two different problems."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "To see the trick, you need one fact about how LLMs generate text. A model does not emit words — it emits one **token** at a time. At each step it produces a score (a *logit*) for every token in its vocabulary, those scores become probabilities, and the sampler picks one. Then it repeats with the new token appended. Generation is just this loop, thousands of tokens long."
+        },
+        {
+          "type": "p",
+          "md": "Outlines inserts itself into that loop. Before the sampler picks, Outlines looks at the structure you required and the text generated so far, works out **which tokens would keep the output valid**, and sets the score of every *other* token to negative infinity. Those forbidden tokens now have zero probability, so the sampler literally cannot choose them. This is called **logit masking** or **token masking**."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "One generation step, with Outlines in the loop",
+            "steps": [
+              {
+                "label": "Model scores tokens",
+                "sub": "a logit per vocab token"
+              },
+              {
+                "label": "Outlines builds a mask",
+                "sub": "from schema + text so far"
+              },
+              {
+                "label": "Mask invalid tokens",
+                "sub": "their score → -infinity"
+              },
+              {
+                "label": "Sample from valid set",
+                "sub": "only legal tokens remain",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "How does Outlines know which tokens are valid? It compiles your constraint — schema, regex, or grammar — into a **finite-state machine**: a tiny map of states and allowed transitions. \"I'm right after an opening brace, so the only legal next thing is a `\"` to start a key, or a `}` to close an empty object.\" The machine tracks where generation currently sits and, for each state, which tokens may come next. The clever part is that Outlines does the expensive compilation step **once**, up front, then reuses the result for every request — so masking adds almost nothing to per-token speed."
+        },
+        {
+          "type": "p",
+          "md": "A simplified picture of generating a small JSON object, where each step only allows characters that keep it on a valid path:"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Walking the state machine for a JSON object",
+            "steps": [
+              {
+                "label": "Start",
+                "sub": "only `{` allowed"
+              },
+              {
+                "label": "After `{`",
+                "sub": "only `\"` (a key) or `}`"
+              },
+              {
+                "label": "Inside a string",
+                "sub": "any char until closing `\"`"
+              },
+              {
+                "label": "After a value",
+                "sub": "only `,` or `}`"
+              },
+              {
+                "label": "Reached `}`",
+                "sub": "valid object — stop",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Because the model is fenced onto a valid path at *every* step, there is no way to reach the end with broken output. Even if the generation is cut short by a token limit, what was produced so far still followed the rules up to that point — it was never allowed to do otherwise."
+        }
+      ]
+    },
+    {
+      "id": "outlines-in-code",
+      "title": "Outlines in code",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The usual pattern: describe the shape you want with a [Pydantic](https://docs.pydantic.dev/) model (which Outlines reads as a JSON Schema), wrap your model, and generate. The return value is already a typed object — no parsing, no validation step, no retry."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Guaranteed-valid extraction with Outlines",
+          "code": "from enum import Enum\nfrom pydantic import BaseModel\nimport outlines\nfrom transformers import AutoModelForCausalLM, AutoTokenizer\n\n# 1) Describe the EXACT shape you want as a schema.\nclass Sentiment(str, Enum):\n    positive = \"positive\"\n    negative = \"negative\"\n    neutral = \"neutral\"\n\nclass Review(BaseModel):\n    sentiment: Sentiment        # must be one of the three enum values\n    score: int                  # must be an integer\n    summary: str\n\n# 2) Wrap any local model Outlines can reach the logits of.\nmodel = outlines.from_transformers(\n    AutoModelForCausalLM.from_pretrained(\"some-open-model\"),\n    AutoTokenizer.from_pretrained(\"some-open-model\"),\n)\n\n# 3) Generate. Token masking happens inside this call.\nresult = model(\n    \"Extract sentiment from: 'The battery life is incredible.'\",\n    Review,                      # the schema IS the constraint\n)\n\nreview = Review.model_validate_json(result)\nprint(review.sentiment)          # Sentiment.positive — guaranteed valid"
+        },
+        {
+          "type": "p",
+          "md": "Schemas are not the only kind of constraint. When the output is not really JSON — a phone number, a date, a single multiple-choice letter — a **regex** or a fixed **choice set** is simpler and just as guaranteed:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Regex and choice constraints",
+          "code": "# Force output to match a pattern exactly.\nphone = model(\"A made-up US phone number:\",\n              outlines.types.Regex(r\"\\(\\d{3}\\) \\d{3}-\\d{4}\"))\n# -> always like \"(415) 555-0182\", never prose around it\n\n# Force the answer to be ONE of a fixed set (great for classification).\nlabel = model(\"Is this spam or not?\",\n              outlines.types.Choice([\"spam\", \"not_spam\"]))\n# -> exactly \"spam\" or \"not_spam\", nothing else is reachable"
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "API shapes evolve, so treat the snippets above as the *idea*, not a copy-paste contract — check the current docs for exact function names. The concept is stable: pick a constraint type (schema, regex, choice, or grammar), pass it alongside the prompt, get back output that provably matches."
+        }
+      ]
+    },
+    {
+      "id": "outlines-vs-other-approaches",
+      "title": "Outlines vs other ways to get structured output",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "\"Make the LLM return reliable JSON\" has several solutions that look similar but differ in *where* the guarantee comes from. The key question for each: can the output still be invalid?"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Approach",
+            "How it enforces shape",
+            "Can output be invalid?"
+          ],
+          "rows": [
+            [
+              "Prompt + hope",
+              "You ask nicely in the prompt",
+              "Yes — no enforcement at all"
+            ],
+            [
+              "Retry libraries (e.g. Instructor)",
+              "Parse, and re-ask the model on failure",
+              "Rare, but possible after retries"
+            ],
+            [
+              "Provider Structured Outputs",
+              "Provider constrains decoding server-side",
+              "No, when the schema is supported"
+            ],
+            [
+              "Outlines",
+              "Local logit masking against a state machine",
+              "No — invalid tokens are unreachable"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The crucial split is between **validate-after** and **constrain-during**. Retry libraries validate *after* generation — they catch a mistake the model already made and ask for a do-over. Outlines constrains *during* generation — the mistake can never be made. Hosted [Structured Outputs](/learn/llm-apis/streaming-structured-outputs/json-mode-vs-structured-outputs) from major providers use the same constrain-during idea, just executed on the provider's servers instead of in your process."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Validate-after vs constrain-during",
+            "columns": [
+              {
+                "title": "Validate-after (retry)",
+                "items": [
+                  "Model writes freely",
+                  "You parse the result",
+                  "On failure, re-ask",
+                  "Costs extra tokens + latency",
+                  "Guarantee is probabilistic"
+                ]
+              },
+              {
+                "title": "Constrain-during (Outlines)",
+                "accent": true,
+                "items": [
+                  "Invalid tokens are masked",
+                  "Output parses on first try",
+                  "No retry loop needed",
+                  "Masking overhead is tiny",
+                  "Guarantee is structural"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "So when do you reach for Outlines specifically rather than a hosted feature? When you run **open-weight models yourself** — local, on-prem, or a self-managed vLLM cluster — and want the same hard guarantee a closed API gives you. Outlines also goes *beyond* typical hosted JSON modes by supporting arbitrary regex and full context-free **grammars** (via EBNF), which lets you constrain output to things like valid SQL or a custom syntax, not just JSON."
+        }
+      ]
+    },
+    {
+      "id": "pitfalls-and-good-practice",
+      "title": "Pitfalls and good practice",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Constrained generation is powerful, but it changes the model's behavior in ways worth understanding before you rely on it in production."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Valid is not correct.** This bears repeating: the structure is guaranteed, the *content* is not. A masked model will happily put a plausible-but-wrong number in a required `int` field. Keep your evals focused on value accuracy, not just \"did it parse.\"",
+            "**Constraints can fight the model's instincts.** If your schema demands a shape the model finds unnatural for the prompt, masking forces it down a path it assigned low probability. The output is still valid, but quality can dip. The fix is usually to *also* describe the desired shape in the prompt, so the model wants what the mask requires.",
+            "**Over-tight regex can trap generation.** A pattern with no legal next token at some state can force odd choices or an early stop. Test patterns on real inputs, and prefer a slightly looser constraint plus validation over an impossibly strict one.",
+            "**It needs the raw logits.** Outlines works because it sees and edits the score of every token before sampling. With a closed API that only returns finished text, it cannot reach inside — that is exactly the gap hosted Structured Outputs fills instead.",
+            "**Compile cost is per-schema, not per-call.** Building the state machine for a brand-new, large schema takes a moment. Reuse the same compiled constraint across requests rather than rebuilding it each time, and that cost disappears into a one-off."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Do not use constrained generation as your *only* safety layer. Masking guarantees shape; it does not catch a syntactically valid but harmful or nonsensical value. Validate business rules (ranges, allowed combinations, references) after generation as well — the schema is a floor, not a ceiling."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics click, a few deeper themes are worth knowing."
+        },
+        {
+          "type": "p",
+          "md": "**The tokenizer mismatch problem.** State machines naturally think in *characters*, but models generate *tokens*, and a single token can span several characters (or a fraction of a multi-byte one). The genuinely hard engineering inside Outlines is mapping the character-level rules onto the model's specific token vocabulary, so the mask is correct for *this* tokenizer. This is why the constraint is compiled per model family, not once for all models — and why a naive \"just regex the output\" approach is not the same thing."
+        },
+        {
+          "type": "p",
+          "md": "**Grammars unlock more than JSON.** Beyond schemas and regex, Outlines accepts context-free grammars (commonly written in EBNF). A grammar can describe nested, recursive structure that a flat regex cannot — balanced parentheses, a subset of a programming language, a domain-specific query format. If you want a model to emit *only* parseable expressions in your own mini-language, a grammar constraint is the tool."
+        },
+        {
+          "type": "p",
+          "md": "**It composes with serving stacks.** The same masking idea is built into high-throughput servers — vLLM, for instance, supports guided/structured decoding, and Outlines integrates with such backends. So you do not have to choose between \"fast serving\" and \"guaranteed structure\"; you can have both, with masking applied inside the serving loop."
+        },
+        {
+          "type": "p",
+          "md": "**Where to go next.** If you mostly call hosted models, compare this approach with provider [Structured Outputs](/learn/llm-apis/streaming-structured-outputs/json-mode-vs-structured-outputs) and the broader idea of [structured outputs](/learn/llm-apis/streaming-structured-outputs/structured-outputs-explained), which solve the same problem from the API side. And if you stream constrained output token by token, remember that a partially generated valid object is not yet a *complete* one — see how to [parse streaming responses](/learn/llm-apis/streaming-structured-outputs/parse-streaming-responses) so you assemble it safely. The durable lesson is the framing itself: constrain during generation instead of validating after it, and an entire class of parse failures simply stops existing."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is Outlines used for?",
+      "a": "Outlines is a Python library for **constrained generation**: it forces a local LLM to produce output that exactly matches a JSON Schema, regular expression, choice set, or grammar. It is used to get structured output — like JSON for an API, an enum for classification, or a fixed pattern — that is guaranteed to parse on the first try, with no retry loop."
+    },
+    {
+      "q": "How does Outlines guarantee valid JSON?",
+      "a": "It works at the token-sampling level. Before each token is chosen, Outlines masks (sets to zero probability) every token that would break the required structure, so the model can only pick tokens that keep the output valid. Because invalid tokens are never sampled, the result is structurally valid by construction rather than checked afterward."
+    },
+    {
+      "q": "What is the difference between Outlines and Instructor?",
+      "a": "Instructor uses a **validate-and-retry** approach: the model generates freely, you parse the output, and on failure it re-asks the model to fix it. Outlines uses **constrained generation**: it prevents invalid output during decoding via token masking, so no retry is needed. Outlines gives a hard structural guarantee but needs access to the model's raw logits, which means running open-weight models yourself."
+    },
+    {
+      "q": "Does constrained generation make the output correct?",
+      "a": "No. It guarantees the output is structurally *valid* — it parses, the keys exist, the value is one of your allowed choices — but it cannot guarantee the values are factually correct. A schema can force a field to be a number; it cannot force the *right* number. You still need evaluation and business-rule checks on the values."
+    },
+    {
+      "q": "Can I use Outlines with the OpenAI or Anthropic API?",
+      "a": "Outlines needs to edit the model's token scores before sampling, which a closed text-only API does not expose, so it targets open-weight models you host (via Transformers, vLLM, llama.cpp, and similar). For hosted models, use the provider's own Structured Outputs feature, which applies the same constrain-during-decoding idea on the server side."
+    },
+    {
+      "q": "Does Outlines slow down generation?",
+      "a": "Very little per token. The expensive step — compiling your schema, regex, or grammar into a finite-state machine — happens once, up front, and is reused for every request. After that, masking invalid tokens at each step adds only a small overhead, which is why constrained generation can run at near-normal speed."
+    }
+  ],
+  "related": [
+    "structured-outputs-explained",
+    "json-mode-vs-structured-outputs",
+    "parse-streaming-responses",
+    "llm-streaming-explained",
+    "streaming-structured-output"
+  ],
+  "furtherReading": [
+    {
+      "title": "Outlines — Official Documentation",
+      "url": "https://dottxt-ai.github.io/outlines/"
+    },
+    {
+      "title": "Outlines — GitHub Repository",
+      "url": "https://github.com/dottxt-ai/outlines"
+    },
+    {
+      "title": "Structured Outputs — vLLM Documentation",
+      "url": "https://docs.vllm.ai/en/latest/features/structured_outputs.html"
+    }
+  ]
+}

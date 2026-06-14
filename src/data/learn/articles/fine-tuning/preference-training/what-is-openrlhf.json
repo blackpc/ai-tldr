@@ -1,0 +1,376 @@
+{
+  "slug": "what-is-openrlhf",
+  "title": "What Is OpenRLHF? Scalable Ray-Based RLHF",
+  "shortTitle": "OpenRLHF",
+  "seoTitle": "What Is OpenRLHF? Ray-Based, Scalable RLHF Toolkit",
+  "metaDescription": "OpenRLHF is an easy-to-use, Ray-based framework for scalable RLHF, supporting PPO, GRPO and REINFORCE++ to align large language models across multiple GPUs.",
+  "keywords": [
+    "openrlhf",
+    "what is openrlhf",
+    "openrlhf framework",
+    "ray rlhf",
+    "openrlhf ppo grpo",
+    "scalable rlhf",
+    "openrlhf vs verl"
+  ],
+  "difficulty": "advanced",
+  "oneLiner": "You will understand what OpenRLHF is, how it uses Ray to scale RLHF, and which preference/RL algorithms it supports.",
+  "updated": "2026-06-14",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**OpenRLHF** is an open-source framework for running [RLHF](/learn/fine-tuning/preference-training/what-is-rlhf) — reinforcement learning from human feedback — on large language models, at a scale that doesn't fit on a single GPU. It is the plumbing, not the method. RLHF is the idea (train a model to prefer the answers humans like); OpenRLHF is one of the well-built engines that actually runs that idea across many GPUs without you wiring all the distributed-systems machinery yourself."
+        },
+        {
+          "type": "image",
+          "url": "/learn-media/dlg-626.jpg",
+          "alt": "OpenRLHF — illustration",
+          "caption": "OpenRLHF",
+          "credit": "cryptoyoog.com"
+        },
+        {
+          "type": "p",
+          "md": "Here is the everyday analogy. Imagine training a star apprentice. One person (the *actor*) does the work and keeps improving. A second person (the *reward model*) grades each attempt the way a customer would. A third (the *critic*) predicts how well things are going so feedback isn't all-or-nothing. And a fourth (a *reference* copy of the original apprentice) makes sure the learner doesn't drift into weird habits while chasing a high score. RLHF needs all four of these roles running together. The catch: for a modern LLM each role is itself a huge model that won't fit on one machine. OpenRLHF's job is to spread these roles across a cluster, keep them in sync, and feed data between them efficiently."
+        },
+        {
+          "type": "p",
+          "md": "It does this on top of **[Ray](https://www.ray.io/)**, a Python framework for distributed computing. Ray lets OpenRLHF place each role on the right GPUs, run them in parallel, and pass tensors between them — so you describe *what* training you want, and Ray handles *where* every piece physically lives."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "OpenRLHF is **advanced** territory. To follow it comfortably, you should already know what RLHF is, what a [reward model](/learn/fine-tuning/preference-training/what-is-a-reward-model) does, and roughly how [PPO and DPO](/learn/fine-tuning/preference-training/ppo-vs-dpo) differ. If those are fuzzy, read those first — this article assumes them."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Classic RLHF with **PPO** is one of the heaviest workloads in all of machine learning. The reason is that, unlike ordinary supervised fine-tuning where you load *one* model, PPO needs **four models alive at the same time**:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "the **actor** — the policy you are training (it generates responses);",
+            "the **critic** — estimates the value of a state, so updates are stable;",
+            "the **reward model** — scores each generated response;",
+            "the **reference model** — a frozen copy of the start point, used to keep the actor from drifting too far (the KL penalty)."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "For a large model, no single GPU holds even one of these, let alone four. So you must shard each model across GPUs, run the slow *generation* step (the actor writing answers token by token) as fast as possible, then run the *training* step (gradients flowing through actor and critic). Doing this by hand means hand-rolling model parallelism, scheduling, memory placement, and weight synchronization. That is weeks of distributed-systems engineering before you train anything."
+        },
+        {
+          "type": "p",
+          "md": "**This is the problem OpenRLHF solves.** It packages the whole multi-model dance behind a clean interface: you pick an algorithm, point it at your model and reward model, and it orchestrates the roles across the cluster for you. A builder cares because it turns 'we'd need an infra team to attempt RLHF' into 'we can launch a run this week.' It also matters that it is open-source and readable — many teams use it as a reference implementation to understand how scalable RLHF actually works, not just as a black box."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "If your goal is just to align a small model on a single GPU, you may not need OpenRLHF at all — a simpler library or plain [DPO](/learn/fine-tuning/preference-training/what-is-dpo) is enough. OpenRLHF earns its keep when the model is big and the run is multi-GPU or multi-node."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The core idea is **role placement**. OpenRLHF treats each model in the RLHF loop as a separate distributed actor that Ray schedules onto its own slice of the cluster. Generation (the actor producing samples) and learning (updating weights) are deliberately handled by different, specialized engines, because they have different bottlenecks: generation is about throughput, learning is about gradient computation and memory."
+        },
+        {
+          "type": "h3",
+          "text": "The four roles, distributed by Ray"
+        },
+        {
+          "type": "p",
+          "md": "Ray acts as the orchestrator. It launches each role as a group of workers on chosen GPUs, lets them run in parallel, and moves data — prompts in, generated responses and scores back out — between them. Because the roles are decoupled, you can give more GPUs to whichever role is the bottleneck (often generation) instead of treating the whole thing as one monolithic job."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "Ray places each RLHF role on its own GPUs",
+            "root": {
+              "label": "Ray orchestrator",
+              "sub": "schedules + routes data",
+              "accent": true
+            },
+            "children": [
+              {
+                "label": "Actor (policy)",
+                "sub": "being trained"
+              },
+              {
+                "label": "Critic",
+                "sub": "value estimates"
+              },
+              {
+                "label": "Reward model",
+                "sub": "scores responses"
+              },
+              {
+                "label": "Reference model",
+                "sub": "frozen, KL anchor"
+              },
+              {
+                "label": "Generation engine",
+                "sub": "fast sampling"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Fast generation, then a training update"
+        },
+        {
+          "type": "p",
+          "md": "The expensive part of PPO is making the actor write thousands of sample responses every step. OpenRLHF offloads this to a high-throughput inference engine (such as vLLM) rather than using the slow training-mode forward pass. The generated responses are scored by the reward model, the reference model supplies the KL penalty, the critic estimates values, and only then does the gradient update run. After updating, the new actor weights are synced back to the generation engine so the next batch is sampled from the improved policy. That **generate → score → learn → sync** cycle repeats for the whole run."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "One RLHF training step, repeated",
+            "steps": [
+              {
+                "label": "Sample prompts"
+              },
+              {
+                "label": "Actor generates responses"
+              },
+              {
+                "label": "Reward model scores them"
+              },
+              {
+                "label": "Compute advantages (critic + KL)"
+              },
+              {
+                "label": "Update actor weights"
+              },
+              {
+                "label": "Sync weights to generator"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "A key efficiency choice is **where models live**. To save memory, OpenRLHF can keep the heavy roles on separate GPUs (so each fits comfortably) or co-locate lighter ones together. Splitting generation onto its own fast engine while training happens elsewhere is what lets a single run scale from a few GPUs to many nodes without the code changing — Ray reshuffles placement, the algorithm stays the same."
+        }
+      ]
+    },
+    {
+      "id": "algorithms-it-supports",
+      "title": "Which algorithms it supports",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "OpenRLHF is not tied to a single algorithm. It supports the main families of preference and RL training for LLMs, which matters because the field keeps shifting toward methods that need *fewer* of the four models above."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Algorithm",
+            "What it is",
+            "Models in the loop"
+          ],
+          "rows": [
+            [
+              "PPO",
+              "The classic RLHF method: an on-policy RL algorithm with a separate value critic.",
+              "Actor, critic, reward, reference (4)"
+            ],
+            [
+              "GRPO",
+              "Group-relative policy optimization — scores a *group* of samples against each other, dropping the separate critic.",
+              "Actor, reward, reference (3)"
+            ],
+            [
+              "REINFORCE++",
+              "A streamlined policy-gradient method that also avoids a learned critic, aiming for PPO-like stability more cheaply.",
+              "Actor, reward, reference (3)"
+            ],
+            [
+              "DPO / direct methods",
+              "Preference optimization straight from labeled pairs, with no online generation or reward model at all.",
+              "Actor, reference (2)"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The trend is visible in the right-hand column: newer methods like [GRPO](/learn/fine-tuning/preference-training/what-is-grpo) and REINFORCE++ deliberately remove the critic to cut memory and complexity, while keeping the online RL signal. OpenRLHF supporting all of them means you can pick the trade-off you want — full PPO when you need it, a lighter method when you don't — without switching frameworks."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Supporting an algorithm is not the same as it being best for your task. PPO is powerful but finicky to tune; GRPO and direct methods are often easier to get working. Treat OpenRLHF as the engine and the algorithm choice as a separate, deliberate decision."
+        }
+      ]
+    },
+    {
+      "id": "a-mental-model-of-a-run",
+      "title": "What launching a run looks like",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You don't write the distributed code yourself. A run is mostly configuration: which base model to train, which reward model to score with, the algorithm, and how many GPUs each role gets. Conceptually a launch looks like this — a Ray cluster comes up, then a training script is submitted with flags describing the roles."
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "title": "conceptual shape of a launch (illustrative)",
+          "code": "# 1) Bring up a Ray cluster across your machines\nray start --head\n\n# 2) Submit a PPO run, telling OpenRLHF where each role lives.\n#    The framework places actor / critic / reward / reference\n#    and the generation engine onto the GPUs you allocate.\npython -m openrlhf.cli.train_ppo_ray \\\n  --pretrain  <base-model> \\\n  --reward_pretrain <reward-model> \\\n  --actor_num_gpus_per_node 4 \\\n  --critic_num_gpus_per_node 2 \\\n  --vllm_num_engines 2 \\\n  --colocate_actor_ref\n\n# Flags above are illustrative — consult the current docs for exact names."
+        },
+        {
+          "type": "p",
+          "md": "The important mental model is in those flags, not their exact spelling: you are **budgeting GPUs to roles**. More GPUs to generation if sampling is your bottleneck; co-locate the reference with the actor to save memory; add inference engines to generate faster. The algorithm code stays the same — you are tuning the *placement*."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Flag names, module paths, and defaults change between releases. Never copy a command from a blog post (or this page) as gospel — always check the version of the docs that matches the code you installed. The concepts here are evergreen; the exact CLI is not."
+        }
+      ]
+    },
+    {
+      "id": "openrlhf-vs-other-frameworks",
+      "title": "OpenRLHF vs other RLHF frameworks",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "OpenRLHF is one of several frameworks for scaling RL on LLMs, and people most often compare it with **verl** and with TRL. They overlap, so it helps to see what each optimizes for."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Where each framework sits",
+            "columns": [
+              {
+                "title": "OpenRLHF",
+                "accent": true,
+                "items": [
+                  "Ray-based, role-distributed RLHF",
+                  "Readable reference implementation",
+                  "PPO, GRPO, REINFORCE++, DPO",
+                  "Good for learning + scaling out"
+                ]
+              },
+              {
+                "title": "verl",
+                "items": [
+                  "Also distributed RL for LLMs",
+                  "Built around a hybrid controller design",
+                  "Strong focus on large-scale throughput",
+                  "Heavier, infra-team oriented"
+                ]
+              },
+              {
+                "title": "TRL (Hugging Face)",
+                "items": [
+                  "Library, tight HF ecosystem fit",
+                  "Great for single-node / smaller runs",
+                  "DPO, PPO, GRPO and more",
+                  "Less about multi-node orchestration"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "A rough rule of thumb: reach for a library like **TRL** when you are on one machine and want the simplest path; reach for **OpenRLHF** when you want a clear, scalable Ray-based RLHF engine you can also read and learn from; consider **verl** when you are pushing very large-scale throughput and have infrastructure expertise. These are not rigid boundaries — all three are actively developed and their feature sets keep converging — but the emphasis differs."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic picture clicks — distribute four roles, generate fast, learn, sync — the interesting depth is in the trade-offs that decide whether a run is efficient or painfully slow."
+        },
+        {
+          "type": "p",
+          "md": "**Generation is usually the bottleneck.** In PPO, the actor must produce many full responses every step, and autoregressive decoding is slow. That is why OpenRLHF leans on a dedicated inference engine for sampling and why people obsess over keeping those GPUs busy. If your reward model is small, most of your wall-clock time is spent generating, not learning — so scaling generation throughput often matters more than scaling the optimizer."
+        },
+        {
+          "type": "p",
+          "md": "**Weight synchronization is a real cost.** After each update, the improved actor weights must reach the generation engine, or you'd be sampling from a stale policy. For huge models, moving those weights across the cluster is itself an engineering problem, and how a framework does this sync efficiently is a major design point."
+        },
+        {
+          "type": "p",
+          "md": "**Memory placement is the main knob.** Whether to co-locate the reference and actor, how to shard the critic, how many inference engines to spin up — these placement choices decide if a model fits and how fast it runs. There is no single right answer; it depends on model size, sequence length, and your GPU count. Expect to experiment."
+        },
+        {
+          "type": "p",
+          "md": "**The algorithm landscape keeps moving.** The shift from PPO toward critic-free methods like GRPO and REINFORCE++ is partly *because* of everything above: fewer models in the loop means less memory, less syncing, and a simpler system to tune. Expect OpenRLHF and its peers to keep adding methods that trade a little theoretical purity for a lot of operational simplicity."
+        },
+        {
+          "type": "p",
+          "md": "**Where to go next.** Solidify the underlying ideas with [what is RLHF](/learn/fine-tuning/preference-training/what-is-rlhf) and [what is a reward model](/learn/fine-tuning/preference-training/what-is-a-reward-model); understand the algorithm choices through [PPO vs DPO](/learn/fine-tuning/preference-training/ppo-vs-dpo) and [GRPO](/learn/fine-tuning/preference-training/what-is-grpo). Then read OpenRLHF's own source — it is compact enough to follow, and seeing the four roles wired together in real code is the fastest way to make all of this concrete."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is OpenRLHF used for?",
+      "a": "It is used to run reinforcement learning from human feedback (RLHF) on large language models across many GPUs. You give it a base model, a reward model, and an algorithm, and it orchestrates the actor, critic, reward, and reference models for you instead of you building all the distributed-systems plumbing by hand."
+    },
+    {
+      "q": "Why does OpenRLHF use Ray?",
+      "a": "RLHF needs several large models running at once, and none of them fit on a single GPU. Ray is a distributed-computing framework that places each role (actor, critic, reward, reference, generation engine) on its own slice of the cluster, runs them in parallel, and routes data between them — so OpenRLHF can scale a run from a few GPUs to many nodes without changing the algorithm code."
+    },
+    {
+      "q": "Which algorithms does OpenRLHF support?",
+      "a": "It supports the classic PPO plus newer, lighter methods like GRPO and REINFORCE++ that drop the separate value critic, as well as direct preference methods such as DPO. The trend is toward methods that need fewer models in the loop, which cuts memory and complexity."
+    },
+    {
+      "q": "What is the difference between OpenRLHF and verl?",
+      "a": "Both are distributed frameworks for RL on LLMs. OpenRLHF is known as a clean, Ray-based, readable implementation that is good for both scaling and learning how RLHF works. verl emphasizes very large-scale throughput with a hybrid-controller design and tends to suit infrastructure-heavy teams. Their feature sets overlap and keep converging."
+    },
+    {
+      "q": "Do I need OpenRLHF to do RLHF?",
+      "a": "No. For a small model on a single GPU, a simpler library or plain DPO is often enough. OpenRLHF earns its place when the model is large and the run spans multiple GPUs or nodes, where hand-rolling the distributed setup would otherwise be a major project."
+    },
+    {
+      "q": "Is OpenRLHF still maintained?",
+      "a": "Yes, it is an actively maintained open-source project. Because it evolves, treat exact command-line flags and module paths as version-specific and check the current documentation rather than relying on an old example."
+    }
+  ],
+  "related": [
+    "what-is-rlhf",
+    "what-is-grpo",
+    "ppo-vs-dpo",
+    "what-is-a-reward-model",
+    "what-is-dpo"
+  ],
+  "furtherReading": [
+    {
+      "title": "OpenRLHF — GitHub repository",
+      "url": "https://github.com/OpenRLHF/OpenRLHF"
+    },
+    {
+      "title": "Ray — Distributed computing framework",
+      "url": "https://www.ray.io/"
+    },
+    {
+      "title": "TRL — Transformer Reinforcement Learning (Hugging Face)",
+      "url": "https://huggingface.co/docs/trl"
+    }
+  ]
+}

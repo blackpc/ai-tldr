@@ -1,0 +1,360 @@
+{
+  "slug": "what-is-vllm",
+  "title": "What Is vLLM? High-Throughput LLM Serving",
+  "shortTitle": "vLLM Engine",
+  "seoTitle": "What Is vLLM? High-Throughput Open LLM Serving Engine",
+  "metaDescription": "vLLM is a high-throughput open-source LLM serving engine that introduced PagedAttention and continuous batching to serve many concurrent requests efficiently.",
+  "keywords": [
+    "vllm",
+    "what is vllm",
+    "vllm tutorial",
+    "vllm vs ollama",
+    "pagedattention",
+    "continuous batching",
+    "vllm serving"
+  ],
+  "difficulty": "advanced",
+  "oneLiner": "You will understand what vLLM is, why PagedAttention and continuous batching make it fast at serving many concurrent users, and where it fits in a production stack.",
+  "updated": "2026-06-14",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**vLLM** is an open-source *serving engine* — a program whose only job is to run a [large language model](/learn/llm-fundamentals/llm-basics/what-is-an-llm) as a fast, shared service that many people can hit at once. You point it at a model's weights, it loads them onto your GPU, and it exposes an HTTP API. From then on, hundreds of users can send requests to the same running model and get answers back quickly."
+        },
+        {
+          "type": "image",
+          "url": "/learn-media/dlg-611.jpg",
+          "alt": "vLLM Engine — illustration",
+          "caption": "vLLM Engine",
+          "credit": "ai-box.eu"
+        },
+        {
+          "type": "p",
+          "md": "Picture a busy restaurant kitchen. A naive setup is one cook taking a single order, cooking it start to finish, and only then looking at the next ticket. The stove sits half-cold between dishes; everyone behind the first customer waits. A great kitchen instead keeps every burner full: the moment one dish finishes, the next ingredient drops into the freed pan, and orders that arrive mid-service slot straight into the rotation. vLLM is that well-run kitchen for an LLM — it keeps the expensive GPU busy almost all the time instead of letting it idle between requests."
+        },
+        {
+          "type": "p",
+          "md": "That single idea — never let the GPU wait — is what vLLM is famous for. It started as a research project at UC Berkeley and grew into the de facto standard for serving open-weight models in production. Two inventions made it possible: **PagedAttention**, a smarter way to store the model's working memory, and **continuous batching**, a smarter way to pack many users' requests onto the GPU together."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "vLLM is not a model and not a chatbot. It is the *engine under the hood* that runs models like Llama, Qwen, or Mistral. Think web server, not website. If you have used a hosted API, something in this family was almost certainly serving your requests."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "GPUs are the single most expensive line item in running an LLM. A serving engine's entire reason to exist is to squeeze more useful work out of each GPU-second, so you can serve more users on fewer, cheaper machines. vLLM matters because it does that dramatically better than the obvious do-it-yourself approach."
+        },
+        {
+          "type": "h3",
+          "text": "The problem with the naive approach"
+        },
+        {
+          "type": "p",
+          "md": "If you just call a model in a loop, one request at a time, two things go wrong. First, the GPU is idle for most of every request — generating text is *memory-bound*, so a single user can't keep thousands of GPU cores busy. Second, the model's working memory (the [KV cache](/learn/production-llmops/cost-latency-optimization/kv-cache-explained)) is managed clumsily: each request reserves a big contiguous block sized for the longest answer it *might* produce, and most of that reservation is never used. You run out of memory long before you run out of compute."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Throughput.** vLLM serves far more requests per second on the same hardware by keeping many requests in flight together. More throughput means a lower cost per token and fewer GPUs to rent.",
+            "**Memory efficiency.** PagedAttention nearly eliminates the wasted KV-cache memory, so a given GPU can hold many more concurrent requests before it fills up.",
+            "**Concurrency.** Continuous batching lets new requests join and finished ones leave on every step, so latency stays reasonable even under heavy, bursty traffic.",
+            "**Compatibility.** It speaks the same OpenAI-style API most tools already expect and runs a huge range of open-weight models, so adopting it rarely means rewriting your application."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who should care? Anyone *serving* an open-weight model to real traffic: a startup hosting its own model to avoid per-token API fees, a platform team running an internal model for the whole company, or a researcher batch-processing millions of prompts. If you are a single person chatting with a model on your laptop, you probably want a single-user runner like [Ollama](/learn/local-open-models/running-models-locally/what-is-ollama) instead — vLLM's strengths only show up when there are many requests to overlap."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "To see what vLLM does, you first need one fact about how LLMs generate text. A model writes one token at a time, and to produce the next token it needs the keys and values it computed for every previous token. Storing those so it doesn't recompute them is the **KV cache**, and that cache grows with every token in every active conversation. The KV cache is the scarce resource a serving engine fights over — and vLLM's two headline techniques are both about using it well."
+        },
+        {
+          "type": "h3",
+          "text": "PagedAttention: paging for the KV cache"
+        },
+        {
+          "type": "p",
+          "md": "Traditional serving gives each request one large, contiguous chunk of GPU memory for its KV cache, sized for the worst case. Two problems follow: the unused tail of every reservation is wasted (*internal fragmentation*), and the leftover gaps between reservations are too small to reuse (*external fragmentation*). In practice a big fraction of precious GPU memory just sits empty."
+        },
+        {
+          "type": "p",
+          "md": "PagedAttention borrows the trick operating systems use for RAM: **paging**. It chops the KV cache into small fixed-size *blocks* and keeps a per-request *block table* that maps logical positions to wherever those blocks physically live. Blocks need not be next to each other, so a request grows one small block at a time and only when it actually needs to. Waste drops to almost nothing, and the same memory holds far more concurrent requests."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "KV-cache memory: naive vs PagedAttention",
+            "columns": [
+              {
+                "title": "Contiguous (naive)",
+                "items": [
+                  "One big block per request",
+                  "Sized for the longest possible answer",
+                  "Unused tail wasted on every request",
+                  "Gaps too small to reuse",
+                  "GPU fills up early"
+                ]
+              },
+              {
+                "title": "PagedAttention",
+                "accent": true,
+                "items": [
+                  "Cache split into small fixed blocks",
+                  "Blocks allocated only as text grows",
+                  "Almost no wasted memory",
+                  "Identical prefixes can share blocks",
+                  "Many more requests fit at once"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "A bonus falls out of the block design: if two requests share the same opening text — the same long system prompt, say — they can *point at the same physical blocks* instead of each storing a copy. This **prefix sharing** saves even more memory whenever requests have common beginnings."
+        },
+        {
+          "type": "h3",
+          "text": "Continuous batching: keep every burner lit"
+        },
+        {
+          "type": "p",
+          "md": "Batching means running several requests through the GPU together, which is the only way to keep it busy. Old-style *static* batching gathers a fixed group, runs them all to completion, and only then starts the next group — so the whole batch waits for its slowest member, and any request that arrives a moment too late sits in line. **Continuous batching** (also called in-flight batching) instead works at the level of a single generation step: after every token, finished requests drop out, newly arrived requests slot in, and the GPU immediately moves on with a full batch. No request waits for an unrelated one to finish."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "One step of vLLM's scheduler loop",
+            "steps": [
+              {
+                "label": "Requests arrive",
+                "sub": "queue of prompts"
+              },
+              {
+                "label": "Scheduler",
+                "sub": "pick what fits in KV cache"
+              },
+              {
+                "label": "Batched step",
+                "sub": "generate 1 token for all"
+              },
+              {
+                "label": "Emit + retire",
+                "sub": "stream tokens, free finished"
+              },
+              {
+                "label": "Loop",
+                "sub": "admit new requests",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The scheduler ties it together. On each step it decides which waiting requests can be admitted based on how much KV-cache memory PagedAttention has free. If the GPU is briefly oversubscribed, vLLM can *preempt* a request — evicting or recomputing its cache — and resume it later, so the system degrades gracefully instead of crashing under load."
+        }
+      ]
+    },
+    {
+      "id": "a-minimal-example",
+      "title": "Running vLLM in practice",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "vLLM is used two ways. As a *server*, it launches a long-running process with an OpenAI-compatible HTTP endpoint your app talks to. As an *offline engine*, you import it into a Python script to crank through a large batch of prompts at maximum throughput. Both share the same engine underneath."
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "title": "Start an OpenAI-compatible server",
+          "code": "# Install, then serve any compatible open-weight model.\npip install vllm\n\n# This loads the weights onto the GPU and exposes /v1/* endpoints.\nvllm serve <org>/<model-name>\n\n# Now any OpenAI-style client can call http://localhost:8000/v1\n# with the SAME request shape it would send to a hosted API."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "Offline batched inference",
+          "code": "from vllm import LLM, SamplingParams\n\n# One engine, loaded once. Reuse it for every prompt.\nllm = LLM(model=\"<org>/<model-name>\")\nparams = SamplingParams(temperature=0.7, max_tokens=256)\n\nprompts = [\n    \"Summarize the plot of Hamlet in two sentences.\",\n    \"Explain a hash map to a 10-year-old.\",\n    \"Write a haiku about GPUs.\",\n]\n\n# vLLM schedules all of these together with continuous batching —\n# you do NOT loop one at a time. The engine overlaps them for you.\noutputs = llm.generate(prompts, params)\nfor out in outputs:\n    print(out.outputs[0].text)"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Notice you never write the batching or memory logic yourself. You hand vLLM a list of prompts (or let many clients hit the server) and the scheduler does the overlapping. The whole point of an engine is that PagedAttention and continuous batching are invisible — you just get throughput."
+        }
+      ]
+    },
+    {
+      "id": "vllm-vs-ollama",
+      "title": "vLLM vs single-user runners like Ollama",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The most common confusion is treating vLLM and [Ollama](/learn/local-open-models/running-models-locally/what-is-ollama) as competitors. They aim at different jobs. Ollama optimizes for *one person, one machine, zero hassle*: it runs comfortably on a laptop, manages downloads, and gives you a model in a single command. vLLM optimizes for *many users, one GPU server, maximum throughput*. Picking the wrong one for your job makes either look bad."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Question",
+            "vLLM",
+            "Ollama"
+          ],
+          "rows": [
+            [
+              "Who is it for?",
+              "Production / serving many users",
+              "Individual on a local machine"
+            ],
+            [
+              "Sweet spot",
+              "High concurrent throughput",
+              "Easy single-user inference"
+            ],
+            [
+              "Key techniques",
+              "PagedAttention, continuous batching",
+              "Convenience, local model management"
+            ],
+            [
+              "Hardware",
+              "Server GPUs (data center)",
+              "Laptops, desktops, modest GPUs"
+            ],
+            [
+              "Setup effort",
+              "More configuration",
+              "One command, minimal setup"
+            ],
+            [
+              "API",
+              "OpenAI-compatible server",
+              "Local API + simple CLI"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "A useful rule of thumb: if you are *building a product* that real traffic will hit, you want a serving engine like vLLM (or one of its alternatives such as [SGLang](/learn/local-open-models/inference-and-serving/what-is-sglang)). If you are *experimenting locally* or running an internal tool for a handful of people, a runner like Ollama is faster to stand up and lighter on hardware. For the deeper trade-off, see [Ollama vs vLLM](/learn/local-open-models/inference-and-serving/ollama-vs-vllm)."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "**Judging it on one request.** Send a single prompt and vLLM looks no faster than anything else — its advantage is overlapping *many* concurrent requests. Always benchmark at realistic concurrency, not with one user.",
+            "**Confusing throughput with latency.** vLLM maximizes tokens-per-second across the whole fleet, which can slightly raise the latency of any single request. Know which you are optimizing for — see [throughput vs latency](/learn/local-open-models/inference-and-serving/throughput-vs-latency-llm).",
+            "**Underestimating GPU memory.** The weights are only part of it; the KV cache for many concurrent requests also lives on the GPU. If you allocate too little headroom, throughput collapses or requests get preempted. [Quantization](/learn/local-open-models/quantization-and-formats/what-is-quantization) frees room for both weights and cache.",
+            "**Setting the max context too high.** A very large maximum sequence length reserves cache capacity per request and shrinks how many you can run at once. Size it to what your workload actually needs.",
+            "**Running it on a laptop and expecting magic.** vLLM targets server GPUs. On a single small machine with one user, a runner built for that case will feel simpler and just as fast."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "vLLM exposes an HTTP server. If you stand it up, it is real infrastructure: put it behind authentication and a gateway, never expose the raw endpoint to the open internet, and treat it with the same care as any other production service."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The PagedAttention + continuous-batching core is the foundation, but a production serving engine does much more. A few directions worth knowing once the basics click."
+        },
+        {
+          "type": "p",
+          "md": "**Tensor and pipeline parallelism.** A model too large for one GPU is split across several. *Tensor parallelism* shards each layer's math across GPUs that work on the same token together; *pipeline parallelism* puts different layers on different GPUs in a relay. vLLM supports both so you can serve large models across a multi-GPU box or several nodes."
+        },
+        {
+          "type": "p",
+          "md": "**Quantization.** Serving in lower precision (such as 8-bit or 4-bit weights) shrinks the memory the weights occupy, leaving more room for the KV cache and thus more concurrent requests. vLLM supports several quantized formats, trading a little quality for a lot of capacity — see [what is quantization](/learn/local-open-models/quantization-and-formats/what-is-quantization)."
+        },
+        {
+          "type": "p",
+          "md": "**Speculative decoding.** A small, fast *draft* model proposes several tokens at once and the big model verifies them in one pass, accepting the run that matches. When the draft guesses well, you get more tokens per step for free. vLLM integrates this as another throughput lever — see [speculative decoding](/learn/local-open-models/inference-and-serving/speculative-decoding-local)."
+        },
+        {
+          "type": "p",
+          "md": "**Prefix caching and structured output.** Building on PagedAttention's block sharing, vLLM can cache the KV blocks of common prompt prefixes across requests, so repeated system prompts or few-shot examples are computed once. It also supports constrained decoding to force outputs into a grammar or JSON schema. These are exactly the areas where alternatives like [SGLang](/learn/local-open-models/inference-and-serving/what-is-sglang) compete, and where the serving field keeps moving fastest."
+        },
+        {
+          "type": "p",
+          "md": "The honest framing: vLLM is the leading open-source serving engine and the place where PagedAttention and continuous batching were born, but it is one part of a larger stack. To see where it sits, read [what is an inference server](/learn/local-open-models/inference-and-serving/what-is-inference-server) and weigh the [cost of self-hosting an LLM](/learn/local-open-models/inference-and-serving/self-hosting-llm-cost) against paying a hosted API. The durable lesson is the one vLLM proved: most of the win in serving comes not from a faster model but from never letting the GPU sit idle."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is vLLM used for?",
+      "a": "vLLM is an open-source engine for *serving* large language models to many users at once. You load an open-weight model onto a GPU and vLLM exposes a fast, OpenAI-compatible API, maximizing how many requests per second the hardware can handle. It is the standard choice for self-hosting a model in production."
+    },
+    {
+      "q": "What is PagedAttention in vLLM?",
+      "a": "PagedAttention is vLLM's memory-management technique for the KV cache. Borrowing the paging idea from operating systems, it splits the cache into small fixed-size blocks that need not be contiguous, so memory is allocated only as a response grows. This nearly eliminates wasted GPU memory and lets far more requests run concurrently."
+    },
+    {
+      "q": "What is continuous batching?",
+      "a": "Continuous batching (also called in-flight batching) overlaps many requests by working one generation step at a time. After each token, finished requests leave the batch and newly arrived ones join, so the GPU always runs a full batch and no request waits for an unrelated one to finish. It is the main reason vLLM keeps a GPU busy under heavy traffic."
+    },
+    {
+      "q": "What is the difference between vLLM and Ollama?",
+      "a": "They target different jobs. Ollama is built for a single person running a model locally with minimal setup, even on a laptop. vLLM is built to serve many concurrent users from a GPU server at maximum throughput. Use Ollama for personal or small local use, and vLLM when real traffic will hit your model."
+    },
+    {
+      "q": "Does vLLM reduce inference cost?",
+      "a": "Indirectly, yes. By packing many requests onto the same GPU and wasting almost no KV-cache memory, vLLM serves more tokens per GPU-second, which lowers the cost per token and lets you serve the same traffic on fewer machines. The savings come from higher utilization, not from changing the model."
+    },
+    {
+      "q": "Can vLLM run on a laptop or CPU?",
+      "a": "vLLM is designed for server-class GPUs and shines only when there are many concurrent requests to overlap. It can run on smaller setups, but on a single laptop with one user a runner like Ollama is simpler and feels just as fast. Match the tool to the workload."
+    }
+  ],
+  "related": [
+    "what-is-inference-server",
+    "continuous-batching",
+    "ollama-vs-vllm",
+    "throughput-vs-latency-llm",
+    "speculative-decoding-local",
+    "self-hosting-llm-cost"
+  ],
+  "furtherReading": [
+    {
+      "title": "vLLM — GitHub repository",
+      "url": "https://github.com/vllm-project/vllm"
+    },
+    {
+      "title": "vLLM Documentation",
+      "url": "https://docs.vllm.ai/"
+    },
+    {
+      "title": "Efficient Memory Management for LLM Serving with PagedAttention (arXiv)",
+      "url": "https://arxiv.org/abs/2309.06180"
+    }
+  ]
+}

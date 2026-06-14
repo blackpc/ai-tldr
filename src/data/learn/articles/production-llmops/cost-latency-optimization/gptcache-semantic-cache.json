@@ -1,0 +1,359 @@
+{
+  "slug": "gptcache-semantic-cache",
+  "title": "What Is GPTCache? A Semantic Cache for LLM Calls",
+  "shortTitle": "GPTCache",
+  "seoTitle": "What Is GPTCache? Semantic Caching for LLMs",
+  "metaDescription": "GPTCache is an open-source semantic cache that reuses answers to similar prompts to cut LLM cost and latency. Learn what it does and how it works.",
+  "keywords": [
+    "gptcache",
+    "what is gptcache",
+    "semantic cache llm",
+    "gptcache tutorial",
+    "llm response caching",
+    "reduce llm cost"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "After reading, you'll understand what GPTCache is, how a semantic cache reuses answers to similar prompts, and how it trades a similarity threshold against accuracy to cut cost and latency.",
+  "updated": "2026-06-14",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Every time your app calls a [large language model](/learn/llm-fundamentals/llm-basics/what-is-an-llm), you pay for it twice: once in money (tokens cost money) and once in time (the user waits for the answer to be generated). If a hundred users ask the *same* question, a naive app pays both costs a hundred times over, even though the answer never changed."
+        },
+        {
+          "type": "image",
+          "url": "/learn-media/dlg-606.jpg",
+          "alt": "GPTCache — illustration",
+          "caption": "GPTCache",
+          "credit": "marktechpost.com"
+        },
+        {
+          "type": "p",
+          "md": "**GPTCache** is an open-source library that sits in front of your LLM and remembers past answers. Before sending a new prompt to the model, it checks: *have I already answered something close enough to this?* If yes, it returns the stored answer instantly — no model call, no token bill, almost no wait. If no, it calls the model as usual and saves the result for next time."
+        },
+        {
+          "type": "p",
+          "md": "The clever part is the phrase *close enough*. A plain cache only reuses an answer when the new request is **byte-for-byte identical** to an old one. But \"What's your refund policy?\" and \"How do refunds work here?\" are different strings, so an exact cache treats them as two separate questions and pays twice. GPTCache is a **semantic** cache: it matches on *meaning*, not exact text, so both of those questions can share one cached answer."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Think of a busy support desk with a notebook of answers. An exact cache is an intern who only reuses a note if you ask the question *word for word*. A semantic cache is an experienced agent who recognizes \"oh, that's the refund question again\" however you phrase it, and reads back the same answer. GPTCache is the experienced agent."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Real LLM traffic is **repetitive**. FAQ bots, documentation assistants, and product chat all get the same handful of questions asked thousands of times in slightly different words. Without a semantic cache, each rephrasing is a full, fresh model call. With one, the repeats collapse onto a small set of stored answers."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Cost.** A cache hit costs essentially nothing — a quick embedding lookup instead of a full generation. On repetitive workloads that can remove a large slice of your token bill. See [cutting LLM token costs](/learn/production-llmops/cost-latency-optimization/cut-llm-token-costs) for the bigger picture.",
+            "**Latency.** A model call can take seconds, especially for long answers. A cache hit returns in milliseconds, which is the difference between an answer that feels instant and one the user watches stream. This is closely tied to [time to first token](/learn/production-llmops/cost-latency-optimization/time-to-first-token) and [reducing LLM latency](/learn/production-llmops/cost-latency-optimization/reduce-llm-latency).",
+            "**Load and rate limits.** Fewer model calls means you stay under provider rate limits and put less pressure on any self-hosted serving stack during traffic spikes.",
+            "**Provider independence.** GPTCache wraps the call, so it works the same whether you're hitting a hosted API or your own model. The cache layer doesn't care who answers a miss."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who should care? Anyone running an LLM feature with **public, repeating questions** and answers that don't need to be unique per call — support bots, help-center search, internal knowledge assistants. Who should *not* reach for it blindly? Anything where every answer must be personalized, time-sensitive, or legally fresh. Caching a generic FAQ answer is great; caching \"what's *my* account balance?\" is a bug waiting to happen."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "GPTCache turns a cache lookup into a *similarity search*. Instead of comparing the raw text of two prompts, it converts each prompt into an [embedding](/learn/embeddings-vector-databases/embeddings-explained/what-are-embeddings) — a list of numbers that captures meaning — and then asks: *is there a stored prompt whose embedding sits close to this one?* Closeness is measured by a **similarity score**, and you set a **threshold** that decides how close is close enough to count as a hit."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "A request through GPTCache",
+            "steps": [
+              {
+                "label": "New prompt",
+                "sub": "user question"
+              },
+              {
+                "label": "Embed",
+                "sub": "text → vector"
+              },
+              {
+                "label": "Similarity search",
+                "sub": "find nearest stored prompt"
+              },
+              {
+                "label": "Above threshold?",
+                "sub": "hit vs. miss decision",
+                "accent": true
+              },
+              {
+                "label": "Return / generate",
+                "sub": "cached answer or call model"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Hit: similar enough"
+        },
+        {
+          "type": "p",
+          "md": "If the nearest stored prompt scores **above** your threshold, that's a *cache hit*. GPTCache returns the answer it saved for that earlier prompt — no model call at all. This is the fast, free path."
+        },
+        {
+          "type": "h3",
+          "text": "Miss: nothing close enough"
+        },
+        {
+          "type": "p",
+          "md": "If nothing scores above the threshold, that's a *cache miss*. GPTCache forwards the prompt to the real LLM, gets a fresh answer, returns it to the user, and **stores** the new prompt embedding plus its answer. The next time a similar question arrives, it's a hit."
+        },
+        {
+          "type": "h3",
+          "text": "The moving parts"
+        },
+        {
+          "type": "p",
+          "md": "Under the hood GPTCache is modular — you can swap each stage — but conceptually there are four pieces working together on every request:"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Component",
+            "Job"
+          ],
+          "rows": [
+            [
+              "Embedding function",
+              "Turns each prompt into a vector that captures its meaning"
+            ],
+            [
+              "Vector store",
+              "Holds past prompt embeddings and finds the nearest one fast"
+            ],
+            [
+              "Similarity evaluator + threshold",
+              "Scores the match and decides hit vs. miss"
+            ],
+            [
+              "Cache store + eviction",
+              "Keeps the prompt→answer pairs and drops old ones when full"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Eviction is the last piece: a cache can't grow forever, so GPTCache applies a policy (such as least-recently-used) to drop stale or rarely-hit entries once the store fills up. That keeps memory bounded and stops ancient answers from lingering."
+        }
+      ]
+    },
+    {
+      "id": "the-threshold-tradeoff",
+      "title": "The threshold tradeoff",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The single most important knob in a semantic cache is the **similarity threshold**. It decides how loosely GPTCache is allowed to call two prompts \"the same question,\" and it directly trades **hit rate** against **correctness**. Get it wrong in either direction and the cache hurts you."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Tuning the similarity threshold",
+            "columns": [
+              {
+                "title": "Threshold too loose",
+                "items": [
+                  "Matches questions that only look related",
+                  "High hit rate, low cost",
+                  "Returns wrong or stale answers",
+                  "\"Refund policy\" answers a shipping question"
+                ]
+              },
+              {
+                "title": "Threshold too strict",
+                "accent": true,
+                "items": [
+                  "Only near-identical prompts hit",
+                  "Answers stay correct",
+                  "Low hit rate, little savings",
+                  "Most rephrasings still hit the model"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "There's no universal \"right\" threshold — it depends on your embedding model and how varied your questions are. The honest way to set it is empirical: collect a sample of real prompts, label which pairs *should* share an answer, then pick the threshold that maximizes hits **without** letting a wrong answer slip through. Watch two numbers as you tune: the **hit rate** (how often the cache answers) and the **false-hit rate** (how often a hit returns an answer that doesn't actually fit the new question)."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "A false hit is worse than a miss. A miss just costs you one model call; a false hit ships a confidently wrong answer to a user and you may never notice. When in doubt, start **strict** and loosen carefully while watching quality, not the other way around."
+        }
+      ]
+    },
+    {
+      "id": "where-it-fits",
+      "title": "Where semantic caching fits among the others",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "\"Caching\" is an overloaded word in LLM land. Three very different techniques all carry the name, and they're not interchangeable — GPTCache does only the first. Knowing the difference keeps you from reaching for the wrong tool."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Technique",
+            "Matches on",
+            "Reuses",
+            "Saves"
+          ],
+          "rows": [
+            [
+              "Semantic cache (GPTCache)",
+              "Meaning of the prompt",
+              "The whole final answer",
+              "An entire model call"
+            ],
+            [
+              "Exact / prompt cache",
+              "Identical prompt text",
+              "The whole final answer",
+              "An entire model call (only on exact repeats)"
+            ],
+            [
+              "Prefix / KV cache",
+              "A shared leading chunk of tokens",
+              "Internal compute for the shared prefix",
+              "Recomputation inside one call"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "**Exact caching** reuses an answer only when the prompt string is identical — simple and zero-risk, but it misses every rephrasing. **Prefix caching** (and the underlying [KV cache](/learn/production-llmops/cost-latency-optimization/kv-cache-explained)) works *inside* a single model call: it reuses the model's computation for a shared opening section of the prompt — like a long system message repeated across requests — but it still generates a fresh answer every time. See [prefix caching explained](/learn/production-llmops/cost-latency-optimization/prefix-caching-explained) and the full [prompt caching vs semantic caching](/learn/production-llmops/cost-latency-optimization/prompt-caching-vs-semantic-caching) comparison."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "These layers stack. A common setup: exact cache for literal repeats, GPTCache for semantic repeats, and prefix/KV caching to speed up the misses that still reach the model. GPTCache also covers the exact-match case for free, since an identical prompt has an identical embedding and scores a perfect match. For the concept on its own, see [semantic caching for LLMs](/learn/production-llmops/cost-latency-optimization/semantic-caching-llm)."
+        }
+      ]
+    },
+    {
+      "id": "a-minimal-mental-model-in-code",
+      "title": "A minimal mental model in code",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "GPTCache itself wraps your LLM client so the cache is mostly invisible — you keep calling the model the way you already do, and hits get served transparently. But the whole idea fits in a few lines of plain Python, which makes the mechanism obvious: embed, search, compare to a threshold, then hit or miss."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "the semantic-cache idea, stripped down",
+          "code": "import numpy as np\n\nstore = []          # list of (embedding, answer)\nTHRESHOLD = 0.85    # cosine similarity needed to count as a hit\n\ndef ask(prompt):\n    q = embed(prompt)                      # prompt -> normalized vector\n\n    # 1) SEARCH: find the closest stored prompt, if any.\n    best_score, best_answer = 0.0, None\n    for vec, answer in store:\n        score = float(q @ vec)             # cosine similarity\n        if score > best_score:\n            best_score, best_answer = score, answer\n\n    # 2) DECIDE: above the threshold is a hit.\n    if best_score >= THRESHOLD:\n        return best_answer                 # cache hit: no model call\n\n    # 3) MISS: call the real model, then store for next time.\n    answer = call_llm(prompt)\n    store.append((q, answer))\n    return answer"
+        },
+        {
+          "type": "p",
+          "md": "That's the entire principle. Real GPTCache swaps the Python list for a proper [vector store](/learn/embeddings-vector-databases/vector-database-guides/what-is-a-vector-database) so search stays fast with millions of entries, adds eviction so the store doesn't grow without bound, and lets you choose the embedding model and similarity metric. But the four steps — embed, search, threshold, hit-or-store — never change."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic cache works, the interesting problems are about *when not to trust it* and *how to keep it honest*. A few directions worth knowing."
+        },
+        {
+          "type": "p",
+          "md": "**Freshness and invalidation.** A cache is a copy, and copies go stale. If the underlying answer changes — a policy update, a new price, a corrected fact — the cached version is now wrong. Plan an invalidation strategy from the start: time-to-live (entries expire after N hours), versioned cache keys you bump when source documents change, or manual purges tied to your content pipeline. Caching is wonderful for *evergreen* answers and dangerous for *volatile* ones."
+        },
+        {
+          "type": "p",
+          "md": "**Context blindness.** Two users can send the same words and still deserve different answers, because the *context* differs — their account, their conversation history, their permissions. A semantic cache keyed only on the prompt text will happily serve one user's answer to another. The fix is to fold the relevant context into the cache key (so different users or sessions don't collide) and to simply **not cache** anything personalized or sensitive."
+        },
+        {
+          "type": "p",
+          "md": "**Embedding choice drives everything.** The cache is only as good as its sense of \"similar,\" which is the embedding model's job. A weak embedding model will both miss true matches and create false ones, no matter how carefully you tune the threshold. If your cache quality is poor, suspect the embeddings before the threshold."
+        },
+        {
+          "type": "p",
+          "md": "**Measure, don't assume.** Treat the cache like any other production component. Track hit rate (is it actually saving anything?), false-hit rate (is it ever wrong?), and the latency of the lookup itself (a slow embedding step can erase the win on misses). A cache that hits 2% of the time while adding latency to the other 98% is a net loss — and you'd only know by measuring."
+        },
+        {
+          "type": "p",
+          "md": "**GPTCache vs. a gateway's built-in cache.** Some managed [AI gateways](/learn/production-llmops/cost-latency-optimization/cut-llm-token-costs) offer caching as a feature you turn on with a config flag, no library to run. GPTCache is the self-hosted alternative: more control over the embedding model, store, threshold, and eviction, at the cost of running it yourself. Choose the gateway for convenience, GPTCache (or a similar self-hosted layer) when you need to tune the semantics. Either way, the concepts in this article are the same."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is GPTCache used for?",
+      "a": "GPTCache is an open-source semantic cache that sits in front of an LLM and reuses past answers for prompts that mean the same thing, even when worded differently. It's used to cut token cost and response latency on repetitive workloads like FAQ bots, documentation assistants, and support chat."
+    },
+    {
+      "q": "How is a semantic cache different from a normal cache?",
+      "a": "A normal (exact) cache only reuses an answer when the new request is byte-for-byte identical to an old one. A semantic cache like GPTCache embeds the prompt and matches on *meaning*, so \"How do refunds work?\" and \"What's the refund policy?\" can share one cached answer even though the text differs."
+    },
+    {
+      "q": "What is the similarity threshold in GPTCache?",
+      "a": "It's the score a new prompt must reach against the closest stored prompt to count as a cache hit. A loose threshold raises the hit rate but risks returning wrong or stale answers; a strict threshold keeps answers correct but saves less. There's no universal value — tune it on real prompts while watching both hit rate and false-hit rate."
+    },
+    {
+      "q": "Does GPTCache risk returning a wrong answer?",
+      "a": "Yes, if the threshold is too loose it can serve an answer from a prompt that only looked similar — a \"false hit.\" A false hit is worse than a miss because it ships a confidently wrong answer. Start with a strict threshold, avoid caching personalized or time-sensitive content, and measure the false-hit rate in production."
+    },
+    {
+      "q": "How is GPTCache different from prompt caching or prefix caching?",
+      "a": "GPTCache reuses the entire final answer when a new prompt is semantically similar to an old one, skipping the model call. Prefix/KV caching works inside a single call: it reuses the model's computation for a shared leading chunk of tokens (like a repeated system prompt) but still generates a fresh answer. They solve different problems and can be used together."
+    },
+    {
+      "q": "When should I not use a semantic cache?",
+      "a": "Avoid caching answers that must be unique, personalized, or freshly accurate per request — account balances, live data, legal or medical specifics. Caching evergreen, public answers is the sweet spot; caching volatile or per-user answers invites stale and cross-user mistakes unless you key the cache on context and set short expirations."
+    }
+  ],
+  "related": [
+    "semantic-caching-llm",
+    "prompt-caching-vs-semantic-caching",
+    "kv-cache-explained",
+    "prefix-caching-explained",
+    "cut-llm-token-costs",
+    "reduce-llm-latency"
+  ],
+  "furtherReading": [
+    {
+      "title": "GPTCache — GitHub (zilliztech/GPTCache)",
+      "url": "https://github.com/zilliztech/GPTCache"
+    },
+    {
+      "title": "Embeddings — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/embeddings"
+    },
+    {
+      "title": "Cache control / prompt caching — Wikipedia: Cache (computing)",
+      "url": "https://en.wikipedia.org/wiki/Cache_(computing)"
+    }
+  ]
+}

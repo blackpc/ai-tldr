@@ -1,0 +1,357 @@
+{
+  "slug": "what-is-tensorrt-llm",
+  "title": "What Is TensorRT-LLM? NVIDIA's Inference Lib",
+  "shortTitle": "TensorRT-LLM",
+  "seoTitle": "What Is TensorRT-LLM? NVIDIA's Low-Latency Engine",
+  "metaDescription": "TensorRT-LLM is NVIDIA's library for lowest-latency LLM inference, using custom optimized CUDA kernels to squeeze maximum speed out of NVIDIA GPUs.",
+  "keywords": [
+    "tensorrt-llm",
+    "what is tensorrt-llm",
+    "tensorrt llm vs vllm",
+    "nvidia llm inference",
+    "low latency llm serving",
+    "tensorrt llm tutorial"
+  ],
+  "difficulty": "advanced",
+  "oneLiner": "You will understand what TensorRT-LLM is, how NVIDIA's compiled CUDA kernels target lowest-latency inference, and the trade-offs of building a model engine for it.",
+  "updated": "2026-06-14",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you run a [large language model](/learn/llm-fundamentals/llm-basics/what-is-an-llm), the model's math is the same no matter where it runs — but *how fast* it runs depends entirely on how well that math is mapped onto your hardware. A model that takes two seconds to answer on one setup might take half a second on the exact same GPU with better plumbing. **TensorRT-LLM** is NVIDIA's library for building that better plumbing."
+        },
+        {
+          "type": "image",
+          "url": "/learn-media/dlg-614.jpg",
+          "alt": "TensorRT-LLM — illustration",
+          "caption": "TensorRT-LLM",
+          "credit": "developer.download.nvidia.com"
+        },
+        {
+          "type": "p",
+          "md": "Here is the core idea. Most serving stacks load the model and interpret it on the fly, step by step, every time a request comes in. TensorRT-LLM does something different: it takes your model *ahead of time* and **compiles** it into a single optimized package — called an **engine** — that is hand-tuned for one specific NVIDIA GPU. All the decisions about how to lay out memory, which operations to fuse together, and which numeric precision to use are baked in once, during the build. At serving time the GPU just runs that pre-baked plan as fast as the silicon allows."
+        },
+        {
+          "type": "p",
+          "md": "Think of the difference between cooking from a recipe you read line-by-line as you go, versus a professional kitchen that has done all the prep — every ingredient chopped, every pan pre-heated, every step rehearsed for *that exact stove*. The first is flexible but slow. The second has a longer setup, only works in that one kitchen, but plates the dish in a fraction of the time. TensorRT-LLM is the pro kitchen: a heavy build step in exchange for the lowest possible latency at runtime."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The name comes from **TensorRT**, NVIDIA's general deep-learning inference compiler that has existed for years. **TensorRT-LLM** is the layer on top that adds everything specific to transformer language models — attention kernels, KV-cache handling, batching, and the rest — so you don't have to hand-build them yourself."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "For a hobby project, raw inference speed barely matters — any setup that answers in a couple of seconds is fine. TensorRT-LLM exists for the situations where those milliseconds are the product."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Latency-sensitive applications.** Voice assistants, live coding completions, and interactive agents feel broken if the model pauses. The metric that matters here is *time to first token* and *per-token latency* — see [throughput vs latency](/learn/local-open-models/inference-and-serving/throughput-vs-latency-llm) — and squeezing those down is exactly what a compiled engine is built for.",
+            "**Cost at scale.** GPUs are expensive. If a compiled engine serves the same traffic on fewer GPUs, the savings compound across every hour of every day. Faster inference is cheaper inference — this is a big part of [self-hosting cost](/learn/local-open-models/inference-and-serving/self-hosting-llm-cost).",
+            "**Getting the most out of NVIDIA hardware.** TensorRT-LLM is written by the people who make the GPUs. It reaches for hardware features — newer tensor cores, low-precision formats, fused kernels — that a portable, general-purpose engine often can't exploit as aggressively.",
+            "**Production serving, not experimentation.** It pairs with NVIDIA's Triton Inference Server to give you a real serving endpoint with batching, scheduling, and monitoring, rather than a script you babysit."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The honest counterweight: that performance is not free, and it is not portable. You pay with a heavier, more fragile build step and you lock yourself to NVIDIA GPUs. For many teams a more portable engine like [vLLM](/learn/local-open-models/inference-and-serving/vllm-explained) is the better default, and TensorRT-LLM is what you reach for when you have measured your latency, found it wanting, and are willing to invest in tuning. The rest of this article is about understanding that trade-off well enough to make the call."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "TensorRT-LLM splits the world into two phases. The **build phase** happens once: you take model weights and compile them into an engine. The **runtime phase** happens on every request: the engine serves tokens. Almost all of the cleverness lives in the build."
+        },
+        {
+          "type": "h3",
+          "text": "The build: model weights become an engine"
+        },
+        {
+          "type": "p",
+          "md": "You start with a model's weights (for example a Llama or Qwen checkpoint). The builder analyzes the network and produces an **engine file** tuned for one target: a specific GPU, a chosen numeric precision, and a fixed range of batch and sequence sizes. During this step it applies the heavy optimizations — and these are why the result is fast."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Kernel fusion.** A naive run launches a separate GPU operation (a *kernel*) for every little step. Each launch has overhead and shuffles data in and out of memory. TensorRT-LLM merges many steps into single fused kernels, so the GPU does more work per launch and touches memory less.",
+            "**Precision lowering / quantization.** Weights and activations can be stored in fewer bits (FP8, INT8, INT4) instead of 16-bit floats. Smaller numbers mean less memory traffic and faster math on tensor cores. The engine bakes the chosen [quantization](/learn/local-open-models/quantization-and-formats/what-is-awq) in.",
+            "**Optimized attention and KV cache.** Transformer attention and the growing key/value cache are the hot path of generation. TensorRT-LLM ships custom attention kernels and efficient cache management so long conversations stay fast.",
+            "**Hardware-specific tuning.** The builder picks the kernel implementations and memory layouts that are fastest *on the exact GPU you target* — choices that would be wrong on a different card."
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Build phase — done once, per model + per GPU",
+            "steps": [
+              {
+                "label": "Model weights",
+                "sub": "e.g. a Llama checkpoint"
+              },
+              {
+                "label": "Define + optimize",
+                "sub": "fuse kernels, set precision"
+              },
+              {
+                "label": "Compile",
+                "sub": "tune for target GPU"
+              },
+              {
+                "label": "Engine file",
+                "sub": "ready-to-run plan",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "The runtime: the engine serves tokens"
+        },
+        {
+          "type": "p",
+          "md": "Once the engine exists, serving is comparatively simple: load it onto the GPU and feed requests through it. At this stage TensorRT-LLM also handles the scheduling tricks that keep a busy server efficient — most importantly **in-flight batching** (NVIDIA's name for [continuous batching](/learn/local-open-models/inference-and-serving/continuous-batching)), where new requests join the running batch as soon as slots free up instead of waiting for the whole batch to finish. In production you usually put it behind Triton Inference Server, which exposes an HTTP/gRPC [inference server](/learn/local-open-models/inference-and-serving/what-is-inference-server) endpoint."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Runtime phase — every request",
+            "steps": [
+              {
+                "label": "Request",
+                "sub": "prompt arrives"
+              },
+              {
+                "label": "In-flight batching",
+                "sub": "join the live batch"
+              },
+              {
+                "label": "Engine runs",
+                "sub": "fused, low-precision kernels"
+              },
+              {
+                "label": "Stream tokens",
+                "sub": "low latency out",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The key mental model: the build phase is where you *spend time to save time*. Every optimization is decided up front, so the runtime path is lean. That is also why the engine is tied to one GPU and one precision — those facts had to be known at build time to make the right choices."
+        }
+      ]
+    },
+    {
+      "id": "a-typical-workflow",
+      "title": "A typical workflow",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The flow is always the same shape: pick a model, build an engine for your GPU, then run it. Modern TensorRT-LLM exposes a high-level Python API (often called the LLM API) that hides most of the lower-level engine-building machinery, so the everyday experience can look close to other serving libraries."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "high-level usage (conceptual)",
+          "code": "from tensorrt_llm import LLM, SamplingParams\n\n# Point at a model checkpoint. The first run builds an engine\n# tuned for THIS machine's GPU, then caches it for reuse.\nllm = LLM(model=\"meta-llama/Llama-3.1-8B-Instruct\")\n\nparams = SamplingParams(temperature=0.7, max_tokens=256)\n\nprompts = [\n    \"Explain kernel fusion in one sentence.\",\n    \"What is a KV cache?\",\n]\n\n# Generation runs against the compiled engine.\nfor out in llm.generate(prompts, params):\n    print(out.outputs[0].text)"
+        },
+        {
+          "type": "p",
+          "md": "Under that convenience the engine still exists. For maximum control — choosing a specific quantization, fixing batch/sequence limits, or producing an engine to deploy on a separate machine — you build the engine explicitly with the command-line tooling, then load the resulting file at serve time."
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "title": "the two-step shape, conceptually",
+          "code": "# 1) BUILD: compile weights into an engine for your target GPU.\n#    (Flags choose precision, max batch size, max sequence length...)\ntrtllm-build --checkpoint_dir ./model --output_dir ./engine\n\n# 2) SERVE: load the engine and expose an endpoint.\n#    In production this engine is loaded by Triton Inference Server.\ntrtllm-serve ./engine"
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "The exact commands and flags change across releases — treat the code above as the *shape* of the workflow, not a copy-paste recipe. Always follow the version of the docs that matches the build you installed."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "An engine is bound to the GPU architecture it was built for. An engine compiled on one generation of NVIDIA card will not necessarily run on a different one — plan to rebuild when you change hardware. Treat the engine as a build artifact, like a compiled binary, not as a portable model file."
+        }
+      ]
+    },
+    {
+      "id": "tensorrt-llm-vs-vllm",
+      "title": "TensorRT-LLM vs vLLM",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The most common question is how TensorRT-LLM compares to [vLLM](/learn/local-open-models/inference-and-serving/vllm-explained), the popular open-source engine. They overlap heavily — both do continuous batching, both serve transformers fast — but they sit at different points on the same trade-off curve."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Aspect",
+            "TensorRT-LLM",
+            "vLLM"
+          ],
+          "rows": [
+            [
+              "Core approach",
+              "Ahead-of-time compiled engine",
+              "Runtime engine, no compile step"
+            ],
+            [
+              "Hardware",
+              "NVIDIA GPUs only",
+              "Broader (NVIDIA + other backends)"
+            ],
+            [
+              "Setup effort",
+              "Heavier: build an engine per model + GPU",
+              "Lighter: point it at weights and go"
+            ],
+            [
+              "Peak latency",
+              "Typically excellent on NVIDIA",
+              "Very good, slightly less tuned"
+            ],
+            [
+              "Portability",
+              "Engine tied to one GPU + precision",
+              "Same install runs on many GPUs"
+            ],
+            [
+              "Best when",
+              "You need the last drop of latency on NVIDIA",
+              "You want fast iteration and flexibility"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The two are not strictly rivals — NVIDIA has even contributed a TensorRT-LLM backend that vLLM can use, so the lines blur. The practical rule of thumb: **start with the portable, low-friction option, and reach for the compiled engine when you have a measured latency or cost problem it can solve.** If you're unsure where to begin between everyday tools, [Ollama vs vLLM](/learn/local-open-models/inference-and-serving/ollama-vs-vllm) is a gentler first comparison; TensorRT-LLM is a step beyond both in both power and effort."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "TensorRT-LLM rewards careful operators and punishes the impatient. Most of the pain is concentrated in the build step and the assumptions baked into the engine."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Forgetting the engine is GPU-locked.** Build on one card, deploy on another, and it may simply refuse to run. Build on — or for — the exact GPU you will serve on.",
+            "**Fixed build-time limits.** Maximum batch size and maximum sequence length are chosen when you compile. If real traffic exceeds them, you don't get a graceful slowdown — you get errors or a rebuild. Size these for your real workload, with headroom.",
+            "**Assuming the build is quick.** Compiling an engine, especially for a large model, can take real time and significant GPU memory. It is not a hot-reload; budget for it in your deploy pipeline.",
+            "**Chasing low precision blindly.** Dropping to FP8 or INT4 buys speed but can cost accuracy. Always evaluate quality on your own task after quantizing — don't assume the faster engine is still the *correct* engine.",
+            "**Version churn.** TensorRT-LLM moves fast. An engine, a flag, or an API that worked last quarter may have changed. Pin versions and rebuild deliberately rather than mixing them."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Speed numbers are only meaningful against a baseline *on your own model, GPU, and traffic shape*. Benchmarks from a blog post rarely transfer. Measure latency and throughput on your real workload before and after, or you can't tell whether the heavier build paid off."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The build-an-engine model above is the foundation. Once it clicks, the interesting depth is in the optimizations layered on top and in how the project fits NVIDIA's larger serving story."
+        },
+        {
+          "type": "p",
+          "md": "**Speculative decoding.** A small, cheap *draft* model proposes several tokens at once and the big model verifies them in a single pass, accepting the ones it agrees with. When the draft is usually right, you generate multiple tokens for roughly the cost of one — a large latency win. TensorRT-LLM supports this directly; see [speculative decoding](/learn/local-open-models/inference-and-serving/speculative-decoding-local) for the general idea."
+        },
+        {
+          "type": "p",
+          "md": "**Multi-GPU and large models.** Models too big for one card are split across several with *tensor parallelism* (slicing each layer across GPUs) and *pipeline parallelism* (placing different layers on different GPUs). TensorRT-LLM bakes this sharding into the engine at build time, which is part of why a large-model build is a bigger commitment than a small one."
+        },
+        {
+          "type": "p",
+          "md": "**KV-cache management at scale.** Beyond a single request, a busy server wants to *reuse* cached attention state — for example sharing a long system prompt across many users (prefix caching) or paging cache in and out of memory under pressure. These features turn a fast single engine into an efficient fleet, and they are where a lot of real-world throughput is won."
+        },
+        {
+          "type": "p",
+          "md": "**Where it sits in the ecosystem.** TensorRT-LLM is the inference engine; **Triton Inference Server** is the production wrapper that exposes it as a managed endpoint with batching, metrics, and model management. Together they are NVIDIA's answer to 'how do I serve this model to real users on my GPUs.' Understanding the generic [inference server](/learn/local-open-models/inference-and-serving/what-is-inference-server) role first makes the division of labor obvious."
+        },
+        {
+          "type": "p",
+          "md": "The durable lesson: TensorRT-LLM trades flexibility for speed, and it makes that trade *explicit* by forcing a compile step. That same property is its strength and its cost. Reach for it when latency or GPU spend is a real, measured constraint on NVIDIA hardware — and reach for something more portable when it isn't."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is TensorRT-LLM in simple terms?",
+      "a": "It is NVIDIA's open-source library for running large language models as fast as possible on NVIDIA GPUs. It works by compiling a model ahead of time into an optimized *engine* that is tuned for a specific GPU, so that at serving time the GPU just runs a pre-optimized plan instead of figuring things out on the fly."
+    },
+    {
+      "q": "Is TensorRT-LLM faster than vLLM?",
+      "a": "On NVIDIA hardware, a well-built TensorRT-LLM engine often reaches lower latency because it is compiled and hand-tuned by NVIDIA for their own GPUs. vLLM is very fast too, and much easier to set up and more portable. The real answer depends on your model, GPU, and traffic — you should measure both on your own workload rather than trusting a generic benchmark."
+    },
+    {
+      "q": "Why does TensorRT-LLM need a build step?",
+      "a": "Because its speed comes from decisions made ahead of time — fusing operations, choosing a numeric precision, and picking kernels tuned for one specific GPU. Those choices have to be locked in during compilation to produce a lean runtime path. The cost is that the resulting engine is tied to that GPU and configuration."
+    },
+    {
+      "q": "Does TensorRT-LLM only work on NVIDIA GPUs?",
+      "a": "Yes. It is built on NVIDIA's TensorRT and CUDA stack and targets NVIDIA GPUs. That hardware lock-in is the main trade-off versus more portable engines, which can run across different vendors' accelerators with the same installation."
+    },
+    {
+      "q": "What is the difference between TensorRT-LLM and Triton Inference Server?",
+      "a": "TensorRT-LLM is the inference *engine* that runs the model fast. Triton Inference Server is the production *serving layer* that wraps engines (including TensorRT-LLM ones) and exposes them as a managed HTTP/gRPC endpoint with batching, metrics, and model management. You typically use them together: TensorRT-LLM for speed, Triton for serving."
+    },
+    {
+      "q": "Can I move a TensorRT-LLM engine to a different GPU?",
+      "a": "Not reliably. An engine is compiled for a specific GPU architecture and configuration, so moving it to a different generation of card usually means you must rebuild it. Treat the engine like a compiled binary that targets one machine, not a portable model file."
+    }
+  ],
+  "related": [
+    "what-is-inference-server",
+    "vllm-explained",
+    "continuous-batching",
+    "speculative-decoding-local",
+    "throughput-vs-latency-llm",
+    "self-hosting-llm-cost"
+  ],
+  "furtherReading": [
+    {
+      "title": "NVIDIA/TensorRT-LLM (GitHub)",
+      "url": "https://github.com/NVIDIA/TensorRT-LLM"
+    },
+    {
+      "title": "TensorRT-LLM Documentation (NVIDIA)",
+      "url": "https://nvidia.github.io/TensorRT-LLM/"
+    },
+    {
+      "title": "Triton Inference Server (GitHub)",
+      "url": "https://github.com/triton-inference-server/server"
+    }
+  ]
+}

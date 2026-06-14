@@ -1,0 +1,393 @@
+{
+  "slug": "splade-learned-sparse",
+  "title": "What Is SPLADE? Learned Sparse Retrieval",
+  "shortTitle": "SPLADE",
+  "seoTitle": "SPLADE Explained: Learned Sparse Retrieval",
+  "metaDescription": "SPLADE is learned sparse retrieval, a smart BM25 that expands query and document terms with a neural model. Learn how SPLADE works and where it fits in RAG.",
+  "keywords": [
+    "splade",
+    "what is splade",
+    "learned sparse retrieval",
+    "splade rag",
+    "splade vs bm25",
+    "sparse neural retrieval"
+  ],
+  "difficulty": "advanced",
+  "oneLiner": "You will understand what SPLADE is, how learned sparse retrieval expands terms to bridge vocabulary gaps, and why it acts like a smarter BM25.",
+  "updated": "2026-06-14",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**SPLADE** is a way to search text that combines the speed of old keyword search with the smarts of a neural network. The name stands for **SParse Lexical AnD Expansion** model. The short version: it is a *smarter [BM25](/learn/rag/retrieval-and-reranking/what-is-bm25)*. Like BM25, it scores documents by the words they share with your query. Unlike BM25, it uses a trained language model to decide *which* words matter and to quietly add related words that were never typed."
+        },
+        {
+          "type": "image",
+          "url": "/learn-media/dlg-597.jpg",
+          "alt": "SPLADE — illustration",
+          "caption": "SPLADE",
+          "credit": "miro.medium.com"
+        },
+        {
+          "type": "p",
+          "md": "Picture a librarian with two habits. The first librarian (plain keyword search) only looks for the exact words you said. Search for \"car\" and a perfect article titled \"automobile maintenance\" is invisible, because it never uses the word \"car.\" The second librarian (SPLADE) reads your request, silently notes that \"car\" also implies \"vehicle,\" \"automobile,\" and \"motor,\" and then looks for *all* of those — while still writing everything down on the same simple index card the first librarian used. You get the recall of a model that understands meaning, but the lookup stays as cheap as a keyword search."
+        },
+        {
+          "type": "p",
+          "md": "The key word is **sparse**. A SPLADE vector has one slot for every word in the model's vocabulary (tens of thousands of slots), but almost all of them are zero. Only a few hundred slots, for the words the model thinks are relevant, hold a non-zero weight. That mostly-empty shape is exactly what a classic *inverted index* — the data structure search engines have used for decades — is built to store and search at scale."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "SPLADE is **learned sparse retrieval**. \"Learned\" because a neural network assigns the term weights instead of a fixed formula. \"Sparse\" because the output is a long, mostly-zero vector keyed by real vocabulary words — the opposite of a dense [embedding](/learn/embeddings-vector-databases/embeddings-explained/what-are-embeddings), which is short and fully packed with numbers that mean nothing on their own."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Retrieval in a [RAG](/learn/rag/rag-fundamentals/what-is-rag) system has a hard tradeoff. Keyword search (BM25) is fast, cheap, explainable, and great at exact matches like error codes, product SKUs, and names — but it is blind to synonyms and paraphrases. Dense embeddings catch meaning and paraphrases — but they are heavier to run, can miss exact terms, and produce vectors no human can read. SPLADE is interesting because it lands in the middle and refuses to fully give up either side."
+        },
+        {
+          "type": "h3",
+          "text": "The vocabulary mismatch problem"
+        },
+        {
+          "type": "p",
+          "md": "The single biggest weakness of keyword search is the **vocabulary mismatch**: the user and the document describe the same idea with different words. A support ticket says \"laptop won't turn on\"; the fix-it doc says \"notebook fails to boot.\" Zero shared words, so BM25 scores it near zero, even though it is the perfect answer. SPLADE attacks this directly through *term expansion* — at index time it adds \"notebook,\" \"boot,\" \"power,\" and friends to the document's vector, and at query time it adds the matching expansions to the query, so the two meet."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Recall without leaving the inverted index.** You get embedding-like recall while still searching with the same fast, mature engines (Lucene, Elasticsearch, OpenSearch) that already run keyword search.",
+            "**Explainability.** Every weight in a SPLADE vector is tied to a real word. You can literally read why a document matched — something a 1,024-number dense vector can never give you.",
+            "**Strong out-of-domain behavior.** Because it is anchored to actual words, learned sparse retrieval often holds up better than dense embeddings on data that looks nothing like its training set.",
+            "**A natural third leg for [hybrid search](/learn/rag/retrieval-and-reranking/what-is-hybrid-search).** Many teams combine BM25, dense, and SPLADE and fuse the results, because each catches mistakes the others make."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "If you are building retrieval and your queries mix exact tokens (codes, names) with natural-language phrasing, SPLADE is worth knowing. It is the answer to \"I want better-than-BM25 recall, but I don't want to throw away my inverted index and explainability to get it.\""
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "SPLADE is built on a masked language model — the same kind of model (a BERT-style encoder) that, during training, learned to predict missing words in a sentence. That \"predict the right word\" skill is exactly what powers term expansion. SPLADE reuses the model's output layer, which already scores *every word in the vocabulary* for how well it fits a position in the text."
+        },
+        {
+          "type": "h3",
+          "text": "From text to a sparse vector"
+        },
+        {
+          "type": "p",
+          "md": "Feed a piece of text through the encoder. For each input token, the model produces a score for every vocabulary word — not just the word that was there, but every word it considers related. SPLADE pools these scores across all the input tokens into a single vector with one entry per vocabulary word, and pushes most entries down to exactly zero. What survives is a short list of weighted terms: the words actually present, plus a handful of expansion words the model decided belong."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Turning a document into a SPLADE vector",
+            "steps": [
+              {
+                "label": "Input text",
+                "sub": "\"notebook fails to boot\""
+              },
+              {
+                "label": "Encoder",
+                "sub": "BERT-style MLM"
+              },
+              {
+                "label": "Score whole vocabulary",
+                "sub": "every word gets a weight"
+              },
+              {
+                "label": "Sparsify",
+                "sub": "push most weights to 0"
+              },
+              {
+                "label": "Sparse vector",
+                "sub": "notebook, boot, laptop, power…",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Two activation tricks make this work. A **ReLU** clamps every score at zero or above, so a word either contributes a positive weight or nothing at all — no negative terms. A **log saturation** (taking the log of one-plus-the-score) keeps any single common word from dominating, mirroring BM25's term-frequency saturation. The result is naturally sparse and well-behaved on an inverted index."
+        },
+        {
+          "type": "h3",
+          "text": "The sparsity knob"
+        },
+        {
+          "type": "p",
+          "md": "Nothing forces the vector to be sparse by default, so SPLADE adds a **regularization penalty** during training that punishes vectors for having too many non-zero terms. Turn the penalty up and vectors get shorter — faster and cheaper to search, but they may drop useful expansions. Turn it down and you keep more terms — better recall, but bigger index and slower queries. This dial, balancing how many words survive against speed, is the central tuning choice in learned sparse retrieval."
+        },
+        {
+          "type": "h3",
+          "text": "Matching and scoring"
+        },
+        {
+          "type": "p",
+          "md": "At search time the query becomes its own sparse vector the same way. The relevance score is just the **dot product**: for every term the query and document share, multiply their two weights and add it all up. That is the identical math an inverted index does for BM25 — which is the whole point. The neural model only runs once per document at index time and once per query; the actual lookup is plain, fast, sparse arithmetic."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "There are two common shapes. **SPLADE-doc** expands only documents and leaves the query as plain words, which makes queries cheaper at the cost of some recall. The fuller version expands **both** query and document. Asymmetric variants like this let you trade query-time cost against quality without changing the core idea."
+        }
+      ]
+    },
+    {
+      "id": "splade-vs-bm25-vs-dense",
+      "title": "SPLADE vs BM25 vs dense embeddings",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The clearest way to place SPLADE is between the two retrieval families it borrows from. BM25 is pure lexical matching with a fixed formula. Dense embeddings are pure semantic matching with an opaque vector. SPLADE is lexical *in shape* but semantic *in content*."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Three retrievers, side by side",
+            "columns": [
+              {
+                "title": "BM25 (lexical)",
+                "items": [
+                  "Fixed formula, no training",
+                  "Exact-word matching only",
+                  "Blind to synonyms",
+                  "Runs on an inverted index",
+                  "Fully explainable"
+                ]
+              },
+              {
+                "title": "SPLADE (learned sparse)",
+                "accent": true,
+                "items": [
+                  "Neural model assigns weights",
+                  "Words + learned expansions",
+                  "Bridges vocabulary gaps",
+                  "Still an inverted index",
+                  "Readable, real-word terms"
+                ]
+              },
+              {
+                "title": "Dense (embeddings)",
+                "items": [
+                  "Neural model, fixed length",
+                  "Pure meaning matching",
+                  "Best at paraphrase",
+                  "Needs a vector index (ANN)",
+                  "Opaque numbers, no words"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Dimension",
+            "BM25",
+            "SPLADE",
+            "Dense embeddings"
+          ],
+          "rows": [
+            [
+              "Vector shape",
+              "Sparse (terms)",
+              "Sparse (terms)",
+              "Dense (floats)"
+            ],
+            [
+              "Synonym / paraphrase",
+              "No",
+              "Yes (term expansion)",
+              "Yes (semantic)"
+            ],
+            [
+              "Exact codes & names",
+              "Strong",
+              "Strong",
+              "Can be weak"
+            ],
+            [
+              "Index type",
+              "Inverted index",
+              "Inverted index",
+              "Vector / ANN index"
+            ],
+            [
+              "Human-readable match",
+              "Yes",
+              "Yes",
+              "No"
+            ],
+            [
+              "Out-of-domain robustness",
+              "Stable",
+              "Often strong",
+              "Can degrade"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Notice SPLADE shares a column with BM25 in two places that matter operationally: the same sparse vector shape and the same inverted index. That is why teams already running keyword search can often adopt SPLADE without standing up a separate [vector database](/learn/embeddings-vector-databases/vector-database-guides/what-is-a-vector-database) — the index they have can store learned sparse vectors too."
+        }
+      ]
+    },
+    {
+      "id": "practical-tips",
+      "title": "Using SPLADE in practice",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "SPLADE rarely flies solo. In most real systems it is one retriever among several, feeding candidates into fusion and reranking. Here is how it usually fits, and the traps to watch."
+        },
+        {
+          "type": "h3",
+          "text": "Where it sits in the pipeline"
+        },
+        {
+          "type": "p",
+          "md": "A common strong setup runs SPLADE (or SPLADE plus BM25 plus dense) as the *first-stage retriever* to pull a broad candidate set, blends the lists with [reciprocal rank fusion](/learn/rag/retrieval-and-reranking/reciprocal-rank-fusion), then sends the top candidates to a [cross-encoder reranker](/learn/rag/retrieval-and-reranking/cross-encoder-vs-bi-encoder) for a precise final sort. SPLADE's job is recall: surface every plausibly relevant document cheaply, and let [reranking](/learn/rag/retrieval-and-reranking/what-is-reranking) do the expensive fine-grained ordering."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "SPLADE in a hybrid retrieval pipeline",
+            "steps": [
+              {
+                "label": "Query"
+              },
+              {
+                "label": "SPLADE + BM25 + dense",
+                "sub": "first-stage recall"
+              },
+              {
+                "label": "Fuse",
+                "sub": "reciprocal rank fusion"
+              },
+              {
+                "label": "Rerank",
+                "sub": "cross-encoder, top-k"
+              },
+              {
+                "label": "Context for the LLM",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Watch-outs"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Index size can balloon.** Expansion adds terms to every document, so an index can grow noticeably versus plain BM25. The sparsity penalty is your lever — tune it against your latency and storage budget, don't accept the default blindly.",
+            "**Indexing is heavier.** Every document must pass through the neural encoder once, so building the index costs real compute. After that, queries are cheap; the cost is paid up front, not per search.",
+            "**The encoder must match your engine.** SPLADE leans on engines that support per-term weights in the inverted index. Confirm your search backend can store and score weighted sparse vectors before committing.",
+            "**It is not a reranker.** SPLADE is a first-stage retriever. It widens the net; it does not give you the razor-sharp top-3 ordering a cross-encoder does. Use both."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Don't treat SPLADE as a drop-in replacement for dense embeddings in *every* case. For highly paraphrased, conceptual queries far from the document's wording, a good dense model can still win. The robust answer is usually [hybrid](/learn/rag/retrieval-and-reranking/what-is-hybrid-search): run both and fuse, rather than betting everything on one retriever."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics click, a few directions are worth knowing. SPLADE is a *family*, not a single frozen model, and it sits inside a broader move toward learned sparse retrieval that also includes models from other labs."
+        },
+        {
+          "type": "p",
+          "md": "**The variants tell a story about tradeoffs.** Early SPLADE expanded both sides but was slow at query time. Later versions added distillation (learning from a stronger cross-encoder teacher) to improve quality, and asymmetric \"doc-only\" expansion to cut query cost. Every generation is essentially a different answer to the same two questions: how many terms survive, and who pays for expansion — the indexer or the querier?"
+        },
+        {
+          "type": "p",
+          "md": "**Distillation is why it competes with dense models.** On its own, the masked-language-model signal is decent but not great. Training SPLADE to imitate the relevance judgments of a powerful but slow cross-encoder transfers much of that quality into a cheap-to-serve sparse model. This teacher-student pattern is common across modern retrieval and is a big reason learned sparse methods caught up."
+        },
+        {
+          "type": "p",
+          "md": "**Engineering reality matters more than leaderboard points.** Expanded vectors create long *posting lists* for popular expansion terms, which can slow an inverted index in ways BM25 never does. Production work on learned sparse retrieval is often about index-time pruning, term-weight quantization, and query-term limits — squeezing the same recall out of a smaller, faster index. The interesting problems are systems problems."
+        },
+        {
+          "type": "p",
+          "md": "**Where to go next.** Solidify the contrast with [BM25](/learn/rag/retrieval-and-reranking/what-is-bm25) and dense [embeddings](/learn/embeddings-vector-databases/embeddings-explained/what-are-embeddings), since SPLADE only makes sense as the bridge between them. Then study [hybrid search](/learn/rag/retrieval-and-reranking/what-is-hybrid-search) and [reciprocal rank fusion](/learn/rag/retrieval-and-reranking/reciprocal-rank-fusion) to see how multiple retrievers combine, and [reranking](/learn/rag/retrieval-and-reranking/what-is-reranking) for the precision stage that almost always follows. The durable lesson: there is no single best retriever — there are complementary ones, and SPLADE earns its place by being lexical and semantic at the same time."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What does SPLADE stand for?",
+      "a": "SPLADE stands for SParse Lexical AnD Expansion model. \"Sparse\" because it outputs a long, mostly-zero vector keyed by vocabulary words; \"lexical\" because matches are real words you can read; and \"expansion\" because a neural model adds related terms the original text never contained."
+    },
+    {
+      "q": "How is SPLADE different from BM25?",
+      "a": "BM25 uses a fixed formula and only matches the exact words present in the text, so it misses synonyms. SPLADE uses a trained language model to assign term weights and to add related words (term expansion), which fixes the vocabulary-mismatch problem. Crucially, both produce sparse vectors that run on the same inverted index, so SPLADE is often described as a smarter BM25."
+    },
+    {
+      "q": "Is SPLADE better than dense embeddings?",
+      "a": "It depends on the query. SPLADE keeps the strengths of keyword search — exact codes, names, and explainability — while adding synonym matching, and it often holds up better on out-of-domain data. Dense embeddings can still win on heavily paraphrased, conceptual queries. In practice most teams use hybrid search and fuse SPLADE, BM25, and dense results rather than picking one."
+    },
+    {
+      "q": "Why is SPLADE called a sparse retrieval method?",
+      "a": "Its vector has one slot for every word in the model's vocabulary (tens of thousands), but almost all of them are forced to exactly zero by a ReLU activation and a sparsity penalty during training. Only a few hundred non-zero, word-keyed weights remain, which is the sparse shape an inverted index is designed to store and search efficiently."
+    },
+    {
+      "q": "Does SPLADE need a vector database?",
+      "a": "Usually no. Because SPLADE vectors are sparse and keyed by real terms, they fit in a classic inverted index in engines like Lucene, Elasticsearch, or OpenSearch, provided the engine supports per-term weights. That is a major operational advantage: teams already running keyword search can often add SPLADE without standing up a separate dense vector index."
+    },
+    {
+      "q": "When should I use SPLADE in a RAG pipeline?",
+      "a": "Use it as a first-stage retriever when your queries mix exact tokens (error codes, product names) with natural-language phrasing and you want better recall than BM25 without losing explainability. Pair it with reciprocal rank fusion to blend retrievers, then add a cross-encoder reranker for the final precise ordering."
+    }
+  ],
+  "related": [
+    "what-is-bm25",
+    "what-is-hybrid-search",
+    "what-is-a-retriever",
+    "reciprocal-rank-fusion",
+    "what-is-reranking",
+    "cross-encoder-vs-bi-encoder"
+  ],
+  "furtherReading": [
+    {
+      "title": "SPLADE — official repository (Naver Labs)",
+      "url": "https://github.com/naver/splade"
+    },
+    {
+      "title": "SPLADE: Sparse Lexical and Expansion Model for First Stage Ranking (arXiv)",
+      "url": "https://arxiv.org/abs/2107.05720"
+    },
+    {
+      "title": "Pinecone — Learning Sparse Retrieval with SPLADE",
+      "url": "https://www.pinecone.io/learn/splade/"
+    }
+  ]
+}

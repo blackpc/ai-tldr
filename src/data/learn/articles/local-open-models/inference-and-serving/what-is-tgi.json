@@ -1,0 +1,350 @@
+{
+  "slug": "what-is-tgi",
+  "title": "What Is Text Generation Inference (TGI)?",
+  "shortTitle": "Hugging Face TGI",
+  "seoTitle": "What Is Hugging Face TGI? The Legacy Serving Toolkit",
+  "metaDescription": "TGI is Hugging Face's Rust/Python LLM serving toolkit, now in maintenance mode as Hugging Face points new production deployments toward vLLM and SGLang.",
+  "keywords": [
+    "text generation inference",
+    "what is tgi",
+    "hugging face tgi",
+    "tgi vs vllm",
+    "tgi maintenance mode",
+    "tgi serving"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You will understand what Hugging Face's Text Generation Inference (TGI) is, what it was built to do, and why Hugging Face now steers new work toward vLLM and SGLang.",
+  "updated": "2026-06-14",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You have downloaded an open model — say a Llama or a Mistral — and you can run it on your laptop with a script. That works for one request at a time. But the moment you want to put it behind a real product, with dozens of users hitting it at once, that simple script falls apart. It loads the model fresh, serves one person, and makes everyone else wait in line. You need a proper *server* in front of the model."
+        },
+        {
+          "type": "image",
+          "url": "/learn-media/dlg-613.jpg",
+          "alt": "Hugging Face TGI — illustration",
+          "caption": "Hugging Face TGI",
+          "credit": "cdn.thenewstack.io"
+        },
+        {
+          "type": "p",
+          "md": "**Text Generation Inference**, almost always shortened to **TGI**, is one such server. It is an open-source toolkit from [Hugging Face](/learn/local-open-models/inference-and-serving/what-is-inference-server) that wraps an open model and turns it into a fast, production-ready web service. You point it at a model, it loads the weights onto your GPU, and it exposes an HTTP endpoint your app can call — handling many users at once, streaming tokens back as they are generated, and squeezing far more work out of the hardware than a naive loop ever could."
+        },
+        {
+          "type": "p",
+          "md": "Think of the raw model as a brilliant chef who can only cook one dish at a time, plated when fully done. TGI is the professional kitchen built around that chef: tickets come in continuously, several dishes cook in parallel, and finished plates go out the instant they are ready instead of everyone waiting for the slowest order. The chef's *skill* is unchanged — TGI just organizes the kitchen so it can feed a crowd."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "One important note up front: TGI is now in **maintenance mode**. It still runs and is still maintained for security and bug fixes, but Hugging Face now steers new production deployments toward [vLLM](/learn/local-open-models/inference-and-serving/vllm-explained) and SGLang. Treat TGI as a piece of serving history worth understanding, not the default pick for a brand-new project."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The gap between \"the model generates text in my notebook\" and \"the model serves a thousand people reliably\" is enormous, and it is *all* infrastructure. TGI was built to close exactly that gap, and the problems it tackles are the same ones every serving system must solve."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Concurrency.** A naive script serves one request, then the next. Real traffic is many requests arriving at unpredictable times. A server has to interleave them so a slow, long generation does not block a quick one behind it.",
+            "**Hardware efficiency.** GPUs are expensive. Running them one-request-at-a-time wastes most of the chip's capacity — the GPU sits idle waiting for the next token instead of doing useful work. Good serving keeps the GPU busy, which directly lowers your cost per request.",
+            "**Streaming.** Users expect text to appear word by word, like a chat. That means the server must stream tokens out as they are produced, not wait for the whole answer to finish.",
+            "**A stable API.** Your application should not care which model is loaded or how it runs. It just wants a clean HTTP endpoint that behaves the same way every time."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "TGI mattered because it packaged all of this into one deployable container, at a time when most teams were hand-rolling fragile serving code. It became a common way to self-host open models — powering Hugging Face's own Inference Endpoints and many private deployments — and it helped popularize techniques like [continuous batching](/learn/local-open-models/inference-and-serving/continuous-batching) that are now standard everywhere."
+        },
+        {
+          "type": "p",
+          "md": "It still matters today for a different reason: understanding TGI teaches you what *any* serving stack must do. The same building blocks — batching, streaming, a model server behind an HTTP gateway — reappear in vLLM, SGLang, and TensorRT-LLM. Learn the shape once and every other server makes sense."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "TGI is built from two halves working together: a **Rust** web layer for speed and a **Python** layer for the actual model. Rust handles the parts that must be fast and never block — accepting HTTP requests, validating them, tokenizing text, and scheduling work. Python (with PyTorch) runs the heavy model math on the GPU, where the deep-learning ecosystem lives. The two talk over a fast internal channel."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "stack",
+            "title": "TGI's layered architecture",
+            "layers": [
+              {
+                "label": "HTTP API",
+                "sub": "REST + streaming endpoints your app calls"
+              },
+              {
+                "label": "Router (Rust)",
+                "sub": "validates, tokenizes, batches, schedules"
+              },
+              {
+                "label": "Model server (Python)",
+                "sub": "runs the model on the GPU",
+                "accent": true
+              },
+              {
+                "label": "GPU + weights",
+                "sub": "the actual tensor math"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "The router and continuous batching"
+        },
+        {
+          "type": "p",
+          "md": "The heart of TGI is the **router**. When requests arrive, the router does not make each one wait for a full batch to fill up. Instead it uses *continuous batching* (sometimes called in-flight batching): it groups requests into a batch, runs one token step for the whole batch, and then — crucially — lets finished requests leave and new ones join *between* steps. The batch is reshaped on every step instead of being frozen until everyone is done."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "A request's journey through TGI",
+            "steps": [
+              {
+                "label": "Request in",
+                "sub": "prompt over HTTP"
+              },
+              {
+                "label": "Validate + tokenize",
+                "sub": "Rust router"
+              },
+              {
+                "label": "Join live batch",
+                "sub": "continuous batching"
+              },
+              {
+                "label": "Generate tokens",
+                "sub": "GPU, step by step"
+              },
+              {
+                "label": "Stream out",
+                "sub": "tokens as they land",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "This is what keeps the GPU busy and the tail latency low. A short request does not have to wait behind a long one — it slips into the running batch, finishes, and leaves, while the long generation keeps going. Under the hood TGI also leans on optimized attention kernels (such as FlashAttention and PagedAttention-style memory handling) and supports [tensor parallelism](/learn/local-open-models/inference-and-serving/vllm-explained) to split a large model across several GPUs."
+        },
+        {
+          "type": "h3",
+          "text": "Talking to a running server"
+        },
+        {
+          "type": "p",
+          "md": "Once TGI is running, your application just makes HTTP calls. The API speaks a familiar shape, including an OpenAI-compatible chat endpoint, so client code looks like any other LLM call:"
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "title": "calling a running TGI server",
+          "code": "curl http://localhost:8080/v1/chat/completions \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"model\": \"tgi\",\n    \"messages\": [{\"role\": \"user\", \"content\": \"Explain batching in one sentence.\"}],\n    \"stream\": true,\n    \"max_tokens\": 64\n  }'"
+        }
+      ]
+    },
+    {
+      "id": "running-tgi",
+      "title": "Running TGI in practice",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "TGI ships as a Docker container, which is the normal way to run it. You give the container access to your GPU and tell it which model to serve; it downloads the weights from the Hugging Face Hub, loads them, and starts listening. There is no Python environment to assemble by hand — that is much of the appeal."
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "title": "launch TGI with Docker",
+          "code": "docker run --gpus all --shm-size 1g -p 8080:80 \\\n  -v $PWD/data:/data \\\n  ghcr.io/huggingface/text-generation-inference:latest \\\n  --model-id meta-llama/Llama-3.1-8B-Instruct"
+        },
+        {
+          "type": "p",
+          "md": "A few flags do most of the configuration work: `--model-id` chooses the model, `--num-shard` splits it across multiple GPUs with tensor parallelism, `--quantize` loads a smaller, compressed version to fit more on the card, and `--max-batch-total-tokens` caps how much the server tries to process at once. The defaults are sensible, so a basic deployment really is close to a one-liner."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Whether you are weighing TGI, vLLM, or a managed API, the real decision is about [throughput versus latency](/learn/local-open-models/inference-and-serving/throughput-vs-latency-llm) and your [cost of self-hosting](/learn/local-open-models/inference-and-serving/self-hosting-llm-cost). The serving toolkit is only one input; the GPU bill usually dominates."
+        }
+      ]
+    },
+    {
+      "id": "tgi-vs-vllm",
+      "title": "TGI vs vLLM and the other servers",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The most common question is how TGI compares to [vLLM](/learn/local-open-models/inference-and-serving/vllm-explained), the server Hugging Face now recommends for new work. They solve the same problem and share the same core ideas — continuous batching, paged memory, an OpenAI-compatible API — but they come from different places and have diverged in momentum."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Aspect",
+            "TGI",
+            "vLLM"
+          ],
+          "rows": [
+            [
+              "Origin",
+              "Hugging Face",
+              "UC Berkeley research, now community-led"
+            ],
+            [
+              "Core language",
+              "Rust router + Python model server",
+              "Mostly Python"
+            ],
+            [
+              "Status",
+              "Maintenance mode",
+              "Actively developed, fast-moving"
+            ],
+            [
+              "Signature idea",
+              "Production-packaged continuous batching",
+              "PagedAttention memory management"
+            ],
+            [
+              "Best fit today",
+              "Existing TGI deployments",
+              "New production deployments"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "There are several other servers in this space, each with a different emphasis. It helps to see where TGI sits among them rather than treating any one as universally best."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Where each serving option fits",
+            "columns": [
+              {
+                "title": "TGI",
+                "accent": true,
+                "items": [
+                  "Hugging Face's toolkit",
+                  "Battle-tested, now legacy",
+                  "Great for understanding the pattern"
+                ]
+              },
+              {
+                "title": "vLLM / SGLang",
+                "items": [
+                  "The recommended modern default",
+                  "Highest momentum and features",
+                  "Strong throughput on GPUs"
+                ]
+              },
+              {
+                "title": "Ollama / llama.cpp",
+                "items": [
+                  "Easiest local single-user runs",
+                  "Great on laptops and CPUs",
+                  "See ollama vs vLLM"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "If you are choosing today and want a desktop-friendly path instead of a GPU server, compare [Ollama and vLLM](/learn/local-open-models/inference-and-serving/ollama-vs-vllm) first — they target very different users than a production serving toolkit like TGI."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics click, a few deeper points make TGI's place in the ecosystem clearer — and explain why it ended up in maintenance mode despite being genuinely good."
+        },
+        {
+          "type": "p",
+          "md": "**Why maintenance mode happened.** TGI and vLLM were both racing to optimize the same thing, and for a while TGI led on production polish while vLLM led on raw research throughput. Over time the open community concentrated its energy on vLLM and SGLang, which iterate faster and absorb new techniques sooner. Rather than split effort, Hugging Face chose to point new production deployments at those servers. The lesson is not that TGI was wrong — it is that in fast-moving infrastructure, *where the community gathers* often decides which tool wins."
+        },
+        {
+          "type": "p",
+          "md": "**Beyond batching.** Modern serving keeps adding tricks, and the frontier moves quickly: [speculative decoding](/learn/local-open-models/inference-and-serving/speculative-decoding-local), which uses a tiny draft model to guess several tokens and verify them in one step; prefix caching, which reuses the computation for prompts that share a common opening; and disaggregated serving, which splits the prompt-reading (prefill) and token-writing (decode) phases onto different hardware. Newer servers adopt these faster, which is part of why momentum shifted away from TGI."
+        },
+        {
+          "type": "p",
+          "md": "**Prefill vs decode.** It is worth internalizing that LLM serving has two very different phases. *Prefill* reads the whole prompt at once and is compute-heavy; *decode* generates one token at a time and is memory-bandwidth-heavy. Almost every advanced serving optimization — batching strategy, caching, disaggregation — is really about handling these two phases efficiently. Understanding this split is the key that unlocks the rest of the [inference-serving](/learn/local-open-models/inference-and-serving/) topic."
+        },
+        {
+          "type": "p",
+          "md": "**Where to go next.** If your goal is to deploy an open model today, read up on [vLLM](/learn/local-open-models/inference-and-serving/vllm-explained) and [continuous batching](/learn/local-open-models/inference-and-serving/continuous-batching) next, then weigh [throughput against latency](/learn/local-open-models/inference-and-serving/throughput-vs-latency-llm) for your workload. TGI remains a clean, well-documented example of how a serving stack is put together — a great thing to have studied, even if you reach for a newer server when it is time to ship."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is Text Generation Inference (TGI)?",
+      "a": "TGI is Hugging Face's open-source toolkit for serving open large language models in production. It wraps a model in a fast web server — a Rust router plus a Python model layer — that handles many users at once, streams tokens as they are generated, and uses continuous batching to keep the GPU busy. It ships as a Docker container you point at a model on the Hugging Face Hub."
+    },
+    {
+      "q": "Is TGI still maintained, or is it deprecated?",
+      "a": "TGI is in maintenance mode rather than deprecated. It still receives security and bug fixes and continues to run existing deployments, but Hugging Face now steers new production work toward vLLM and SGLang. For a brand-new project, treat TGI as legacy and reach for a more actively developed server."
+    },
+    {
+      "q": "What is the difference between TGI and vLLM?",
+      "a": "Both are production LLM servers that use continuous batching and offer an OpenAI-compatible API, so they solve the same problem. TGI comes from Hugging Face and pairs a Rust router with a Python model server, while vLLM is mostly Python and is known for its PagedAttention memory management. The practical difference today is momentum: vLLM is actively developed and recommended for new deployments, whereas TGI is in maintenance mode."
+    },
+    {
+      "q": "What problem does TGI actually solve?",
+      "a": "It turns a raw open model into a real service. A plain script serves one request at a time and wastes most of the GPU; TGI adds concurrency, continuous batching, token streaming, and a stable HTTP API so the same model can serve many users efficiently and cheaply. In short, it handles all the serving infrastructure so your app can just make HTTP calls."
+    },
+    {
+      "q": "Should I use TGI for a new project in 2026?",
+      "a": "Probably not as a first choice. Because TGI is in maintenance mode, new production deployments are better served by vLLM or SGLang, which iterate faster and adopt new optimizations sooner. TGI is still worth understanding and is fine to keep running if you already depend on it, but it is no longer the default for new work."
+    }
+  ],
+  "related": [
+    "what-is-inference-server",
+    "vllm-explained",
+    "continuous-batching",
+    "ollama-vs-vllm",
+    "throughput-vs-latency-llm"
+  ],
+  "furtherReading": [
+    {
+      "title": "text-generation-inference — Hugging Face (GitHub)",
+      "url": "https://github.com/huggingface/text-generation-inference"
+    },
+    {
+      "title": "Text Generation Inference — Hugging Face Docs",
+      "url": "https://huggingface.co/docs/text-generation-inference"
+    },
+    {
+      "title": "vLLM Documentation",
+      "url": "https://docs.vllm.ai/"
+    }
+  ]
+}

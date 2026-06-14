@@ -1,0 +1,300 @@
+{
+  "slug": "what-is-awq",
+  "title": "What Is AWQ? Activation-Aware Quantization",
+  "shortTitle": "AWQ",
+  "seoTitle": "What Is AWQ? Activation-Aware Weight Quantization",
+  "metaDescription": "AWQ (Activation-aware Weight Quantization) is a 4-bit post-training method that protects the most salient weights to keep accuracy high after quantization.",
+  "keywords": [
+    "awq",
+    "what is awq",
+    "activation-aware weight quantization",
+    "awq vs gptq",
+    "4-bit quantization",
+    "awq quantization"
+  ],
+  "difficulty": "advanced",
+  "oneLiner": "You will understand what AWQ is, how protecting a small set of salient weights preserves accuracy at 4-bit, and why it has overtaken GPTQ for new work.",
+  "updated": "2026-06-14",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "A large language model stores its knowledge as billions of numbers called *weights*. By default each weight is a 16-bit floating-point number, which is accurate but heavy: a model with billions of weights needs a lot of memory just to load. [Quantization](/learn/local-open-models/quantization-and-formats/what-is-quantization) shrinks those numbers to fewer bits — often 4 — so the same model fits in a fraction of the memory and runs faster."
+        },
+        {
+          "type": "image",
+          "url": "/learn-media/dlg-615.jpg",
+          "alt": "AWQ — illustration",
+          "caption": "AWQ",
+          "credit": "cast.ai"
+        },
+        {
+          "type": "p",
+          "md": "**AWQ** stands for **Activation-aware Weight Quantization**. It is a method for squeezing a model's weights down to 4 bits *after* training (so-called post-training quantization), without retraining anything. Its one big idea: not all weights are equally important. A small fraction of them carry far more of the model's behaviour than the rest. If you crush those few carelessly, accuracy collapses; if you protect them, you can quantize everything else aggressively and barely notice the difference."
+        },
+        {
+          "type": "p",
+          "md": "Think of packing a suitcase for a long trip with a strict weight limit. Most clothes you can roll up tightly and stuff into corners — a little wrinkling is fine. But a few fragile items (a laptop, glasses, a gift) need padding and a protected spot, or the whole trip is ruined. AWQ does exactly this: it finds the *fragile, important* weights and treats them gently, while compressing the bulk as tightly as possible."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The word **activation-aware** is the key. AWQ decides which weights are important not by looking at the weights alone, but by watching the *activations* — the actual numbers that flow through the model when you run real text through it. The columns of weights that interact with large activations are the ones it protects."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Running a capable open model locally or on a single GPU is, for most people, a memory problem before it is a speed problem. A model that needs more memory than your GPU has simply will not load. Quantization is the standard escape hatch, and AWQ is one of the best ways to take that escape hatch without paying a heavy accuracy tax."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**It makes big models fit.** Going from 16-bit to 4-bit cuts the weight memory to roughly a quarter. A model that needed an expensive multi-GPU setup can suddenly run on one consumer or mid-range card.",
+            "**It keeps quality high.** Naive 4-bit rounding can noticeably dumb a model down. By protecting the salient weights, AWQ holds accuracy much closer to the original than a careless round-to-4-bit would.",
+            "**It needs no retraining.** AWQ is post-training: you run a small amount of sample text through the model once to measure activations, compute the protection, and you are done. No gradient training, no labelled dataset, no GPU-weeks.",
+            "**It serves fast.** AWQ models are designed to run with optimized 4-bit GPU kernels, so the smaller memory footprint also translates into higher throughput, especially in serving engines like vLLM."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who cares? Anyone deploying open-weight models: a hobbyist fitting a model on one GPU, a startup cutting its serving bill, or a team that wants more requests per second from the same hardware. AWQ has become a default choice for 4-bit GPU deployment, and it is the natural thing to reach for when you would otherwise consider its older sibling, [GPTQ](/learn/local-open-models/quantization-and-formats/gguf-vs-gptq-vs-awq)."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "AWQ rests on a single observation backed by experiment: in a transformer's weight matrices, only a small fraction of the weight channels — often around 1% — are *salient*, meaning they have an outsized effect on the output. The trick is finding those channels cheaply and protecting them without storing them in a special, awkward format."
+        },
+        {
+          "type": "h3",
+          "text": "Step 1 — Watch the activations"
+        },
+        {
+          "type": "p",
+          "md": "You feed a small *calibration set* (a few hundred sentences of representative text) through the unquantized model and record the activations entering each linear layer. Weight channels that consistently meet large activation values are the influential ones: even a small error there gets amplified as it multiplies through. AWQ ranks importance by activation magnitude, not by weight magnitude — that is the insight earlier methods missed."
+        },
+        {
+          "type": "h3",
+          "text": "Step 2 — Scale, don't isolate"
+        },
+        {
+          "type": "p",
+          "md": "An obvious fix would be to keep the important weights in full 16-bit precision and quantize the rest to 4-bit. But mixing two number formats inside one matrix makes the GPU math slow and irregular. AWQ avoids that with a cleverer move: before quantizing, it multiplies each salient weight channel by a scaling factor (and divides the matching activation by the same factor, so the math still comes out the same). Scaling a value up before rounding effectively gives it more *resolution* in 4-bit space — the rounding error becomes proportionally smaller. The important channels are protected, yet every weight ends up in the same uniform 4-bit format."
+        },
+        {
+          "type": "h3",
+          "text": "Step 3 — Quantize everything uniformly"
+        },
+        {
+          "type": "p",
+          "md": "With the salient channels scaled up, AWQ rounds the whole matrix to 4-bit in the usual grouped way (small groups of weights share a scale and zero-point). Because the fragile channels were padded by the scaling step, the overall accuracy loss is small. The result is a clean, uniform 4-bit model with no exotic mixed-precision layout — which is exactly why it runs fast on standard kernels."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "AWQ — done once, after training",
+            "steps": [
+              {
+                "label": "Trained model",
+                "sub": "16-bit weights"
+              },
+              {
+                "label": "Calibrate",
+                "sub": "run sample text, record activations"
+              },
+              {
+                "label": "Find salient",
+                "sub": "channels meeting big activations"
+              },
+              {
+                "label": "Scale + quantize",
+                "sub": "protect, then round to 4-bit"
+              },
+              {
+                "label": "AWQ model",
+                "sub": "uniform 4-bit, GPU-fast",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The deep reason AWQ works: rounding error is *relative*. Scaling a weight up before rounding shrinks its error as a fraction of its value, so a tiny set of well-chosen scales buys back most of the accuracy that plain 4-bit rounding throws away — with no extra storage and no retraining."
+        }
+      ]
+    },
+    {
+      "id": "awq-vs-gptq",
+      "title": "AWQ vs GPTQ",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "AWQ is almost always compared to **GPTQ**, the earlier 4-bit post-training standard. Both turn a 16-bit model into a 4-bit one using a small calibration set, and both run on GPUs. They differ in *what they pay attention to* and *how they correct error*."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Aspect",
+            "AWQ",
+            "GPTQ"
+          ],
+          "rows": [
+            [
+              "Core idea",
+              "Protect salient weights spotted via activations",
+              "Minimize reconstruction error layer by layer"
+            ],
+            [
+              "What it looks at",
+              "Activation magnitudes (data-driven importance)",
+              "Weights and their second-order error"
+            ],
+            [
+              "How it corrects",
+              "Per-channel scaling before uniform rounding",
+              "Sequentially adjusts remaining weights to offset rounding"
+            ],
+            [
+              "Calibration",
+              "Small sample set, fast",
+              "Small sample set, can be slower to compute"
+            ],
+            [
+              "Typical use today",
+              "Common default for new 4-bit GPU work",
+              "Classic; still widely supported"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "In practice both can produce strong 4-bit models, and the right pick depends on the model, the toolchain, and the serving engine you target. AWQ has gained popularity for new work because its activation-aware scaling tends to preserve accuracy well while producing a clean uniform format that serves quickly. GPTQ remains a solid, mature option with broad support. If you want a three-way picture that also brings in the CPU-focused GGUF family, see [GGUF vs GPTQ vs AWQ](/learn/local-open-models/quantization-and-formats/gguf-vs-gptq-vs-awq)."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "A common point of confusion: AWQ and GPTQ are mainly for **GPU** serving, while the [GGUF](/learn/local-open-models/quantization-and-formats/what-is-gguf) format (used by llama.cpp) targets flexible **CPU and mixed** setups. They are not direct competitors so much as tools for different deployment targets."
+        }
+      ]
+    },
+    {
+      "id": "using-awq-in-practice",
+      "title": "Using AWQ in practice",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You rarely quantize a popular model yourself — the community usually publishes ready-made AWQ versions on model hubs. But it helps to see the shape of the process. Conceptually there are two phases: quantize once, then load the result anywhere that supports AWQ."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "the shape of quantizing with AWQ",
+          "code": "# 1) QUANTIZE ONCE — needs the full model + a small calibration set.\n#    (autoawq is the common library; the API shape, not exact calls.)\nfrom awq import AutoAWQForCausalLM\nfrom transformers import AutoTokenizer\n\nmodel = AutoAWQForCausalLM.from_pretrained(\"some-org/some-model\")\ntok = AutoTokenizer.from_pretrained(\"some-org/some-model\")\n\n# A few hundred representative sentences are enough to measure activations.\nmodel.quantize(\n    tok,\n    quant_config={\"w_bit\": 4, \"q_group_size\": 128, \"version\": \"GEMM\"},\n)\nmodel.save_quantized(\"some-model-awq\")  # now ~4x smaller on disk"
+        },
+        {
+          "type": "p",
+          "md": "Once a model is quantized, serving it is the easy part. Engines like vLLM detect the AWQ format and use optimized 4-bit kernels automatically — you just point them at the quantized weights."
+        },
+        {
+          "type": "code",
+          "lang": "bash",
+          "title": "serving an AWQ model with vLLM",
+          "code": "# vLLM auto-detects AWQ from the model's config; quantization is optional to state.\nvllm serve some-org/some-model-AWQ --quantization awq"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The calibration text matters more than people expect. Use samples that resemble your real workload — if you serve code, calibrate on code; if you serve chat, calibrate on chat. The activations AWQ measures (and therefore the channels it protects) reflect whatever data you feed it."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic picture clicks, a few subtleties separate a good AWQ deployment from a disappointing one."
+        },
+        {
+          "type": "p",
+          "md": "**Group size is a dial.** AWQ quantizes weights in small groups that share a scale and zero-point (a group size of 128 is common). Smaller groups store more scaling metadata and preserve more accuracy at a slight cost in memory and speed; larger groups are leaner but coarser. It is the main quality-vs-size knob you actually touch."
+        },
+        {
+          "type": "p",
+          "md": "**4-bit is not free, even at its best.** AWQ narrows the gap between 4-bit and 16-bit dramatically, but a gap remains. On hard reasoning, long-context recall, or rare facts, a 4-bit model can slip in ways that a few casual test prompts will not reveal. If quality is critical, compare the quantized and original model on tasks you actually care about rather than trusting that 4-bit 'looked fine.' See [how much quality quantization costs](/learn/local-open-models/quantization-and-formats/quantization-quality-loss)."
+        },
+        {
+          "type": "p",
+          "md": "**Weight-only, not activation quantization.** AWQ quantizes the *weights* to 4-bit while activations typically stay in higher precision during the actual matrix multiply. That is why it is called weight quantization — it shrinks what you store, not the live signal flowing through. This keeps accuracy high but means the speedup comes mainly from moving less weight data through memory, the usual bottleneck in LLM inference."
+        },
+        {
+          "type": "p",
+          "md": "**Where it sits in the ecosystem.** AWQ is one member of a family of compression choices. For the broader concept, start with [what quantization is](/learn/local-open-models/quantization-and-formats/what-is-quantization); to understand the bit-width tradeoffs themselves, see [Q4 vs Q8 vs FP16](/learn/local-open-models/quantization-and-formats/q4-vs-q8-vs-fp16); and for the CPU-side format that dominates local desktop use, read about [GGUF](/learn/local-open-models/quantization-and-formats/gguf-format-explained). The honest takeaway: AWQ's activation-aware scaling was a genuinely useful idea that pushed 4-bit GPU serving from 'usable in a pinch' to 'a sensible default,' which is why so much new quantization work now starts there."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What does AWQ stand for?",
+      "a": "AWQ stands for **Activation-aware Weight Quantization**. It compresses a model's weights to 4 bits after training, using the model's activations to decide which weights are important enough to protect during quantization."
+    },
+    {
+      "q": "What is the difference between AWQ and GPTQ?",
+      "a": "Both are 4-bit post-training quantization methods for GPUs. AWQ identifies a small set of *salient* weight channels using activation magnitudes and protects them by scaling before uniform rounding. GPTQ instead minimizes reconstruction error layer by layer, sequentially adjusting the remaining weights. AWQ has become a common default for new work, while GPTQ remains a mature, widely supported option."
+    },
+    {
+      "q": "Does AWQ reduce a model's accuracy?",
+      "a": "It reduces accuracy far less than naive 4-bit rounding, because it protects the most influential weights. But it is not lossless: a small gap to the original 16-bit model remains, and it can show up on hard reasoning or rare-fact tasks. If quality is critical, test the quantized model on your real workload rather than assuming 4-bit is fine."
+    },
+    {
+      "q": "Is AWQ better than GGUF?",
+      "a": "They target different hardware, so it is not a head-to-head. AWQ is built for fast 4-bit serving on GPUs (with engines like vLLM), while GGUF is the format used by llama.cpp for flexible CPU and mixed CPU/GPU setups. Pick AWQ for GPU serving and GGUF for running locally on a laptop or CPU."
+    },
+    {
+      "q": "Do I need to retrain a model to use AWQ?",
+      "a": "No. AWQ is post-training quantization. You run a small calibration set of representative text through the model once to measure activations, compute the protective scaling, and round to 4-bit. There is no gradient training, labelled dataset, or long GPU job involved."
+    },
+    {
+      "q": "What is a calibration set in AWQ?",
+      "a": "It is a small collection of sample text (often a few hundred sentences) that you pass through the unquantized model so AWQ can observe the activations. Those activations reveal which weight channels are salient. Using calibration data that resembles your real workload gives the best results."
+    }
+  ],
+  "related": [
+    "what-is-quantization",
+    "gguf-vs-gptq-vs-awq",
+    "what-is-gguf",
+    "q4-vs-q8-vs-fp16",
+    "quantization-quality-loss"
+  ],
+  "furtherReading": [
+    {
+      "title": "llm-awq — Activation-aware Weight Quantization (GitHub)",
+      "url": "https://github.com/mit-han-lab/llm-awq"
+    },
+    {
+      "title": "AWQ: Activation-aware Weight Quantization (arXiv)",
+      "url": "https://arxiv.org/abs/2306.00978"
+    },
+    {
+      "title": "Quantization — vLLM Documentation",
+      "url": "https://docs.vllm.ai/en/latest/features/quantization/index.html"
+    }
+  ]
+}

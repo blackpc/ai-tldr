@@ -1,0 +1,354 @@
+{
+  "slug": "langsmith-observability",
+  "title": "What Is LangSmith? LLM Tracing & Evaluation",
+  "shortTitle": "LangSmith",
+  "seoTitle": "What Is LangSmith? LLM Tracing & Evals Platform",
+  "metaDescription": "LangSmith is LangChain's hosted platform for tracing, evaluating, and monitoring LLM apps. Learn what it does and how it fits a production stack.",
+  "keywords": [
+    "langsmith",
+    "what is langsmith",
+    "langsmith tracing",
+    "langsmith vs langfuse",
+    "llm observability",
+    "langsmith evaluation"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "After reading, you'll understand what LangSmith is, how its tracing and evaluation features work, and when a team reaches for it to monitor LLM apps.",
+  "updated": "2026-06-14",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When a normal web app misbehaves, you read the logs: a request came in, here's the response, here's the error. LLM apps are harder to debug because the interesting part is invisible. A single user question can fan out into several model calls, a couple of [retrieval](/learn/production-llmops/observability-monitoring/what-is-llm-observability) steps, a tool call or two, and a final answer — and any one of those steps can quietly produce nonsense while the app still returns *something*. A plain log line of \"200 OK\" tells you nothing about *why* the answer was wrong."
+        },
+        {
+          "type": "image",
+          "url": "/learn-media/dlg-598.jpg",
+          "alt": "LangSmith — illustration",
+          "caption": "LangSmith",
+          "credit": "reintech.io"
+        },
+        {
+          "type": "p",
+          "md": "**LangSmith** is a hosted platform, built by the team behind LangChain, for *seeing inside* those runs. It records a detailed **trace** of every step an LLM app takes — each prompt sent, each model response, each tool call, how long each took, and how many tokens it burned — and shows it to you as a tidy, clickable tree. On top of that, it lets you **evaluate** your app systematically (does the new prompt actually answer better than the old one?) and **monitor** it in production (is latency creeping up, are users thumbs-downing more answers this week?)."
+        },
+        {
+          "type": "p",
+          "md": "Think of it as a flight recorder plus a test bench for AI apps. The flight recorder captures exactly what happened on every \"flight\" (every user request) so you can replay a crash. The test bench lets you run the same set of questions through two versions of your app and compare the results side by side before you ship. Same tool, two jobs: *understand what already happened*, and *measure whether a change makes things better*."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "LangChain (the open-source framework) and LangSmith (the observability platform) are made by the same company but are **separate products**. You can use LangSmith with an app that never imports LangChain — it works with plain SDK calls, other frameworks, or any language that can send it a trace."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "LLM apps fail in ways ordinary software does not, and the usual debugging tools don't catch them. LangSmith exists to close that gap."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**The failure is in the middle, not the edges.** Your code ran fine and the API returned 200, yet the answer is wrong because the retriever pulled the wrong document or the prompt template dropped a variable. Only a step-by-step trace shows you *which* step went bad.",
+            "**Non-determinism hides regressions.** Tweak a prompt to fix one case and you might silently break ten others. Without a way to re-run a fixed set of examples and compare, you're flying blind — \"it looked fine when I tried it\" is not a test.",
+            "**Cost and latency are invisible until the bill arrives.** A single user turn can trigger many model calls. Token usage and per-step timing, aggregated across thousands of runs, is the only way to find the expensive or slow step.",
+            "**Quality is subjective and needs feedback.** \"Is this a good answer?\" can't be checked with an assertion like `status == 200`. You need to attach human ratings, user thumbs-up/down, or [LLM-as-a-judge](/learn/evaluation-safety/llm-as-judge/what-is-llm-as-a-judge) scores to runs and track them over time."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who reaches for it? Any team running an LLM feature past the toy stage — a support bot, a [RAG](/learn/rag/rag-fundamentals/what-is-rag) assistant, an [agent](/learn/ai-agents/agent-fundamentals/what-is-an-ai-agent) that calls tools. The moment you go from \"it works on my machine\" to \"real users are hitting it and sometimes complaining,\" you need to see what happened on the runs that went wrong, and you need to prove a change is an improvement before you deploy it. That is exactly the gap LangSmith fills."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "LangSmith has two halves. **Tracing** captures what your app does, automatically, as it runs. **Evaluation** runs your app over a fixed set of examples and scores the outputs. Both halves revolve around the same handful of objects, so it helps to learn the vocabulary first."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Concept",
+            "What it is"
+          ],
+          "rows": [
+            [
+              "Run",
+              "One unit of work — a single model call, a retriever lookup, or a tool call. The atom of observability."
+            ],
+            [
+              "Trace",
+              "The full tree of runs for one request, showing how the parent (the whole request) breaks into child steps."
+            ],
+            [
+              "Project",
+              "A named bucket that groups traces — usually one per app or environment (dev, staging, prod)."
+            ],
+            [
+              "Dataset",
+              "A saved collection of example inputs (and optionally reference outputs) to test your app against."
+            ],
+            [
+              "Evaluator",
+              "A function or LLM-judge that scores a run's output, producing a numeric or pass/fail result."
+            ]
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "Tracing: capturing what happened"
+        },
+        {
+          "type": "p",
+          "md": "You wrap or decorate your code so each step reports itself to LangSmith. If you use LangChain, tracing turns on with a couple of environment variables and nothing else. If you don't, you add a small decorator to the functions you care about, or use a thin wrapper around your model client. Each step sends its inputs, outputs, timing, token counts, and any error up to LangSmith, where they're stitched into a [trace](/learn/production-llmops/observability-monitoring/llm-tracing-explained) you can click through."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "One request becomes one trace",
+            "steps": [
+              {
+                "label": "User question",
+                "sub": "the request arrives"
+              },
+              {
+                "label": "Retrieve",
+                "sub": "child run: fetch docs"
+              },
+              {
+                "label": "Prompt + LLM",
+                "sub": "child run: model call"
+              },
+              {
+                "label": "Tool call",
+                "sub": "child run: e.g. calculator"
+              },
+              {
+                "label": "Trace in LangSmith",
+                "sub": "the full tree, replayable",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The payoff is the trace view: a collapsible tree where you expand the slow or suspicious step, read the *exact* prompt the model received (variables already filled in), see its raw response, and check token usage. Most \"why is it doing that?\" mysteries are solved the moment you read the real prompt — it's almost never what you assumed."
+        },
+        {
+          "type": "h3",
+          "text": "Evaluation: measuring whether a change helps"
+        },
+        {
+          "type": "p",
+          "md": "Tracing tells you what happened *once*. Evaluation tells you how your app does *across many cases*. You assemble a **dataset** of example inputs — often harvested straight from real production traces, including the ones that failed — then run your app over every example and score each output with one or more **evaluators**. An evaluator can be plain code (does the output contain the right account number?) or an LLM judge (is this answer faithful to the retrieved context?)."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "The evaluation loop",
+            "steps": [
+              {
+                "label": "Collect examples into a dataset"
+              },
+              {
+                "label": "Run app over every example"
+              },
+              {
+                "label": "Score outputs with evaluators"
+              },
+              {
+                "label": "Compare vs. previous version"
+              },
+              {
+                "label": "Fix prompt / retrieval / model"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Because results are saved per dataset version, you get an apples-to-apples comparison: prompt A scored 78% faithful, prompt B scores 84% — ship B. This is the same idea as a regression test suite in normal software, adapted to outputs that can't be checked with a single `==`."
+        }
+      ]
+    },
+    {
+      "id": "tracing-a-call-in-code",
+      "title": "Tracing a call in code",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The lightest way to trace a non-LangChain function is the `@traceable` decorator. Any function it wraps becomes a run, and nested traceable calls automatically become child runs of the same trace. Here a small RAG-style function reports both its retrieval and its model call."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "tracing without any framework",
+          "code": "from langsmith import traceable\nfrom anthropic import Anthropic\n\nclient = Anthropic()\n\n@traceable  # this step shows up as a child run\ndef retrieve(question):\n    # ... your vector search; returns a few passages\n    return [\"Refunds are accepted within 30 days of purchase.\"]\n\n@traceable  # the parent run for the whole answer\ndef answer(question):\n    context = \"\\n\".join(retrieve(question))\n    msg = client.messages.create(\n        model=\"claude-sonnet-4-6\",\n        max_tokens=300,\n        messages=[{\n            \"role\": \"user\",\n            \"content\": f\"Use only this context:\\n{context}\\n\\nQ: {question}\",\n        }],\n    )\n    return msg.content[0].text\n\nanswer(\"How long do I have to return an item?\")"
+        },
+        {
+          "type": "p",
+          "md": "With your API key set, that's it — every call to `answer()` now produces a trace in LangSmith showing the `retrieve` step nested under it, the filled-in prompt, the model's reply, latency, and token counts. You changed almost nothing about your logic; you just made it observable."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Don't trace only failures. Tracing every run (or a sampled fraction in high-traffic apps) is what lets you spot *trends* — a slow creep in latency or a rising error rate — that no single trace would reveal. See [trace sampling](/learn/production-llmops/observability-monitoring/trace-sampling-llm) for keeping volume and cost under control."
+        }
+      ]
+    },
+    {
+      "id": "langsmith-vs-the-alternatives",
+      "title": "LangSmith vs the alternatives",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "LangSmith is the most prominent LLM-observability platform, but it's not the only one, and the trade-offs are real. The main axis is **hosted-and-polished vs. open-source-and-self-hostable**."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "How LangSmith is positioned",
+            "columns": [
+              {
+                "title": "LangSmith",
+                "accent": true,
+                "items": [
+                  "Hosted platform (cloud + self-host tier)",
+                  "Tightest fit with LangChain / LangGraph",
+                  "Tracing, evals, and feedback in one place",
+                  "Framework-agnostic, but built by LangChain",
+                  "Source is not open"
+                ]
+              },
+              {
+                "title": "Open-source tools",
+                "items": [
+                  "Self-host for full data control",
+                  "OpenTelemetry-native, less lock-in",
+                  "Often free at the core, pay for cloud",
+                  "More setup and ops work on you",
+                  "e.g. Langfuse and similar projects"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "A rough rule of thumb: if your stack already leans on LangChain or LangGraph and you'd rather pay for a managed service than run infrastructure, LangSmith is the path of least resistance. If keeping trace data inside your own network is a hard requirement, or you want an OpenTelemetry-native open-source core, an open tool like [Langfuse](/learn/production-llmops/observability-monitoring/langfuse-vs-langsmith-helicone) is worth a look. Many teams trial both — the core concepts (traces, runs, datasets, evaluators) carry over almost unchanged."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "\"Observability\" here means the whole package: tracing, evaluation, and production monitoring. Some tools focus on just one slice — a proxy that only logs requests, say. LangSmith's pitch is that all three live together, so a failing production trace can be dropped straight into a dataset and turned into a regression test."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "**Logging secrets and PII into traces.** Traces capture raw prompts and responses, which often contain personal data or credentials. Mask or redact sensitive fields before they leave your app — a trace store is still a data store with all the same obligations.",
+            "**Tracing everything in dev, nothing in prod.** It's tempting to flip tracing off in production to save cost, but production is exactly where the surprising failures live. Sample instead of disabling: keep a representative fraction of real traffic.",
+            "**A dataset that doesn't reflect reality.** If your evaluation set is ten cherry-picked easy questions, a 95% score means nothing. Pull examples from real (especially failed) production traces so the eval measures the problems users actually hit.",
+            "**Trusting one number.** A single average score hides distribution. An app that's brilliant on 90% of cases and dangerous on 10% can post a fine mean. Look at the worst runs, not just the headline metric.",
+            "**Forgetting the evaluator can be wrong too.** An LLM-judge evaluator is itself a model that can mis-score. Spot-check its verdicts against human judgment before you treat its scores as ground truth — see [LLM-as-a-judge](/learn/evaluation-safety/llm-as-judge/what-is-llm-as-a-judge)."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once basic tracing is in place, the platform's depth is mostly about closing the loop between *what happened in production* and *what you test before the next release*. A few directions worth knowing."
+        },
+        {
+          "type": "p",
+          "md": "**Online vs. offline evaluation.** *Offline* eval runs your app over a fixed dataset before you ship — the regression-test use case. *Online* eval runs evaluators continuously on live production traffic, so you catch quality drops as they happen rather than at the next test run. Production traces can also feed [production metrics](/learn/production-llmops/observability-monitoring/llm-production-metrics) like latency percentiles, error rates, and [cost attribution](/learn/production-llmops/observability-monitoring/llm-cost-attribution) per feature or customer."
+        },
+        {
+          "type": "p",
+          "md": "**Human feedback in the loop.** Beyond automatic evaluators, you can attach human ratings to runs — internal annotators reviewing a queue of flagged traces, or end users clicking thumbs-up/down in your product. That [user feedback](/learn/production-llmops/observability-monitoring/llm-user-feedback) becomes a score on the trace, so you can rank your worst-rated answers and turn them into new test cases. This is how a real eval dataset grows: not hand-written, but harvested from things that actually went wrong."
+        },
+        {
+          "type": "p",
+          "md": "**Prompt iteration and comparison.** Because every run records the exact prompt and model, you can compare two prompt versions over the same dataset and see precisely which examples each one wins or loses. This turns prompt engineering from guesswork into a measured A/B exercise, and it pairs naturally with setting an [SLO and error budget](/learn/production-llmops/observability-monitoring/llm-slo-error-budget) for answer quality so you know when a regression is bad enough to block a release."
+        },
+        {
+          "type": "p",
+          "md": "**Standards and portability.** The broader observability world is converging on OpenTelemetry as the common trace format, which reduces lock-in across tools. The durable skill isn't any one platform's UI — it's the mental model. Capture a trace of every step, build datasets from real failures, score outputs with code and judges, and compare versions before you ship. Learn that loop once and it transfers to whatever tool your team picks."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is LangSmith used for?",
+      "a": "LangSmith is used to debug, test, and monitor LLM applications. It captures detailed traces of every step a request takes (each prompt, model response, retrieval, and tool call), lets you evaluate your app against datasets of examples, and tracks quality, latency, and cost in production."
+    },
+    {
+      "q": "Do I need to use LangChain to use LangSmith?",
+      "a": "No. LangSmith is framework-agnostic even though LangChain builds it. If you use LangChain, tracing turns on with a couple of environment variables, but you can also trace plain SDK calls with the `@traceable` decorator or a client wrapper, with no LangChain in your stack."
+    },
+    {
+      "q": "What is a trace in LangSmith?",
+      "a": "A trace is the full tree of steps for one request. The top-level run is the whole request, and child runs are the individual steps inside it — a retrieval, a model call, a tool call. Each run records its inputs, outputs, timing, token usage, and any error, so you can replay exactly what happened."
+    },
+    {
+      "q": "What is the difference between LangSmith and Langfuse?",
+      "a": "Both do LLM tracing, evaluation, and monitoring. LangSmith is a hosted platform (with a self-host tier) built by LangChain, tightly integrated with LangChain and LangGraph. Langfuse is open-source and OpenTelemetry-native, which appeals to teams that want to self-host for data control or avoid lock-in. The core concepts are nearly identical."
+    },
+    {
+      "q": "Is LangSmith free?",
+      "a": "LangSmith offers tiered access including a free starting tier, paid cloud plans, and self-hosted options. Pricing changes over time, so check the official site for current limits rather than relying on a fixed figure."
+    },
+    {
+      "q": "How does evaluation work in LangSmith?",
+      "a": "You build a dataset of example inputs (often pulled from real production traces), run your app over every example, and score each output with evaluators — either plain code checks or LLM-as-a-judge graders. Results are saved per dataset version, so you can compare two prompts or models side by side before shipping."
+    }
+  ],
+  "related": [
+    "what-is-llm-observability",
+    "llm-tracing-explained",
+    "langfuse-vs-langsmith-helicone",
+    "llm-production-metrics",
+    "llm-user-feedback",
+    "llm-cost-attribution"
+  ],
+  "furtherReading": [
+    {
+      "title": "LangSmith — LangChain",
+      "url": "https://www.langchain.com/langsmith"
+    },
+    {
+      "title": "LangSmith Documentation",
+      "url": "https://docs.smith.langchain.com/"
+    },
+    {
+      "title": "OpenTelemetry — official site",
+      "url": "https://opentelemetry.io/"
+    }
+  ]
+}

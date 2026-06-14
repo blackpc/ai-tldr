@@ -1,0 +1,322 @@
+{
+  "slug": "instructor-pydantic-extraction",
+  "title": "What Is Instructor? Structured LLM Output with Pydantic",
+  "shortTitle": "Instructor",
+  "seoTitle": "Instructor: Pydantic-Based Structured LLM Outputs",
+  "metaDescription": "Instructor is a Python library that turns LLM responses into validated Pydantic objects, with automatic retries and streaming for reliable structured output.",
+  "keywords": [
+    "instructor",
+    "what is instructor library",
+    "instructor python pydantic",
+    "instructor llm structured output",
+    "instructor vs outlines",
+    "instructor retries validation"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You will understand how Instructor uses Pydantic models to extract validated, typed data from LLMs, retrying automatically when a response fails validation.",
+  "updated": "2026-06-14",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Ask a language model to \"pull the name, email, and order number out of this support ticket and give it back as JSON,\" and most of the time it will. But *most of the time* is the problem. Now and then it wraps the JSON in a chatty sentence, renames a field, leaves a trailing comma, or returns the order number as text when you needed a number. Your code calls `json.loads()`, hits one of those cases, and crashes in production."
+        },
+        {
+          "type": "image",
+          "url": "/learn-media/dlg-631.jpg",
+          "alt": "Instructor — illustration",
+          "caption": "Instructor",
+          "credit": "docs.spring.io"
+        },
+        {
+          "type": "p",
+          "md": "**Instructor** is a small Python library that makes this reliable. You define the *shape* you want as a [Pydantic](https://docs.pydantic.dev/latest/) model — a plain Python class that says \"this field is a string, this one is an integer, this one is required.\" You hand that class to Instructor, and instead of a blob of text, you get back a fully-typed, already-validated Python object. If the model's reply doesn't fit the shape, Instructor catches it and asks the model to try again — automatically, before your code ever sees it."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like a strict form at a passport office. You don't hand the clerk a rambling paragraph about yourself; you fill in labelled boxes — *surname*, *date of birth*, *passport number*. If you leave the date blank or scribble outside the lines, the clerk hands the form straight back and says \"fix this box.\" Instructor is that clerk standing between your application and the LLM: the model keeps filling out the form until every box is valid, and only then does the form reach you."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The name says it all: you *instruct* the model with a schema (the Pydantic model) and Instructor handles getting a clean, structured answer back. It is the most widely-used library for this \"LLM in, validated object out\" pattern, and it works across many providers — OpenAI, Anthropic, Google, and local models — with the same code."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Most real LLM apps don't want a paragraph of prose — they want *data* to feed into the next step: a database row, an API call, a UI component. The moment an LLM output flows into code instead of a human's eyes, it has to be parseable, every single time. Instructor exists to close the gap between \"the model usually returns good JSON\" and \"my pipeline never breaks.\""
+        },
+        {
+          "type": "h3",
+          "text": "What it saves you from"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Brittle hand-parsing.** Without it you end up writing `try/except` around `json.loads()`, stripping markdown code fences the model added, and re-prompting by hand when a field is missing. That glue code is fragile and you rewrite it on every project.",
+            "**Silent type bugs.** Raw JSON gives you a string where you wanted an integer, or `\"yes\"` where you wanted a boolean. Pydantic coerces and *checks* types, so `age` is guaranteed to be an `int` before it touches your logic.",
+            "**Missing business rules.** A schema can't only say \"this is a number\" — Pydantic validators can say \"this rating must be between 1 and 5\" or \"this must be one of these five categories.\" If the model invents a sixth category, validation fails and it gets asked again.",
+            "**Editor blindness.** Because the result is a typed object, your IDE autocompletes `user.email` and your type checker catches typos. A raw dict gives you none of that."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who needs this? Anyone doing **extraction** (pull fields out of resumes, invoices, emails), **classification** (return a fixed label plus a confidence and a reason), **tool/argument generation**, or any step where the model's answer is consumed by software rather than read by a person. If you've ever written code that prays the model returned valid JSON, that's the job Instructor does properly. It pairs naturally with the broader idea of [structured outputs](/learn/llm-apis/streaming-structured-outputs/structured-outputs-explained)."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Instructor's central trick is that it **patches the provider's client**. You create your normal client (say, the OpenAI or Anthropic SDK), wrap it once with Instructor, and now that client accepts one extra argument: `response_model`, set to your Pydantic class. Everything else looks like a normal API call — but the return value is an instance of your class, not a raw message."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "the whole idea in a few lines",
+          "code": "import instructor\nfrom pydantic import BaseModel, Field\nfrom anthropic import Anthropic\n\n# 1) Define the SHAPE you want back.\nclass Contact(BaseModel):\n    name: str\n    email: str\n    company: str | None = None\n    priority: int = Field(ge=1, le=5)  # must be 1-5\n\n# 2) Patch the client once.\nclient = instructor.from_anthropic(Anthropic())\n\n# 3) Ask for the model, not for text.\ncontact = client.messages.create(\n    model=\"claude-sonnet-4-6\",\n    max_tokens=1024,\n    response_model=Contact,            # <- the magic argument\n    messages=[{\"role\": \"user\",\n               \"content\": \"Jane Doe, jane@acme.io, urgent ticket from Acme.\"}],\n)\n\nprint(contact.name)      # 'Jane Doe'  -> a real str\nprint(contact.priority)  # 5           -> a validated int, guaranteed 1-5"
+        },
+        {
+          "type": "p",
+          "md": "Under the hood Instructor does three things for you on every call. First, it **translates your Pydantic model into a schema the provider understands** — usually a tool/function definition or a JSON-schema response format — so the provider is *steered* toward the right structure, not just asked nicely in prose. Second, it **parses and validates** the reply against your model. Third — the part that makes it reliable — if validation fails, it runs a **re-ask loop**."
+        },
+        {
+          "type": "h3",
+          "text": "The validate-then-retry loop"
+        },
+        {
+          "type": "p",
+          "md": "This loop is the heart of the library. When the model returns something that doesn't fit — a missing field, a `priority` of 9, malformed JSON — Pydantic raises a validation error. Instructor catches that error, *feeds the error message back to the model* as a new turn (\"your last answer failed validation because priority must be ≤ 5; fix it\"), and asks again. It repeats up to `max_retries` times. Because the model is told exactly what was wrong, the second attempt almost always succeeds."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "Validate, and re-ask on failure",
+            "steps": [
+              {
+                "label": "Send prompt + schema"
+              },
+              {
+                "label": "Model returns data"
+              },
+              {
+                "label": "Pydantic validates"
+              },
+              {
+                "label": "On error: feed error back"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "When validation finally passes, the loop exits and you get your object. Put end to end, the flow looks like this:"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "One Instructor call, start to finish",
+            "steps": [
+              {
+                "label": "Pydantic model",
+                "sub": "your target shape"
+              },
+              {
+                "label": "Patched client",
+                "sub": "schema sent to provider"
+              },
+              {
+                "label": "LLM responds",
+                "sub": "structured attempt"
+              },
+              {
+                "label": "Validate + retry",
+                "sub": "re-ask on failure"
+              },
+              {
+                "label": "Typed object",
+                "sub": "guaranteed valid",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Add a plain-language `description` to a Pydantic `Field`, and Instructor passes it to the model as part of the schema. So `Field(description=\"ISO 4217 currency code, e.g. USD\")` doubles as both documentation for you and an instruction for the model. Good field descriptions are the cheapest accuracy win you get."
+        }
+      ]
+    },
+    {
+      "id": "a-worked-example",
+      "title": "A worked example: extraction with a custom rule",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Schemas alone enforce *types*. The real power shows up when you add a Pydantic **validator** to enforce a *business rule* the model must respect. Here we extract a list of action items from a meeting note, and we insist every owner be one of the people actually on the team — if the model hallucinates a name, validation fails and it gets asked to fix it."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "extraction with a validator that triggers a retry",
+          "code": "from typing import Literal\nfrom pydantic import BaseModel, field_validator\n\nTEAM = {\"Ana\", \"Ben\", \"Chen\"}\n\nclass ActionItem(BaseModel):\n    task: str\n    owner: str\n    status: Literal[\"todo\", \"in_progress\", \"done\"]\n\n    @field_validator(\"owner\")\n    @classmethod\n    def owner_must_be_on_team(cls, v: str) -> str:\n        if v not in TEAM:\n            # This message is fed back to the model on retry.\n            raise ValueError(f\"{v} is not on the team. Use one of: {TEAM}\")\n        return v\n\nclass Meeting(BaseModel):\n    items: list[ActionItem]\n\nmeeting = client.messages.create(\n    model=\"claude-sonnet-4-6\",\n    max_tokens=1024,\n    response_model=Meeting,\n    max_retries=3,                 # re-ask up to 3 times on validation failure\n    messages=[{\"role\": \"user\", \"content\": NOTES}],\n)\n\nfor item in meeting.items:\n    print(item.owner, \"->\", item.task)   # every owner is guaranteed in TEAM"
+        },
+        {
+          "type": "p",
+          "md": "Notice three things. The `Literal` type means `status` can *only* be one of those three strings — no free-text statuses slip through. The nested `list[ActionItem]` means Instructor handles arbitrarily nested structures, not just flat fields. And the validator turns a soft instruction (\"please only use real team members\") into a *hard guarantee*: the code after the call can trust `item.owner` without re-checking it, because an invalid value could never have escaped the retry loop."
+        }
+      ]
+    },
+    {
+      "id": "instructor-vs-alternatives",
+      "title": "Instructor vs the alternatives",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Instructor is one of three common ways to get structured output, and they work at different layers. Knowing which is which keeps you from reaching for the wrong tool."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Approach",
+            "How it guarantees structure",
+            "Best when"
+          ],
+          "rows": [
+            [
+              "**Instructor**",
+              "Validates the reply with Pydantic, re-asks the model on failure (retry-based)",
+              "You want rich validation, custom rules, and one API across many providers"
+            ],
+            [
+              "**Raw JSON mode / `response_format`**",
+              "Provider promises syntactically valid JSON (or schema-matching), no retries or business rules",
+              "A simple, flat shape and you're staying on one provider"
+            ],
+            [
+              "**Constrained generation (Outlines)**",
+              "Masks invalid tokens *during* decoding, so output can't break the schema in the first place",
+              "You run open models locally and want zero parse failures by construction"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The key contrast is *when* the structure is enforced. [Outlines](/learn/llm-apis/streaming-structured-outputs/structured-outputs-explained) constrains the model's token sampling so an invalid output is impossible — but that requires access to the decoding step, which generally means open/local models. Instructor sits one level up: it can't change how a hosted API samples tokens, so it validates *after* the response and retries. That's why Instructor works with closed providers Outlines can't touch, at the cost of an occasional extra round-trip. They solve the same problem from opposite ends."
+        },
+        {
+          "type": "p",
+          "md": "And plain JSON mode? It only promises the text *parses* as JSON. It won't promise your fields exist, your types are right, or your `priority` is between 1 and 5. Instructor builds the validation and retry layer on top of exactly that primitive. See [JSON mode vs structured outputs](/learn/llm-apis/streaming-structured-outputs/json-mode-vs-structured-outputs) for that distinction in depth."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "**Treating retries as free.** Every retry is another full API call — more latency and more cost. If a model retries constantly, the fix is usually a clearer schema or better field descriptions, not a higher `max_retries`. Cap it (commonly 2–3) and log when you hit the ceiling.",
+            "**Over-stuffed schemas.** A model asked to fill 40 fields at once does worse on all of them. Extract in smaller, focused models, or split a giant object into a couple of calls. Smaller asks are more accurate and cheaper to retry.",
+            "**Vague field names with no descriptions.** A field called `value` tells the model nothing. Rename it to `total_price_usd` and add a `description`. The schema *is* your prompt — sloppy field names produce sloppy extractions.",
+            "**Validators that can never pass.** If you write a rule the source text genuinely can't satisfy, Instructor will retry to the limit and then raise. A validation error after max retries is a real exception you must handle, not a guarantee that it always succeeds.",
+            "**Forgetting the data might not be there.** If a field is sometimes absent in the source, make it `Optional` (`str | None = None`). Marking a field required when the text often lacks it forces the model to either hallucinate a value or fail."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Validation is not a security boundary. Instructor guarantees the *shape and types* of the output, not that the content is true or safe. The model can still return a well-formed, perfectly-typed object full of wrong or fabricated facts. Treat extracted data as a claim to verify, especially when it drives an action like a payment or a database write."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics click, a few capabilities make Instructor genuinely powerful in production."
+        },
+        {
+          "type": "p",
+          "md": "**Streaming partial objects.** Instructor can yield a validated object that fills in *as the model generates it*, field by field. For a UI, that means you can show the `name` the instant it's parsed while the rest of the object is still arriving — the structured-output equivalent of token [streaming](/learn/llm-apis/streaming-structured-outputs/llm-streaming-explained). It also supports streaming a *list* where each complete item is handed to you as soon as it finishes, which is ideal for extracting many records from a long document. See [streaming structured output](/learn/llm-apis/streaming-structured-outputs/streaming-structured-output) for the general pattern."
+        },
+        {
+          "type": "p",
+          "md": "**LLM-powered validators.** A Pydantic validator is just a function, so it can itself call a model. Instructor ships a validator that asks an LLM to judge a rule you state in plain English — for example, \"this answer must not contain personal opinions.\" If the judge says it violates the rule, validation fails and the main model is asked to regenerate. You're using one model to keep another in line, enforced through the same retry loop."
+        },
+        {
+          "type": "p",
+          "md": "**Provider portability and modes.** Because Instructor abstracts over providers, the *mechanism* it uses to coax structure differs underneath — tool calling, JSON mode, or a provider's native structured-output feature — and you can pick the `mode` per provider. Your Pydantic models and call sites stay identical when you switch from one provider to another, which makes it easy to A/B models or add a fallback."
+        },
+        {
+          "type": "p",
+          "md": "**Where it fits in a bigger system.** Validated objects are the natural input to the next stage of a pipeline: the typed result of an extraction becomes the arguments to a tool call, a row written to a database, or the state passed to an agent step. The honest tradeoff to remember is the one above — retry-based reliability costs an occasional extra round-trip, and validation guards structure but never truth. Design your schemas to be as small and as descriptive as the task allows, and you get most of the accuracy and most of the reliability for very little code."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is the Instructor Python library used for?",
+      "a": "Instructor turns an LLM's response into a validated Pydantic object instead of raw text. You define the data shape you want as a Pydantic model, and Instructor steers the model toward it, validates the reply, and automatically re-asks the model if the output fails validation. It's the standard tool for reliable structured extraction and classification."
+    },
+    {
+      "q": "How does Instructor work with Pydantic?",
+      "a": "You pass a Pydantic `BaseModel` as the `response_model` argument on a patched client. Instructor converts that model into a schema the provider understands, then validates the model's reply against it using Pydantic. Because Pydantic checks types and runs your custom validators, the object you get back is guaranteed to match your shape and rules."
+    },
+    {
+      "q": "What happens when the LLM output fails validation in Instructor?",
+      "a": "Instructor catches the Pydantic validation error and feeds the error message back to the model as a new turn, asking it to fix the specific problem. It repeats this up to `max_retries` times. If it still can't produce a valid object after the last retry, it raises an exception you need to handle."
+    },
+    {
+      "q": "Instructor vs Outlines: what's the difference?",
+      "a": "Instructor validates the response *after* generation and retries on failure, which works with closed hosted APIs. Outlines constrains token sampling *during* generation so invalid output is impossible, but that needs access to the decoding step, so it's aimed at open/local models. Instructor trades occasional extra calls for broad provider support."
+    },
+    {
+      "q": "Does Instructor support providers other than OpenAI?",
+      "a": "Yes. Instructor patches many provider clients — OpenAI, Anthropic, Google, Mistral, and local models among them — with helpers like `from_anthropic()` or `from_openai()`. Your Pydantic models and call sites stay the same across providers, so switching models is mostly a one-line change."
+    },
+    {
+      "q": "Can Instructor stream structured output?",
+      "a": "Yes. It can yield a partial object that fills in field by field as the model generates, or hand you each complete item of a list as soon as it finishes. That lets a UI display fields the moment they're parsed instead of waiting for the whole response."
+    }
+  ],
+  "related": [
+    "structured-outputs-explained",
+    "json-mode-vs-structured-outputs",
+    "streaming-structured-output",
+    "llm-streaming-explained",
+    "parse-streaming-responses"
+  ],
+  "furtherReading": [
+    {
+      "title": "Instructor — official documentation",
+      "url": "https://python.useinstructor.com/"
+    },
+    {
+      "title": "Pydantic — official documentation",
+      "url": "https://docs.pydantic.dev/latest/"
+    },
+    {
+      "title": "Instructor on GitHub",
+      "url": "https://github.com/567-labs/instructor"
+    }
+  ]
+}

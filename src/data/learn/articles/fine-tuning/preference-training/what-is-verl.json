@@ -1,0 +1,323 @@
+{
+  "slug": "what-is-verl",
+  "title": "What Is verl? Production RL Post-Training for LLMs",
+  "shortTitle": "verl",
+  "seoTitle": "What Is verl? RL Post-Training (PPO, GRPO) for LLMs",
+  "metaDescription": "verl is a production-grade RL post-training framework for LLMs, running PPO and GRPO at scale by integrating FSDP training with vLLM or SGLang for fast rollouts.",
+  "keywords": [
+    "verl",
+    "what is verl",
+    "verl rl framework",
+    "verl ppo grpo",
+    "rl for llms",
+    "verl fsdp vllm",
+    "rlhf at scale"
+  ],
+  "difficulty": "advanced",
+  "oneLiner": "You will understand what verl is, how it combines distributed training with fast inference for RL post-training, and when teams reach for it.",
+  "updated": "2026-06-14",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**verl** is an open-source framework for doing **reinforcement-learning post-training** of large language models at scale. In plainer terms: it's the machinery that lets a team take an already-trained LLM and keep improving it by having the model *generate answers*, *scoring those answers*, and then *nudging the model's weights* toward the higher-scoring behavior — over and over, across many GPUs."
+        },
+        {
+          "type": "image",
+          "url": "/learn-media/dlg-625.jpg",
+          "alt": "verl — illustration",
+          "caption": "verl",
+          "credit": "cdn.sanity.io"
+        },
+        {
+          "type": "p",
+          "md": "If you've read about [RLHF](/learn/fine-tuning/preference-training/what-is-rlhf), this is the engine that actually runs it. Algorithms like [PPO](/learn/fine-tuning/preference-training/ppo-vs-dpo) and [GRPO](/learn/fine-tuning/preference-training/what-is-grpo) describe *the math* for how to update the model from rewards. verl is the *plumbing* that makes that math runnable on real hardware: it coordinates the model that's learning, the fast system that generates samples, and the [reward model](/learn/fine-tuning/preference-training/what-is-a-reward-model) or grader that scores them."
+        },
+        {
+          "type": "p",
+          "md": "Here's an everyday analogy. Imagine training a debate student. The student needs two very different things: a *practice room* where they rapidly fire off lots of arguments (you want this to be fast and cheap), and a *coaching session* where a teacher reviews the arguments, grades them, and the student internalizes the feedback (this is slow, careful, and expensive). A naive setup makes the student do both in the same slow, careful mode — wasting hours generating practice answers at a snail's pace. verl is the school that runs the practice room on one optimized system and the coaching on another, and keeps the two perfectly in sync so the student always practices with their *latest* skills."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The name verl comes from the phrase *\"Volcano Engine Reinforcement Learning.\"* It started as the open implementation of a research framework called **HybridFlow** and is now one of the most widely used open frameworks for RL on LLMs."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "RL post-training is how a lot of today's strongest reasoning and instruction-following models are made. But unlike ordinary [fine-tuning](/learn/fine-tuning/fine-tuning-basics/what-is-fine-tuning), RL post-training has a brutal systems problem hiding inside it, and that problem is exactly what verl exists to solve."
+        },
+        {
+          "type": "h3",
+          "text": "RL training needs two systems that hate each other"
+        },
+        {
+          "type": "p",
+          "md": "Every RL step has a **generation phase** (the model produces sample answers, sometimes long chains of reasoning) and a **training phase** (the model's weights get updated from the rewards those answers earned). These two phases want opposite things from your hardware:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Generation** wants a fast *inference* engine — the kind tuned for throughput with tricks like continuous batching and paged attention. Doing generation with a plain training loop is painfully slow, and generation can dominate the wall-clock time of an RL run.",
+            "**Training** wants a *distributed training* engine that can hold optimizer states, compute gradients, and shard a huge model across many GPUs to update it.",
+            "These are two different software stacks with different memory layouts. Bolting them together naively — or running generation inside the trainer — wastes most of your expensive GPU time."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "A builder cares because the alternative is writing this orchestration yourself: spinning up an inference server, shuttling freshly generated samples to a trainer, computing rewards, applying the policy update, and then **pushing the newly updated weights back into the inference engine** so the next round of generation uses the improved model. Get the weight sync wrong and you train on stale samples; get the memory layout wrong and you run out of VRAM. verl packages all of this so teams can focus on the *reward* and the *data*, not the GPU choreography."
+        },
+        {
+          "type": "p",
+          "md": "Who reaches for it? Research labs and companies running PPO/GRPO-style training on models too big for a single GPU — reasoning models, coding agents trained with verifiable rewards, RLHF alignment runs. If your RL job fits comfortably on one GPU with a toy model, you don't need verl. The moment it has to scale across nodes, the orchestration verl provides is the hard part."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "verl's core idea is **hybrid orchestration**: keep the distributed *trainer* and the fast *inference engine* as separate, specialized components, and have a controller drive them through the RL loop. The trainer is typically built on PyTorch [FSDP](/learn/fine-tuning/preference-training/what-is-rlhf) (Fully Sharded Data Parallel) or a Megatron-style backend; the generation step is handed off to a high-throughput inference engine such as **vLLM** or **SGLang**."
+        },
+        {
+          "type": "p",
+          "md": "Walking through one RL iteration of a GRPO/PPO-style algorithm:"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "One RL post-training step in verl",
+            "steps": [
+              {
+                "label": "Sample prompts"
+              },
+              {
+                "label": "Generate (vLLM / SGLang)"
+              },
+              {
+                "label": "Score rewards"
+              },
+              {
+                "label": "Compute advantages"
+              },
+              {
+                "label": "Update policy (FSDP)"
+              },
+              {
+                "label": "Sync weights → generator"
+              }
+            ]
+          }
+        },
+        {
+          "type": "list",
+          "ordered": true,
+          "items": [
+            "**Sample prompts.** A batch of prompts is drawn from your dataset.",
+            "**Generate rollouts.** The current policy generates one or more responses per prompt. This runs on the fast inference engine, not the trainer — the single biggest speedup verl provides.",
+            "**Score rewards.** Each response gets a scalar reward, from a reward model, a rule/verifier (does the code pass tests? is the math answer correct?), or a human-preference proxy.",
+            "**Compute advantages.** The algorithm turns raw rewards into a training signal. PPO uses a learned value/critic model; GRPO skips the critic and normalizes rewards *within a group* of samples for the same prompt.",
+            "**Update the policy.** The trainer computes gradients and applies the policy-gradient update across all GPUs, usually with a KL penalty keeping the new policy close to the original so it doesn't drift into nonsense.",
+            "**Sync weights.** The updated weights are pushed back into the inference engine so the next round of generation uses the improved model."
+          ]
+        },
+        {
+          "type": "h3",
+          "text": "The single-controller, multi-worker split"
+        },
+        {
+          "type": "p",
+          "md": "verl uses a *single-controller* design: one process expresses the RL algorithm as ordinary, readable Python (\"generate, then score, then update\"), while the heavy work is fanned out to pools of GPU workers. This is what HybridFlow contributed — you write the dataflow once at a high level, and verl maps each stage onto the right distributed backend underneath. The roles in a PPO run map onto worker groups like this:"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "Worker roles in a PPO-style run",
+            "root": {
+              "label": "Controller",
+              "sub": "drives the RL loop"
+            },
+            "children": [
+              {
+                "label": "Actor",
+                "sub": "the policy being trained",
+                "accent": true
+              },
+              {
+                "label": "Rollout",
+                "sub": "vLLM / SGLang generation"
+              },
+              {
+                "label": "Critic",
+                "sub": "value model (PPO only)"
+              },
+              {
+                "label": "Reward",
+                "sub": "scores responses"
+              },
+              {
+                "label": "Reference",
+                "sub": "frozen KL anchor"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "A key efficiency trick: the actor and the rollout engine often share the *same* GPUs, swapping which one holds memory at a given moment (sometimes called *colocation* or *hybrid engine*). The model isn't generating and training at the same instant, so it would waste hardware to give each its own dedicated GPUs. verl manages that placement for you."
+        }
+      ]
+    },
+    {
+      "id": "minimal-config-example",
+      "title": "What a run looks like",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "You don't write the RL loop by hand. You point verl at a dataset, a base model, a reward source, and a choice of algorithm, mostly through configuration. A GRPO run is conceptually configured like this (illustrative — real configs have many more fields):"
+        },
+        {
+          "type": "code",
+          "lang": "yaml",
+          "title": "illustrative GRPO config sketch",
+          "code": "algorithm: grpo            # no critic; group-normalized rewards\n\nactor_rollout_ref:\n  model:\n    path: <base-instruct-model>\n  rollout:\n    engine: vllm           # fast generation backend (or sglang)\n    n: 8                   # samples per prompt for the group\n  actor:\n    strategy: fsdp         # sharded training across GPUs\n    kl_loss_coef: 0.001    # stay near the reference policy\n\nreward:\n  type: function           # e.g. a verifier: does the answer check out?\n\ndata:\n  train_files: prompts.parquet\n  max_response_length: 4096"
+        },
+        {
+          "type": "p",
+          "md": "The mental model: **GRPO with a function-based verifier reward** is the popular recipe for training reasoning and coding models, because the reward is cheap and objective (did the unit tests pass? is the final number right?) and GRPO needs no separate critic model to maintain. **PPO with a learned reward model** is the classic RLHF recipe when the thing you're optimizing is fuzzy human preference. verl supports both by swapping the algorithm and reward fields."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The reward function is where almost all of your real effort goes. The framework handles distributed generation and updates; *what counts as a good answer* is your design problem, and a sloppy reward leads straight to [reward hacking](/learn/fine-tuning/preference-training/what-is-grpo) — the model finding cheap tricks that score high without actually being better."
+        }
+      ]
+    },
+    {
+      "id": "where-it-fits",
+      "title": "Where verl fits among the alternatives",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "verl is one of several open frameworks for RL on LLMs, and they overlap a lot. The useful distinction is *how they orchestrate the distributed work* and *what they optimize for*."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Approach",
+            "What it's for",
+            "Trade-off"
+          ],
+          "rows": [
+            [
+              "**verl**",
+              "Production-grade PPO/GRPO at scale, FSDP/Megatron training + vLLM/SGLang rollouts via a hybrid controller",
+              "Very capable and fast at scale; more machinery to learn than a single-file trainer"
+            ],
+            [
+              "**Ray-based RLHF toolkits**",
+              "Scalable RLHF that distributes actor/critic/reward/rollout roles across GPUs with Ray",
+              "Clean role separation; a different orchestration model to learn"
+            ],
+            [
+              "**Library-style RL trainers**",
+              "RL fine-tuning that lives next to your supervised fine-tuning and DPO code in one toolkit",
+              "Easiest to start; may not push the largest-scale rollouts as hard"
+            ],
+            [
+              "**DPO / preference-only methods**",
+              "Skip online generation entirely — train directly on preference pairs",
+              "Far simpler and cheaper, but no live rollouts, so it can't optimize a verifier reward"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Note that bottom row carefully. [DPO](/learn/fine-tuning/preference-training/what-is-dpo) and friends like [ORPO and KTO](/learn/fine-tuning/preference-training/orpo-and-kto) are *offline* — they learn from a fixed dataset of \"this answer is better than that one\" without ever generating during training. That makes them dramatically simpler and is why many teams try them first. You reach for an online RL framework like verl specifically when you need the model to *generate, get graded, and improve in a loop* — for example, training against a verifier that runs code or checks a proof. See [PPO vs DPO](/learn/fine-tuning/preference-training/ppo-vs-dpo) for that fork in the road."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic loop makes sense, the interesting parts of verl are all about *systems efficiency* and *correctness of the loop* — the places where large RL runs quietly go wrong."
+        },
+        {
+          "type": "p",
+          "md": "**Weight synchronization is the subtle bottleneck.** After every policy update, the new weights have to reach the inference engine before the next rollout, or you're generating with a stale model (a correctness bug) — and naively copying full weights across the cluster every step is slow (a performance bug). Efficient, low-overhead resharding of weights from the trainer's layout into the inference engine's layout is a core piece of what a good RL framework does, and a common source of trouble in homegrown setups."
+        },
+        {
+          "type": "p",
+          "md": "**Memory is a constant fight.** A PPO run can hold several models at once — the actor, a frozen reference for the KL penalty, a critic, and a reward model — plus the inference engine's KV cache. Techniques like colocating actor and rollout on shared GPUs, offloading idle model states to CPU, and choosing GRPO (which drops the critic) over PPO are all ways to fit the run. This is why algorithm choice and systems choice are tangled together in RL post-training."
+        },
+        {
+          "type": "p",
+          "md": "**Long rollouts and agentic RL are the frontier.** Modern recipes often involve very long responses (extended chains of reasoning) or *multi-turn agent rollouts* where the model calls tools between steps. These stress the generation phase hardest and make the rollout/training split even more important, which is why active frameworks keep investing in faster, more flexible rollout backends and in handling variable-length, multi-step trajectories."
+        },
+        {
+          "type": "p",
+          "md": "**Where to go next.** Solidify the algorithms before the framework: understand [what RLHF is](/learn/fine-tuning/preference-training/what-is-rlhf), why [GRPO](/learn/fine-tuning/preference-training/what-is-grpo) dropped the critic, the role of the [reward model](/learn/fine-tuning/preference-training/what-is-a-reward-model), and when the offline shortcut of [DPO](/learn/fine-tuning/preference-training/what-is-dpo) is enough. The honest summary: verl doesn't invent the learning — PPO and GRPO do that. verl makes those algorithms *runnable at scale* by marrying a distributed trainer to a fast generator and keeping them in lockstep, which is the genuinely hard engineering that stands between a paper and a trained model."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is verl used for?",
+      "a": "verl is used to run reinforcement-learning post-training of large language models at scale — algorithms like PPO and GRPO for RLHF and verifier-reward training. It coordinates a distributed trainer (FSDP or Megatron) with a fast inference engine (vLLM or SGLang) so the generate-score-update loop runs efficiently across many GPUs."
+    },
+    {
+      "q": "Why does RL training for LLMs need both a trainer and an inference engine?",
+      "a": "Each RL step has two phases with opposite needs: generating sample answers wants a fast inference engine, while updating the model's weights wants a distributed training engine. Running generation inside the trainer is very slow, so verl hands generation to a high-throughput engine like vLLM or SGLang and keeps it in sync with the trainer."
+    },
+    {
+      "q": "What is the difference between verl and DPO?",
+      "a": "verl runs online RL: the model generates responses during training, those responses get scored, and the model updates from the reward in a loop. DPO is offline — it trains directly on a fixed dataset of preference pairs with no generation step. DPO is much simpler and cheaper; you use a framework like verl when you need live rollouts, such as optimizing a reward that runs code or checks an answer."
+    },
+    {
+      "q": "Does verl support GRPO as well as PPO?",
+      "a": "Yes. verl supports both. PPO uses a separate learned critic/value model; GRPO skips the critic and instead normalizes rewards within a group of samples for the same prompt, which saves memory and is popular for reasoning and coding models trained against verifier rewards."
+    },
+    {
+      "q": "When should a team choose verl over a simpler RL trainer?",
+      "a": "Reach for verl when your RL run has to scale beyond a single GPU — large models, long rollouts, or multi-node training — where the orchestration of distributed generation, reward scoring, weight syncing, and policy updates is the hard part. For a small model that fits on one GPU, a lighter library-style trainer is usually enough."
+    }
+  ],
+  "related": [
+    "what-is-rlhf",
+    "what-is-grpo",
+    "ppo-vs-dpo",
+    "what-is-a-reward-model",
+    "what-is-dpo",
+    "orpo-and-kto"
+  ],
+  "furtherReading": [
+    {
+      "title": "verl — Volcano Engine Reinforcement Learning for LLMs (GitHub)",
+      "url": "https://github.com/volcengine/verl"
+    },
+    {
+      "title": "vLLM — High-throughput LLM inference engine (Docs)",
+      "url": "https://docs.vllm.ai/"
+    },
+    {
+      "title": "Proximal Policy Optimization (PPO) — original paper (arXiv)",
+      "url": "https://arxiv.org/abs/1707.06347"
+    }
+  ]
+}

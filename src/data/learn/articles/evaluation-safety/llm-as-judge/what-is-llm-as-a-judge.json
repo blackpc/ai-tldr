@@ -1,0 +1,354 @@
+{
+  "slug": "what-is-llm-as-a-judge",
+  "title": "What Is LLM-as-a-Judge? Using AI to Grade AI",
+  "shortTitle": "AI Grading AI",
+  "seoTitle": "What Is LLM-as-a-Judge? Direct vs Pairwise Scoring",
+  "metaDescription": "LLM-as-a-Judge uses one model to score another against a rubric. Learn direct vs pairwise scoring, common judge biases, and jury-based mitigations.",
+  "keywords": [
+    "llm as a judge",
+    "what is llm as a judge",
+    "llm judge evaluation",
+    "pairwise vs direct scoring",
+    "llm judge bias",
+    "llm jury"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You will understand how LLM-as-a-Judge scoring works, its main variants, and the biases you must guard against.",
+  "updated": "2026-06-14",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Suppose you have an AI assistant that writes answers, summaries, or code. How do you tell whether its output is actually *good*? For a math problem you can check the number, but for an open-ended reply — a customer-support answer, a translation, a polite refusal — there is no single right string to compare against. The classic answer is to ask a human to read each output and rate it. That works, but it is slow, expensive, and impossible to run on thousands of outputs every time you change a prompt."
+        },
+        {
+          "type": "image",
+          "url": "/learn-media/dlg-548.jpg",
+          "alt": "AI Grading AI — illustration",
+          "caption": "AI Grading AI",
+          "credit": "wiro.ai"
+        },
+        {
+          "type": "p",
+          "md": "**LLM-as-a-Judge** is the trick of handing that grading job to *another language model*. You write a rubric in plain English — \"rate this answer from 1 to 5 on helpfulness and factual accuracy\" — and a second model reads the output and returns a score, usually with a short explanation of why. One AI grades the work of another AI."
+        },
+        {
+          "type": "p",
+          "md": "Think of a teacher who can't possibly grade ten thousand essays alone, so they write a clear marking guide and hand it to a capable teaching assistant. The assistant isn't perfect and won't always agree with the teacher, but if the guide is good, the assistant grades quickly, consistently, and cheaply enough to cover the whole class. The model is that teaching assistant: not the final authority, but a tireless first grader you can run on every output."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "LLM-as-a-Judge is a *method*, not a product. You can implement it with a plain API call and a good prompt. Several popular eval tools — like [G-Eval](/learn/evaluation-safety/llm-as-judge/what-is-g-eval) and many metrics inside evaluation libraries — are specific, packaged versions of this same idea."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "If you build anything on top of an LLM, you eventually need to answer \"is the new version better than the old one?\" thousands of times. LLM-as-a-Judge exists because the two older options both break down at that scale."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Exact-match scoring is too rigid.** Comparing the output to a fixed \"correct\" string only works for closed tasks (multiple choice, a known number). For anything open-ended, two perfectly good answers can be worded completely differently, and a string match marks one of them wrong. Older text metrics like BLEU and ROUGE just count overlapping words, so they miss meaning, tone, and reasoning entirely.",
+            "**Human grading doesn't scale.** People are still the gold standard for judging quality, but you cannot put a human in the loop for every prompt tweak, every regression test, every item in a [golden dataset](/learn/evaluation-safety/evaluation-basics/golden-dataset-llm-testing). It is too slow and too costly, so it becomes a once-in-a-while audit, not a daily signal.",
+            "**You need a fast, repeatable number.** To compare prompts, catch regressions, or run evals in CI, you need a score you can produce on demand, on every commit, across hundreds of cases. An LLM judge gives you exactly that — a cheap, automatic, reasonably-aligned proxy for human judgment."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The payoff is that grading open-ended output becomes a normal part of your test loop instead of a special event. You can score a whole eval set in minutes, watch a metric move when you edit a prompt, and use the judge's scores to compare two models head-to-head. That is why LLM-as-a-Judge sits at the center of modern [LLM evaluation](/learn/evaluation-safety/evaluation-basics/what-are-llm-evals) — it is the engine that turns \"this feels better\" into a measurable score."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Mechanically, an LLM judge is just one more model call. You assemble a prompt that contains the grading instructions, the thing being judged, and (sometimes) a reference answer; you send it to a capable model; and you parse a score out of its reply. The art is entirely in the prompt and the setup, not in any special machinery."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "The judge call, end to end",
+            "steps": [
+              {
+                "label": "Input + output",
+                "sub": "the question + the model's answer"
+              },
+              {
+                "label": "Judge prompt",
+                "sub": "rubric + criteria"
+              },
+              {
+                "label": "Judge model",
+                "sub": "reads and reasons"
+              },
+              {
+                "label": "Score + reason",
+                "sub": "e.g. 4/5 + why",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "There are two main ways to ask the judge to score, and the difference matters a lot in practice."
+        },
+        {
+          "type": "h3",
+          "text": "Direct (pointwise) scoring"
+        },
+        {
+          "type": "p",
+          "md": "You show the judge **one** output and ask it to rate that output on its own — for example, \"on a scale of 1 to 5, how faithful is this answer to the source text?\" This is simple, gives you an absolute number per item, and is easy to average across a dataset. The catch is that models are shaky at absolute scales: ask the same judge on different days, or change one word in the rubric, and the numbers can drift. Direct scoring is great for tracking a metric over time, less great as a precise, calibrated grade."
+        },
+        {
+          "type": "h3",
+          "text": "Pairwise comparison"
+        },
+        {
+          "type": "p",
+          "md": "You show the judge **two** outputs (A and B) for the same input and ask which one is better. Models are far more reliable at *comparing* than at assigning an absolute number — the same way a person finds \"is this coffee better than that one?\" easier than \"rate this coffee 7.3 out of 10.\" Pairwise is the natural fit for picking a winner between two prompts or two models. Run many pairwise comparisons and you can aggregate the wins into a ranking (the same idea behind Elo leaderboards like [LMArena](/learn/evaluation-safety/benchmarks-leaderboards/what-is-lmarena))."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Two ways to ask the judge",
+            "columns": [
+              {
+                "title": "Direct (pointwise)",
+                "items": [
+                  "Judges one output alone",
+                  "Returns an absolute score (e.g. 1–5)",
+                  "Easy to average and track over time",
+                  "Wobbly on absolute scales"
+                ]
+              },
+              {
+                "title": "Pairwise",
+                "accent": true,
+                "items": [
+                  "Judges A vs B together",
+                  "Returns a winner (or a tie)",
+                  "More reliable, matches human ranking",
+                  "Needs order-swapping to be fair"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "A big quality lever for both modes is asking the judge to **reason before it scores**. If you make it write out its assessment first and only then give a number, the score tends to track the rubric far better than if it blurts a digit immediately — see [chain-of-thought judge prompts](/learn/evaluation-safety/llm-as-judge/chain-of-thought-judge-prompts). A typical judge prompt looks like this:"
+        },
+        {
+          "type": "code",
+          "lang": "text",
+          "title": "a direct-scoring judge prompt",
+          "code": "You are grading an AI assistant's answer.\n\nCriteria:\n- Faithful: every claim is supported by the SOURCE below.\n- Helpful: directly answers the QUESTION.\n\nSOURCE:\n{the retrieved context}\n\nQUESTION:\n{the user's question}\n\nANSWER:\n{the assistant's answer}\n\nFirst, reason step by step about how the answer meets each\ncriterion. Then output a JSON object:\n{\"reasoning\": \"...\", \"score\": <1-5>}"
+        },
+        {
+          "type": "p",
+          "md": "Forcing the reply into a fixed JSON shape (a score field plus a reasoning field) is what makes the judge usable in a pipeline: you can parse the number reliably and keep the explanation for debugging."
+        }
+      ]
+    },
+    {
+      "id": "worked-example",
+      "title": "A worked example in code",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Here is the whole idea as a small function. It sends one output to a judge model and parses back a score and a reason — no framework required."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "llm_judge.py",
+          "code": "import json\nfrom anthropic import Anthropic\n\nclient = Anthropic(api_key=\"sk-ant-...\")\n\nJUDGE_PROMPT = \"\"\"You are grading an AI answer for FAITHFULNESS:\nevery claim must be supported by the SOURCE.\n\nSOURCE:\n{source}\n\nANSWER:\n{answer}\n\nReason step by step, then output ONLY JSON:\n{{\"reasoning\": \"...\", \"score\": <1-5>}}\"\"\"\n\ndef judge(source: str, answer: str) -> dict:\n    prompt = JUDGE_PROMPT.format(source=source, answer=answer)\n    msg = client.messages.create(\n        model=\"claude-sonnet-4-6\",\n        max_tokens=400,\n        temperature=0,            # determinism: same input -> same grade\n        messages=[{\"role\": \"user\", \"content\": prompt}],\n    )\n    return json.loads(msg.content[0].text)\n\nsource = \"Refunds on physical items are accepted within 30 days.\"\nanswer = \"You can return a physical item any time within 90 days.\"\nresult = judge(source, answer)\nprint(result[\"score\"], \"-\", result[\"reasoning\"])\n# -> a low score: the answer says 90 days, the source says 30"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Set the judge's **temperature to 0** so the same input grades the same way every run. A judge whose scores jump around between runs is useless as a regression signal. Pin the judge model version too, so a silent model update doesn't quietly shift all your numbers."
+        },
+        {
+          "type": "p",
+          "md": "Run this function over a labelled set of examples and you have a metric you can chart. Swap `judge` into a pairwise variant — two answers in, \"A\" or \"B\" out — and you have a head-to-head comparator for two prompts or two models."
+        }
+      ]
+    },
+    {
+      "id": "biases-and-mitigations",
+      "title": "Judge biases and how to fight them",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "An LLM judge is not a neutral measuring tape — it is a model with predictable quirks. If you ignore them, your scores can look precise while quietly measuring the wrong thing. These are the biases that bite most often, and the standard fixes for each. (For the deeper version, see [LLM judge biases](/learn/evaluation-safety/llm-as-judge/llm-judge-biases).)"
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Bias",
+            "What goes wrong",
+            "Mitigation"
+          ],
+          "rows": [
+            [
+              "Position bias",
+              "In pairwise mode, the judge tends to favour whichever answer is shown first (or second), regardless of quality.",
+              "Run each pair both ways (A,B and B,A); only count it as a win if the same answer wins both orders."
+            ],
+            [
+              "Verbosity bias",
+              "Longer, more elaborate answers get higher scores even when they add no real value.",
+              "State in the rubric that length is not quality; reward concision; cap or normalise for length."
+            ],
+            [
+              "Self-preference",
+              "A judge tends to rate outputs from its own model family more highly than a fair grader would.",
+              "Use a different model as judge than the one you're grading, or use a panel of judges from different families."
+            ],
+            [
+              "Score clustering",
+              "On a 1–5 scale the judge piles everything into 3s and 4s, so the metric barely moves.",
+              "Prefer pairwise comparison, or use a clear rubric that anchors what each score level means."
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Never let a model grade its *own* output in a high-stakes setting without a check. Self-preference means it may flatter itself, and a judge that always says \"looks good\" gives you false confidence. Treat the judge as one noisy estimator, not a verdict."
+        },
+        {
+          "type": "h3",
+          "text": "The jury trick"
+        },
+        {
+          "type": "p",
+          "md": "A powerful general mitigation is to stop relying on a single judge. Instead, ask **several different models** to grade the same output and combine their verdicts — average the scores, or take a majority vote. This is the *panel* or *jury* of judges (sometimes abbreviated PoLL). Because each model's biases differ, blending them cancels out a lot of individual quirks, and a jury of smaller, cheaper models can match or beat one large judge while costing less and being harder to game."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "A jury of judges",
+            "root": {
+              "label": "One output to grade"
+            },
+            "children": [
+              {
+                "label": "Judge A",
+                "sub": "model family 1"
+              },
+              {
+                "label": "Judge B",
+                "sub": "model family 2"
+              },
+              {
+                "label": "Judge C",
+                "sub": "model family 3"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The three verdicts then feed a simple aggregator — a mean score or a majority vote — to produce one final, steadier grade."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic loop works, the real question becomes: *do you trust the judge?* Everything below is about earning that trust and knowing the method's limits."
+        },
+        {
+          "type": "p",
+          "md": "**Validate the judge against humans.** The judge is only useful if its scores agree with what people would say. The standard practice is to hand-label a modest set of examples, run the judge on the same set, and measure agreement between the two — see [LLM judge vs human agreement](/learn/evaluation-safety/llm-as-judge/llm-judge-vs-human-agreement). If they agree well, you can trust the judge on the rest of your data. If they don't, fix the rubric before you trust a single automated number. A judge you never checked against a human is a guess dressed up as a metric."
+        },
+        {
+          "type": "p",
+          "md": "**Calibrate, don't just prompt.** Beyond agreement, you can tune the judge so its score distribution matches human grades — adjusting the rubric, adding worked examples of each score level (few-shot anchors), or post-processing the raw scores. This is [calibrating an LLM judge](/learn/evaluation-safety/llm-as-judge/calibrating-llm-judge), and it is what turns a rough signal into a dependable one."
+        },
+        {
+          "type": "p",
+          "md": "**Reference-free vs reference-based.** Some judging needs a gold answer to compare against (reference-based); some grades the output on its own qualities like coherence or safety (reference-free). They suit different tasks, and mixing them up is a common mistake — see [reference-free vs reference-based eval](/learn/evaluation-safety/llm-as-judge/reference-free-vs-reference-based-eval)."
+        },
+        {
+          "type": "p",
+          "md": "**Rubric vs pairwise as a design choice.** Choosing between an absolute rubric score and head-to-head comparison isn't just mechanics — it shapes what you can measure and how stable it is. The trade-offs are worth understanding before you commit a whole eval suite to one or the other: [pairwise vs rubric judging](/learn/evaluation-safety/llm-as-judge/pairwise-vs-rubric-judging)."
+        },
+        {
+          "type": "p",
+          "md": "Finally, keep the honest limits in view. An LLM judge inherits the blind spots of the model behind it: it can be confidently wrong about facts it doesn't know, it can be gamed by outputs written to please a grader (a form of reward hacking), and its agreement with humans is never perfect. The durable lesson is the same one that applies to the whole eval stack: an LLM judge is a fast, cheap *proxy* for human judgment, not a replacement for it. Use it to scan everything continuously, and reserve scarce human attention for spot-checks, disagreements, and the cases that actually decide whether you ship. For the full list of traps, read [LLM judge pitfalls](/learn/evaluation-safety/llm-as-judge/llm-judge-pitfalls)."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is LLM-as-a-Judge?",
+      "a": "LLM-as-a-Judge is the practice of using one language model to grade the outputs of another model (or itself) against a rubric you write in plain English. The judge reads an output and returns a score, usually with a short explanation. It is a fast, cheap stand-in for human grading on open-ended tasks where exact-match scoring doesn't work."
+    },
+    {
+      "q": "What is the difference between direct and pairwise LLM judging?",
+      "a": "Direct (pointwise) scoring shows the judge one output and asks for an absolute score, like 4 out of 5. Pairwise scoring shows two outputs and asks which is better. Models are generally more reliable at comparing two answers than at assigning an absolute number, so pairwise is preferred for ranking prompts or models, while direct scoring is handy for tracking a single metric over time."
+    },
+    {
+      "q": "Is LLM-as-a-Judge reliable?",
+      "a": "It is reliable enough to be useful, but only after you validate it. LLM judges have known biases — favouring the first answer shown, longer answers, or their own model's outputs. You should check the judge's scores against a set of human-labelled examples, use a different model as judge than the one being graded, and consider a panel of judges to average out individual quirks."
+    },
+    {
+      "q": "What biases affect LLM judges?",
+      "a": "The common ones are position bias (favouring whichever answer comes first in a pair), verbosity bias (rewarding longer answers), self-preference (rating its own model family higher), and score clustering (piling everything into the middle of the scale). You fight them by swapping answer order, telling the rubric that length isn't quality, using a separate judge model, and preferring pairwise comparison."
+    },
+    {
+      "q": "What is an LLM jury or panel of judges?",
+      "a": "Instead of one judge, you ask several different models to grade the same output and combine their verdicts by averaging or majority vote. Because each model has different biases, blending them cancels out a lot of individual error. A jury of smaller, cheaper models can match or beat a single large judge while being harder to game."
+    },
+    {
+      "q": "Does LLM-as-a-Judge replace human evaluation?",
+      "a": "No. It is a proxy for human judgment, not a replacement. The right pattern is to validate the judge against a small human-labelled set, then let the judge scan everything continuously, while reserving human attention for spot-checks, disagreements, and high-stakes decisions about whether to ship."
+    }
+  ],
+  "related": [
+    "llm-as-a-judge-explained",
+    "llm-judge-biases",
+    "pairwise-vs-rubric-judging",
+    "calibrating-llm-judge",
+    "llm-judge-vs-human-agreement",
+    "llm-judge-pitfalls"
+  ],
+  "furtherReading": [
+    {
+      "title": "LLM-as-a-Judge — Wikipedia",
+      "url": "https://en.wikipedia.org/wiki/LLM-as-a-Judge"
+    },
+    {
+      "title": "Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena (arXiv)",
+      "url": "https://arxiv.org/abs/2306.05685"
+    },
+    {
+      "title": "Define your own evals — Anthropic Docs",
+      "url": "https://platform.claude.com/docs/en/test-and-evaluate/define-success"
+    }
+  ]
+}

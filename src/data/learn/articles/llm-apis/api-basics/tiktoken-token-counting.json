@@ -1,0 +1,307 @@
+{
+  "slug": "tiktoken-token-counting",
+  "title": "What Is tiktoken? Counting Tokens for OpenAI Models",
+  "shortTitle": "tiktoken",
+  "seoTitle": "tiktoken: Counting Tokens, Cost & Context Budget",
+  "metaDescription": "tiktoken is OpenAI's fast BPE tokenizer for counting tokens before you call an API, so you can estimate cost, budget the context window, and avoid truncation.",
+  "keywords": [
+    "tiktoken",
+    "what is tiktoken",
+    "tiktoken count tokens",
+    "tiktoken python",
+    "tiktoken cost estimation",
+    "openai tokenizer"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You will understand how tiktoken turns text into the same tokens a model sees, so you can count tokens to estimate cost and stay inside the context window.",
+  "updated": "2026-06-14",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Before a language model ever reads your prompt, your text is chopped into small pieces called **tokens**. A token is roughly a word, part of a word, or a punctuation mark — `cat` is one token, but `tokenization` might split into `token` + `ization`. The model never sees raw characters; it sees a list of token IDs (just numbers). Every API bills you by the token, and every model has a hard ceiling on how many tokens fit in one request (the [context window](/learn/llm-fundamentals/context-windows/what-is-a-context-window))."
+        },
+        {
+          "type": "image",
+          "url": "/learn-media/dlg-637.jpg",
+          "alt": "tiktoken — illustration",
+          "caption": "tiktoken",
+          "credit": "zartis.com"
+        },
+        {
+          "type": "p",
+          "md": "**tiktoken** is OpenAI's fast, open-source library that turns text into exactly the same tokens an OpenAI model would see — *before* you send anything over the network. It runs locally on your machine in microseconds. Give it a string, it gives you back the list of token IDs; ask for the length, and you know the token count."
+        },
+        {
+          "type": "p",
+          "md": "Think of a shipping company that charges by the box, not by weight, and refuses any order over 50 boxes. tiktoken is the calculator at your desk that tells you exactly how many boxes your shipment will fill — so you can price it and check it fits — without driving to the depot first. You count at home, for free, and only ship when you know the number."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The name comes from **BPE** — *byte pair encoding*, the algorithm underneath — plus *tik* for how fast it runs. tiktoken is the tokenizer for OpenAI's GPT-family models. It is **not** the right tokenizer for Claude, Gemini, or Llama: each model family tokenizes differently, so a tiktoken count is only accurate for the OpenAI model whose *encoding* you asked for."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Tokens are the unit of three things you cannot ignore when you build on an LLM: **price**, **the context limit**, and **truncation**. tiktoken lets you measure all three on your own machine before you spend a cent or get a surprise error."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Cost estimation.** APIs price per million input and output tokens. If you can count the tokens in a prompt locally, you can estimate the bill for one call — or for a million calls in a batch job — before running it. No more guessing why the invoice doubled.",
+            "**Staying inside the context window.** Every model rejects a request whose input is too large. Counting first lets you check `prompt_tokens + expected_output < context_limit` and trim or chunk the input *before* the API says no.",
+            "**Avoiding truncated output.** The room left for the answer is `context_limit − input_tokens`. If your prompt eats most of the window, the model runs out of space mid-sentence (see [max tokens and truncation](/learn/llm-apis/api-basics/max-tokens-and-truncation)). Counting the input tells you how much output budget remains."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who needs this? Anyone shipping LLM features at scale. A [RAG](/learn/rag/rag-fundamentals/what-is-rag) pipeline that stuffs retrieved chunks into a prompt has to budget tokens so the context still fits. A summarizer processing thousands of documents needs a per-document cost forecast. A chat app must trim old turns before the conversation overflows the window. In every case, *counting before calling* is cheaper, faster, and more reliable than catching an error after the fact."
+        },
+        {
+          "type": "p",
+          "md": "Counting locally is also **free and instant**. The API has a token-counting endpoint too, but that is a network round-trip. tiktoken runs in-process, so you can call it on every request — in a loop, in a validator, in a UI that shows a live token meter — without adding latency or cost."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "tiktoken implements **byte pair encoding (BPE)**. The idea is simple: start from raw bytes, then repeatedly merge the most common adjacent pair into a single new token, following a fixed merge table that was learned once when the tokenizer was trained. Common words and word-parts collapse into one token; rare or made-up strings stay split into many small pieces. That is why ordinary English averages about 4 characters per token, while a long URL, a code identifier, or non-English text can cost far more tokens per character."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Text → tokens → IDs",
+            "steps": [
+              {
+                "label": "Raw text",
+                "sub": "\"tokenizing is fun\""
+              },
+              {
+                "label": "BPE merges",
+                "sub": "apply the merge table"
+              },
+              {
+                "label": "Tokens",
+                "sub": "[\"token\",\"izing\",\" is\",\" fun\"]"
+              },
+              {
+                "label": "Token IDs",
+                "sub": "[5963, 4954, 374, 2523]",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Encodings: the same library, different rule sets"
+        },
+        {
+          "type": "p",
+          "md": "tiktoken doesn't have one tokenizer — it has several, called **encodings**, each a different merge table. Two models can use the same encoding or different ones. You pick the encoding either by name or, more safely, by model name, and tiktoken loads the matching rules. Using the wrong encoding gives you the wrong count, so always tie the encoding to the exact model you'll call."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "count tokens with tiktoken",
+          "code": "import tiktoken\n\n# Best practice: let tiktoken pick the encoding from the model name,\n# so your count always matches the model you'll actually call.\nenc = tiktoken.encoding_for_model(\"gpt-4o\")\n\ntext = \"Tokenizing is fun!\"\ntoken_ids = enc.encode(text)      # -> a list of integers\nprint(token_ids)                  # [2438, 4954, 382, 1424, 0]\nprint(len(token_ids))             # 5  -> this is your token count\n\n# Decoding is exact and reversible: IDs back to the original text.\nprint(enc.decode(token_ids))      # \"Tokenizing is fun!\""
+        },
+        {
+          "type": "p",
+          "md": "The whole API is essentially two methods: `encode(text)` turns a string into a list of token IDs, and `decode(ids)` turns the list back into the exact original string. To count tokens, you encode and take the length. There is no model call, no key, no network — it is pure local computation over the merge table."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "`len(enc.encode(prompt))` counts the tokens in your **raw text only**. The actual request the API bills includes chat-format overhead — role markers and message separators wrapped around every message. So the billed input is a bit higher than a naive string count. For exact chat-request counts, follow OpenAI's documented per-message formula instead of just encoding the concatenated text."
+        }
+      ]
+    },
+    {
+      "id": "worked-example-budgeting-a-prompt",
+      "title": "Worked example: budgeting a prompt",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Say you're building a summarizer. Each call sends a system instruction plus one document, and you've capped the answer at 500 output tokens. You want two things before calling: confirm the input fits the window, and estimate the cost. Here's the pattern."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "fit + cost check before the API call",
+          "code": "import tiktoken\n\nMODEL = \"gpt-4o\"\nCONTEXT_LIMIT = 128_000      # the model's context window (tokens)\nMAX_OUTPUT = 500             # tokens we reserve for the answer\n\n# Per-million-token prices vary by model and change over time —\n# read the current numbers from the provider's pricing page.\nINPUT_PRICE_PER_M = 2.50     # example placeholder, USD per 1M input tokens\n\nenc = tiktoken.encoding_for_model(MODEL)\n\ndef count(text: str) -> int:\n    return len(enc.encode(text))\n\nsystem = \"Summarize the document in three bullet points.\"\ndocument = open(\"report.txt\").read()\n\ninput_tokens = count(system) + count(document)\n\n# 1) Does it fit, leaving room for the answer?\nif input_tokens + MAX_OUTPUT > CONTEXT_LIMIT:\n    raise ValueError(\n        f\"Too big: {input_tokens} input + {MAX_OUTPUT} output \"\n        f\"exceeds the {CONTEXT_LIMIT}-token window. Trim or chunk it.\"\n    )\n\n# 2) Estimate the input cost for this one call.\nest_cost = input_tokens / 1_000_000 * INPUT_PRICE_PER_M\nprint(f\"{input_tokens} input tokens, ~${est_cost:.4f} for input\")"
+        },
+        {
+          "type": "p",
+          "md": "Two cheap local checks now prevent two expensive surprises later: a `400` error for overflowing the window, and a bill you didn't expect. Multiply `est_cost` by your number of documents and you have a forecast for the whole batch — all without making a single API call."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Counting `document` and seeing it's 30% larger than the window is your cue to reach for [chunking](/learn/rag/chunking-and-ingestion/what-is-chunking-in-rag): split it into window-sized pieces, summarize each, then summarize the summaries. The token count is what tells you a single call won't do."
+        }
+      ]
+    },
+    {
+      "id": "tiktoken-vs-other-ways-to-count",
+      "title": "tiktoken vs. other ways to count",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "tiktoken is one option among several. The right choice depends on which model you're targeting and whether you need a billing-exact number or a fast estimate."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Method",
+            "Accurate for",
+            "Speed / cost",
+            "Use when"
+          ],
+          "rows": [
+            [
+              "tiktoken (local)",
+              "OpenAI GPT-family models",
+              "Instant, free, offline",
+              "Pre-flight checks and cost estimates for OpenAI models"
+            ],
+            [
+              "Provider count-tokens endpoint",
+              "That provider's models exactly",
+              "Network round-trip per call",
+              "You need a billing-exact count, including chat overhead"
+            ],
+            [
+              "`chars / 4` rule of thumb",
+              "Rough English estimate only",
+              "Instant, free",
+              "A back-of-envelope guess, never a hard limit check"
+            ],
+            [
+              "Hugging Face tokenizer",
+              "Open models (Llama, Mistral, etc.)",
+              "Local, free",
+              "Counting for open-weight models tiktoken doesn't cover"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The trap beginners fall into is assuming one tokenizer fits all models. It does not. tiktoken gives correct counts for OpenAI models and *wrong* counts for everything else — it typically **undercounts** other model families on normal text, and by more on code or non-English input. If you're calling [Claude](/learn/llm-apis/api-basics/claude-vs-gpt-vs-gemini), don't reach for tiktoken: Anthropic's API exposes a dedicated `count_tokens` endpoint that returns the exact token count for the model you name, and that is the number to budget against. Match the counter to the model, every time."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The fastest *estimate* is dividing characters by four for English. It's fine for a rough sanity check, but never use it to decide whether a prompt fits the context window — code, JSON, and other languages blow past 4 characters per token, and an underestimate is exactly the case that gets your request rejected."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "**Wrong encoding for the model.** Counting with an encoding that doesn't match your model gives a number that's close but not exact — and \"close\" is what overflows the window on a long prompt. Use `encoding_for_model(name)`, not a hard-coded encoding name, so the right rules load automatically.",
+            "**Forgetting chat-message overhead.** `len(enc.encode(text))` counts your text, not the role markers and separators the chat format adds around each message. The real billed input is higher. For chat requests, apply the per-message overhead formula or call the provider's count-tokens endpoint.",
+            "**Counting only the input.** You're billed for output tokens too, usually at a higher rate. tiktoken can't predict how long the answer will be — budget for it with `max_tokens` and price both sides.",
+            "**Assuming tiktoken works for non-OpenAI models.** It's OpenAI-specific. For Claude use the `count_tokens` endpoint; for open models use that model's own tokenizer. A tiktoken count for Claude or Llama is simply wrong.",
+            "**Trusting `chars / 4` as a hard limit.** It's a rough guess for English prose only. Code, URLs, emoji, and non-English text use far more tokens per character, so the estimate can be badly low right when it matters most."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics click, a few details separate a rough counter from a reliable one."
+        },
+        {
+          "type": "p",
+          "md": "**Why token counts feel unpredictable.** Because BPE merges by frequency, identical-looking text can cost wildly different token counts. A leading space is part of the token (` the` and `the` may differ), capitalization can change the split, and a rare word fragments into many pieces. Code is especially token-hungry — indentation, braces, and long identifiers all add up — which is why a code-heavy prompt costs more tokens than the same character count of plain prose."
+        },
+        {
+          "type": "p",
+          "md": "**Special tokens.** Beyond ordinary text, encodings include special control tokens (end-of-text, and the role/format markers used in chat). These are how the API frames a conversation, and they count toward your bill. tiktoken can encode or refuse them depending on flags you pass — relevant when you're trying to reproduce the *exact* number the API charges rather than a text-only estimate."
+        },
+        {
+          "type": "p",
+          "md": "**Local estimate vs. billed truth.** Treat a local tiktoken count as an excellent estimate, not a guarantee. The provider's own count-tokens endpoint is the source of truth for what you'll be billed, because it accounts for the full request envelope. The practical pattern: use tiktoken for fast, free, in-loop checks and live UI meters, and reserve the endpoint for the cases where being off by a few percent actually matters."
+        },
+        {
+          "type": "p",
+          "md": "**Performance and portability.** tiktoken's core is written in Rust, so it tokenizes large texts very fast — fast enough to run on every request without a noticeable hit. There are community ports (for example, JavaScript implementations) so you can count tokens in a browser or Node service, not just Python. The merge tables are downloaded and cached on first use, which matters if you deploy to a locked-down or offline environment."
+        },
+        {
+          "type": "p",
+          "md": "**Where to go next.** Tokenization underpins everything else about working with LLMs: it sets the [context window](/learn/llm-fundamentals/context-windows/what-is-a-context-window) you have to budget, drives the cost math behind [choosing a model](/learn/llm-apis/api-basics/how-to-choose-llm-model), and is the first thing to check when output is mysteriously [truncated](/learn/llm-apis/api-basics/max-tokens-and-truncation). The durable lesson: tokens, not characters or words, are the real currency of LLM APIs — so count them with the right tool for the model you're calling, and count before you call."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is tiktoken used for?",
+      "a": "tiktoken is OpenAI's open-source library for counting tokens in text locally, before you call the API. You use it to estimate the cost of a request, check that a prompt fits inside the model's context window, and reserve enough room for the output so the answer isn't truncated. It runs in microseconds, offline and for free."
+    },
+    {
+      "q": "How do I count tokens with tiktoken in Python?",
+      "a": "Install it with `pip install tiktoken`, then call `enc = tiktoken.encoding_for_model(\"gpt-4o\")` and `len(enc.encode(your_text))`. The `encode` method returns a list of token IDs, and its length is the token count. Always pick the encoding by model name so the count matches the model you'll actually call."
+    },
+    {
+      "q": "Is tiktoken accurate for Claude or Gemini?",
+      "a": "No. tiktoken is specific to OpenAI's GPT-family models and typically undercounts other model families, especially on code or non-English text. For Claude, use Anthropic's `count_tokens` endpoint, which returns the exact token count for the model you name; for open models like Llama, use that model's own tokenizer."
+    },
+    {
+      "q": "Why is my tiktoken count lower than what the API bills?",
+      "a": "Counting your raw text misses the chat-format overhead — the role markers and separators the API wraps around every message — which all count as tokens. To match the billed number, apply OpenAI's documented per-message overhead formula, or use the provider's count-tokens endpoint, which already includes the full request envelope."
+    },
+    {
+      "q": "What is BPE and how does tiktoken use it?",
+      "a": "BPE (byte pair encoding) is the algorithm tiktoken uses to split text. It starts from raw bytes and repeatedly merges the most common adjacent pair into a single token, following a fixed merge table learned during training. Common words become one token while rare strings split into several, which is why token counts don't map cleanly to character or word counts."
+    },
+    {
+      "q": "Can I estimate tokens without tiktoken?",
+      "a": "For a rough guess on English prose, dividing the character count by about four gets you close. But never use that as a hard limit check — code, URLs, emoji, and non-English text use far more tokens per character, and an underestimate is exactly what gets a request rejected for overflowing the context window."
+    }
+  ],
+  "related": [
+    "max-tokens-and-truncation",
+    "how-to-choose-llm-model",
+    "claude-vs-gpt-vs-gemini",
+    "what-is-llm-api",
+    "how-to-call-llm-api"
+  ],
+  "furtherReading": [
+    {
+      "title": "openai/tiktoken (GitHub)",
+      "url": "https://github.com/openai/tiktoken"
+    },
+    {
+      "title": "Byte pair encoding (Wikipedia)",
+      "url": "https://en.wikipedia.org/wiki/Byte_pair_encoding"
+    },
+    {
+      "title": "Token counting — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/token-counting"
+    }
+  ]
+}

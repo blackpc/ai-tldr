@@ -1,0 +1,314 @@
+{
+  "slug": "guidance-controlled-generation",
+  "title": "What Is Guidance? Steering LLMs with Control Flow",
+  "shortTitle": "Guidance",
+  "seoTitle": "Guidance: Steering LLM Output with Control Flow",
+  "metaDescription": "Guidance is a programming paradigm for steering LLMs by interleaving prompt text with control flow, regex, and grammars, so you constrain exactly what the model can.",
+  "keywords": [
+    "guidance",
+    "what is guidance library",
+    "guidance llm",
+    "guidance constrained generation",
+    "guidance vs outlines",
+    "guidance control flow prompting"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You will understand how Guidance interleaves your prompt with loops, conditionals, regex, and grammars to control exactly what an LLM is allowed to generate at each step.",
+  "updated": "2026-06-14",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you write a normal prompt, you hand the model a block of text and hope it produces something in the shape you want. The model is free to ramble, skip a field, wrap the answer in a friendly preamble, or invent a category you never offered. You wrote the *request*; the model controls the whole *response*. **Guidance** flips that. It is a programming style (and a Python library, `guidance`) that lets you write the prompt and the response *together*, interleaving fixed text you control with small slots the model is allowed to fill — and nothing else."
+        },
+        {
+          "type": "image",
+          "url": "/learn-media/dlg-641.jpg",
+          "alt": "Guidance — illustration",
+          "caption": "Guidance",
+          "credit": "aman.ai"
+        },
+        {
+          "type": "p",
+          "md": "Think of it like a paper form versus an open letter. An open letter is a blank page: the writer can put anything anywhere. A form already has the labels printed — `Name:`, `Date:`, a checkbox for *yes* or *no* — and the person only fills the blanks. Guidance turns your prompt into that form. You print the structure; the model only writes inside the boxes you leave open, and you can even restrict a box to *digits only*, *one of these three words*, or *valid JSON*."
+        },
+        {
+          "type": "p",
+          "md": "Because you wrote the labels yourself, they cost no generation — the model never has to *produce* the word `Name:`, you already typed it. The model only spends effort on the genuinely unknown parts. That single idea — *you write the scaffolding, the model fills constrained gaps* — is what people mean by **guided** or **controlled generation**."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Guidance is one tool in a small family called **constrained decoding** libraries (alongside Outlines, LMQL, and others). They all share the same goal: shrink the model's choices at each step so the output is guaranteed to fit a shape you defined, instead of merely *asked* for."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The moment you wire an LLM into real software, free-form text becomes a liability. Your code expects a number, a `true`/`false`, a JSON object with three exact keys, or one label from a fixed list. A plain prompt *requests* that shape; it does not *enforce* it. One run in fifty comes back as `\"Sure! Here's the JSON you asked for:\"` followed by almost-valid JSON with a trailing comma, and your parser crashes in production."
+        },
+        {
+          "type": "h3",
+          "text": "What controlled generation fixes"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Format reliability.** If you constrain a slot to a regex or a grammar, an invalid answer is *not generatable*. You don't validate-and-retry after the fact — the bad output literally cannot be produced, so it never reaches your parser.",
+            "**No stray prose.** Because you wrote the surrounding text, the model can't add a greeting, a disclaimer, or a markdown code fence around the data. The slot is the only thing it writes.",
+            "**Closed choices stay closed.** Ask for a sentiment label in a normal prompt and you might get `positive`, `Positive`, `mostly positive`, or `upbeat`. Constrain it to exactly `positive | negative | neutral` and only those three strings can come out.",
+            "**Cheaper and faster.** The fixed text you supply is *prefilled*, not generated. The model skips the tokens you already wrote, so a heavily-templated interaction can use fewer generated tokens than the same task done as one big free-form prompt."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Who needs this? Anyone doing **extraction** (pull fields out of a document into a record), **classification** (map text to a fixed set of labels), **routing** (pick which tool or branch to take), or **multi-step generation** where each step feeds the next. It is closely related to the *output format* problem covered in [getting structured output from a prompt](/learn/prompt-engineering/prompting-basics/prompt-for-output-format/) — Guidance is one of the strongest ways to actually guarantee that format rather than hope for it."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Under the hood, an LLM generates one token at a time. At each step it produces a probability for every possible next token, then samples one. **Constrained generation works by masking that list**: before sampling, it sets the probability of every token that would break your rule to zero, so the model can only choose from the tokens that keep the output valid. Guidance is the layer that lets you *describe* those rules — as plain text, regex, grammars, loops, and conditionals — woven directly into the prompt."
+        },
+        {
+          "type": "p",
+          "md": "The key mental model is an **alternating loop**. Your program is a sequence of two kinds of segment: *fixed text you supply* and *constrained slots the model fills*. Guidance walks through them in order, feeding your text to the model as context and letting the model generate only inside the slots, under whatever constraint you attached."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "cycle",
+            "title": "The generate-and-constrain loop",
+            "steps": [
+              {
+                "label": "Append your fixed text",
+                "sub": "prefilled, not generated"
+              },
+              {
+                "label": "Open a constrained slot",
+                "sub": "regex / grammar / choice"
+              },
+              {
+                "label": "Mask invalid tokens",
+                "sub": "zero out anything off-grammar"
+              },
+              {
+                "label": "Model fills the slot",
+                "sub": "only valid tokens left"
+              },
+              {
+                "label": "Stop at the boundary",
+                "sub": "slot's stop rule hit"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Crucially, the constraint is applied *during* decoding, not checked afterward. When a slot is limited to one of three labels, the very first generated token already steers the model down one of only three paths; subsequent tokens are forced to complete a valid label. There is no failed attempt to discard — the invalid tokens were never on the table."
+        },
+        {
+          "type": "h3",
+          "text": "Where the program lives"
+        },
+        {
+          "type": "p",
+          "md": "In the library, you build this template in normal Python. You add fixed strings, then call a generation primitive (often written `gen(...)`) for each slot, passing a `regex`, a `stop` string, or a `select([...])` of allowed options. Loops and `if` statements are just Python — they decide how many slots you open and what text goes between them — which is why people say Guidance lets you put **control flow inside the prompt**."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "interleaving fixed text with constrained slots",
+          "code": "from guidance import models, gen, select\n\nlm = models.Transformers(\"a-local-model\")  # any backend the lib supports\n\n# Fixed text (you write it) is interleaved with gen()/select() slots\n# (the model fills them, under the constraint you attach).\nlm += \"Classify the review sentiment.\\n\"\nlm += \"Review: The battery dies in an hour. Terrible.\\n\"\nlm += \"Sentiment: \" + select([\"positive\", \"negative\", \"neutral\"], name=\"label\")\nlm += \"\\nConfidence (0-100): \" + gen(\"score\", regex=r\"[0-9]{1,3}\")\n\nprint(lm[\"label\"])  # guaranteed one of the three strings\nprint(lm[\"score\"])  # guaranteed to be digits only"
+        },
+        {
+          "type": "p",
+          "md": "The `select([...])` slot can only emit one of the listed strings; the `gen(..., regex=...)` slot can only emit text matching the pattern. Everything outside the slots — the labels `Sentiment:` and `Confidence:` — is text you already wrote, so the model spends zero generation on it. The result is captured by name (`lm[\"label\"]`, `lm[\"score\"]`) ready for your code to use."
+        }
+      ]
+    },
+    {
+      "id": "control-flow-example",
+      "title": "A worked example with control flow",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The single feature that sets Guidance apart from a plain \"give me JSON\" prompt is that the *program* decides what happens next based on what the model just produced. You can branch and loop in Python, and each branch opens different constrained slots. Here is a tiny router that first asks the model to pick an intent, then — only for the branch it chose — extracts exactly the fields that branch needs."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "branching on the model's own choice",
+          "code": "from guidance import gen, select\n\nlm += \"User message: 'Cancel my order #4471 please.'\\n\"\nlm += \"Intent: \" + select([\"order_status\", \"cancel\", \"other\"], name=\"intent\")\nlm += \"\\n\"\n\n# Python control flow reads the model's own output and branches.\nif lm[\"intent\"] == \"cancel\":\n    lm += \"Order number: #\" + gen(\"order\", regex=r\"[0-9]{4,6}\")\nelif lm[\"intent\"] == \"order_status\":\n    lm += \"Looking up status...\\n\"\n    lm += \"Tracking id: \" + gen(\"tracking\", regex=r\"[A-Z0-9]{8,12}\")\nelse:\n    lm += \"Reply: \" + gen(\"reply\", stop=\"\\n\", max_tokens=60)"
+        },
+        {
+          "type": "p",
+          "md": "Notice what *cannot* go wrong here. The intent is always one of three known strings, so the `if/elif/else` is exhaustive. If the model picks `cancel`, the order number is forced to be 4–6 digits — never a sentence, never a missing field. Each branch produces a different shape, but every shape is guaranteed by construction. A single free-form prompt asking the model to \"figure out the intent and return the right fields as JSON\" gives you none of these guarantees."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "A good rule of thumb: use a `select([...])` or short regex for *decisions* (labels, yes/no, which branch), and free `gen()` only where the content is genuinely open-ended (a summary, a reply). Constrain the structure tightly; leave the prose loose."
+        }
+      ]
+    },
+    {
+      "id": "guidance-vs-alternatives",
+      "title": "Guidance vs other ways to control output",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Constrained generation is not the only way to get structured output, and it is not always the right one. The table compares the common approaches by what they actually guarantee and what they cost."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Approach",
+            "How it works",
+            "Guarantee",
+            "Trade-off"
+          ],
+          "rows": [
+            [
+              "Plain prompt (\"return JSON\")",
+              "Ask nicely in the instructions",
+              "None — best effort",
+              "Simplest; can fail unpredictably"
+            ],
+            [
+              "Validate + retry",
+              "Parse the output, re-ask if it's malformed",
+              "Eventually valid",
+              "Extra calls, latency, can loop"
+            ],
+            [
+              "Provider JSON / schema mode",
+              "The API enforces a JSON schema for you",
+              "Valid JSON of that schema",
+              "Hosted-only; tied to one provider"
+            ],
+            [
+              "Guidance / constrained decoding",
+              "Mask invalid tokens during generation",
+              "Cannot produce invalid output",
+              "Needs token-level access to the model"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The dividing line is **where you sit relative to the model**. Guidance, Outlines, and LMQL apply constraints at the token level, which means they need access to the model's next-token probabilities — easiest with open models you run yourself (via Transformers, llama.cpp, vLLM, and similar). Hosted APIs that only return finished text can't be steered token-by-token from outside, which is why closed providers ship their *own* built-in structured-output or grammar features instead. Both are forms of constrained generation; they just live in different places."
+        },
+        {
+          "type": "p",
+          "md": "What makes Guidance distinct even among the token-level tools is the *interleaving* — you don't just hand it one big grammar for the whole output, you stitch fixed text and constrained slots together in program order, with real loops and conditionals in between. That is the \"control flow in the prompt\" idea, and it shines for multi-step interactions rather than a single structured blob. Compare it conceptually with [structuring prompts using XML or markdown](/learn/prompt-engineering/prompting-basics/structure-prompts-xml-markdown/), which organizes the *input*; Guidance instead constrains the *output*."
+        }
+      ]
+    },
+    {
+      "id": "pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Controlled generation removes a whole class of bugs, but it introduces a few of its own. The constraint is a hard wall, and walls in the wrong place cause their own problems."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**A constraint forces an answer, even a wrong one.** If you force the output to be one of three labels, the model *will* emit one of those three — even when the true answer is \"none of these\" or \"I'm not sure.\" Always include an escape hatch like an `other` or `unknown` option when the closed set might not cover reality.",
+            "**Over-tight regex fights the model.** A pattern that's too rigid (say, a date regex that forbids a format the model strongly wants to use) can push it into awkward, low-probability tokens and hurt quality. Constrain the *shape* you truly need, not every cosmetic detail.",
+            "**The grammar doesn't make the answer correct.** Guidance guarantees the output is well-*formed*, not that it is *true*. A perfectly-valid JSON object can still contain a hallucinated value. Structure and factual accuracy are separate problems.",
+            "**Token-level access is required.** These constraints need to see and mask the model's logits. If your only access is a text-in/text-out hosted endpoint, external Guidance-style masking isn't available — you'd use that provider's own structured-output feature instead.",
+            "**Constraints don't replace prompting.** A clear instruction still matters. The constraint narrows *form*; the prompt still has to make the model *want* the right content. Pair both."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Don't reach for a heavy constrained-generation setup when a one-line instruction would do. If you just need a yes/no from a capable model in a low-stakes path, a plain prompt plus a quick check is simpler to maintain. Save token-level constraints for the structured, high-volume, must-not-break paths."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic generate-and-constrain loop clicks, a few deeper ideas are worth knowing as you push controlled generation into real systems."
+        },
+        {
+          "type": "p",
+          "md": "**Grammars, not just regex.** A regex constrains a single flat string, but many outputs are *nested* — JSON, a function call, a small query language. For these, Guidance lets you express a **context-free grammar**: a set of rules describing how valid structures nest. The decoder then masks tokens against the grammar at every step, so a generated JSON object always has balanced braces and quotes. This is how \"guaranteed valid JSON\" actually works under the hood: the grammar makes a malformed structure unreachable."
+        },
+        {
+          "type": "p",
+          "md": "**Why it can be faster.** Beyond skipping the fixed text you prefilled, a constrained decoder sometimes knows that only one token is possible next — for instance, right after an opening brace the next character *must* be a quote. When a step is fully determined, the engine can fill it without a full sampling decision, which trims work. The practical headline: heavy templating often means *fewer generated tokens*, and fewer generated tokens means lower cost and latency."
+        },
+        {
+          "type": "p",
+          "md": "**Stateful, multi-turn programs.** Because the whole interaction is ordinary Python around constrained slots, you can build genuine programs: loop until a stopping condition the model itself signals, accumulate results across several `gen()` calls, or feed one slot's captured value into the constraint of the next. This blurs into agent territory — a program that decides what to ask the model next based on what it just answered, with each step's output shape guaranteed."
+        },
+        {
+          "type": "p",
+          "md": "**Where to go next.** Constrained generation is the enforcement layer; clear prompting is still the foundation. Strengthen both by reading up on [getting a specific output format from a prompt](/learn/prompt-engineering/prompting-basics/prompt-for-output-format/) and on [using constraints and negative instructions in prompts](/learn/prompt-engineering/prompting-basics/negative-prompting-constraints-llm/). The durable lesson: a plain prompt asks the model to behave, while controlled generation removes its ability to misbehave at the token level — so reach for it exactly where a broken shape would break your software."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is the Guidance library used for?",
+      "a": "Guidance is a Python library for controlling exactly what an LLM generates. You interleave fixed text you write with constrained slots the model fills, optionally bounded by a choice list, a regex, or a grammar. It is mainly used for reliable structured output, classification, extraction, and multi-step prompts where the output shape must be guaranteed."
+    },
+    {
+      "q": "How is Guidance different from just asking the model to return JSON?",
+      "a": "A plain \"return JSON\" prompt is a request the model can ignore or get subtly wrong. Guidance applies the constraint *during* decoding by masking any token that would break the format, so invalid output literally cannot be generated. You get a guarantee instead of a best effort, and the model can't wrap the data in extra prose."
+    },
+    {
+      "q": "What is the difference between Guidance and Outlines?",
+      "a": "Both are constrained-decoding libraries that mask invalid tokens to force a valid shape, and both work best with open models you can run yourself. The main difference is style: Guidance emphasizes interleaving program control flow (loops, conditionals, fixed text, and slots) directly inside the prompt, while Outlines centers on generating output that matches a regex, JSON schema, or grammar. They solve overlapping problems."
+    },
+    {
+      "q": "Does Guidance work with hosted APIs like closed models?",
+      "a": "Token-level constraints need access to the model's next-token probabilities, which is straightforward with open models run through backends like Transformers, llama.cpp, or vLLM. Purely hosted text-in/text-out endpoints can't be masked from outside, so closed providers offer their own built-in structured-output or grammar features instead. Check which backends your setup supports."
+    },
+    {
+      "q": "Does constrained generation stop the model from hallucinating?",
+      "a": "No. Guidance guarantees the output is well-formed — valid JSON, a digit-only field, one of a fixed set of labels — but it does not guarantee the content is true. A perfectly structured answer can still contain a made-up value. Structure and factual accuracy are separate problems, so you still need verification for correctness."
+    }
+  ],
+  "related": [
+    "prompt-for-output-format",
+    "structure-prompts-xml-markdown",
+    "negative-prompting-constraints-llm",
+    "what-is-prompt-engineering",
+    "how-to-write-good-prompt"
+  ],
+  "furtherReading": [
+    {
+      "title": "guidance-ai/guidance — GitHub",
+      "url": "https://github.com/guidance-ai/guidance"
+    },
+    {
+      "title": "Outlines — Structured generation library (GitHub)",
+      "url": "https://github.com/dottxt-ai/outlines"
+    },
+    {
+      "title": "Structured Outputs — Concept (Hugging Face docs)",
+      "url": "https://huggingface.co/docs/text-generation-inference/conceptual/guidance"
+    }
+  ]
+}

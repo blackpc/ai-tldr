@@ -1,0 +1,377 @@
+{
+  "slug": "model2vec-static-embeddings",
+  "title": "What Is Model2Vec? Tiny, Fast Static Embeddings",
+  "shortTitle": "Model2Vec",
+  "seoTitle": "What Is Model2Vec? Tiny Fast Static Text Embeddings",
+  "metaDescription": "Model2Vec distills sentence-transformers into tiny static embeddings that are far smaller and faster, ideal for CPU and low-resource production use.",
+  "keywords": [
+    "model2vec",
+    "what is model2vec",
+    "static embeddings",
+    "model2vec vs sentence-transformers",
+    "fast cpu embeddings",
+    "distilled embedding model"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You will understand what Model2Vec is, how distilling into static embeddings trades a little accuracy for huge size and speed gains, and when to use it.",
+  "updated": "2026-06-14",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "To turn a sentence into an [embedding](/learn/embeddings-vector-databases/embeddings-explained/what-are-embeddings) — a list of numbers that captures its meaning — the usual tool is a *sentence-transformer*: a small neural network that reads your text token by token and computes a vector. It works beautifully, but it is still a transformer. Every encode runs a forward pass through many layers, which wants a decent CPU (or ideally a GPU) and a fat stack of machine-learning libraries on disk."
+        },
+        {
+          "type": "image",
+          "url": "/learn-media/dlg-670.jpg",
+          "alt": "Model2Vec — illustration",
+          "caption": "Model2Vec",
+          "credit": "avahi.ai"
+        },
+        {
+          "type": "p",
+          "md": "**Model2Vec** asks a cheeky question: what if you didn't run the network at all, and just *looked the answer up*? It takes a full sentence-transformer and **distills** it into a plain word-to-vector lookup table. Encoding a sentence then becomes: split it into tokens, grab each token's pre-computed vector from the table, and average them. No layers, no attention, no forward pass — just a dictionary lookup and a mean. The result is a **static embedding** model that is tiny on disk and extremely fast to run."
+        },
+        {
+          "type": "p",
+          "md": "Here is the everyday analogy. A sentence-transformer is a skilled translator who reads your whole sentence, thinks about context, and renders it carefully — accurate, but slow and expensive to keep on staff. Model2Vec is a phrasebook the translator wrote for you before leaving: you flip to each word, copy its meaning, and stitch them together. You lose the translator's feel for context, but you can look things up instantly, on any cheap device, with nobody on payroll."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "\"Static\" means each token *always* maps to the same vector, no matter what surrounds it. \"Contextual\" (what a transformer produces) means the vector for a word shifts depending on its neighbours. That single difference is the whole trade Model2Vec makes — and the source of both its speed and its limits."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "For a small demo, a normal sentence-transformer is fine — you barely notice the cost. The pain shows up at scale and at the edges, and that is exactly where Model2Vec earns its place."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Embedding huge corpora.** Indexing millions of documents with a transformer can take hours and a GPU bill. A static model that encodes orders of magnitude faster turns the same job into minutes on a laptop — useful when you re-embed often (see [keeping embeddings in sync with source data](/learn/embeddings-vector-databases/vectors-in-production/syncing-embeddings-with-source-data)).",
+            "**CPU-only and serverless.** Many production hosts have no GPU, and a cold serverless function can't afford to load a heavy model. Model2Vec is a small file with light dependencies, so it loads fast and runs comfortably on plain CPU.",
+            "**Edge and on-device.** Phones, browsers, IoT, and air-gapped boxes can't ship a full transformer stack. A few-megabyte static model can live where a transformer simply won't fit.",
+            "**Latency-critical paths.** When you must embed a user query *inside* the request — autocomplete, live search, a retrieval step the user is waiting on — milliseconds matter. Static lookup keeps that step almost free."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The honest catch: static embeddings are *less accurate* than the contextual model they came from, because they throw away word order and context. So Model2Vec is not a blanket replacement for sentence-transformers — it is the right tool when **size and latency dominate** and you can accept a modest quality dip. A common pattern is to use it for cheap first-pass work (bulk indexing, a fast candidate retrieval) and lean on a heavier model only where precision truly pays off."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Model2Vec has two phases that mirror RAG's own shape: a one-time **distillation** that builds the lookup table, and a per-call **inference** that uses it. Distillation is where a transformer is involved; after that, the transformer is gone and you never touch it again."
+        },
+        {
+          "type": "h3",
+          "text": "Distillation: bake the transformer into a table"
+        },
+        {
+          "type": "p",
+          "md": "Start with a trained sentence-transformer (the *teacher*). Take its vocabulary — every token it knows — and run each token through the teacher once to get its output vector. Collect all of those into one big matrix: a row per token, each row that token's embedding. That matrix is your static model. The clever bit is the post-processing: Model2Vec applies dimensionality reduction (PCA) to trim the vector size, and reweights tokens so that common, low-information words count for less, much as classic search weighting does. The teacher is run a vocabulary's worth of times *once*, then discarded."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Distillation — done once, up front",
+            "steps": [
+              {
+                "label": "Teacher model",
+                "sub": "a sentence-transformer"
+              },
+              {
+                "label": "Encode vocab",
+                "sub": "each token → vector"
+              },
+              {
+                "label": "Reduce + reweight",
+                "sub": "PCA, down-weight common tokens"
+              },
+              {
+                "label": "Static table",
+                "sub": "token → vector lookup",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Inference: tokenize, look up, average"
+        },
+        {
+          "type": "p",
+          "md": "Now encoding any text is pure table work. Tokenize the input with the same tokenizer the teacher used, fetch each token's row from the static table, and pool the rows (usually a mean) into one sentence vector. There is no neural network in this path at all — it is array indexing and an average, which is why it runs so fast and needs so little memory. The output vector lives in the same kind of space as any other embedding, so it drops straight into a [vector database](/learn/embeddings-vector-databases/vector-database-guides/what-is-a-vector-database) and ordinary [semantic search](/learn/embeddings-vector-databases/similarity-search-indexing/what-is-semantic-search)."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Inference — every encode",
+            "steps": [
+              {
+                "label": "Input text",
+                "sub": "\"fast cpu search\""
+              },
+              {
+                "label": "Tokenize",
+                "sub": "split into tokens"
+              },
+              {
+                "label": "Look up rows",
+                "sub": "table[token]"
+              },
+              {
+                "label": "Pool",
+                "sub": "average the vectors"
+              },
+              {
+                "label": "Sentence vector",
+                "sub": "ready to index",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Because the table is just a matrix, distilling your own static model takes a single function call and finishes in moments — no training loop, no labelled data, no GPU required."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "distill once, then encode forever",
+          "code": "from model2vec.distill import distill\nfrom model2vec import StaticModel\n\n# 1) DISTILL (once): turn any sentence-transformer into a static model.\n#    Runs the teacher over its vocabulary, then reduces + reweights.\nm = distill(model_name=\"BAAI/bge-base-en-v1.5\", pca_dims=256)\nm.save_pretrained(\"my-static-model\")\n\n# 2) INFERENCE (every time): no transformer in this path — just lookups.\nmodel = StaticModel.from_pretrained(\"my-static-model\")\nvectors = model.encode([\n    \"fast cpu search\",\n    \"tiny static embeddings\",\n])\nprint(vectors.shape)  # (2, 256) — feed straight into a vector store"
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "You don't have to distill anything yourself — the project publishes ready-made static models you can load directly. Distill your own only when you want to match a specific teacher, language, or vector size."
+        }
+      ]
+    },
+    {
+      "id": "static-vs-contextual",
+      "title": "Static vs contextual embeddings",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The whole decision comes down to one question: do you need the model to understand a word *in context*, or is a fixed meaning per word good enough? This table lays the trade out plainly."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Aspect",
+            "Model2Vec (static)",
+            "Sentence-transformer (contextual)"
+          ],
+          "rows": [
+            [
+              "How a token is encoded",
+              "Same vector every time",
+              "Vector shifts with surrounding words"
+            ],
+            [
+              "Cost per encode",
+              "A lookup and an average",
+              "A full transformer forward pass"
+            ],
+            [
+              "Speed",
+              "Order-of-magnitude faster",
+              "Baseline"
+            ],
+            [
+              "Model size on disk",
+              "A few megabytes",
+              "Hundreds of MB to gigabytes"
+            ],
+            [
+              "Hardware",
+              "Plain CPU, edge, serverless",
+              "Prefers GPU; heavy on CPU"
+            ],
+            [
+              "Accuracy",
+              "Good, but lower",
+              "Higher, the quality reference"
+            ],
+            [
+              "Handles word order / ambiguity",
+              "Weakly (order is averaged away)",
+              "Well"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Notice that the rows split cleanly into two groups. Everything about *resources* — speed, size, hardware — favours static. Everything about *understanding* — accuracy, context, ambiguity — favours contextual. There is no free lunch here; you are buying speed and size with a little quality. The skill is knowing which side your task lives on."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Because Model2Vec averages token vectors, it largely ignores word order. \"Dog bites man\" and \"man bites dog\" look almost identical to it. If your task hinges on order, negation, or subtle phrasing, that is a sign you want a contextual model."
+        }
+      ]
+    },
+    {
+      "id": "when-to-use",
+      "title": "When to reach for it (and when not to)",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Match the tool to where your bottleneck actually is. A quick rule: if you are blocked on *compute, memory, or latency*, lean static; if you are blocked on *answer quality*, lean contextual."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Pick the embedding style by your bottleneck",
+            "columns": [
+              {
+                "title": "Reach for Model2Vec",
+                "accent": true,
+                "items": [
+                  "Embedding millions of docs cheaply",
+                  "CPU-only or serverless hosts",
+                  "On-device, browser, or edge",
+                  "Latency-critical inline encoding",
+                  "A fast first-pass retrieval stage",
+                  "Lightweight classification or clustering"
+                ]
+              },
+              {
+                "title": "Stay with a contextual model",
+                "items": [
+                  "Top-of-funnel retrieval accuracy is critical",
+                  "Order, negation, or nuance matter",
+                  "Long, complex passages",
+                  "Multilingual edge cases",
+                  "You have GPU budget to spare",
+                  "Quality outranks speed and cost"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "These two columns are not enemies — they pair well. A popular setup is a **two-stage pipeline**: use the static model to scan the whole corpus fast and pull a few hundred rough candidates, then run a slower, smarter model (or a reranker) over just those candidates to sort the winners. You spend cheap compute on the 99% you discard and expensive compute only on the 1% you keep. For budget-driven design choices, see [vector search cost optimization](/learn/embeddings-vector-databases/vectors-in-production/vector-search-cost-optimization)."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Static embeddings are easy to adopt and easy to misuse. Most disappointments trace back to expecting transformer-grade nuance from a lookup table."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Mixing models in one index.** Vectors from Model2Vec and from a different model do not share a coordinate space — comparing them is meaningless. Every document and every query in one index must be encoded by the *same* model. Changing models means a full re-index; see [embedding model migration](/learn/embeddings-vector-databases/vectors-in-production/embedding-model-migration).",
+            "**Expecting it to grasp context.** It can't disambiguate \"bank\" (river vs money) or feel negation, because those need surrounding words. If quality drops on nuanced queries, that's the static trade biting — not a bug to tune away.",
+            "**Judging it on the wrong task.** Static models shine at fast, broad similarity and lightweight classification or clustering. Pushing them at fine-grained ranking where small differences decide the answer plays to their weakest spot.",
+            "**Skipping evaluation.** \"It felt fast\" is not a result. Measure the accuracy gap against your current model on *your* data and *your* queries, then decide whether the speed and size win is worth it. The acceptable trade is task-specific, not universal."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Treat the speed/quality trade as a dial you can test, not a verdict. Distill or download a static model, run it beside your current one on a small labelled set, and look at the numbers. Often the quality loss is smaller than people fear — and sometimes it's a dealbreaker. Only your data can say."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic idea clicks — distill a transformer into a token table, then average lookups — a few finer points are worth knowing."
+        },
+        {
+          "type": "p",
+          "md": "**Vector dimensionality is a knob.** Distillation lets you set how many dimensions the static vectors keep. Smaller vectors mean a smaller model, less storage, and faster similarity math, at some accuracy cost — the same speed-versus-quality dial, now at the level of the vector itself. This pairs naturally with quantization and other storage tricks when you're squeezing a large index."
+        },
+        {
+          "type": "p",
+          "md": "**Distill your own teacher.** Because distillation is fast and needs no training data, you can build a static model from whatever sentence-transformer best fits your domain or language, rather than settling for an off-the-shelf one. If your corpus is medical, legal, or non-English, distilling from a teacher that already knows that space usually beats a generic static model."
+        },
+        {
+          "type": "p",
+          "md": "**It composes with everything else in your stack.** Static vectors are ordinary vectors, so they slot into [hybrid search](/learn/embeddings-vector-databases/vectors-in-production/hybrid-search-explained) (blend them with keyword scoring to recover the exact-match precision pure semantic search lacks) and into [metadata filtering](/learn/embeddings-vector-databases/vectors-in-production/vector-metadata-filtering). A common, strong design is static embeddings for cheap recall plus keyword search and a reranker for precision."
+        },
+        {
+          "type": "p",
+          "md": "**Know the boundary of the technique.** Averaging token vectors is a genuinely lossy operation — order and long-range structure wash out, and there is a hard ceiling on how well any static model can capture meaning that depends on context. No amount of tuning closes that gap entirely; it is the cost of removing the transformer. The durable lesson is to be deliberate: static embeddings are a precise tool for compute-, memory-, and latency-bound problems, not a universal upgrade. Decide where your bottleneck lives, then pick accordingly — and measure both options on your own data before you commit."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is Model2Vec in simple terms?",
+      "a": "Model2Vec is a tool that turns a full sentence-transformer into a tiny *static embedding* model. Instead of running a neural network to encode text, it precomputes a vector for every token and stores them in a lookup table. Encoding then means looking up each token's vector and averaging them — far smaller and faster than a transformer, at a modest accuracy cost."
+    },
+    {
+      "q": "What is the difference between static and contextual embeddings?",
+      "a": "A static embedding gives a word the *same* vector every time, regardless of surrounding words. A contextual embedding (what a transformer produces) gives a word a vector that *shifts* with its context, so it can tell apart the two meanings of \"bank.\" Static is much faster and smaller; contextual is more accurate on nuance, order, and ambiguity."
+    },
+    {
+      "q": "Is Model2Vec more accurate than sentence-transformers?",
+      "a": "No — it is generally *less* accurate, because dropping the transformer and averaging token vectors throws away context and word order. The point isn't higher accuracy, it's dramatically smaller size and faster encoding for an acceptable quality dip. Use it when speed, cost, or memory are your bottleneck, not when top accuracy is."
+    },
+    {
+      "q": "When should I use static embeddings instead of a transformer?",
+      "a": "Reach for static embeddings when you must embed huge corpora cheaply, run on CPU-only or serverless hosts, deploy to edge or on-device, or keep an inline encode step extremely low-latency. Stay with a contextual model when retrieval accuracy, word order, negation, or subtle nuance matter most. A common hybrid uses static for a fast first pass and a heavier model only on the candidates that survive."
+    },
+    {
+      "q": "Do I need a GPU to use Model2Vec?",
+      "a": "No. Inference is just table lookups and an average, so it runs comfortably on plain CPU, in serverless functions, and on edge devices. A GPU isn't needed for distilling your own model either, since distillation only runs the teacher over its vocabulary once and finishes quickly."
+    },
+    {
+      "q": "Can I mix Model2Vec vectors with vectors from another model?",
+      "a": "No. Vectors from different models live in different coordinate spaces, so comparing them is meaningless. Every document and query in a single index must be encoded by the same model; switching models requires re-indexing the whole corpus."
+    }
+  ],
+  "related": [
+    "how-to-choose-vector-database",
+    "hybrid-search-explained",
+    "vector-search-cost-optimization",
+    "embedding-model-migration",
+    "syncing-embeddings-with-source-data"
+  ],
+  "furtherReading": [
+    {
+      "title": "Model2Vec — GitHub (MinishLab)",
+      "url": "https://github.com/MinishLab/model2vec"
+    },
+    {
+      "title": "Sentence Transformers — Documentation",
+      "url": "https://www.sbert.net/"
+    },
+    {
+      "title": "Word embedding — Wikipedia",
+      "url": "https://en.wikipedia.org/wiki/Word_embedding"
+    }
+  ]
+}

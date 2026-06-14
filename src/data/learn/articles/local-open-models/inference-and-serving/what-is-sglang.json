@@ -1,0 +1,294 @@
+{
+  "slug": "what-is-sglang",
+  "title": "What Is SGLang? Fast LLM Serving Framework",
+  "shortTitle": "SGLang",
+  "seoTitle": "What Is SGLang? RadixAttention LLM Serving Framework",
+  "metaDescription": "SGLang is a high-performance open-source LLM serving framework whose RadixAttention prefix caching speeds up workloads that share common prompt prefixes.",
+  "keywords": [
+    "sglang",
+    "what is sglang",
+    "sglang vs vllm",
+    "radixattention",
+    "prefix caching llm",
+    "sglang serving"
+  ],
+  "difficulty": "advanced",
+  "oneLiner": "You will understand what SGLang is, how RadixAttention prefix caching reuses shared prompt prefixes, and why it is a leading alternative to vLLM for serving.",
+  "updated": "2026-06-14",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**SGLang** is an open-source framework for *serving* large language models — the software that sits between your application and a GPU, taking in requests and streaming back tokens as fast as the hardware allows. It belongs to the same family as [vLLM](/learn/local-open-models/inference-and-serving/vllm-explained) and other [inference servers](/learn/local-open-models/inference-and-serving/what-is-inference-server), and in practice it is the framework most teams weigh against vLLM when they pick an engine for production traffic."
+        },
+        {
+          "type": "image",
+          "url": "/learn-media/dlg-612.jpg",
+          "alt": "SGLang — illustration",
+          "caption": "SGLang",
+          "credit": "lmsys.org"
+        },
+        {
+          "type": "p",
+          "md": "Its headline trick is a memory feature called **RadixAttention**. Imagine a busy coffee shop where dozens of customers all start their order the same way: *\"a large oat-milk latte, and then...\"* A slow barista re-makes the whole drink from scratch every single time. A smart barista notices the shared start, prepares one big batch of oat-milk latte base, and only customizes the last part of each order. RadixAttention is that smart barista. When many requests share the same opening text — a long system prompt, the same few examples, the same conversation so far — SGLang computes that shared part **once** and reuses it for everyone, instead of redoing the identical work per request."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "The name SGLang comes from \"Structured Generation Language.\" The project is two things bundled together: a fast serving *runtime* (where RadixAttention lives) and a *frontend language* for writing programs that call the model in structured, multi-step ways. Most people first meet it for the runtime speed, but the two halves are designed to work together."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Serving an LLM is mostly a fight over expensive GPU memory and wasted computation. Every request builds a *KV cache* — a scratchpad of the model's attention results for every token seen so far — and recomputing that cache is the bulk of the work. The big realization behind SGLang is that across real workloads, a huge fraction of that work is **identical from one request to the next**, so doing it once and reusing it is almost free performance."
+        },
+        {
+          "type": "p",
+          "md": "Three common workloads share prefixes heavily, and these are exactly where SGLang shines:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Few-shot prompting.** You prepend the same handful of worked examples to every query. That preamble can be thousands of tokens, repeated on every single call — pure duplicated work that prefix caching erases.",
+            "**Agents and tool use.** An [agent](/learn/ai-agents/agent-fundamentals/what-is-an-ai-agent) loop sends the same long system prompt, tool definitions, and growing history over and over as it takes steps. Each step reuses almost the entire previous prompt.",
+            "**Multi-turn chat.** Every new user message replays the whole conversation so far. Turn five contains all of turns one through four verbatim, so most of the cache from the last turn is still valid."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Why does a builder care? Because serving cost and speed are the difference between a demo and a product. If your app re-pays for the same 4,000-token system prompt on every request, you are burning GPU time and money on work you already did. SGLang's value proposition is simple: the more your requests overlap, the more you save — in latency, in throughput, and in dollars. For workloads with little overlap the gain is smaller, but for agents, structured pipelines, and chat it is often large. See [self-hosting LLM cost](/learn/local-open-models/inference-and-serving/self-hosting-llm-cost) for how that translates into a bill."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "RadixAttention organizes cached prefixes in a **radix tree** (a prefix tree, also called a trie). Picture a branching diagram of every prompt the server has recently seen. Requests that begin the same way walk down the same branch and *share* the cached KV blocks for that shared path; the moment two requests differ, the tree splits and each gets its own branch from that point on. The server keeps the tree in GPU memory and evicts the least-recently-used branches when space runs low — much like a CPU cache decides what to keep."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "A radix tree of shared prefixes",
+            "root": {
+              "label": "System prompt + examples",
+              "sub": "computed ONCE, shared by all",
+              "accent": true
+            },
+            "children": [
+              {
+                "label": "User A: \"reset my password\"",
+                "sub": "own branch from here"
+              },
+              {
+                "label": "User B: \"cancel my order\"",
+                "sub": "own branch from here"
+              },
+              {
+                "label": "User C: \"track shipment\"",
+                "sub": "own branch from here"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "When a new request arrives, the runtime looks it up in the tree. It finds the **longest matching prefix** already cached, reuses every KV block along that path for free, and only computes the cache for the genuinely new tokens at the end. Nothing about the request needs special tagging — the matching is automatic, which is the key difference from older systems where you had to manually mark which prompts were reusable."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Serving one request with RadixAttention",
+            "steps": [
+              {
+                "label": "Request arrives",
+                "sub": "full prompt text"
+              },
+              {
+                "label": "Match prefix",
+                "sub": "longest path in radix tree"
+              },
+              {
+                "label": "Reuse cache",
+                "sub": "shared KV blocks, free"
+              },
+              {
+                "label": "Compute the rest",
+                "sub": "only the new tokens"
+              },
+              {
+                "label": "Generate",
+                "sub": "stream tokens out",
+                "accent": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Prefix caching sits on top of, not instead of, the other modern serving techniques. SGLang still uses [continuous batching](/learn/local-open-models/inference-and-serving/continuous-batching) to keep the GPU busy by adding and removing requests from a running batch token-by-token, paged KV memory to avoid fragmentation, and tensor parallelism to split a big model across several GPUs. RadixAttention is the extra layer that removes *redundant* work between requests, while batching maximizes *concurrent* work within them."
+        },
+        {
+          "type": "h3",
+          "text": "The frontend language"
+        },
+        {
+          "type": "p",
+          "md": "The second half of SGLang is a small Python-embedded DSL for writing model programs that branch, call tools, run in parallel, and constrain output to a grammar. Because the frontend knows the *structure* of your program, it can tell the runtime which parts share a prefix and which calls can run together — so the language and the cache reinforce each other. A rough sketch of the style:"
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "sglang frontend — the shape, not exact API",
+          "code": "import sglang as sgl\n\n@sgl.function\ndef triage(s, ticket):\n    # This shared preamble is cached once and reused\n    # across every ticket that runs through triage().\n    s += sgl.system(\"You are a support triage assistant.\")\n    s += sgl.user(ticket)\n    s += sgl.assistant(sgl.gen(\"category\", choices=[\n        \"billing\", \"technical\", \"account\",\n    ]))\n\n# Many tickets share the same system prefix -> RadixAttention reuse.\nstates = triage.run_batch([\n    {\"ticket\": \"I was charged twice\"},\n    {\"ticket\": \"The app keeps crashing\"},\n])"
+        },
+        {
+          "type": "p",
+          "md": "You do not have to use the frontend — SGLang also exposes a standard OpenAI-compatible HTTP server, so existing client code that talks to a chat-completions endpoint works against it with only a base-URL change."
+        }
+      ]
+    },
+    {
+      "id": "sglang-vs-vllm",
+      "title": "SGLang vs vLLM: how to think about the choice",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "These two are the most-compared serving frameworks, and they are more alike than different: both are open-source, both do continuous batching and paged KV memory, both run popular open models, and both expose an OpenAI-compatible API. The honest framing is that their signature optimizations come from *different angles* and have converged over time — vLLM popularized smarter KV *memory layout* (PagedAttention), while SGLang popularized automatic prefix *reuse* (RadixAttention)."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Dimension",
+            "SGLang",
+            "vLLM"
+          ],
+          "rows": [
+            [
+              "Signature idea",
+              "RadixAttention prefix reuse",
+              "PagedAttention memory layout"
+            ],
+            [
+              "Sweet spot",
+              "High prefix overlap: agents, few-shot, chat, structured output",
+              "General high-throughput serving of all kinds"
+            ],
+            [
+              "Extra layer",
+              "A frontend DSL for structured, multi-call programs",
+              "Focused on the serving engine itself"
+            ],
+            [
+              "Standard API",
+              "OpenAI-compatible HTTP server",
+              "OpenAI-compatible HTTP server"
+            ],
+            [
+              "Ecosystem position",
+              "The leading challenger / #2 by mindshare",
+              "The de-facto default many teams reach for first"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Practical advice: if your traffic has lots of shared prefixes — you run an agent, a structured-output pipeline, or heavy few-shot prompting — SGLang's prefix caching is the most direct lever and worth benchmarking first. If your workload is varied requests with little overlap, the two perform comparably and other factors (model support, your team's familiarity, deployment tooling) matter more. Many teams simply test both on *their own* prompts, because the right answer depends entirely on how much your requests repeat themselves. For the deeper dive on the other side, read [vLLM explained](/learn/local-open-models/inference-and-serving/vllm-explained)."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Don't pick a serving framework from a leaderboard. Throughput numbers move with every release and depend heavily on the model, the GPU, and the prompt mix. The durable question is *how much do my requests share a common prefix?* — that, not a benchmark chart, predicts how much SGLang will help you."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "**Expecting a speedup with no shared prefixes.** RadixAttention pays off in proportion to overlap. Feed it totally distinct prompts and the prefix cache has nothing to reuse, so you get ordinary serving performance, not a miracle.",
+            "**Putting the variable part first.** Caching matches from the *start* of the prompt. If you place a unique per-request value (a user id, a timestamp) before the long shared system prompt, you break the match for everyone. Keep the stable, shared text at the front and the changing text at the end.",
+            "**Confusing prefix caching with the full conversation.** The cache stores KV blocks for tokens, and it is evicted under memory pressure. A reused prefix makes a request faster; it does not give the model long-term memory across sessions, and a cache miss simply recomputes — it never changes the answer.",
+            "**Treating throughput as the only metric.** A framework can win on tokens-per-second while feeling slow to a single user. Always look at both — see [throughput vs latency](/learn/local-open-models/inference-and-serving/throughput-vs-latency-llm) — because the prefix-caching win mostly helps latency and cost on overlapping traffic, not raw single-stream speed."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "**Where prefix caching meets structured generation.** SGLang's frontend can constrain output to a grammar or JSON schema, decoding only tokens that keep the output valid. This pairs naturally with prefix reuse: the fixed parts of a structured prompt (instructions, schema, examples) are cached once, and the constrained decoder handles the varying answer. For agents and tool-callers that emit JSON on every step, that combination is the whole point."
+        },
+        {
+          "type": "p",
+          "md": "**Prefix caching is now an industry idea, not a single product.** The lesson behind RadixAttention — reuse the KV cache for shared prefixes — proved so valuable that prefix/automatic caching now appears across many serving stacks and even in hosted provider APIs as a \"prompt caching\" feature. So you may benefit from the same principle without running SGLang directly. SGLang's contribution was making it *automatic* and tree-structured across concurrent requests, rather than a manual, per-prompt opt-in."
+        },
+        {
+          "type": "p",
+          "md": "**It composes with the rest of the serving toolbox.** Prefix reuse stacks with [speculative decoding](/learn/local-open-models/inference-and-serving/speculative-decoding-local), tensor and pipeline parallelism for very large models, quantization, and disaggregated prefill/decode setups. None of these are alternatives to RadixAttention; they attack different bottlenecks (model size, decode speed, memory footprint) and are routinely used together."
+        },
+        {
+          "type": "p",
+          "md": "**Where to go next.** If you are choosing an engine, start by characterizing your traffic — measure how much of each prompt is shared boilerplate. Then read [vLLM explained](/learn/local-open-models/inference-and-serving/vllm-explained) and [what is an inference server](/learn/local-open-models/inference-and-serving/what-is-inference-server) for the broader landscape, and skim the SGLang repository's docs for the current feature set, since both frameworks ship improvements quickly and the gap between them keeps shifting."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is SGLang used for?",
+      "a": "SGLang is an open-source framework for serving large language models at high speed. It is especially good for workloads where many requests share the same opening text — agents, multi-turn chat, few-shot prompting, and structured-output pipelines — because its RadixAttention feature computes that shared prefix once and reuses it across requests."
+    },
+    {
+      "q": "What is RadixAttention in SGLang?",
+      "a": "RadixAttention is SGLang's automatic prefix-caching technique. It stores recently seen prompts in a radix (prefix) tree and lets requests that begin with the same text reuse the cached KV blocks for that shared portion, so the server only computes the new tokens at the end. The matching is automatic — you don't have to mark which prompts are reusable."
+    },
+    {
+      "q": "Is SGLang better than vLLM?",
+      "a": "Neither is universally better; they are the two leading open-source serving frameworks and overlap a lot. SGLang's edge is automatic prefix reuse, so it tends to win when your requests share long common prefixes (agents, chat, few-shot). For varied traffic with little overlap they perform similarly, so the best move is to benchmark both on your own prompts."
+    },
+    {
+      "q": "Does SGLang work with the OpenAI API format?",
+      "a": "Yes. Besides its own structured-generation frontend, SGLang runs an OpenAI-compatible HTTP server, so existing client code that calls a chat-completions endpoint can usually point at SGLang by just changing the base URL."
+    },
+    {
+      "q": "What kinds of workloads benefit most from SGLang?",
+      "a": "Any workload with heavy prompt overlap. The clearest wins are AI agents that resend a long system prompt and history every step, multi-turn chat that replays the conversation, few-shot prompting with a fixed set of examples, and structured generation where the schema and instructions stay constant across calls."
+    }
+  ],
+  "related": [
+    "vllm-explained",
+    "what-is-inference-server",
+    "continuous-batching",
+    "throughput-vs-latency-llm",
+    "self-hosting-llm-cost"
+  ],
+  "furtherReading": [
+    {
+      "title": "SGLang — GitHub repository",
+      "url": "https://github.com/sgl-project/sglang"
+    },
+    {
+      "title": "vLLM — Documentation",
+      "url": "https://docs.vllm.ai/"
+    }
+  ]
+}

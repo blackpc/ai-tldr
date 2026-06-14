@@ -1,0 +1,373 @@
+{
+  "slug": "cohere-rerank-api",
+  "title": "What Is Cohere Rerank? Managed Reranking API",
+  "shortTitle": "Cohere Rerank",
+  "seoTitle": "Cohere Rerank Explained: Managed Reranking API",
+  "metaDescription": "Cohere Rerank is a managed reranking API that reorders retrieved results by relevance as a second stage in RAG. Learn how it works and when to use it.",
+  "keywords": [
+    "cohere rerank",
+    "what is cohere rerank",
+    "cohere reranker",
+    "rerank api",
+    "rag reranking",
+    "second stage reranking"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You will understand what Cohere Rerank is, how a managed reranking API improves a RAG pipeline as a second stage, and when to use it instead of self-hosting.",
+  "updated": "2026-06-14",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "In a [RAG](/learn/rag/rag-fundamentals/what-is-rag) system, the first step is search: you ask a [vector database](/learn/embeddings-vector-databases/vector-database-guides/what-is-a-vector-database) for the passages that look most relevant to a question. That first pass is fast and cheap, but it is also a bit blurry — it sorts results by rough similarity, so the *truly* best answer is often sitting at position 7 instead of position 1. **Cohere Rerank** is a hosted API that takes those rough results and reorders them by how well each one actually answers the query."
+        },
+        {
+          "type": "image",
+          "url": "/learn-media/dlg-592.jpg",
+          "alt": "Cohere Rerank — illustration",
+          "caption": "Cohere Rerank",
+          "credit": "brave.com"
+        },
+        {
+          "type": "p",
+          "md": "Think of hiring. A recruiter does a keyword screen and pulls 50 résumés that broadly match the job — that is your first-stage retrieval. Then a senior engineer reads each one *next to the job description* and ranks the top 5 they would actually interview. Cohere Rerank is that senior engineer: it reads the query and each candidate document together, side by side, and scores how good a match they really are. You send it a query plus a list of documents; it sends back the same documents with a relevance score and a new order."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Cohere Rerank is one specific *product* in a broader pattern called [reranking](/learn/rag/retrieval-and-reranking/what-is-reranking). The pattern is the idea; Cohere Rerank is a managed, pay-per-call API that implements it so you do not have to host a model yourself."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "First-stage retrieval has to be fast because it searches your whole corpus — sometimes millions of chunks. To stay fast, it compares pre-computed [embeddings](/learn/embeddings-vector-databases/embeddings-explained/what-are-embeddings): the query becomes one vector, every document is already a vector, and the system just measures distance. That is a *bi-encoder* approach, and it is great at recall (pulling back a pool that probably contains the answer) but only so-so at precision (putting the single best chunk on top)."
+        },
+        {
+          "type": "p",
+          "md": "That gap is exactly what hurts a RAG answer. You usually only paste the top 3–5 chunks into the prompt, because context is expensive and models get \"lost in the middle\" of long prompts. If the genuinely best passage is ranked 8th, it never reaches the model, and the answer suffers — no matter how capable the model is. A reranker fixes the ordering of that small candidate pool so the best material lands in the top few slots you actually use."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Higher precision where it counts.** Retrieve a broad pool of 50–100 candidates cheaply, then let the reranker pick the true top 5. You feed the model better context without widening the prompt.",
+            "**No model to host.** A strong reranker is a cross-encoder model that needs a GPU and serving infrastructure. Cohere Rerank is an HTTP call — you add one step to your pipeline and Cohere runs the model.",
+            "**Drop-in upgrade.** Reranking sits *after* whatever search you already have (vector, keyword, or [hybrid](/learn/rag/retrieval-and-reranking/what-is-hybrid-search)). You do not have to re-embed your corpus or change your database to add it.",
+            "**Multilingual and long-document handling.** The hosted models handle many languages and longer passages, which is otherwise fiddly to get right when self-hosting."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The trade-off is that you are now sending data to an external API and paying per search. For many teams that is a fine deal; for some it is a dealbreaker. We cover that decision below."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Reranking is a **two-stage retrieval** pattern. Stage one is your existing fast search, which casts a wide net. Stage two is the reranker, which reads the query and each candidate *together* and produces a precise relevance score. You then keep the top few and pass them to the LLM."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "Two-stage retrieval with a reranker",
+            "steps": [
+              {
+                "label": "User query",
+                "sub": "the question"
+              },
+              {
+                "label": "First-stage search",
+                "sub": "vector / keyword / hybrid"
+              },
+              {
+                "label": "Candidate pool",
+                "sub": "top 50–100, rough order"
+              },
+              {
+                "label": "Cohere Rerank",
+                "sub": "re-score each pair",
+                "accent": true
+              },
+              {
+                "label": "Top-k to LLM",
+                "sub": "best 3–5 chunks"
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "Why the second stage is more accurate"
+        },
+        {
+          "type": "p",
+          "md": "First-stage search uses a *bi-encoder*: the query and the documents are turned into vectors **separately**, so the model never sees them at the same time. It is fast because document vectors are computed once, in advance — but the model can't reason about how a specific query relates to a specific document. A reranker uses a *cross-encoder*: it feeds the query and one document into the model **together** and outputs a single relevance score. Because the two texts attend to each other, it catches nuance a vector distance misses — negation, specific entities, who-did-what-to-whom. The price is that it must run once per query-document pair, which is why you only use it on the small candidate pool, not the whole corpus. The deeper contrast lives in [cross-encoder vs bi-encoder](/learn/rag/retrieval-and-reranking/cross-encoder-vs-bi-encoder)."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "First-stage retriever vs reranker",
+            "columns": [
+              {
+                "title": "First-stage (bi-encoder)",
+                "items": [
+                  "Query and docs embedded separately",
+                  "Doc vectors precomputed once",
+                  "Scans the whole corpus fast",
+                  "High recall, looser ordering"
+                ]
+              },
+              {
+                "title": "Reranker (cross-encoder)",
+                "accent": true,
+                "items": [
+                  "Query and doc read together",
+                  "Scores each pair at query time",
+                  "Runs only on the candidate pool",
+                  "High precision, sharp ordering"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "h3",
+          "text": "What the API call looks like"
+        },
+        {
+          "type": "p",
+          "md": "The interface is deliberately small. You pass a `query`, a list of `documents`, and how many results you want back (`top_n`). The response is the documents reordered, each with a `relevance_score` and its original `index` so you can map back to your data. Your first-stage search and your database stay exactly as they are — reranking just slots in between."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "rerank_step.py — one extra step after retrieval",
+          "code": "import cohere\n\nco = cohere.ClientV2(api_key=\"...\")  # your Cohere API key\n\nquery = \"What is the refund window for physical items?\"\n\n# These came from your first-stage search (vector / keyword / hybrid).\n# Usually 50-100 rough candidates, not the whole corpus.\ncandidates = [\n    \"Digital goods are non-refundable once downloaded.\",\n    \"Refunds on physical items are accepted within 30 days of purchase.\",\n    \"Support hours are 9am to 6pm Eastern, Monday to Friday.\",\n    # ... dozens more ...\n]\n\nresp = co.rerank(\n    model=\"rerank-v3.5\",     # use the current model id from the docs\n    query=query,\n    documents=candidates,\n    top_n=3,                 # keep only the best few for the prompt\n)\n\n# results come back sorted best-first, with a score and original index\nfor r in resp.results:\n    print(r.index, round(r.relevance_score, 3), candidates[r.index])\n\n# Take the reranked top-n and stuff them into your RAG prompt as context."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "Treat `relevance_score` as a *ranking* signal, not an absolute truth. Scores are comparable **within one response** (higher means more relevant to this query), but you should not hard-code a universal cutoff like \"keep everything above 0.5\" — tune any threshold against your own data."
+        }
+      ]
+    },
+    {
+      "id": "worked-example",
+      "title": "A worked example: rescuing the buried answer",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Suppose a user asks: *\"Can I return a physical product after three weeks?\"* Your vector search returns 50 chunks. Embedding similarity is dominated by surface words, so chunks that mention \"product\", \"return\", and \"weeks\" float up — including a chunk about *digital* returns and one about shipping times. The chunk that actually answers the question (\"physical items: 30-day return window\") happens to land 6th, because it phrases the rule differently."
+        },
+        {
+          "type": "p",
+          "md": "If you only keep the top 3 for your prompt, the right answer never reaches the model, and it may wrongly say \"digital products can't be returned\" by pattern-matching the wrong chunk. Now add a rerank stage over those 50 candidates."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Chunk (shortened)",
+            "First-stage rank",
+            "After rerank"
+          ],
+          "rows": [
+            [
+              "Digital goods are non-refundable once downloaded",
+              "1",
+              "4"
+            ],
+            [
+              "Standard shipping takes 5–7 business days",
+              "2",
+              "9"
+            ],
+            [
+              "Physical items: returns accepted within 30 days",
+              "6",
+              "1"
+            ],
+            [
+              "Store credit can be issued for opened items",
+              "3",
+              "5"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The reranker read the full query against each chunk and understood that \"after three weeks\" + \"physical product\" maps onto the 30-day physical-returns rule, not the digital or shipping passages. It promoted the right chunk to position 1. Same search, same database, same documents — one extra API call moved the correct answer into the slot the model actually reads."
+        }
+      ]
+    },
+    {
+      "id": "managed-vs-self-hosted",
+      "title": "Cohere Rerank vs self-hosting a reranker",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The reranking *pattern* is the same either way. The choice is whether someone else runs the model (Cohere Rerank) or you do (an open cross-encoder you host, like the BGE reranker family). Pick based on data sensitivity, cost shape, and how much infrastructure you want to own."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Consideration",
+            "Cohere Rerank (managed)",
+            "Self-hosted reranker"
+          ],
+          "rows": [
+            [
+              "Setup",
+              "One HTTP call, no model to deploy",
+              "Provision GPU, serve and scale the model"
+            ],
+            [
+              "Cost shape",
+              "Pay per search request",
+              "Fixed infra cost, cheaper at high volume"
+            ],
+            [
+              "Data flow",
+              "Candidates leave your network",
+              "Stays inside your infrastructure"
+            ],
+            [
+              "Latency control",
+              "Depends on the provider",
+              "You own and can tune it"
+            ],
+            [
+              "Maintenance",
+              "Provider handles upgrades",
+              "You patch, monitor, and update"
+            ],
+            [
+              "Best when",
+              "Small teams, fast start, variable load",
+              "Strict privacy, steady high volume, in-house ML"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "A common path: start with the managed API to prove that reranking helps your numbers, then revisit self-hosting only if cost at scale or a data-residency rule forces the move. Do not self-host on day one for a problem you have not yet measured."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "Reranking is *not* the only way to combine result lists. If you are fusing rankings from multiple searches (say vector + keyword), a cheap, model-free option is [reciprocal rank fusion](/learn/rag/retrieval-and-reranking/reciprocal-rank-fusion). A reranker re-scores by *content*; RRF merges by *position*. They solve overlapping but different problems and are often used together."
+        }
+      ]
+    },
+    {
+      "id": "common-pitfalls",
+      "title": "Common pitfalls",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "**Reranking too few candidates.** A reranker can only reorder what you give it. If first-stage search returns 5 chunks and the answer wasn't in those 5, reranking can't conjure it. Retrieve a *wide* pool (e.g. 50–100) so the right chunk is present to be promoted.",
+            "**Reranking the whole corpus.** The opposite mistake. A cross-encoder runs once per query-document pair, so reranking 100,000 chunks per query is slow and expensive. Always rerank a small candidate pool, never the full index.",
+            "**Forgetting the latency cost.** Adding a network round trip plus model inference adds real milliseconds to every query. Usually worth it, but measure it and keep the candidate pool sized sensibly.",
+            "**Hard-coding a score threshold.** Relevance scores are meaningful for *ordering*, but a fixed cutoff that works on one dataset can silently drop good results on another. Tune any threshold on your own evaluation set.",
+            "**Skipping evaluation.** \"It feels better\" is not proof. Measure whether reranking actually lifts retrieval quality (did the right chunk reach the top-k?) before and after — otherwise you are paying for a step you can't justify."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Documents you rerank are still untrusted input that ends up in the model's prompt. A reranker scores *relevance*, not *safety* — it will happily rank a malicious passage highly if it matches the query. Keep your [prompt-injection](/learn/prompt-engineering/prompt-injection-security/what-is-prompt-injection) defenses in place regardless of how the results were ranked."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basic two-stage setup is working, a few refinements separate a decent reranking step from a great one."
+        },
+        {
+          "type": "p",
+          "md": "**Tune the candidate-pool size.** The width of your first-stage pool (often called the *retrieve depth*) is the single biggest lever. Too narrow and the answer never enters the pool; too wide and you pay more latency and cost for diminishing returns. Sweep a few values against an evaluation set and pick the smallest pool that keeps recall high."
+        },
+        {
+          "type": "p",
+          "md": "**Pair it with strong first-stage search.** Reranking does not excuse weak retrieval — it sharpens a good pool, it does not rescue a bad one. The strongest setups feed the reranker a [hybrid search](/learn/rag/retrieval-and-reranking/what-is-hybrid-search) pool that blends semantic vectors with keyword scoring ([BM25](/learn/rag/retrieval-and-reranking/what-is-bm25)), so exact matches like error codes and product names are present *and* meaning-based matches are too. Improving [query rewriting](/learn/rag/retrieval-and-reranking/query-rewriting-for-rag) before retrieval helps the reranker even more."
+        },
+        {
+          "type": "p",
+          "md": "**Combine reranking with metadata filtering.** Reranking decides order by content; [metadata filtering](/learn/rag/retrieval-and-reranking/metadata-filtering-in-rag) decides *eligibility* by attributes (tenant, language, date, permissions). Filter first to remove documents a user should never see, then rerank what remains. Order matters: never let a reranker promote a chunk the user wasn't allowed to retrieve."
+        },
+        {
+          "type": "p",
+          "md": "**Mind versions without depending on them.** Hosted rerank models are updated over time, and the exact model id you pass will change across generations. Read the current model name and limits from the official docs rather than pinning to whatever you saw in a tutorial, and re-run your evaluation when you upgrade — a newer model can shift scores and reorder edge cases."
+        },
+        {
+          "type": "p",
+          "md": "The durable takeaway: reranking is the cheapest large win available in most RAG pipelines, because it improves the *order* of context the model sees without touching your data, your embeddings, or your database. Cohere Rerank is simply the managed way to add that win in a single API call — start there, measure the lift, and only graduate to a self-hosted reranker when cost or privacy actually demands it."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is Cohere Rerank used for?",
+      "a": "It improves the second stage of a RAG or search pipeline. After your first-stage search returns a rough pool of candidate documents, Cohere Rerank reorders them by true relevance to the query so the genuinely best passages land in the top few slots you feed to the LLM. It is a managed API, so you don't host the model yourself."
+    },
+    {
+      "q": "How is reranking different from vector search?",
+      "a": "Vector search uses a bi-encoder: the query and documents are embedded separately, which is fast enough to scan a whole corpus but only roughly ordered. A reranker uses a cross-encoder that reads the query and each candidate together, producing a far more precise relevance score. Because it runs per query-document pair, you only apply it to the small candidate pool that vector search returned."
+    },
+    {
+      "q": "Do I need a reranker if I already use hybrid search?",
+      "a": "They complement each other. Hybrid search widens and improves the *candidate pool* by blending semantic and keyword matches; a reranker sharpens the *final order* of that pool. Many production systems do hybrid search first, then rerank the merged results, because each fixes a different weakness."
+    },
+    {
+      "q": "When should I self-host a reranker instead of using Cohere Rerank?",
+      "a": "Self-host when data must stay inside your network, when steady high volume makes fixed infrastructure cheaper than per-call pricing, or when you need full control of latency and model versions. The managed API is usually the better starting point — prove reranking helps your metrics first, then move in-house only if cost or privacy forces it."
+    },
+    {
+      "q": "How many documents should I rerank?",
+      "a": "Rerank a small candidate pool, not the whole corpus — typically the top 50 to 100 results from first-stage search, then keep the best 3 to 5. Too few candidates and the right answer may never enter the pool to be promoted; too many and you pay extra latency and cost for little gain. Tune the exact numbers against an evaluation set."
+    },
+    {
+      "q": "Does Cohere Rerank replace my vector database?",
+      "a": "No. It sits between your existing search and the LLM. Your vector database (or keyword index) still does first-stage retrieval; the reranker only reorders the candidates that search returns. You don't re-embed your corpus or change your database to add it."
+    }
+  ],
+  "related": [
+    "what-is-reranking",
+    "cross-encoder-vs-bi-encoder",
+    "what-is-a-retriever",
+    "what-is-hybrid-search",
+    "reciprocal-rank-fusion"
+  ],
+  "furtherReading": [
+    {
+      "title": "Rerank — Cohere Docs",
+      "url": "https://docs.cohere.com/docs/rerank"
+    },
+    {
+      "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks (arXiv)",
+      "url": "https://arxiv.org/abs/2005.11401"
+    },
+    {
+      "title": "Sentence Transformers — Cross-Encoders documentation",
+      "url": "https://www.sbert.net/docs/cross_encoder/usage/usage.html"
+    }
+  ]
+}

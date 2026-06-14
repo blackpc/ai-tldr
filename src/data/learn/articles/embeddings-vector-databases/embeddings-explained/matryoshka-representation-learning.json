@@ -1,0 +1,364 @@
+{
+  "slug": "matryoshka-representation-learning",
+  "title": "What Is Matryoshka Representation Learning (MRL)?",
+  "shortTitle": "Matryoshka Representation Learning",
+  "seoTitle": "Matryoshka Representation Learning (MRL) Explained",
+  "metaDescription": "Matryoshka Representation Learning trains one embedding model whose vectors can be truncated to fewer dimensions with minimal quality loss, saving cost.",
+  "keywords": [
+    "matryoshka representation learning",
+    "what is matryoshka embeddings",
+    "mrl embeddings",
+    "truncate embedding dimensions",
+    "adaptive embedding size",
+    "matryoshka vs fixed embeddings"
+  ],
+  "difficulty": "intermediate",
+  "oneLiner": "You will understand the Matryoshka Representation Learning technique: how one model produces truncatable embeddings and why that saves storage and compute.",
+  "updated": "2026-06-14",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "An [embedding](/learn/embeddings-vector-databases/embeddings-explained/what-are-embeddings) is a list of numbers that captures the meaning of some text. A normal embedding model is trained to be good at exactly one size — say 1024 numbers. If you later want a smaller, cheaper vector, you are out of luck: chopping a normal vector in half throws away meaning at random, because the model never agreed to keep the important stuff up front."
+        },
+        {
+          "type": "image",
+          "url": "/learn-media/dlg-668.jpg",
+          "alt": "Matryoshka Representation Learning — illustration",
+          "caption": "Matryoshka Representation Learning",
+          "credit": "files.speakerdeck.com"
+        },
+        {
+          "type": "p",
+          "md": "**Matryoshka Representation Learning (MRL)** is the *training technique* that fixes this. It teaches one model to pack the most important information into the **leading dimensions** of every vector, so the first chunk of numbers is a complete, usable embedding on its own — and the chunk after it just adds finer detail. The result is a vector you can safely cut short. The name comes from Russian Matryoshka nesting dolls: open the big doll and a smaller, complete doll sits inside, then a smaller one inside that."
+        },
+        {
+          "type": "p",
+          "md": "A good everyday analogy is a well-written report. A strong report front-loads the headline and the key conclusion in the first paragraph, then fills in detail and caveats further down. Read only the opening and you still get the gist; read the whole thing and you get the nuance. MRL trains the model to write its vectors the same way — *most signal first* — so a reader (your search system) can stop early and still be roughly right. A progressive-loading JPEG works on the same principle: the blurry-but-recognizable version arrives first, and the rest sharpens it."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "This article is about the **method**: how MRL trains a model to make truncation safe, and the dimension-versus-quality tradeoff that follows. If you want the practical *how do I truncate and search* mechanics — re-normalization, coarse-to-fine retrieval, code — read the companion piece, [Matryoshka embeddings explained](/learn/embeddings-vector-databases/embeddings-explained/matryoshka-embeddings-explained). Here we go one level deeper into the representation learning itself."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The size of an embedding is a permanent tax. Every vector you store, every byte of RAM in your [vector database](/learn/embeddings-vector-databases/vector-database-guides/what-is-a-vector-database), and every comparison your search does scales with the dimension count. So model builders and users face the same dilemma from opposite ends: pick a big size for quality and pay forever, or pick a small size for cost and cap your accuracy. You normally choose once, up front, and live with it."
+        },
+        {
+          "type": "p",
+          "md": "Before MRL, the only honest way to offer several sizes was to *train several models* — a 256-dim model, a 512-dim model, a 1024-dim model — each from scratch, each separately maintained, each producing vectors that are not interchangeable. That is expensive for whoever trains the model and confusing for whoever uses it."
+        },
+        {
+          "type": "p",
+          "md": "MRL collapses that whole family into **one training run and one model**. Because the sizes are nested inside a single vector, the provider trains once and ships every size at no extra inference cost, and you get to pick — or change — your size later by simply keeping fewer numbers. This is why so many modern embedding APIs now expose a single `dimensions` knob instead of a menu of separate models: under the hood it is one MRL-trained vector being truncated."
+        },
+        {
+          "type": "h3",
+          "text": "Who this changes things for"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Model builders** train one network instead of a separate model per target size, and can advertise a range of supported dimensions from a single checkpoint.",
+            "**Platform and API teams** offer 'choose your dimension' as a parameter rather than maintaining many models — fewer artifacts, one quality story.",
+            "**Application builders** decouple the size decision from the embedding decision. You can index now and decide later how much of each vector to actually compare, trading [cost against quality](/learn/embeddings-vector-databases/embeddings-explained/embedding-dimensions-explained) without re-embedding anything."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "MRL changes only one thing about ordinary embedding training: the **loss**. A normal model produces a full vector and is scored on that one vector. An MRL model produces the same full vector, then slices off several nested prefixes — the first 64 numbers, the first 128, the first 256, and so on — and is scored on *all of them at once*. The total training loss is the sum of the loss at each size."
+        },
+        {
+          "type": "p",
+          "md": "That sum is the whole trick. To make every prefix score well, gradient descent is forced to put the most broadly useful information where *every* prefix can see it — the earliest dimensions — and push finer, more specialized detail into the later ones that only the larger prefixes include. The model is, in effect, learning an **importance ordering** over its own dimensions. Nothing about the network architecture changes; the pressure comes entirely from being graded at many sizes simultaneously."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "split",
+            "title": "One backbone, many nested losses sharing the gradient",
+            "root": {
+              "label": "Encoder backbone",
+              "sub": "produces one full vector",
+              "accent": true
+            },
+            "children": [
+              {
+                "label": "Prefix 64",
+                "sub": "loss at 64 dims"
+              },
+              {
+                "label": "Prefix 128",
+                "sub": "loss at 128 dims"
+              },
+              {
+                "label": "Prefix 256",
+                "sub": "loss at 256 dims"
+              },
+              {
+                "label": "Prefix full",
+                "sub": "loss at full size"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Because all those losses flow back into the *same* shared weights, the earliest dimensions receive a gradient signal from every prefix, while the latest dimensions are only nudged by the full-size loss. Early dimensions are therefore optimized far harder and end up carrying the coarse, general meaning; later dimensions get the leftover, fine-grained signal. That uneven training is exactly why importance decays from front to back — the nesting-doll structure is an *emergent property of the loss*, not something hand-coded."
+        },
+        {
+          "type": "h3",
+          "text": "The objective, in pseudocode"
+        },
+        {
+          "type": "p",
+          "md": "Conceptually the change is tiny. Where a normal model computes one loss, MRL loops over a list of nesting sizes and adds up the loss at each. Some recipes also weight the sizes (for example, giving the full size a little more importance) — that is the `w[d]` term below."
+        },
+        {
+          "type": "code",
+          "lang": "python",
+          "title": "MRL training objective — the core idea",
+          "code": "# full_vec: model output for the batch, e.g. shape (batch, 1024)\n# A normal model would just do:  loss = task_loss(full_vec)\n\nnesting_sizes = [64, 128, 256, 512, 1024]\nweights       = {64: 1.0, 128: 1.0, 256: 1.0, 512: 1.0, 1024: 1.0}\n\ntotal_loss = 0.0\nfor d in nesting_sizes:\n    prefix = full_vec[:, :d]            # keep the first d dimensions\n    prefix = normalize(prefix)          # treat the prefix as its own vector\n    total_loss += weights[d] * task_loss(prefix)\n\n# Backprop on total_loss reorders information so that EVERY prefix\n# is a good embedding. Truncation later is then a valid operation."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "A practical refinement called **MRL-E** (the efficient variant) computes the loss only at a small subset of the nesting sizes — often just the smallest and a couple of others — instead of all of them, cutting training overhead with almost no loss of quality. The principle is identical: grade multiple prefixes, let the gradient sort the dimensions."
+        }
+      ]
+    },
+    {
+      "id": "dimension-quality-tradeoff",
+      "title": "The dimension-versus-quality tradeoff",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The reason MRL is useful — and the reason it is sometimes misused — is that quality does not fall off linearly as you cut dimensions. Because the model was trained to front-load signal, the *first* dimensions are doing most of the work. So as you shorten the vector, accuracy stays nearly flat for a long stretch and then drops sharply only once you cut into the dimensions that still carried real signal."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "How quality typically behaves as you truncate (shape, not numbers)",
+            "steps": [
+              {
+                "label": "Full size",
+                "sub": "best quality, biggest index"
+              },
+              {
+                "label": "Cut to ~half",
+                "sub": "tiny quality loss, half the cost",
+                "accent": true
+              },
+              {
+                "label": "Cut to ~quarter",
+                "sub": "small loss, still strong"
+              },
+              {
+                "label": "Very small",
+                "sub": "quality drops off fast"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "The takeaway is that there is usually a **sweet spot** — a size where you have shed most of the cost but almost none of the quality. The curve is flat near the top and steep at the bottom, so the smart move is to ride down it until just before the steep part begins. Crucially, where that knee sits depends on your data and your task; it is not a universal number, which is why you measure rather than guess."
+        },
+        {
+          "type": "p",
+          "md": "An MRL model only *guarantees* good behavior at the specific nesting sizes it was trained on (and prefixes near them). A size the model never saw during training can behave worse than the trend suggests, so prefer the dimensions the provider actually supports. To turn this into a decision, run a small **recall check**: index a sample of your real documents at the full size and at each candidate truncated size, then compare how much the top-k results overlap. High overlap means the smaller size is safe to ship."
+        },
+        {
+          "type": "callout",
+          "tone": "warn",
+          "md": "Graceful decay is not *zero* decay. A short vector genuinely holds less information than a long one — there is no free lunch. MRL lets you *choose* where on the curve to sit; it does not abolish the curve. Treat the dimension count as a measured knob, not a setting you guess once and forget."
+        }
+      ]
+    },
+    {
+      "id": "mrl-vs-separate-models",
+      "title": "MRL vs. training a separate model per size",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "It helps to compare MRL against the two pre-MRL ways of getting smaller vectors: training a dedicated small model, or shrinking a normal model's output after the fact (for example with PCA). MRL's advantage is that the shrinkability is *learned once, into the weights*, so there is nothing extra to train, store, or apply later."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "",
+            "Matryoshka (MRL)",
+            "Separate model per size",
+            "Post-hoc reduction (e.g. PCA)"
+          ],
+          "rows": [
+            [
+              "Number of models to train",
+              "One",
+              "One per target size",
+              "One (then fit a reducer)"
+            ],
+            [
+              "How you get a smaller vector",
+              "Keep the first N dimensions",
+              "Call the smaller model",
+              "Multiply by a fitted matrix"
+            ],
+            [
+              "Vectors interchangeable across sizes",
+              "Yes — same vector, different cut",
+              "No — different models, different spaces",
+              "No — pre- vs post-reduction differ"
+            ],
+            [
+              "Change the size later",
+              "Just truncate, no re-embedding",
+              "Re-embed with another model",
+              "Re-fit / re-apply the reducer"
+            ],
+            [
+              "Extra artifact to maintain",
+              "None",
+              "Many model checkpoints",
+              "The fitted projection matrix"
+            ]
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The deeper point is conceptual. Separate models give you several *unrelated* representation spaces; you cannot compare a 256-dim vector from one model to a 1024-dim vector from another. MRL gives you **one representation space that is consistent across sizes** — the small vector is literally the prefix of the big one, so they live in the same geometry. That is what makes tricks like coarse-to-fine retrieval possible, where a cheap truncated pass and an accurate full pass operate on the same stored vector."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "MRL and post-hoc methods are not strictly rivals. You can still apply PCA or [quantization](/learn/embeddings-vector-databases/embeddings-explained/normalizing-embeddings-explained) on top of a truncated MRL vector to squeeze even harder — truncation handles *how many* dimensions, quantization handles *how many bits per dimension*, and they stack."
+        }
+      ]
+    },
+    {
+      "id": "design-choices",
+      "title": "Design choices when training an MRL model",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "If you are training (or fine-tuning) your own embeddings rather than consuming an API, a few decisions shape how well the Matryoshka property holds. None of them change the architecture; they all tune the loss."
+        },
+        {
+          "type": "h3",
+          "text": "Which nesting sizes to train"
+        },
+        {
+          "type": "p",
+          "md": "You list the sizes you want to support — commonly a geometric series like 32, 64, 128, 256, and up. Including a very small size in the list is what pressures the model to make the *earliest* dimensions count; if your smallest trained size is large, the model has no reason to keep the first handful of dimensions especially meaningful. Pick the sizes you actually intend to deploy, plus the smallest you might ever want."
+        },
+        {
+          "type": "h3",
+          "text": "Whether and how to weight the sizes"
+        },
+        {
+          "type": "p",
+          "md": "The simplest objective weights every size equally. Some recipes up-weight the full size to protect top-end quality, or up-weight small sizes to push more signal forward. There is no universal best weighting; it is a knob you tune for whether your priority is the truncated path or the full-precision path."
+        },
+        {
+          "type": "h3",
+          "text": "It is not only for text"
+        },
+        {
+          "type": "p",
+          "md": "MRL was introduced as a *general* representation learning idea, not a text-only trick. The same nested-loss recipe applies to image embeddings, [multimodal embeddings](/learn/embeddings-vector-databases/embeddings-explained/multimodal-embeddings-explained), and even classification features. Anywhere a fixed-size representation is a cost bottleneck, the method offers the same escape hatch: one model, many usable sizes. For the underlying training machinery these losses plug into, see [how embeddings are trained](/learn/embeddings-vector-databases/embeddings-explained/how-embeddings-are-trained)."
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "The core idea — grade many nested prefixes, let the gradient sort the dimensions — is simple. A few subtler points matter once you rely on MRL in production or compare it to alternatives."
+        },
+        {
+          "type": "p",
+          "md": "**Adaptive retrieval is the real payoff.** Because every prefix is a valid embedding in the *same* space, you can choose the dimension count per query rather than globally. Cheap, common queries run at low dimensions; rare or high-stakes ones use the full vector. The well-known *Matryoshka Adaptive Retrieval* pattern — a fast coarse pass over short vectors followed by a precise re-rank on full ones — is just this idea applied as a two-stage cascade, and it is covered in detail in the [Matryoshka embeddings overview](/learn/embeddings-vector-databases/embeddings-explained/matryoshka-embeddings-explained)."
+        },
+        {
+          "type": "p",
+          "md": "**The information ordering is approximate, not perfect.** MRL strongly *encourages* importance to decay front-to-back, but it does not guarantee a strict monotonic ranking of every single dimension. The signal is concentrated early as a statistical tendency across the training objective, which is why quality decays gracefully rather than in perfectly even steps, and why the knee in the curve sits in a slightly different place for each dataset."
+        },
+        {
+          "type": "p",
+          "md": "**You cannot retrofit it.** Truncation is only safe because the model was *trained* for it. You cannot take an arbitrary pretrained embedding model, chop its outputs, and expect the prefix to mean anything — the first N numbers of a non-MRL vector are an arbitrary slice. Adopting MRL means either using a model whose card advertises Matryoshka / variable dimensions, or fine-tuning one yourself with the nested loss. Before truncating any model, confirm it was trained for it."
+        },
+        {
+          "type": "p",
+          "md": "**The honest limits.** MRL does not make information free: a small vector holds less than a large one, full stop. It does not abolish the dimension-versus-quality tradeoff; it only lets you *choose your point on it cheaply and after the fact*, with one model instead of many. Used well — measuring recall, respecting trained sizes, re-normalizing after truncation — that is a genuinely large operational win. Used carelessly — truncating too hard, or truncating a model that was never trained for it — it quietly degrades quality in ways that pass a demo and fail the long tail. The discipline is the same as ever: treat the dimension count as a knob you measure, not one you guess."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is Matryoshka Representation Learning (MRL)?",
+      "a": "MRL is a training technique that teaches one embedding model to pack the most important information into the leading dimensions of its vectors. It does this by computing the training loss at several nested prefix sizes at once and summing them, which pressures the model to make every prefix a usable embedding. The payoff is that you can later truncate a vector to fewer dimensions and keep most of its quality."
+    },
+    {
+      "q": "How is MRL different from just training a smaller embedding model?",
+      "a": "A separate small model gives you an unrelated vector in a different space, so its outputs are not interchangeable with a larger model's. MRL trains a single model whose small vector is literally the prefix of the big one, so both sizes share one consistent representation space. That means one training run instead of many, and you can switch sizes later by simply keeping fewer numbers — no re-embedding."
+    },
+    {
+      "q": "Does truncating a Matryoshka embedding lose accuracy?",
+      "a": "Some, but it decays gracefully rather than linearly. Because signal is front-loaded, quality stays nearly flat as you shorten the vector and then drops sharply only once you cut into dimensions that still carried meaning. There is usually a sweet spot where you shed most of the cost for almost no quality loss — but you should measure recall on your own data to find it."
+    },
+    {
+      "q": "Can I apply MRL truncation to any embedding model?",
+      "a": "No. Truncation is only safe if the model was trained with Matryoshka loss (or exposes a variable-dimension parameter). For a normal model the first N numbers are an arbitrary slice and chopping them destroys quality. Check the model card for Matryoshka or variable-dimension support before truncating anything."
+    },
+    {
+      "q": "Why do many embedding APIs have a 'dimensions' parameter now?",
+      "a": "Because under the hood they often ship an MRL-trained model. Asking for fewer dimensions returns a truncated, re-normalized prefix of the full vector — one model serving many sizes through a single knob, instead of a separate model per size."
+    },
+    {
+      "q": "What is the MRL-E efficient variant?",
+      "a": "MRL-E computes the nested loss at only a subset of the trained sizes — often the smallest plus a couple of others — rather than at every size. This reduces training overhead with almost no quality loss, because the smallest prefix already does most of the work of pushing important information forward."
+    }
+  ],
+  "related": [
+    "matryoshka-embeddings-explained",
+    "embedding-dimensions-explained",
+    "how-embeddings-are-trained",
+    "what-are-embeddings",
+    "how-to-choose-embedding-model",
+    "normalizing-embeddings-explained"
+  ],
+  "furtherReading": [
+    {
+      "title": "Matryoshka Representation Learning (arXiv)",
+      "url": "https://arxiv.org/abs/2205.13147"
+    },
+    {
+      "title": "Matryoshka Embedding Models — Hugging Face blog",
+      "url": "https://huggingface.co/blog/matryoshka"
+    },
+    {
+      "title": "Embeddings — Claude Docs",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/embeddings"
+    }
+  ]
+}

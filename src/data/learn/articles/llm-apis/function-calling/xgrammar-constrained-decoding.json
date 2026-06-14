@@ -1,0 +1,348 @@
+{
+  "slug": "xgrammar-constrained-decoding",
+  "title": "What Is XGrammar? Fast Constrained Decoding for LLMs",
+  "shortTitle": "XGrammar",
+  "seoTitle": "XGrammar: Constrained-Decoding Grammar Engine",
+  "metaDescription": "XGrammar is a low-level constrained-decoding engine that enforces grammars during token generation, powering structured output in vLLM, SGLang, and TensorRT-LLM.",
+  "keywords": [
+    "xgrammar",
+    "what is xgrammar",
+    "xgrammar constrained decoding",
+    "xgrammar vllm",
+    "xgrammar grammar engine",
+    "structured output inference engine"
+  ],
+  "difficulty": "advanced",
+  "oneLiner": "You will understand how XGrammar acts as the low-level grammar engine that makes constrained, schema-valid decoding fast inside serving stacks like vLLM and SGLang.",
+  "updated": "2026-06-14",
+  "sections": [
+    {
+      "id": "in-plain-english",
+      "title": "In plain English",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "When you ask an LLM for JSON, you usually just *hope* it returns valid JSON. Most of the time it does. But every so often it forgets a closing brace, wraps the answer in chatty prose, or invents a field your schema never had — and your parser crashes in production. **Constrained decoding** removes the hope: it makes invalid output *physically impossible* to generate. **XGrammar** is one of the engines that does this, and does it fast."
+        },
+        {
+          "type": "image",
+          "url": "/learn-media/dlg-636.jpg",
+          "alt": "XGrammar — illustration",
+          "caption": "XGrammar",
+          "credit": "machinelearningmastery.com"
+        },
+        {
+          "type": "p",
+          "md": "Here is the key idea. An LLM writes one [token](/learn/llm-fundamentals/tokens-and-tokenization/what-is-a-token) at a time. At each step it produces a score for *every* token in its vocabulary, then picks one. Constrained decoding sits in the middle of that loop: before the model picks, it crosses out every token that would break the rules. If the grammar says the next character must be a digit or a closing bracket, every token that starts with a letter is struck off the list. The model can only ever choose from what is still allowed, so the final text is guaranteed to fit the grammar."
+        },
+        {
+          "type": "p",
+          "md": "Think of it like one of those magnetic poetry kits, but with a strict editor standing behind you. You can only place a word if it keeps the sentence grammatical so far; the editor physically hides every magnet that would make a mistake. You still choose *which* allowed word to place — your creativity is intact — but you cannot produce a broken sentence even if you tried. XGrammar is that editor, engineered to hide the wrong magnets in microseconds so it does not slow the writing down."
+        },
+        {
+          "type": "callout",
+          "tone": "note",
+          "md": "XGrammar is **infrastructure**, not a product you call directly day to day. It is the low-level grammar engine inside serving stacks like **vLLM**, **SGLang**, and **TensorRT-LLM**. When you set `response_format` or a JSON schema on one of those servers, an engine like XGrammar is what actually enforces it under the hood."
+        }
+      ]
+    },
+    {
+      "id": "why-it-matters",
+      "title": "Why it matters",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Plain [function calling](/learn/llm-apis/function-calling/what-is-function-calling) and \"please reply in JSON\" prompts get you *most* of the way, but \"most\" is the problem. If 1 in 200 responses is malformed, a service handling millions of calls breaks thousands of times a day. Constrained decoding turns a statistical promise into a hard guarantee, and that is why it became standard infrastructure."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Validity by construction.** The output cannot violate the schema, because invalid tokens were never on the table. You stop writing defensive retry-and-reparse loops around every call.",
+            "**No wasted tokens.** Without constraints, a model might emit `Sure, here is the JSON you asked for:` before the actual object. A grammar forbids that preamble, so every generated token is part of the answer.",
+            "**Smaller models punch up.** A weaker or cheaper model often *knows* the answer but is sloppy about format. Constraining the format lets it produce clean structured output it could not reliably manage on its own.",
+            "**It is the layer real serving stacks need.** A grammar check that runs once per request is fine. A grammar check that runs on *every token* of *every concurrent request* must be nearly free, or it destroys throughput. That performance problem is exactly what XGrammar exists to solve."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "The reason a dedicated engine matters is throughput. A naive implementation re-computes the set of legal tokens from scratch at every single step, for every request the GPU is batching together. On a vocabulary of 100,000+ tokens that work can rival the cost of the model's own forward pass — and suddenly your structured-output feature has halved your serving capacity. XGrammar's whole job is to make that per-token bookkeeping so cheap it disappears into the noise, so structured output is essentially free rather than a throughput tax."
+        }
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "title": "How it works",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Constrained decoding has two phases. **Compilation** happens once, when you submit a grammar or JSON schema: XGrammar turns those rules into a fast lookup structure. **Masking** happens on every token: at each decoding step it produces a *token mask* — a list marking which of the model's vocabulary tokens are currently allowed — and applies it to the model's scores before a token is sampled."
+        },
+        {
+          "type": "h3",
+          "text": "Grammars, schemas, and token masks"
+        },
+        {
+          "type": "p",
+          "md": "The rules start as a **grammar**: a precise description of which strings are valid, usually written in a notation like context-free grammar (CFG) or EBNF. A JSON schema is converted into such a grammar automatically. The grammar defines a state machine — at any moment you are in some state, and only certain next characters keep you on a valid path. A **token mask** translates that character-level rule into the model's world: of the 100,000+ tokens the model can output right now, which ones lead to a string the grammar still accepts?"
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "flow",
+            "title": "One decoding step with a grammar engine",
+            "steps": [
+              {
+                "label": "Model logits",
+                "sub": "score per vocab token"
+              },
+              {
+                "label": "Grammar state",
+                "sub": "what's allowed next"
+              },
+              {
+                "label": "Token mask",
+                "sub": "allow / forbid each token"
+              },
+              {
+                "label": "Apply mask",
+                "sub": "forbidden → -infinity"
+              },
+              {
+                "label": "Sample token",
+                "sub": "valid by construction",
+                "accent": true
+              },
+              {
+                "label": "Advance state",
+                "sub": "grammar moves forward"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "\"Apply the mask\" means setting the score of every forbidden token to negative infinity, so its probability becomes zero. The model samples normally from what remains — temperature, top-p, and the rest of your sampling settings still work, just over a legal subset. After a token is chosen, the grammar **advances** to its next state, and the whole loop repeats for the following token."
+        },
+        {
+          "type": "h3",
+          "text": "Why doing this fast is hard"
+        },
+        {
+          "type": "p",
+          "md": "The naive way is brutal: at every step, for every one of 100,000+ tokens, check whether appending it keeps the string valid. Most tokens are several characters long, so each check is itself several grammar steps. Multiply by the batch of requests the GPU runs together and the cost explodes. XGrammar's contribution is a set of techniques that make this cheap — its design is what the next section is about."
+        },
+        {
+          "type": "callout",
+          "tone": "tip",
+          "md": "The mask is computed on the **CPU in parallel with the GPU's forward pass**. While the GPU is busy producing the next step's logits, the CPU is already preparing the mask for them. Overlapping the two means the grammar work hides behind computation the model was doing anyway — a big reason the overhead can be close to zero."
+        }
+      ]
+    },
+    {
+      "id": "what-makes-xgrammar-fast",
+      "title": "What makes XGrammar fast",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "XGrammar's speed comes from a few specific ideas, all aimed at avoiding work. The headline observation is that the model's vocabulary splits cleanly into two kinds of tokens at any grammar state."
+        },
+        {
+          "type": "list",
+          "items": [
+            "**Context-independent tokens.** For most tokens, whether they are allowed depends only on the *current grammar state*, not on the full history of what came before. These can be decided ahead of time and cached. XGrammar precomputes them during compilation, so at run time it just looks them up — no checking required.",
+            "**Context-dependent tokens.** A smaller set of tokens (often the ones near brackets, quotes, and other structural boundaries) genuinely depend on the surrounding context and must be checked live. By isolating this minority, XGrammar only does expensive work where it is truly needed.",
+            "**A persistent execution stack.** Tracking nested structures (an array inside an object inside an array) needs a stack-based pushdown automaton. XGrammar maintains and reuses this stack efficiently instead of rebuilding it each step.",
+            "**CPU/GPU overlap.** As noted above, mask generation runs on the CPU while the GPU computes logits, so the two pipelines hide each other."
+          ]
+        },
+        {
+          "type": "p",
+          "md": "Putting it together: compile once into a cached structure, look up the easy majority of tokens for free, check only the hard minority live, and overlap all of it with the GPU. The result is that enforcing a grammar adds only a tiny fraction to the time per token, which is what lets a serving stack offer guaranteed structured output without quietly cutting its own capacity."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "compare",
+            "title": "Naive masking vs an engine like XGrammar",
+            "columns": [
+              {
+                "title": "Naive per-step check",
+                "items": [
+                  "Re-checks all 100k+ tokens every step",
+                  "Multi-character checks repeated constantly",
+                  "Runs on the critical path, blocks the GPU",
+                  "Overhead can rival the forward pass"
+                ]
+              },
+              {
+                "title": "XGrammar approach",
+                "accent": true,
+                "items": [
+                  "Precomputes the easy majority at compile time",
+                  "Live-checks only context-dependent tokens",
+                  "Overlaps masking with the GPU forward pass",
+                  "Overhead shrinks toward negligible"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "where-it-fits",
+      "title": "Where it fits in the stack",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "It helps to see the layers. As an application developer you touch the top; XGrammar lives near the bottom, right next to the model's sampling loop. You rarely import it yourself — you turn on structured output in your serving framework, and it reaches for an engine like XGrammar."
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "kind": "stack",
+            "title": "The structured-output stack",
+            "layers": [
+              {
+                "label": "Your app",
+                "sub": "asks for JSON / a schema / a tool call"
+              },
+              {
+                "label": "API surface",
+                "sub": "response_format, JSON schema, tool definitions"
+              },
+              {
+                "label": "Serving engine",
+                "sub": "vLLM, SGLang, TensorRT-LLM"
+              },
+              {
+                "label": "Grammar engine",
+                "sub": "XGrammar: schema → token masks",
+                "accent": true
+              },
+              {
+                "label": "Model sampling loop",
+                "sub": "logits → mask → token"
+              }
+            ]
+          }
+        },
+        {
+          "type": "p",
+          "md": "Concretely, when you send a request with a JSON schema to a vLLM server, vLLM hands that schema to its grammar backend (XGrammar is a common default). The backend compiles the schema into a grammar, then attaches a mask to every decoding step for that request. The structured-output features you read about at the [function calling](/learn/llm-apis/function-calling/) and [structured outputs](/learn/llm-apis/streaming-structured-outputs/) level are the *user-facing* face of this same machinery."
+        },
+        {
+          "type": "p",
+          "md": "XGrammar is not the only engine of its kind — **Outlines**, **llguidance**, and others occupy the same niche, and serving frameworks often let you choose between them. They differ in grammar support and performance characteristics, but the core contract is identical: turn a schema into per-token masks, fast enough to leave throughput intact."
+        },
+        {
+          "type": "table",
+          "headers": [
+            "Layer",
+            "You set",
+            "What enforces it"
+          ],
+          "rows": [
+            [
+              "Application",
+              "\"Give me JSON matching this schema\"",
+              "Nothing yet — just intent"
+            ],
+            [
+              "API / framework",
+              "response_format, json_schema, tools",
+              "Serving engine routes it"
+            ],
+            [
+              "Grammar engine",
+              "(automatic) schema → grammar",
+              "XGrammar compiles + masks"
+            ],
+            [
+              "Decoding loop",
+              "(automatic) per token",
+              "Mask zeroes illegal tokens"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "going-deeper",
+      "title": "Going deeper",
+      "blocks": [
+        {
+          "type": "p",
+          "md": "Once the basics click, a few sharper points separate people who *use* constrained decoding from people who understand its limits."
+        },
+        {
+          "type": "p",
+          "md": "**Format is guaranteed; correctness is not.** A grammar can force the output to be valid JSON with the right field names and types. It cannot force the *values* to be true. A constrained model will happily emit a perfectly-shaped object full of wrong facts. Constrained decoding is about syntax, not truth — you still need verification and good prompting on top."
+        },
+        {
+          "type": "p",
+          "md": "**Constraints can fight the model's instincts.** If a model strongly \"wants\" to write prose but the grammar only permits a digit, masking forces a low-probability path. Usually fine, occasionally it nudges the model into awkward or repetitive output. The fix is to make the prompt and the schema agree: ask for what the grammar already requires, so the constraint rarely has to overrule the model."
+        },
+        {
+          "type": "p",
+          "md": "**Tokenization makes it genuinely hard.** Grammars are defined over *characters*, but models emit *tokens*, and a single token can span a quote, a brace, and the start of the next field. Deciding whether such a token is legal means simulating the grammar across all of its characters. Subword tokenization is the deep reason a fast engine is needed at all — and why this is an advanced topic, not a weekend script."
+        },
+        {
+          "type": "p",
+          "md": "**Compilation has a cost too.** Turning a large or deeply recursive schema into a grammar is not free; for complex schemas the one-time compile can be noticeable. Engines cache compiled grammars so a repeated schema pays this only once. If you generate a brand-new schema on every request, you may feel it."
+        },
+        {
+          "type": "p",
+          "md": "Where to go next: read how the user-facing layer exposes all this through [defining function schemas](/learn/llm-apis/function-calling/defining-function-schemas) and [forcing tool use](/learn/llm-apis/function-calling/forcing-tool-use), and follow [tool calling best practices](/learn/llm-apis/function-calling/tool-calling-best-practices) so your prompts and schemas pull in the same direction. To go down instead of up, the XGrammar source and paper are the authoritative reference for how the masking is actually implemented."
+        }
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "q": "What is XGrammar?",
+      "a": "XGrammar is a low-level, high-performance engine for constrained decoding. It compiles a grammar or JSON schema into token masks that are applied during an LLM's token-by-token generation, guaranteeing the output matches the structure. It runs inside serving stacks like vLLM, SGLang, and TensorRT-LLM rather than being called directly by most app developers."
+    },
+    {
+      "q": "What is constrained decoding?",
+      "a": "Constrained decoding restricts an LLM so it can only generate tokens that keep its output valid against a set of rules (a grammar or schema). At each step it masks out every token that would break the rules, so invalid output becomes impossible to produce rather than just unlikely. It is the mechanism behind reliable JSON mode and structured output."
+    },
+    {
+      "q": "How is XGrammar different from Outlines?",
+      "a": "Both solve the same problem — turning a schema into per-token masks for constrained decoding — and serving frameworks often let you pick between them. They differ in grammar support, implementation details, and performance characteristics. XGrammar is widely used as a default backend in vLLM, SGLang, and TensorRT-LLM; Outlines is another popular engine in the same niche."
+    },
+    {
+      "q": "Does constrained decoding slow down inference?",
+      "a": "A naive implementation can slow it down a lot, because checking 100,000+ vocabulary tokens at every step is expensive. Engines like XGrammar minimize this by precomputing the easy majority of tokens, live-checking only the context-dependent minority, and overlapping mask generation on the CPU with the GPU's forward pass. Done well, the overhead is close to negligible."
+    },
+    {
+      "q": "Does using XGrammar guarantee the answer is correct?",
+      "a": "No. It guarantees the output's *format* — valid JSON, the right fields, the right types. It cannot make the *values* true. A constrained model can still produce a perfectly structured object full of wrong facts, so you still need verification and good prompting for correctness."
+    },
+    {
+      "q": "Do I need to install XGrammar myself?",
+      "a": "Usually not. If you run a serving stack like vLLM or SGLang and enable structured output or a JSON schema, the framework reaches for a grammar engine like XGrammar automatically. You interact with the framework's structured-output API, not with XGrammar's internals."
+    }
+  ],
+  "related": [
+    "what-is-function-calling",
+    "defining-function-schemas",
+    "forcing-tool-use",
+    "tool-calling-best-practices",
+    "parallel-tool-calling"
+  ],
+  "furtherReading": [
+    {
+      "title": "XGrammar — GitHub (mlc-ai/xgrammar)",
+      "url": "https://github.com/mlc-ai/xgrammar"
+    },
+    {
+      "title": "vLLM Documentation",
+      "url": "https://docs.vllm.ai/"
+    },
+    {
+      "title": "Structured Outputs — OpenAI Docs",
+      "url": "https://platform.openai.com/docs/guides/structured-outputs"
+    }
+  ]
+}
