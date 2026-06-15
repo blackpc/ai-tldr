@@ -1,9 +1,10 @@
 /**
  * /learn/landscape/<slug> — a single open-source tool's detail page.
  *
- * SEO-targeted, standalone page: long-form overview, capability bullets, a
- * grounded getting-started walkthrough with real code, use cases, links and
- * related tools. Pure / SSR-safe — also rendered by prerender-learn.tsx.
+ * Uses the EXACT same layout primitives as a Learn article (lrn-article →
+ * lrn-art-head + lrn-art-layout with a TOC rail → lrn-section / lrn-h2, and
+ * the shared CodeBlock) so a tool page reads as part of the same encyclopedia.
+ * Pure / SSR-safe — also rendered by prerender-learn.tsx.
  */
 
 import landscapeData from "../../data/learn/landscape.json";
@@ -15,6 +16,7 @@ import {
   learnToolPath,
 } from "../../data/learn/schema";
 import { Breadcrumbs } from "./ArticleBody";
+import { Block } from "./Blocks";
 
 const DATA = landscapeData as Landscape;
 const STARS = githubStars as Record<string, number>;
@@ -36,9 +38,7 @@ function starsOf(repo: string): number {
 function relatedTools(detail: LandscapeToolDetail) {
   const cat = DATA.categories.find((c) => c.id === detail.category);
   const sub = cat?.subcategories.find((s) => s.id === detail.subcategory);
-  return (sub?.tools ?? [])
-    .filter((t) => t.slug !== detail.slug)
-    .slice(0, 8);
+  return (sub?.tools ?? []).filter((t) => t.slug !== detail.slug).slice(0, 6);
 }
 
 export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
@@ -46,9 +46,17 @@ export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
   const ghUrl = `https://github.com/${detail.repo}`;
   const related = relatedTools(detail);
 
+  const toc = [
+    { id: "overview", title: "Overview" },
+    { id: "features", title: "What it does" },
+    { id: "getting-started", title: "Getting started" },
+    { id: "use-cases", title: "When to use it" },
+    ...(related.length > 0 ? [{ id: "related", title: "Related tools" }] : []),
+  ];
+
   return (
-    <article className="lrn-page lrn-tool">
-      <header className="lrn-tool-head">
+    <article className="lrn-article">
+      <header className="lrn-art-head">
         <Breadcrumbs
           trail={[
             { label: "LEARN", href: learnHubPath },
@@ -56,28 +64,39 @@ export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
             { label: detail.name },
           ]}
         />
-        <span className="lrn-tool-eyebrow">
-          {detail.categoryTitle} · {detail.subcategoryTitle}
-        </span>
-        <h1 className="lrn-tool-title">{detail.name}</h1>
-        <p className="lrn-tool-tagline">{detail.tagline}</p>
-
-        <div className="lrn-tool-actions">
+        <h1 className="lrn-art-title">{detail.name}</h1>
+        <p className="lrn-art-tagline">{detail.tagline}</p>
+        <div className="lrn-art-meta">
+          <span className="lrn-art-updated">
+            {detail.categoryTitle} · {detail.subcategoryTitle}
+          </span>
+          {detail.language && (
+            <span className="lrn-art-updated">{detail.language}</span>
+          )}
+          {detail.license && (
+            <span className="lrn-art-updated">{detail.license}</span>
+          )}
+        </div>
+        <div className="lrn-art-links" aria-label="Official links">
           <a
-            className="lrn-tool-gh"
+            className="lrn-art-home lrn-art-gh"
             href={ghUrl}
             target="_blank"
             rel="noopener noreferrer"
           >
-            <span className="lrn-tool-gh-mark" aria-hidden="true">
-              <svg viewBox="0 0 16 16" width="15" height="15">
-                <path fill="currentColor" d={GH_MARK} />
-              </svg>
-            </span>
-            <span className="lrn-tool-gh-repo">{detail.repo}</span>
+            <svg
+              className="lrn-gh-mark"
+              viewBox="0 0 16 16"
+              width="15"
+              height="15"
+              aria-hidden="true"
+            >
+              <path fill="currentColor" d={GH_MARK} />
+            </svg>
+            <span className="lrn-art-home-loc">{detail.repo}</span>
             {stars > 0 && (
-              <span className="lrn-tool-gh-stars">
-                <span className="lrn-tool-star" aria-hidden="true">
+              <span className="lrn-gh-stars">
+                <span className="lrn-gh-star" aria-hidden="true">
                   ★
                 </span>
                 {formatStars(stars)}
@@ -86,121 +105,142 @@ export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
           </a>
           {detail.homepage && (
             <a
-              className="lrn-tool-home"
+              className="lrn-art-home"
               href={detail.homepage}
               target="_blank"
               rel="noopener noreferrer"
             >
-              Website <span aria-hidden="true">↗</span>
+              <span className="lrn-art-home-kind">WEBSITE</span>
+              <span className="lrn-art-home-loc">
+                {detail.homepage.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "")}
+              </span>
+              <span className="lrn-art-home-arrow" aria-hidden="true">
+                ↗
+              </span>
             </a>
-          )}
-          {detail.language && (
-            <span className="lrn-tool-chip">{detail.language}</span>
-          )}
-          {detail.license && (
-            <span className="lrn-tool-chip">{detail.license}</span>
           )}
         </div>
       </header>
 
-      <div className="lrn-tool-body">
-        <section className="lrn-tool-sec">
-          <h2 className="lrn-tool-h2">Overview</h2>
-          {detail.overview.map((p, i) => (
-            <p className="lrn-tool-p" key={i}>
-              {p}
-            </p>
-          ))}
-        </section>
-
-        {detail.features.length > 0 && (
-          <section className="lrn-tool-sec">
-            <h2 className="lrn-tool-h2">What it does</h2>
-            <ul className="lrn-tool-feats">
-              {detail.features.map((f, i) => (
-                <li key={i}>{f}</li>
-              ))}
-            </ul>
-          </section>
-        )}
-
-        <section className="lrn-tool-sec">
-          <h2 className="lrn-tool-h2">Getting started</h2>
-          {detail.gettingStarted.intro && (
-            <p className="lrn-tool-p">{detail.gettingStarted.intro}</p>
-          )}
-          <ol className="lrn-tool-steps">
-            {detail.gettingStarted.steps.map((s, i) => (
-              <li className="lrn-tool-step" key={i}>
-                <h3 className="lrn-tool-step-h">{s.heading}</h3>
-                {s.body && <p className="lrn-tool-p">{s.body}</p>}
-                {s.code && (
-                  <div className="lrn-tool-code">
-                    {s.lang && (
-                      <span className="lrn-tool-code-lang">{s.lang}</span>
-                    )}
-                    <pre>
-                      <code>{s.code}</code>
-                    </pre>
-                  </div>
-                )}
+      <div className="lrn-art-layout">
+        <nav className="lrn-toc" aria-label="On this page">
+          <span className="lrn-toc-h">// ON THIS PAGE</span>
+          <ol>
+            {toc.map((t) => (
+              <li key={t.id}>
+                <a href={`#${t.id}`}>{t.title}</a>
               </li>
             ))}
           </ol>
-          <p className="lrn-tool-note">
-            Commands and code are distilled from the project's own
-            documentation — always check the{" "}
-            <a href={ghUrl} target="_blank" rel="noopener noreferrer">
-              official repo
-            </a>{" "}
-            for the latest.
-          </p>
-        </section>
+        </nav>
 
-        {detail.useCases.length > 0 && (
-          <section className="lrn-tool-sec">
-            <h2 className="lrn-tool-h2">When to use it</h2>
-            <ul className="lrn-tool-uses">
-              {detail.useCases.map((u, i) => (
-                <li key={i}>{u}</li>
-              ))}
-            </ul>
-          </section>
-        )}
-
-        {related.length > 0 && (
-          <section className="lrn-tool-sec">
-            <h2 className="lrn-tool-h2">
-              More in {detail.subcategoryTitle}
+        <div className="lrn-art-content">
+          <section id="overview" className="lrn-section" aria-labelledby="overview-h">
+            <h2 className="lrn-h2" id="overview-h">
+              <span className="lrn-h2-mark" aria-hidden="true">//</span> Overview
             </h2>
-            <div className="lrn-tool-related">
-              {related.map((t) => (
-                <a
-                  className="lrn-tool-rel"
-                  href={learnToolPath(t.slug)}
-                  data-internal="true"
-                  key={t.slug}
-                >
-                  <span className="lrn-tool-rel-name">{t.name}</span>
+            {detail.overview.map((p, i) => (
+              <p className="lrn-p" key={i}>
+                {p}
+              </p>
+            ))}
+          </section>
+
+          {detail.features.length > 0 && (
+            <section id="features" className="lrn-section" aria-labelledby="features-h">
+              <h2 className="lrn-h2" id="features-h">
+                <span className="lrn-h2-mark" aria-hidden="true">//</span> What it does
+              </h2>
+              <ul className="lrn-list">
+                {detail.features.map((f, i) => (
+                  <li key={i}>{f}</li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          <section
+            id="getting-started"
+            className="lrn-section"
+            aria-labelledby="getting-started-h"
+          >
+            <h2 className="lrn-h2" id="getting-started-h">
+              <span className="lrn-h2-mark" aria-hidden="true">//</span> Getting started
+            </h2>
+            {detail.gettingStarted.intro && (
+              <p className="lrn-p">{detail.gettingStarted.intro}</p>
+            )}
+            {detail.gettingStarted.steps.map((s, i) => (
+              <div key={i}>
+                <h3 className="lrn-h3">{s.heading}</h3>
+                {s.body && <p className="lrn-p">{s.body}</p>}
+                {s.code && (
+                  <Block block={{ type: "code", lang: s.lang || "text", code: s.code }} />
+                )}
+              </div>
+            ))}
+            <p className="lrn-p lrn-tool-src">
+              Commands and code are distilled from the project's own
+              documentation — always check the{" "}
+              <a href={ghUrl} target="_blank" rel="noopener noreferrer">
+                official repo
+              </a>{" "}
+              for the latest.
+            </p>
+          </section>
+
+          {detail.useCases.length > 0 && (
+            <section id="use-cases" className="lrn-section" aria-labelledby="use-cases-h">
+              <h2 className="lrn-h2" id="use-cases-h">
+                <span className="lrn-h2-mark" aria-hidden="true">//</span> When to use it
+              </h2>
+              <ul className="lrn-list">
+                {detail.useCases.map((u, i) => (
+                  <li key={i}>{u}</li>
+                ))}
+              </ul>
+            </section>
+          )}
+        </div>
+      </div>
+
+      {related.length > 0 && (
+        <section id="related" className="lrn-related" aria-label="Related tools">
+          <h2 className="lrn-h2">
+            <span className="lrn-h2-mark" aria-hidden="true">//</span> More in{" "}
+            {detail.subcategoryTitle}
+          </h2>
+          <div className="lrn-rel-grid">
+            {related.map((t) => (
+              <a
+                className="lrn-rel-card"
+                href={learnToolPath(t.slug)}
+                data-internal="true"
+                key={t.slug}
+              >
+                <span className="lrn-rel-meta">
+                  <span className="lrn-rel-cat">{detail.subcategoryTitle}</span>
                   {starsOf(t.repo) > 0 && (
-                    <span className="lrn-tool-rel-stars">
-                      <span className="lrn-tool-star" aria-hidden="true">
-                        ★
-                      </span>
-                      {formatStars(starsOf(t.repo))}
+                    <span className="lrn-rel-stars">
+                      ★ {formatStars(starsOf(t.repo))}
                     </span>
                   )}
-                  <span className="lrn-tool-rel-desc">{t.description}</span>
-                </a>
-              ))}
-            </div>
-          </section>
-        )}
+                </span>
+                <span className="lrn-rel-title">{t.name}</span>
+                <span className="lrn-rel-line">{t.description}</span>
+              </a>
+            ))}
+          </div>
+        </section>
+      )}
 
-        <a className="lrn-tool-back" href={learnLandscapePath} data-internal="true">
-          ← Back to the AI tooling landscape
+      <nav className="lrn-pn" aria-label="Back to the landscape">
+        <a className="lrn-pn-link lrn-pn-prev" href={learnLandscapePath} data-internal="true">
+          <span className="lrn-pn-dir">← LANDSCAPE</span>
+          <span className="lrn-pn-title">All open-source AI tools</span>
         </a>
-      </div>
+        <span className="lrn-pn-spacer" />
+      </nav>
     </article>
   );
 }
