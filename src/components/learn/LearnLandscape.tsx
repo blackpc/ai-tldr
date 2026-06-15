@@ -1,20 +1,24 @@
 /**
  * /learn/landscape — the open-source AI tooling landscape.
  *
- * A single, full-width, collapsible board of every notable open-source AI
- * project, grouped by category → subcategory. Each tool shows its live
- * GitHub star count (from github-stars.json, refreshed by the 2h sweep) and
- * a plain-English description revealed on hover. Pure/presentational — the
- * data is a static JSON chunk; no network calls at view time.
+ * Finder-style "Miller columns": category ▸ subcategory ▸ tools. The whole
+ * structure is visible at a glance (every category in the left column, every
+ * subcategory of the selected one in the middle) and you drill in by clicking
+ * across. There are NO inner scrollbars — only the page scrolls; the two nav
+ * columns stick while the (often long) tools column scrolls past them.
+ *
+ * Live GitHub star counts come from github-stars.json (refreshed by the 2h
+ * sweep). Pure/presentational — the data is a static JSON chunk, no network
+ * calls at view time. Also rendered server-side by prerender-learn.tsx.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import landscapeData from "../../data/learn/landscape.json";
 import githubStars from "../../data/learn/github-stars.json";
 import type {
   Landscape,
-  LandscapeCategory,
+  LandscapeSubcategory,
   LandscapeTool,
 } from "../../data/learn/schema";
 import { learnHubPath, learnToolPath } from "../../data/learn/schema";
@@ -26,17 +30,13 @@ const STARS = githubStars as Record<string, number>;
 const GH_MARK =
   "M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z";
 
-/** Per-category accent, cycled across a fixed neon palette. */
+/** Per-category accent, cycled across a fixed neon palette (17 distinct). */
 const ACCENTS = [
-  "#f7ff00",
-  "#4fe0c0",
-  "#6aa6ff",
-  "#ff86c2",
-  "#b98bff",
-  "#ffb14a",
-  "#8ce85a",
-  "#ff6b5d",
+  "#f7ff00", "#4fe0c0", "#6aa6ff", "#ff86c2", "#b98bff", "#ffb14a",
+  "#8ce85a", "#ff6b5d", "#39d0d8", "#d8d84a", "#ff9e64", "#7aa2f7",
+  "#bb9af7", "#9ece6a", "#e0af68", "#f7768e", "#2ac3de",
 ];
+const accentOf = (idx: number) => ACCENTS[idx % ACCENTS.length];
 
 function starsOf(repo: string): number {
   return STARS[repo.toLowerCase()] ?? 0;
@@ -63,7 +63,13 @@ function matchTool(t: LandscapeTool, q: string): boolean {
   );
 }
 
-function ToolRow({ tool }: { tool: LandscapeTool }) {
+function sortTools(tools: LandscapeTool[], byStars: boolean): LandscapeTool[] {
+  return [...tools].sort((a, b) =>
+    byStars ? starsOf(b.repo) - starsOf(a.repo) : a.name.localeCompare(b.name),
+  );
+}
+
+function ToolTile({ tool }: { tool: LandscapeTool }) {
   const stars = starsOf(tool.repo);
   return (
     <a className="lrn-ls-tool" href={learnToolPath(tool.slug)} data-internal="true">
@@ -92,102 +98,43 @@ function ToolRow({ tool }: { tool: LandscapeTool }) {
   );
 }
 
-function CategoryPanel({
-  cat,
-  accent,
-  open,
-  onToggle,
-  query,
-  sortByStars,
-}: {
-  cat: LandscapeCategory;
+interface FilteredSub extends LandscapeSubcategory {
+  tools: LandscapeTool[];
+}
+interface FilteredCat {
+  id: string;
+  title: string;
+  blurb: string;
   accent: string;
-  open: boolean;
-  onToggle: () => void;
-  query: string;
-  sortByStars: boolean;
-}) {
-  // Build the visible subcategories (filtered by the query, tools sorted).
-  const subs = useMemo(() => {
-    return cat.subcategories
-      .map((sc) => {
-        let tools = query ? sc.tools.filter((t) => matchTool(t, query)) : sc.tools;
-        tools = [...tools].sort((a, b) =>
-          sortByStars
-            ? starsOf(b.repo) - starsOf(a.repo)
-            : a.name.localeCompare(b.name),
-        );
-        return { ...sc, tools };
-      })
-      .filter((sc) => sc.tools.length > 0);
-  }, [cat, query, sortByStars]);
+  count: number;
+  subcategories: FilteredSub[];
+}
 
-  const count = subs.reduce((n, sc) => n + sc.tools.length, 0);
-  const totalStars = subs.reduce(
-    (n, sc) => n + sc.tools.reduce((s, t) => s + starsOf(t.repo), 0),
-    0,
-  );
-  if (count === 0) return null;
-  // When searching, force open so matches are always visible.
-  const expanded = open || query.length > 0;
-
-  return (
-    <section
-      className={`lrn-ls-panel${expanded ? " is-open" : ""}`}
-      style={{ ["--cat" as string]: accent }}
-    >
-      <button
-        className="lrn-ls-head"
-        onClick={onToggle}
-        aria-expanded={expanded}
-        type="button"
-      >
-        <span className="lrn-ls-head-bar" aria-hidden="true" />
-        <span className="lrn-ls-head-main">
-          <span className="lrn-ls-head-title">{cat.title}</span>
-          <span className="lrn-ls-head-blurb">{cat.blurb}</span>
-        </span>
-        <span className="lrn-ls-head-meta">
-          <span className="lrn-ls-head-stars">
-            <span className="lrn-ls-star" aria-hidden="true">
-              ★
-            </span>
-            {compactInt(totalStars)}
-          </span>
-          <span className="lrn-ls-head-count">{count}</span>
-          <span className="lrn-ls-chevron" aria-hidden="true">
-            {expanded ? "–" : "+"}
-          </span>
-        </span>
-      </button>
-      {expanded && (
-        <div className="lrn-ls-body">
-          {subs.map((sc) => (
-            <div className="lrn-ls-sub" key={sc.id}>
-              <h3 className="lrn-ls-sub-title">
-                {sc.title}
-                <span className="lrn-ls-sub-n">{sc.tools.length}</span>
-              </h3>
-              <div className="lrn-ls-tools">
-                {sc.tools.map((t) => (
-                  <ToolRow key={t.repo} tool={t} />
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
-  );
+/** Read the current category / subcategory selection from the URL query
+ *  (?cat=&sub=). SSR-safe: returns nulls when there is no window. */
+function readSelection(): { cat: string | null; sub: string | null } {
+  if (typeof window === "undefined") return { cat: null, sub: null };
+  const p = new URLSearchParams(window.location.search);
+  return { cat: p.get("cat"), sub: p.get("sub") };
 }
 
 export function LearnLandscapePage() {
   const [query, setQuery] = useState("");
   const [sortByStars, setSortByStars] = useState(true);
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  // Selection lives in the URL (?cat=&sub=) so it is shareable and the
+  // browser Back / Forward buttons step through it.
+  const [sel, setSel] = useState(readSelection);
+
+  // Re-read the selection when the user navigates Back / Forward.
+  useEffect(() => {
+    const onPop = () => setSel(readSelection());
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   const q = query.trim().toLowerCase();
 
+  // Global, unfiltered stats for the hero.
   const stats = useMemo(() => {
     let tools = 0;
     let stars = 0;
@@ -200,26 +147,60 @@ export function LearnLandscapePage() {
     return { tools, stars, categories: DATA.categories.length };
   }, []);
 
-  // Categories that survive the current search (so the "no results" state is
-  // accurate and we can show how many matched).
-  const visibleCats = useMemo(() => {
-    if (!q) return DATA.categories;
-    return DATA.categories.filter((c) =>
-      c.subcategories.some((s) => s.tools.some((t) => matchTool(t, q))),
-    );
-  }, [q]);
+  // The tree, filtered by the query and with tools sorted. Categories /
+  // subcategories with no surviving tools drop out so the columns only ever
+  // show things you can actually open.
+  const tree = useMemo<FilteredCat[]>(() => {
+    return DATA.categories
+      .map((c, i) => {
+        const subs = c.subcategories
+          .map((sc) => {
+            const tools = sortTools(
+              q ? sc.tools.filter((t) => matchTool(t, q)) : sc.tools,
+              sortByStars,
+            );
+            return { ...sc, tools };
+          })
+          .filter((sc) => sc.tools.length > 0);
+        const count = subs.reduce((n, sc) => n + sc.tools.length, 0);
+        return {
+          id: c.id,
+          title: c.title,
+          blurb: c.blurb,
+          accent: accentOf(i),
+          count,
+          subcategories: subs,
+        };
+      })
+      .filter((c) => c.subcategories.length > 0);
+  }, [q, sortByStars]);
 
-  const toggle = (id: string) =>
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  // Resolve the effective selection during render (no setState-in-effect): if
+  // the chosen category/subcategory was filtered away, fall back to the first
+  // available one.
+  const cat = tree.find((c) => c.id === sel.cat) ?? tree[0];
+  const sub = cat
+    ? cat.subcategories.find((s) => s.id === sel.sub) ?? cat.subcategories[0]
+    : undefined;
 
-  const expandAll = () => setCollapsed(new Set());
-  const collapseAll = () =>
-    setCollapsed(new Set(DATA.categories.map((c) => c.id)));
+  // Push a new history entry per selection so Back returns to the previous
+  // category/subcategory. The pathname is unchanged, so the SPA router keeps
+  // this page mounted — only the ?cat=&sub= query changes.
+  const navigate = (catId: string, subId: string) => {
+    const params = new URLSearchParams(window.location.search);
+    params.set("cat", catId);
+    params.set("sub", subId);
+    window.history.pushState({}, "", `${window.location.pathname}?${params}`);
+    setSel({ cat: catId, sub: subId });
+  };
+
+  const selectCat = (id: string) => {
+    const next = tree.find((c) => c.id === id);
+    navigate(id, next?.subcategories[0]?.id ?? "");
+  };
+  const selectSub = (id: string) => {
+    if (cat) navigate(cat.id, id);
+  };
 
   return (
     <div className="lrn-page lrn-ls-page">
@@ -238,8 +219,8 @@ export function LearnLandscapePage() {
             </h1>
             <p className="lrn-ls-dek">
               The open-source AI stack on one page — runtimes, agents, RAG,
-              vector stores, fine-tuning, eval, serving and more. Browse the
-              tree, follow the stars, discover what you've been missing.
+              vector stores, fine-tuning, eval, serving and more. Pick a
+              category, then a group, and follow the stars.
             </p>
           </div>
           <dl className="lrn-ls-stats">
@@ -299,45 +280,84 @@ export function LearnLandscapePage() {
               A–Z
             </button>
           </span>
-          <button
-            type="button"
-            className="lrn-ls-toggle-all"
-            onClick={expandAll}
-            disabled={q.length > 0}
-          >
-            expand all
-          </button>
-          <button
-            type="button"
-            className="lrn-ls-toggle-all"
-            onClick={collapseAll}
-            disabled={q.length > 0}
-          >
-            collapse all
-          </button>
         </div>
       </div>
 
-      {visibleCats.length === 0 ? (
+      {!cat || !sub ? (
         <p className="lrn-ls-empty">
           No tools match “{query}”. Try a broader term.
         </p>
       ) : (
-        <div className="lrn-ls-grid">
-          {visibleCats.map((cat) => {
-            const idx = DATA.categories.indexOf(cat);
-            return (
-              <CategoryPanel
-                key={cat.id}
-                cat={cat}
-                accent={ACCENTS[idx % ACCENTS.length]}
-                open={!collapsed.has(cat.id)}
-                onToggle={() => toggle(cat.id)}
-                query={q}
-                sortByStars={sortByStars}
-              />
-            );
-          })}
+        <div className="lrn-ls-miller">
+          {/* Column 1 — categories */}
+          <div className="lrn-ls-mcol lrn-ls-mcol-cats">
+            <div className="lrn-ls-msticky">
+              <div className="lrn-ls-mhdr">
+                Categories <span className="lrn-ls-mhdr-n">{tree.length}</span>
+              </div>
+              {tree.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  className={`lrn-ls-mrow${c.id === cat.id ? " is-on" : ""}`}
+                  style={{ ["--cat" as string]: c.accent }}
+                  onClick={() => selectCat(c.id)}
+                  aria-current={c.id === cat.id}
+                >
+                  <span className="lrn-ls-mbar" aria-hidden="true" />
+                  <span className="lrn-ls-mname">{c.title}</span>
+                  <span className="lrn-ls-mn">{c.count}</span>
+                  <span className="lrn-ls-marr" aria-hidden="true">
+                    ›
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Column 2 — subcategories of the selected category */}
+          <div
+            className="lrn-ls-mcol lrn-ls-mcol-subs"
+            style={{ ["--cat" as string]: cat.accent }}
+          >
+            <div className="lrn-ls-msticky">
+              <div className="lrn-ls-mhdr">{cat.title}</div>
+              {cat.subcategories.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  className={`lrn-ls-mrow${s.id === sub.id ? " is-on" : ""}`}
+                  onClick={() => selectSub(s.id)}
+                  aria-current={s.id === sub.id}
+                >
+                  <span className="lrn-ls-mname">{s.title}</span>
+                  <span className="lrn-ls-mn">{s.tools.length}</span>
+                  <span className="lrn-ls-marr" aria-hidden="true">
+                    ›
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Column 3 — tools in the selected subcategory */}
+          <div
+            className="lrn-ls-mcol lrn-ls-mcol-tools"
+            style={{ ["--cat" as string]: cat.accent }}
+          >
+            <div className="lrn-ls-mhdr lrn-ls-mhdr-tools">
+              <span className="lrn-ls-mhdr-title">{sub.title}</span>
+              <span className="lrn-ls-mhdr-sub">
+                {cat.title} · {sub.tools.length} tool
+                {sub.tools.length === 1 ? "" : "s"}
+              </span>
+            </div>
+            <div className="lrn-ls-mtiles">
+              {sub.tools.map((t) => (
+                <ToolTile key={t.repo} tool={t} />
+              ))}
+            </div>
+          </div>
         </div>
       )}
 
