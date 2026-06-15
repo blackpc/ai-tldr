@@ -26,9 +26,13 @@ if (!Array.isArray(data.categories) || data.categories.length === 0)
   err("categories must be a non-empty array");
 
 const repoSeen = new Map<string, string>(); // lower → first display location
+const slugSeen = new Map<string, string>();
 const catIds = new Set<string>();
 let toolCount = 0;
+let detailMissing = 0;
 const REPO_RE = /^[^/\s]+\/[^/\s]+$/;
+const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const TOOLS_DIR = "src/data/learn/tools";
 
 for (const c of data.categories ?? []) {
   const where = `category "${c.id}"`;
@@ -54,6 +58,38 @@ for (const c of data.categories ?? []) {
       toolCount++;
       const tw = `${sw} → "${t.name}"`;
       if (!t.name || typeof t.name !== "string") err(`${sw} a tool is missing a name`);
+      if (typeof t.slug !== "string" || !SLUG_RE.test(t.slug))
+        err(`${tw} slug invalid: ${t.slug}`);
+      else {
+        if (slugSeen.has(t.slug))
+          err(`duplicate slug ${t.slug} (also in ${slugSeen.get(t.slug)})`);
+        slugSeen.set(t.slug, tw);
+        const file = `${TOOLS_DIR}/${t.slug}.json`;
+        if (!existsSync(file)) {
+          detailMissing++;
+          err(`${tw} has no detail page (${file})`);
+        } else {
+          try {
+            const d = JSON.parse(readFileSync(file, "utf8"));
+            const need = [
+              "slug", "name", "repo", "tagline", "seoTitle", "metaDescription",
+              "overview", "features", "gettingStarted", "useCases",
+            ];
+            for (const k of need)
+              if (d[k] == null) err(`${t.slug}.json missing ${k}`);
+            if (d.slug !== t.slug) err(`${t.slug}.json slug mismatch (${d.slug})`);
+            if (d.repo !== t.repo) err(`${t.slug}.json repo mismatch (${d.repo})`);
+            if (!Array.isArray(d.overview) || d.overview.length < 2)
+              err(`${t.slug}.json overview needs ≥2 paragraphs`);
+            if (!d.gettingStarted?.steps?.length)
+              err(`${t.slug}.json gettingStarted has no steps`);
+            if ((d.seoTitle ?? "").length > 70)
+              err(`${t.slug}.json seoTitle too long (${d.seoTitle.length})`);
+          } catch {
+            err(`${t.slug}.json is not valid JSON`);
+          }
+        }
+      }
       if (typeof t.repo !== "string" || !REPO_RE.test(t.repo))
         err(`${tw} repo not "owner/repo": ${t.repo}`);
       else {
@@ -77,8 +113,11 @@ for (const c of data.categories ?? []) {
   }
 }
 
-if (warnings.length)
-  console.warn(`[check-landscape] ${warnings.length} repos missing star counts (will fill on next refresh)`);
+if (detailMissing)
+  console.warn(`[check-landscape] ${detailMissing}/${toolCount} tools have no detail page yet`);
+const starless = warnings.filter((w) => w.includes("star count")).length;
+if (starless)
+  console.warn(`[check-landscape] ${starless} repos missing star counts (will fill on next refresh)`);
 
 if (errors.length) {
   console.error(`[check-landscape] FAILED with ${errors.length} error(s):`);

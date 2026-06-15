@@ -17,7 +17,7 @@ import type {
   LandscapeCategory,
   LandscapeTool,
 } from "../../data/learn/schema";
-import { learnHubPath } from "../../data/learn/schema";
+import { learnHubPath, learnToolPath } from "../../data/learn/schema";
 import { Breadcrumbs } from "./ArticleBody";
 
 const DATA = landscapeData as Landscape;
@@ -66,12 +66,7 @@ function matchTool(t: LandscapeTool, q: string): boolean {
 function ToolRow({ tool }: { tool: LandscapeTool }) {
   const stars = starsOf(tool.repo);
   return (
-    <a
-      className="lrn-ls-tool"
-      href={`https://github.com/${tool.repo}`}
-      target="_blank"
-      rel="noopener noreferrer"
-    >
+    <a className="lrn-ls-tool" href={learnToolPath(tool.slug)} data-internal="true">
       <span className="lrn-ls-tool-row">
         <span className="lrn-ls-gh" aria-hidden="true">
           <svg viewBox="0 0 16 16" width="13" height="13">
@@ -89,16 +84,10 @@ function ToolRow({ tool }: { tool: LandscapeTool }) {
         )}
       </span>
       <span className="lrn-ls-tool-desc">{tool.description}</span>
-      {tool.homepage ? (
-        <span className="lrn-ls-tool-foot">
-          <span className="lrn-ls-tool-repo">{tool.repo}</span>
-          <span className="lrn-ls-tool-site">site ↗</span>
-        </span>
-      ) : (
-        <span className="lrn-ls-tool-foot">
-          <span className="lrn-ls-tool-repo">{tool.repo}</span>
-        </span>
-      )}
+      <span className="lrn-ls-tool-foot">
+        <span className="lrn-ls-tool-repo">{tool.repo}</span>
+        <span className="lrn-ls-tool-site">details →</span>
+      </span>
     </a>
   );
 }
@@ -353,8 +342,9 @@ export function LearnLandscapePage() {
       )}
 
       <p className="lrn-ls-note">
-        Star counts are pulled live from GitHub and refreshed every few hours.
-        Open-source projects only — each tile links to its repository.
+        Open-source projects only. Click any tool for a detail page with a
+        plain-English overview and a getting-started guide. Star counts are
+        pulled live from GitHub and refreshed every few hours.
       </p>
     </div>
   );

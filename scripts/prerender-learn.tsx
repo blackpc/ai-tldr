@@ -30,12 +30,14 @@ import {
   learnLandscapePath,
   learnMapPath,
   learnSubcategoryPath,
+  learnToolPath,
 } from "../src/data/learn/schema";
-import type { Landscape } from "../src/data/learn/schema";
+import type { Landscape, LandscapeToolDetail } from "../src/data/learn/schema";
 import { learnTaxonomy, learnArticleCount } from "../src/data/learn/nav";
 import { ArticleBody } from "../src/components/learn/ArticleBody";
 import LearnMap from "../src/components/learn/LearnMap";
 import { LearnLandscapePage } from "../src/components/learn/LearnLandscape";
+import { LearnToolPage } from "../src/components/learn/LearnTool";
 import landscapeData from "../src/data/learn/landscape.json";
 import {
   LearnCategoryPage,
@@ -105,6 +107,27 @@ function loadArticles(): Map<string, LearnArticle> {
       map.set(a.slug, a);
     } catch {
       console.warn(`[prerender-learn] skipping unparseable ${file}`);
+    }
+  }
+  return map;
+}
+
+const TOOLS_DIR = join(ROOT, "src", "data", "learn", "tools");
+
+function loadToolDetails(): Map<string, LandscapeToolDetail> {
+  const map = new Map<string, LandscapeToolDetail>();
+  let files: string[] = [];
+  try {
+    files = readdirSync(TOOLS_DIR).filter((f) => f.endsWith(".json"));
+  } catch {
+    return map; // dir may not exist yet
+  }
+  for (const f of files) {
+    try {
+      const d = JSON.parse(readFileSync(join(TOOLS_DIR, f), "utf8")) as LandscapeToolDetail;
+      map.set(d.slug, d);
+    } catch {
+      console.warn(`[prerender-learn] skipping unparseable tool ${f}`);
     }
   }
   return map;
@@ -546,8 +569,71 @@ export async function prerenderLearn(opts: {
     }
   }
 
+  // ---- tool detail pages (/learn/landscape/<slug>) ----
+  const toolDetails = loadToolDetails();
+  let toolPages = 0;
+  for (const detail of toolDetails.values()) {
+    const tp = learnToolPath(detail.slug);
+    const tUrl = `${siteUrl}${tp}`;
+    const ghUrl = `https://github.com/${detail.repo}`;
+    const toolLd = [
+      wrapJsonLd({
+        "@context": "https://schema.org",
+        "@type": "SoftwareSourceCode",
+        "@id": `${tUrl}#software`,
+        name: detail.name,
+        description: detail.tagline,
+        url: tUrl,
+        codeRepository: ghUrl,
+        ...(detail.language ? { programmingLanguage: detail.language } : {}),
+        ...(detail.license ? { license: detail.license } : {}),
+        applicationCategory: detail.categoryTitle,
+        isAccessibleForFree: true,
+        author: { "@id": `${siteUrl}/#org` },
+      }),
+      wrapJsonLd({
+        "@context": "https://schema.org",
+        "@type": "HowTo",
+        name: `Getting started with ${detail.name}`,
+        description: detail.gettingStarted.intro || `Install and run ${detail.name}.`,
+        step: detail.gettingStarted.steps.map((s, i) => ({
+          "@type": "HowToStep",
+          position: i + 1,
+          name: s.heading,
+          text: [s.body, s.code].filter(Boolean).join("\n") || s.heading,
+        })),
+      }),
+      breadcrumbLd(wrapJsonLd, siteUrl, [
+        { name: "AI/TLDR", path: "/" },
+        { name: "Learn AI", path: learnHubPath },
+        { name: "Landscape", path: learnLandscapePath },
+        { name: detail.name, path: tp },
+      ]),
+    ].join("\n    ");
+    await writeHtml(
+      `learn/landscape/${detail.slug}/index.html`,
+      injectBody(
+        injectMeta(
+          template,
+          {
+            title: learnTitle(detail.seoTitle),
+            description: clamp(detail.metaDescription, 160),
+            canonical: tUrl,
+            ogType: "article",
+            ogImage: defaultOgImage,
+          },
+          toolLd,
+        ),
+        renderToStaticMarkup(<LearnToolPage detail={detail} />),
+        detail,
+      ),
+    );
+    toolPages++;
+    urls.push({ loc: tUrl, lastmod: today, changefreq: "weekly", priority: 0.6 });
+  }
+
   console.log(
-    `[prerender-learn] wrote ${pages} learn pages (${learnArticleCount()} articles in taxonomy, ${articles.size} article files)`,
+    `[prerender-learn] wrote ${pages} learn pages (${learnArticleCount()} articles in taxonomy, ${articles.size} article files) + ${toolPages} tool pages`,
   );
   return urls;
 }

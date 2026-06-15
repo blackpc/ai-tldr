@@ -70,6 +70,9 @@ function parseRoute(): Route {
     return { kind: "learn-landscape" };
   }
 
+  const toolMatch = path.match(/^\/learn\/landscape\/([^/]+)\/?$/);
+  if (toolMatch) return { kind: "learn-tool", slug: toolMatch[1] };
+
   const learn = path.match(/^\/learn(?:\/([^/]+))?(?:\/([^/]+))?(?:\/([^/]+))?\/?$/);
   if (learn) {
     const [, cat, sub, slug] = learn;

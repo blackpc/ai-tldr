@@ -287,12 +287,59 @@ export function learnArticlePath(
 export interface LandscapeTool {
   /** Display name of the project. */
   name: string;
+  /** URL slug for the tool's detail page (globally unique). */
+  slug: string;
   /** GitHub "owner/repo" (case as on GitHub); the join key for star counts. */
   repo: string;
   /** Official site / docs URL, if any. */
   homepage?: string;
   /** One plain-English sentence: what it is and what it is for. */
   description: string;
+}
+
+/** Canonical site path for a single tool's detail page. */
+export function learnToolPath(slug: string): string {
+  return `/learn/landscape/${slug}/`;
+}
+
+/** One step in a tool's getting-started walkthrough. */
+export interface ToolStartStep {
+  heading: string;
+  body?: string;
+  /** Code block contents (exact commands/snippet), if any. */
+  code?: string;
+  /** Highlight language hint: bash | python | ts | js | yaml | json | text. */
+  lang?: string;
+}
+
+/**
+ * A tool's standalone, SEO-targeted detail page content. Lives one-per-file
+ * at src/data/learn/tools/<slug>.json (lazy vite chunk), and is rendered both
+ * client-side and by the prerenderer. Self-contained: carries the identity
+ * fields copied from the landscape tile plus the generated long-form content.
+ */
+export interface LandscapeToolDetail {
+  slug: string;
+  name: string;
+  repo: string;
+  homepage?: string;
+  category: string;
+  categoryTitle: string;
+  subcategory: string;
+  subcategoryTitle: string;
+  /** Short crisp one-liner (H1 subtitle / OG). */
+  tagline: string;
+  seoTitle: string;
+  metaDescription: string;
+  /** 2-3 plain-English paragraphs. */
+  overview: string[];
+  /** 3-6 capability bullets. */
+  features: string[];
+  gettingStarted: { intro?: string; steps: ToolStartStep[] };
+  /** 2-4 "reach for it when…" lines. */
+  useCases: string[];
+  language?: string;
+  license?: string;
 }
 
 export interface LandscapeSubcategory {

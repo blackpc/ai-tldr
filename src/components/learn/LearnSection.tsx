@@ -25,9 +25,12 @@ import {
   findLearnCategory,
   findLearnSubcategory,
 } from "../../data/learn/nav";
+import type { LandscapeToolDetail } from "../../data/learn/schema";
+import { learnToolPath } from "../../data/learn/schema";
 import { ArticleBody } from "./ArticleBody";
 import LearnMap from "./LearnMap";
 import { LearnLandscapePage } from "./LearnLandscape";
+import { LearnToolPage } from "./LearnTool";
 import {
   LearnCategoryPage,
   LearnHubPage,
@@ -39,6 +42,7 @@ export type LearnRoute =
   | { kind: "learn" }
   | { kind: "learn-map" }
   | { kind: "learn-landscape" }
+  | { kind: "learn-tool"; slug: string }
   | { kind: "learn-cat"; cat: string }
   | { kind: "learn-sub"; cat: string; sub: string }
   | { kind: "learn-article"; cat: string; sub: string; slug: string };
@@ -54,6 +58,16 @@ for (const [path, loader] of Object.entries(articleModules)) {
   articleLoaders.set(slug, loader);
 }
 
+// Same per-file chunking for landscape tool detail pages.
+const toolModules = import.meta.glob<{ default: LandscapeToolDetail }>(
+  "../../data/learn/tools/*.json",
+);
+const toolLoaders = new Map<string, () => Promise<{ default: LandscapeToolDetail }>>();
+for (const [path, loader] of Object.entries(toolModules)) {
+  const slug = path.split("/").pop()!.replace(/\.json$/, "");
+  toolLoaders.set(slug, loader);
+}
+
 /** Prerendered pages embed the article JSON so the SPA's first render
  *  matches the static HTML without waiting for the chunk fetch. */
 function embeddedArticle(slug: string): LearnArticle | null {
@@ -62,6 +76,18 @@ function embeddedArticle(slug: string): LearnArticle | null {
   try {
     const data = JSON.parse(el.textContent) as LearnArticle;
     return data.slug === slug ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Same embedded-payload trick for tool detail pages. */
+function embeddedTool(slug: string): LandscapeToolDetail | null {
+  const el = document.getElementById("__LEARN_DATA__");
+  if (!el?.textContent) return null;
+  try {
+    const data = JSON.parse(el.textContent) as LandscapeToolDetail;
+    return data.slug === slug && Array.isArray(data.overview) ? data : null;
   } catch {
     return null;
   }
@@ -126,6 +152,47 @@ function LearnArticleView({ slug }: { slug: string }) {
   return <ArticleBody article={article} />;
 }
 
+function LearnToolView({ slug }: { slug: string }) {
+  const [detail, setDetail] = useState<LandscapeToolDetail | null>(() =>
+    embeddedTool(slug),
+  );
+
+  useEffect(() => {
+    if (detail?.slug === slug) return;
+    setDetail(null);
+    const loader = toolLoaders.get(slug);
+    if (!loader) return;
+    let cancelled = false;
+    loader().then((mod) => {
+      if (!cancelled) setDetail(mod.default);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [slug, detail]);
+
+  // Meta is data-dependent (lives in the detail chunk), so set it here once
+  // the detail is available rather than in the route-level effect.
+  useEffect(() => {
+    if (detail?.slug === slug)
+      setPageMeta(
+        `${detail.seoTitle} | AI/TLDR`,
+        detail.metaDescription,
+        learnToolPath(slug),
+      );
+  }, [detail, slug]);
+
+  if (!toolLoaders.has(slug)) return <NotFound what="tool" />;
+  if (!detail) {
+    return (
+      <div className="lrn-page">
+        <div className="lrn-loading">// loading…</div>
+      </div>
+    );
+  }
+  return <LearnToolPage detail={detail} />;
+}
+
 export default function LearnSection({
   route,
   onNavigate,
@@ -153,6 +220,8 @@ export default function LearnSection({
         "A browsable map of the open-source AI stack: runtimes, agents, RAG, vector databases, fine-tuning, eval, serving and more — grouped by category, ranked by GitHub stars.",
         learnLandscapePath,
       );
+    } else if (route.kind === "learn-tool") {
+      // Meta is set by LearnToolView once the detail chunk loads.
     } else if (route.kind === "learn-cat") {
       const cat = findLearnCategory(route.cat);
       if (cat)
@@ -205,6 +274,8 @@ export default function LearnSection({
     body = <LearnMap onNavigate={onNavigate} />;
   } else if (route.kind === "learn-landscape") {
     body = <LearnLandscapePage />;
+  } else if (route.kind === "learn-tool") {
+    body = <LearnToolView slug={route.slug} />;
   } else if (route.kind === "learn-cat") {
     const cat = findLearnCategory(route.cat);
     body = cat ? <LearnCategoryPage category={cat} /> : <NotFound what="topic" />;
