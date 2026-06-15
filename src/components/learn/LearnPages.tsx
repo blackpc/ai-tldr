@@ -76,27 +76,38 @@ export function LearnHubPage() {
   return (
     <div className="lrn-page">
       <header className="lrn-hub-head">
-        <span className="lrn-hub-eyebrow">// THE FIELD GUIDE</span>
-        <h1 className="lrn-hub-title">
-          LEARN <span className="lrn-hub-title-accent">AI</span>
-        </h1>
-        <p className="lrn-hub-dek">
-          A plain-English encyclopedia of AI engineering — LLMs, RAG,
-          vector databases, agents, fine-tuning and the tools around them.
-          Pick a track. Every page starts from zero and ends deep.
-        </p>
-        <a className="lrn-hub-maplink" href={learnMapPath} data-internal="true">
-          <span className="lrn-hub-maplink-ic" aria-hidden="true">
-            <MapGlyph />
+        <div className="lrn-hub-headline">
+          <span className="lrn-hub-eyebrow">// THE FIELD GUIDE</span>
+          <h1 className="lrn-hub-title">
+            LEARN <span className="lrn-hub-title-accent">AI</span>
+          </h1>
+          <p className="lrn-hub-dek">
+            A plain-English encyclopedia of AI engineering — LLMs, RAG,
+            vector databases, agents, fine-tuning and the tools around them.
+            Every page starts from zero and ends deep.
+          </p>
+        </div>
+        <a
+          className="lrn-hub-citycta"
+          href={learnMapPath}
+          data-internal="true"
+          style={{ backgroundImage: "url(/learn-media/city-hero.jpg)" }}
+        >
+          <span className="lrn-hub-citycta-grad" aria-hidden="true" />
+          <span className="lrn-hub-citycta-top">
+            <span className="lrn-hub-citycta-ic" aria-hidden="true">
+              <MapGlyph />
+            </span>
+            <span className="lrn-hub-citycta-tag">INTERACTIVE · 3D</span>
           </span>
-          <span className="lrn-hub-maplink-tx">
-            <span className="lrn-hub-maplink-lead">Enter Knowledge City</span>
-            <span className="lrn-hub-maplink-sub">
+          <span className="lrn-hub-citycta-body">
+            <span className="lrn-hub-citycta-lead">Enter Knowledge City</span>
+            <span className="lrn-hub-citycta-sub">
               every article is a tower — read it to light it up
             </span>
-          </span>
-          <span className="lrn-hub-maplink-go" aria-hidden="true">
-            →
+            <span className="lrn-hub-citycta-go">
+              ENTER <span aria-hidden="true">→</span>
+            </span>
           </span>
         </a>
       </header>
