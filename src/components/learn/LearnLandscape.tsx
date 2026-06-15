@@ -21,8 +21,7 @@ import type {
   LandscapeSubcategory,
   LandscapeTool,
 } from "../../data/learn/schema";
-import { learnHubPath, learnToolPath } from "../../data/learn/schema";
-import { Breadcrumbs } from "./ArticleBody";
+import { learnToolPath } from "../../data/learn/schema";
 
 const DATA = landscapeData as Landscape;
 const STARS = githubStars as Record<string, number>;
@@ -223,39 +222,23 @@ export function LearnLandscapePage() {
   return (
     <div className="lrn-page lrn-ls-page">
       <header className="lrn-ls-hero">
-        <Breadcrumbs
-          trail={[
-            { label: "LEARN", href: learnHubPath },
-            { label: "Landscape" },
-          ]}
-        />
-        <div className="lrn-ls-hero-row">
-          <div className="lrn-ls-hero-text">
-            <span className="lrn-ls-eyebrow">// THE OPEN-SOURCE MAP</span>
-            <h1 className="lrn-ls-title">
-              AI TOOLING <span className="lrn-ls-title-accent">LANDSCAPE</span>
-            </h1>
-            <p className="lrn-ls-dek">
-              The open-source AI stack on one page — runtimes, agents, RAG,
-              vector stores, fine-tuning, eval, serving and more. Pick a
-              category, then a group, and follow the stars.
-            </p>
+        <h1 className="lrn-ls-title">
+          AI Tooling <span className="lrn-ls-title-accent">Landscape</span>
+        </h1>
+        <dl className="lrn-ls-stats">
+          <div className="lrn-ls-stat">
+            <dd>{stats.tools}</dd>
+            <dt>tools</dt>
           </div>
-          <dl className="lrn-ls-stats">
-            <div className="lrn-ls-stat">
-              <dt>tools</dt>
-              <dd>{stats.tools}</dd>
-            </div>
-            <div className="lrn-ls-stat">
-              <dt>categories</dt>
-              <dd>{stats.categories}</dd>
-            </div>
-            <div className="lrn-ls-stat">
-              <dt>★ combined</dt>
-              <dd>{compactInt(stats.stars)}</dd>
-            </div>
-          </dl>
-        </div>
+          <div className="lrn-ls-stat">
+            <dd>{stats.categories}</dd>
+            <dt>categories</dt>
+          </div>
+          <div className="lrn-ls-stat">
+            <dd>{compactInt(stats.stars)}</dd>
+            <dt>★ stars</dt>
+          </div>
+        </dl>
       </header>
 
       <div className="lrn-ls-bar">
