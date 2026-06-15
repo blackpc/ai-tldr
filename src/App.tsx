@@ -174,6 +174,10 @@ function pageFromRoute(route: Route): Page {
 function App() {
   const [route, setRoute] = useState<Route>(() => parseRoute());
   const page: Page = pageFromRoute(route);
+  // The landscape + per-tool pages live under the Learn section but get their
+  // own nav link, so split the "learn" active state between the two.
+  const isLandscape =
+    route.kind === "learn-landscape" || route.kind === "learn-tool";
   const [active, setActive] = useState<Set<Category>>(() =>
     parseCategoriesFromUrl(),
   );
@@ -592,7 +596,7 @@ function App() {
             </button>
             <button
               type="button"
-              className={`nav-link ${page === "learn" ? "nav-active" : ""}`}
+              className={`nav-link ${page === "learn" && !isLandscape ? "nav-active" : ""}`}
               onClick={() => {
                 setMenuOpen(false);
                 goLearnPath("/learn/");
@@ -600,6 +604,16 @@ function App() {
             >
               <span className="nav-link-lbl">LEARN</span>
               <span className="nav-link-num">{learnCount.articles}</span>
+            </button>
+            <button
+              type="button"
+              className={`nav-link ${isLandscape ? "nav-active" : ""}`}
+              onClick={() => {
+                setMenuOpen(false);
+                goLearnPath("/learn/landscape/");
+              }}
+            >
+              <span className="nav-link-lbl">LANDSCAPE</span>
             </button>
             <button
               type="button"
