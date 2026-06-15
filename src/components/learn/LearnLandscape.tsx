@@ -71,30 +71,48 @@ function sortTools(tools: LandscapeTool[], byStars: boolean): LandscapeTool[] {
 
 function ToolTile({ tool }: { tool: LandscapeTool }) {
   const stars = starsOf(tool.repo);
+  const ghUrl = `https://github.com/${tool.repo}`;
+  // The whole card is the (internal) detail link via a stretched ::after; the
+  // repo link in the footer is raised above it so it opens GitHub directly.
   return (
-    <a className="lrn-ls-tool" href={learnToolPath(tool.slug)} data-internal="true">
-      <span className="lrn-ls-tool-row">
-        <span className="lrn-ls-gh" aria-hidden="true">
-          <svg viewBox="0 0 16 16" width="13" height="13">
-            <path fill="currentColor" d={GH_MARK} />
-          </svg>
-        </span>
-        <span className="lrn-ls-tool-name">{tool.name}</span>
-        {stars > 0 && (
-          <span className="lrn-ls-tool-stars">
-            <span className="lrn-ls-star" aria-hidden="true">
-              ★
-            </span>
-            {formatStars(stars)}
+    <div className="lrn-ls-tool">
+      <a
+        className="lrn-ls-tool-link"
+        href={learnToolPath(tool.slug)}
+        data-internal="true"
+        aria-label={`${tool.name} — details`}
+      >
+        <span className="lrn-ls-tool-row">
+          <span className="lrn-ls-gh" aria-hidden="true">
+            <svg viewBox="0 0 16 16" width="13" height="13">
+              <path fill="currentColor" d={GH_MARK} />
+            </svg>
           </span>
-        )}
-      </span>
-      <span className="lrn-ls-tool-desc">{tool.description}</span>
+          <span className="lrn-ls-tool-name">{tool.name}</span>
+          {stars > 0 && (
+            <span className="lrn-ls-tool-stars">
+              <span className="lrn-ls-star" aria-hidden="true">
+                ★
+              </span>
+              {formatStars(stars)}
+            </span>
+          )}
+        </span>
+        <span className="lrn-ls-tool-desc">{tool.description}</span>
+      </a>
       <span className="lrn-ls-tool-foot">
-        <span className="lrn-ls-tool-repo">{tool.repo}</span>
+        <a
+          className="lrn-ls-tool-repo"
+          href={ghUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={`Open ${tool.repo} on GitHub`}
+        >
+          {tool.repo} ↗
+        </a>
         <span className="lrn-ls-tool-site">details →</span>
       </span>
-    </a>
+    </div>
   );
 }
 
