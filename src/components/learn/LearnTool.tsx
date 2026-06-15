@@ -48,14 +48,15 @@ export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
 
   const toc = [
     { id: "overview", title: "Overview" },
-    { id: "features", title: "What it does" },
+    ...(detail.features.length > 0 ? [{ id: "features", title: "What it does" }] : []),
     { id: "getting-started", title: "Getting started" },
-    { id: "use-cases", title: "When to use it" },
-    ...(related.length > 0 ? [{ id: "related", title: "Related tools" }] : []),
+    ...(detail.useCases.length > 0 ? [{ id: "use-cases", title: "When to use it" }] : []),
   ];
 
+  const catHref = `${learnLandscapePath}?cat=${detail.category}&sub=${detail.subcategory}`;
+
   return (
-    <article className="lrn-article">
+    <article className="lrn-article lrn-tool">
       <header className="lrn-art-head">
         <Breadcrumbs
           trail={[
@@ -66,63 +67,9 @@ export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
         />
         <h1 className="lrn-art-title">{detail.name}</h1>
         <p className="lrn-art-tagline">{detail.tagline}</p>
-        <div className="lrn-art-meta">
-          <span className="lrn-art-updated">
-            {detail.categoryTitle} · {detail.subcategoryTitle}
-          </span>
-          {detail.language && (
-            <span className="lrn-art-updated">{detail.language}</span>
-          )}
-          {detail.license && (
-            <span className="lrn-art-updated">{detail.license}</span>
-          )}
-        </div>
-        <div className="lrn-art-links" aria-label="Official links">
-          <a
-            className="lrn-art-home lrn-art-gh"
-            href={ghUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <svg
-              className="lrn-gh-mark"
-              viewBox="0 0 16 16"
-              width="15"
-              height="15"
-              aria-hidden="true"
-            >
-              <path fill="currentColor" d={GH_MARK} />
-            </svg>
-            <span className="lrn-art-home-loc">{detail.repo}</span>
-            {stars > 0 && (
-              <span className="lrn-gh-stars">
-                <span className="lrn-gh-star" aria-hidden="true">
-                  ★
-                </span>
-                {formatStars(stars)}
-              </span>
-            )}
-          </a>
-          {detail.homepage && (
-            <a
-              className="lrn-art-home"
-              href={detail.homepage}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              <span className="lrn-art-home-kind">WEBSITE</span>
-              <span className="lrn-art-home-loc">
-                {detail.homepage.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "")}
-              </span>
-              <span className="lrn-art-home-arrow" aria-hidden="true">
-                ↗
-              </span>
-            </a>
-          )}
-        </div>
       </header>
 
-      <div className="lrn-art-layout">
+      <div className="lrn-tool-layout">
         <nav className="lrn-toc" aria-label="On this page">
           <span className="lrn-toc-h">// ON THIS PAGE</span>
           <ol>
@@ -202,37 +149,98 @@ export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
             </section>
           )}
         </div>
-      </div>
 
-      {related.length > 0 && (
-        <section id="related" className="lrn-related" aria-label="Related tools">
-          <h2 className="lrn-h2">
-            <span className="lrn-h2-mark" aria-hidden="true">//</span> More in{" "}
-            {detail.subcategoryTitle}
-          </h2>
-          <div className="lrn-rel-grid">
-            {related.map((t) => (
-              <a
-                className="lrn-rel-card"
-                href={learnToolPath(t.slug)}
-                data-internal="true"
-                key={t.slug}
+        <aside className="lrn-tool-aside" aria-label="Tool details">
+          <div className="lrn-tool-links">
+            <a
+              className="lrn-art-home lrn-art-gh"
+              href={ghUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <svg
+                className="lrn-gh-mark"
+                viewBox="0 0 16 16"
+                width="15"
+                height="15"
+                aria-hidden="true"
               >
-                <span className="lrn-rel-meta">
-                  <span className="lrn-rel-cat">{detail.subcategoryTitle}</span>
-                  {starsOf(t.repo) > 0 && (
-                    <span className="lrn-rel-stars">
-                      ★ {formatStars(starsOf(t.repo))}
-                    </span>
-                  )}
+                <path fill="currentColor" d={GH_MARK} />
+              </svg>
+              <span className="lrn-art-home-loc">{detail.repo}</span>
+              {stars > 0 && (
+                <span className="lrn-gh-stars">
+                  <span className="lrn-gh-star" aria-hidden="true">
+                    ★
+                  </span>
+                  {formatStars(stars)}
                 </span>
-                <span className="lrn-rel-title">{t.name}</span>
-                <span className="lrn-rel-line">{t.description}</span>
+              )}
+            </a>
+            {detail.homepage && (
+              <a
+                className="lrn-art-home"
+                href={detail.homepage}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <span className="lrn-art-home-kind">WEBSITE</span>
+                <span className="lrn-art-home-loc">
+                  {detail.homepage.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "")}
+                </span>
+                <span className="lrn-art-home-arrow" aria-hidden="true">
+                  ↗
+                </span>
               </a>
-            ))}
+            )}
           </div>
-        </section>
-      )}
+
+          <dl className="lrn-tool-facts">
+            <div>
+              <dt>Category</dt>
+              <dd>
+                <a href={catHref} data-internal="true">
+                  {detail.subcategoryTitle}
+                </a>
+              </dd>
+            </div>
+            {detail.language && (
+              <div>
+                <dt>Language</dt>
+                <dd>{detail.language}</dd>
+              </div>
+            )}
+            {detail.license && (
+              <div>
+                <dt>License</dt>
+                <dd>{detail.license}</dd>
+              </div>
+            )}
+          </dl>
+
+          {related.length > 0 && (
+            <div className="lrn-tool-related">
+              <span className="lrn-tool-aside-h">
+                // MORE IN {detail.subcategoryTitle}
+              </span>
+              <ul>
+                {related.map((t) => (
+                  <li key={t.slug}>
+                    <a href={learnToolPath(t.slug)} data-internal="true">
+                      <span className="lrn-tool-related-name">{t.name}</span>
+                      {starsOf(t.repo) > 0 && (
+                        <span className="lrn-tool-related-stars">
+                          ★ {formatStars(starsOf(t.repo))}
+                        </span>
+                      )}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </aside>
+      </div>
 
       <nav className="lrn-pn" aria-label="Back to the landscape">
         <a className="lrn-pn-link lrn-pn-prev" href={learnLandscapePath} data-internal="true">
