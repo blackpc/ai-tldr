@@ -254,6 +254,9 @@ export const learnHubPath = "/learn/";
 /** Canonical site path for the Learn mind map. */
 export const learnMapPath = "/learn/map/";
 
+/** Canonical site path for the open-source AI tooling landscape. */
+export const learnLandscapePath = "/learn/landscape/";
+
 /** Canonical site path for a category listing page. */
 export function learnCategoryPath(cat: string): string {
   return `/learn/${cat}/`;
@@ -271,4 +274,41 @@ export function learnArticlePath(
   slug: string,
 ): string {
   return `/learn/${cat}/${sub}/${slug}/`;
+}
+
+// ---------------------------------------------------------------------------
+// Open-source AI tooling landscape (/learn/landscape)
+// ---------------------------------------------------------------------------
+// A curated, collapsible directory of open-source AI projects grouped by
+// category → subcategory. Live GitHub star counts come from
+// `github-stars.json` (keyed by lowercased "owner/repo"), refreshed by the
+// 2h sweep — never hard-coded in the landscape data.
+
+export interface LandscapeTool {
+  /** Display name of the project. */
+  name: string;
+  /** GitHub "owner/repo" (case as on GitHub); the join key for star counts. */
+  repo: string;
+  /** Official site / docs URL, if any. */
+  homepage?: string;
+  /** One plain-English sentence: what it is and what it is for. */
+  description: string;
+}
+
+export interface LandscapeSubcategory {
+  id: string;
+  title: string;
+  tools: LandscapeTool[];
+}
+
+export interface LandscapeCategory {
+  id: string;
+  title: string;
+  /** One-line description of the category, shown under its heading. */
+  blurb: string;
+  subcategories: LandscapeSubcategory[];
+}
+
+export interface Landscape {
+  categories: LandscapeCategory[];
 }

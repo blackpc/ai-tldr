@@ -37,14 +37,30 @@ const SKIP_OWNERS = new Set(["features", "marketplace", "sponsors", "about", "to
 
 // collect real-case repos, deduped case-insensitively
 const repos = new Map<string, string>();
+function addRepo(owner: string, name: string): void {
+  if (SKIP_OWNERS.has(owner.toLowerCase())) return;
+  const key = `${owner}/${name}`.toLowerCase();
+  if (!repos.has(key)) repos.set(key, `${owner}/${name}`);
+}
+// (1) github links surfaced on Learn tool articles
 for (const f of walk(ARTICLES)) {
   const a = JSON.parse(readFileSync(f, "utf8"));
   for (const u of a.links ?? []) {
     const m = (u as string).match(/^https:\/\/github\.com\/([^/]+)\/([^/?#]+)/i);
-    if (!m || SKIP_OWNERS.has(m[1].toLowerCase())) continue;
-    const key = `${m[1]}/${m[2]}`.toLowerCase();
-    if (!repos.has(key)) repos.set(key, `${m[1]}/${m[2]}`);
+    if (m) addRepo(m[1], m[2]);
   }
+}
+// (2) every project in the open-source landscape (repo is "owner/repo").
+// These MUST be collected here or the prune below would delete their counts.
+const LANDSCAPE = "src/data/learn/landscape.json";
+if (existsSync(LANDSCAPE)) {
+  const ls = JSON.parse(readFileSync(LANDSCAPE, "utf8"));
+  for (const c of ls.categories ?? [])
+    for (const s of c.subcategories ?? [])
+      for (const t of s.tools ?? []) {
+        const m = String(t.repo).match(/^([^/]+)\/([^/?#]+)$/);
+        if (m) addRepo(m[1], m[2]);
+      }
 }
 
 const existing: Record<string, number> = existsSync(OUT)

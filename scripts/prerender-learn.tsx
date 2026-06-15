@@ -27,12 +27,16 @@ import {
   learnArticlePath,
   learnCategoryPath,
   learnHubPath,
+  learnLandscapePath,
   learnMapPath,
   learnSubcategoryPath,
 } from "../src/data/learn/schema";
+import type { Landscape } from "../src/data/learn/schema";
 import { learnTaxonomy, learnArticleCount } from "../src/data/learn/nav";
 import { ArticleBody } from "../src/components/learn/ArticleBody";
 import LearnMap from "../src/components/learn/LearnMap";
+import { LearnLandscapePage } from "../src/components/learn/LearnLandscape";
+import landscapeData from "../src/data/learn/landscape.json";
 import {
   LearnCategoryPage,
   LearnHubPage,
@@ -299,6 +303,62 @@ export async function prerenderLearn(opts: {
   );
   pages++;
   urls.push({ loc: `${siteUrl}${mapPath}`, lastmod: today, changefreq: "weekly", priority: 0.8 });
+
+  // ---- landscape (/learn/landscape) ----
+  // A static, fully-crawlable list of every open-source tool with its
+  // description + repo link. The ItemList JSON-LD exposes the whole catalog.
+  const lsPath = learnLandscapePath;
+  const ls = landscapeData as Landscape;
+  const lsTools = ls.categories.flatMap((c) =>
+    c.subcategories.flatMap((s) => s.tools),
+  );
+  const lsMeta: LearnPageMeta = {
+    title:
+      "AI Tooling Landscape — Open-Source Libraries & Frameworks | AI/TLDR",
+    description:
+      "A browsable map of the open-source AI stack: runtimes, agents, RAG, vector databases, fine-tuning, eval, serving and more — grouped by category, ranked by GitHub stars.",
+    canonical: `${siteUrl}${lsPath}`,
+    ogType: "website",
+    ogImage: defaultOgImage,
+  };
+  const lsLd = [
+    wrapJsonLd({
+      "@context": "https://schema.org",
+      "@type": "CollectionPage",
+      "@id": `${siteUrl}${lsPath}#webpage`,
+      url: `${siteUrl}${lsPath}`,
+      name: "AI Tooling Landscape",
+      description: lsMeta.description,
+      inLanguage: "en-US",
+      isPartOf: { "@id": `${siteUrl}/#website` },
+      publisher: { "@id": `${siteUrl}/#org` },
+      mainEntity: {
+        "@type": "ItemList",
+        numberOfItems: lsTools.length,
+        itemListElement: lsTools.map((t, i) => ({
+          "@type": "ListItem",
+          position: i + 1,
+          name: t.name,
+          description: t.description,
+          url: `https://github.com/${t.repo}`,
+        })),
+      },
+    }),
+    breadcrumbLd(wrapJsonLd, siteUrl, [
+      { name: "AI/TLDR", path: "/" },
+      { name: "Learn AI", path: learnHubPath },
+      { name: "Landscape", path: lsPath },
+    ]),
+  ].join("\n    ");
+  await writeHtml(
+    "learn/landscape/index.html",
+    injectBody(
+      injectMeta(template, lsMeta, lsLd),
+      renderToStaticMarkup(<LearnLandscapePage />),
+    ),
+  );
+  pages++;
+  urls.push({ loc: `${siteUrl}${lsPath}`, lastmod: today, changefreq: "weekly", priority: 0.8 });
 
   for (const cat of learnTaxonomy.categories) {
     // ---- category page ----

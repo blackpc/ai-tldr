@@ -19,6 +19,7 @@ import {
   learnArticlePath,
   learnCategoryPath,
   learnHubPath,
+  learnLandscapePath,
   learnMapPath,
   learnSubcategoryPath,
 } from "../../data/learn/schema";
@@ -63,6 +64,29 @@ function MapGlyph() {
   );
 }
 
+/** Tiny collapsible-tree glyph for the "open-source landscape" hub link. */
+function TreeGlyph() {
+  return (
+    <svg
+      viewBox="0 0 32 32"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.6}
+      strokeLinecap="square"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <line x1="7" y1="7" x2="7" y2="25" />
+      <line x1="7" y1="9" x2="13" y2="9" />
+      <line x1="7" y1="16" x2="13" y2="16" />
+      <line x1="7" y1="23" x2="13" y2="23" />
+      <rect x="14" y="6.5" width="11" height="5" />
+      <rect x="14" y="13.5" width="11" height="5" />
+      <rect x="14" y="20.5" width="11" height="5" />
+    </svg>
+  );
+}
+
 /** Sets the per-category accent as a CSS custom property on a node. */
 function accentVar(accent: string): CSSProperties {
   return { ["--cat" as string]: accent };
@@ -87,29 +111,49 @@ export function LearnHubPage() {
             Every page starts from zero and ends deep.
           </p>
         </div>
-        <a
-          className="lrn-hub-citycta"
-          href={learnMapPath}
-          data-internal="true"
-          style={{ backgroundImage: "url(/learn-media/city-hero.jpg)" }}
-        >
-          <span className="lrn-hub-citycta-grad" aria-hidden="true" />
-          <span className="lrn-hub-citycta-top">
-            <span className="lrn-hub-citycta-ic" aria-hidden="true">
-              <MapGlyph />
+        <div className="lrn-hub-ctas">
+          <a
+            className="lrn-hub-citycta"
+            href={learnMapPath}
+            data-internal="true"
+            style={{ backgroundImage: "url(/learn-media/city-hero.jpg)" }}
+          >
+            <span className="lrn-hub-citycta-grad" aria-hidden="true" />
+            <span className="lrn-hub-citycta-top">
+              <span className="lrn-hub-citycta-ic" aria-hidden="true">
+                <MapGlyph />
+              </span>
+              <span className="lrn-hub-citycta-tag">INTERACTIVE · 3D</span>
             </span>
-            <span className="lrn-hub-citycta-tag">INTERACTIVE · 3D</span>
-          </span>
-          <span className="lrn-hub-citycta-body">
-            <span className="lrn-hub-citycta-lead">Enter Knowledge City</span>
-            <span className="lrn-hub-citycta-sub">
-              every article is a tower — read it to light it up
+            <span className="lrn-hub-citycta-body">
+              <span className="lrn-hub-citycta-lead">Enter Knowledge City</span>
+              <span className="lrn-hub-citycta-sub">
+                every article is a tower — read it to light it up
+              </span>
+              <span className="lrn-hub-citycta-go">
+                ENTER <span aria-hidden="true">→</span>
+              </span>
             </span>
-            <span className="lrn-hub-citycta-go">
-              ENTER <span aria-hidden="true">→</span>
+          </a>
+          <a
+            className="lrn-hub-landcta"
+            href={learnLandscapePath}
+            data-internal="true"
+          >
+            <span className="lrn-hub-landcta-ic" aria-hidden="true">
+              <TreeGlyph />
             </span>
-          </span>
-        </a>
+            <span className="lrn-hub-landcta-tx">
+              <span className="lrn-hub-landcta-lead">Open-Source Landscape</span>
+              <span className="lrn-hub-landcta-sub">
+                every AI tool &amp; framework, by category — with live GitHub stars
+              </span>
+            </span>
+            <span className="lrn-hub-landcta-go" aria-hidden="true">
+              →
+            </span>
+          </a>
+        </div>
       </header>
 
       <div className="lrn-cat-grid">

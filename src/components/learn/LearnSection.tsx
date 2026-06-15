@@ -16,6 +16,7 @@ import {
   learnArticlePath,
   learnCategoryPath,
   learnHubPath,
+  learnLandscapePath,
   learnMapPath,
   learnSubcategoryPath,
 } from "../../data/learn/schema";
@@ -26,6 +27,7 @@ import {
 } from "../../data/learn/nav";
 import { ArticleBody } from "./ArticleBody";
 import LearnMap from "./LearnMap";
+import { LearnLandscapePage } from "./LearnLandscape";
 import {
   LearnCategoryPage,
   LearnHubPage,
@@ -36,6 +38,7 @@ import { track } from "../../lib/analytics";
 export type LearnRoute =
   | { kind: "learn" }
   | { kind: "learn-map" }
+  | { kind: "learn-landscape" }
   | { kind: "learn-cat"; cat: string }
   | { kind: "learn-sub"; cat: string; sub: string }
   | { kind: "learn-article"; cat: string; sub: string; slug: string };
@@ -144,6 +147,12 @@ export default function LearnSection({
         "The whole Learn AI encyclopedia as an explorable 3D city: every article is a tower, reading it lights the building. Roam the districts, power up the city.",
         learnMapPath,
       );
+    } else if (route.kind === "learn-landscape") {
+      setPageMeta(
+        "AI Tooling Landscape — Open-Source Libraries & Frameworks | AI/TLDR",
+        "A browsable map of the open-source AI stack: runtimes, agents, RAG, vector databases, fine-tuning, eval, serving and more — grouped by category, ranked by GitHub stars.",
+        learnLandscapePath,
+      );
     } else if (route.kind === "learn-cat") {
       const cat = findLearnCategory(route.cat);
       if (cat)
@@ -194,6 +203,8 @@ export default function LearnSection({
     body = <LearnHubPage />;
   } else if (route.kind === "learn-map") {
     body = <LearnMap onNavigate={onNavigate} />;
+  } else if (route.kind === "learn-landscape") {
+    body = <LearnLandscapePage />;
   } else if (route.kind === "learn-cat") {
     const cat = findLearnCategory(route.cat);
     body = cat ? <LearnCategoryPage category={cat} /> : <NotFound what="topic" />;

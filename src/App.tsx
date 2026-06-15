@@ -66,6 +66,10 @@ function parseRoute(): Route {
     return { kind: "learn-map" };
   }
 
+  if (path === "/learn/landscape" || path === "/learn/landscape/") {
+    return { kind: "learn-landscape" };
+  }
+
   const learn = path.match(/^\/learn(?:\/([^/]+))?(?:\/([^/]+))?(?:\/([^/]+))?\/?$/);
   if (learn) {
     const [, cat, sub, slug] = learn;
