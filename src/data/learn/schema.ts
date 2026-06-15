@@ -166,6 +166,16 @@ export interface LearnFaqEntry {
 export interface LearnArticle extends LearnArticleRef {
   /** YYYY-MM-DD the content was last reviewed/updated. */
   updated: string;
+  /**
+   * For an article ABOUT a named tool/library/model/benchmark: its official
+   * links — homepage, GitHub repo, docs, model page, paper, etc. Rendered as
+   * prominent buttons at the TOP of the article so readers immediately see
+   * it's a real tool and can jump to any of its resources. Each must be a
+   * live https URL, verified at authoring time; the button label (GITHUB /
+   * DOCS / OFFICIAL SITE …) is derived from the URL. Ordered most-useful
+   * first. Omit for pure concept articles not about a specific named thing.
+   */
+  links?: string[];
   sections: LearnSection[];
   faq: LearnFaqEntry[];
   /** Slugs of related articles (rendered as cards). */

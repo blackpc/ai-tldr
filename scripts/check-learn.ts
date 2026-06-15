@@ -382,6 +382,18 @@ for (const [slug, loc] of bySlug) {
     if (!f.title?.trim()) err(slug, "furtherReading entry missing title");
   }
 
+  // official tool links (optional) — prominent buttons at the top of the page
+  if (article.links !== undefined) {
+    if (!Array.isArray(article.links) || article.links.length < 1 || article.links.length > 6)
+      err(slug, `links must be 1–6 entries (got ${article.links?.length})`);
+    for (const u of article.links ?? []) {
+      if (typeof u !== "string" || !u.startsWith("https://"))
+        err(slug, `links entry not https: ${u}`);
+    }
+    if (article.links && new Set(article.links).size !== article.links.length)
+      err(slug, "duplicate links entry");
+  }
+
   // 8. word count
   if (counters.words < 700) err(slug, `too thin: ~${counters.words} words (need ≥700)`);
   if (counters.words > 3800)

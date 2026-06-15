@@ -36,6 +36,27 @@ function locPath(loc: LearnArticleLocation): string {
   );
 }
 
+/** Label + short display for the prominent official-link button. */
+function homepageMeta(url: string): { kind: string; display: string } {
+  let host = "";
+  let pathname = "";
+  try {
+    const u = new URL(url);
+    host = u.hostname.replace(/^www\./, "");
+    pathname = u.pathname;
+  } catch {
+    return { kind: "OFFICIAL", display: url };
+  }
+  const seg = (n: number) => pathname.split("/").filter(Boolean).slice(0, n).join("/");
+  if (host === "github.com") return { kind: "GITHUB", display: `github.com/${seg(2)}` };
+  if (host === "huggingface.co") return { kind: "HUGGING FACE", display: `huggingface.co/${seg(2)}` };
+  if (host === "arxiv.org") return { kind: "PAPER", display: "arXiv" };
+  if (host.endsWith("wikipedia.org")) return { kind: "REFERENCE", display: "Wikipedia" };
+  if (host.startsWith("docs.") || /(^|\/)docs(\/|$)/.test(pathname))
+    return { kind: "DOCS", display: host };
+  return { kind: "OFFICIAL SITE", display: host };
+}
+
 export function DifficultyBadge({
   level,
 }: {
@@ -88,6 +109,7 @@ export function ArticleBody({ article }: { article: LearnArticle }) {
   const loc = findLearnArticle(article.slug);
   const { prev, next } = learnPrevNext(article.slug);
   const minutes = learnReadingMinutes(article);
+  const links = article.links ?? [];
   const related = article.related
     .map((slug) => findLearnArticle(slug))
     .filter((l): l is LearnArticleLocation => l !== null && l.article.slug !== article.slug);
@@ -123,6 +145,26 @@ export function ArticleBody({ article }: { article: LearnArticle }) {
           <span className="lrn-art-minutes">{minutes} MIN READ</span>
           <span className="lrn-art-updated">UPDATED {article.updated}</span>
         </div>
+        {links.length > 0 && (
+          <div className="lrn-art-links" aria-label="Official links">
+            {links.map((url) => {
+              const m = homepageMeta(url);
+              return (
+                <a
+                  key={url}
+                  className="lrn-art-home"
+                  href={url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <span className="lrn-art-home-kind">{m.kind}</span>
+                  <span className="lrn-art-home-loc">{m.display}</span>
+                  <span className="lrn-art-home-arrow" aria-hidden="true">↗</span>
+                </a>
+              );
+            })}
+          </div>
+        )}
       </header>
 
       <div className="lrn-art-layout">
