@@ -866,54 +866,176 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
   }
   syncBeacons();
 
-  // --- the AI core ------------------------------------------------------------------------------------------
-  const coreBase = new THREE.Mesh(
-    track(new THREE.BoxGeometry(17, 24, 17)),
+  // --- the AI core: a Burj-Khalifa-style landmark spire -----------------------------------------------------
+  // A tri-lobed tower of stacked tiers that taper and spiral upward (the Burj's
+  // signature setbacks), crowned by a slender glowing needle — the single
+  // tallest structure in the city, rising far above every article tower. The
+  // tier boxes are one InstancedMesh; the shaft + spire are solid meshes. All
+  // of them resolve to { kind: "core" } when picked.
+  const coreSolids: THREE.Mesh[] = [];
+  const coreFacadeMat = track(
+    new THREE.MeshStandardMaterial({
+      map: wallsMat.map,
+      color: 0xcdbb86, // champagne-gold glass — the lit landmark
+      roughness: 0.34,
+      metalness: 0.52,
+      emissive: 0xffe7a4,
+      emissiveMap: winFullTex,
+      emissiveIntensity: 0.5,
+    }),
+  );
+
+  interface CoreInst {
+    x: number;
+    y: number;
+    z: number;
+    sx: number;
+    sy: number;
+    sz: number;
+    ry: number;
+  }
+  const coreInsts: CoreInst[] = [];
+
+  // stepped podium so the tower reads as grounded, not floating
+  coreInsts.push({ x: 0, y: 3, z: 0, sx: 30, sy: 6, sz: 30, ry: 0 });
+  coreInsts.push({ x: 0, y: 8.4, z: 0, sx: 23, sy: 5, sz: 23, ry: Math.PI / 12 });
+
+  // tri-lobe body: stacked tiers, each a central hub + three radial wings, that
+  // shrink and rotate as they climb to carve the spiralling-setback silhouette.
+  const TIERS = 22;
+  const TIER_H = 4.8;
+  const BODY_Y0 = 11;
+  const TWIST = 0.062; // radians of spin added per tier
+  for (let i = 0; i < TIERS; i++) {
+    const f = i / (TIERS - 1); // 0 at base → 1 at the crown
+    const cy = BODY_Y0 + i * TIER_H + TIER_H / 2;
+    const rot = i * TWIST;
+    const hub = 7.6 * (1 - f * 0.56);
+    coreInsts.push({ x: 0, y: cy, z: 0, sx: hub, sy: TIER_H * 1.05, sz: hub, ry: rot });
+    const wingLen = 11.5 * (1 - f * 0.88) + 1.4; // radial reach, tapers to a stub
+    const wingThick = 5.8 * (1 - f * 0.5);
+    const reach = hub / 2 + wingLen / 2 - 0.7;
+    for (let k = 0; k < 3; k++) {
+      const ang = rot + (k * Math.PI * 2) / 3;
+      coreInsts.push({
+        x: Math.cos(ang) * reach,
+        y: cy,
+        z: Math.sin(ang) * reach,
+        sx: wingLen,
+        sy: TIER_H * 1.02,
+        sz: wingThick,
+        ry: ang,
+      });
+    }
+  }
+  const bodyTopY = BODY_Y0 + TIERS * TIER_H; // ≈ 116.6
+
+  // crown collar where the body hands off to the shaft
+  coreInsts.push({
+    x: 0,
+    y: bodyTopY + 1.2,
+    z: 0,
+    sx: 6.8,
+    sy: 2.4,
+    sz: 6.8,
+    ry: TIERS * TWIST,
+  });
+
+  const coreTiers = new THREE.InstancedMesh(boxGeo, coreFacadeMat, coreInsts.length);
+  coreTiers.castShadow = true;
+  coreTiers.receiveShadow = true;
+  {
+    const q = new THREE.Quaternion();
+    const e = new THREE.Euler();
+    const sc = new THREE.Vector3();
+    const ps = new THREE.Vector3();
+    const mm = new THREE.Matrix4();
+    coreInsts.forEach((d, i) => {
+      e.set(0, d.ry, 0);
+      q.setFromEuler(e);
+      sc.set(d.sx, d.sy, d.sz);
+      ps.set(d.x, d.y, d.z);
+      mm.compose(ps, q, sc);
+      coreTiers.setMatrixAt(i, mm);
+    });
+    coreTiers.instanceMatrix.needsUpdate = true;
+  }
+  scene.add(coreTiers);
+
+  // tapering metal shaft rising out of the crown
+  const SHAFT_H = 34;
+  const shaft = new THREE.Mesh(
+    track(new THREE.CylinderGeometry(2.0, 3.6, SHAFT_H, 16, 1)),
     track(
       new THREE.MeshStandardMaterial({
-        map: wallsMat.map,
-        color: 0xcfc89a,
-        roughness: 0.8,
-        metalness: 0.2,
-        emissive: 0xffe9a0,
-        emissiveMap: winFullTex,
-        emissiveIntensity: 0.55,
+        color: 0x26282f,
+        roughness: 0.28,
+        metalness: 0.8,
+        emissive: 0x7d8430,
+        emissiveIntensity: 0.22,
       }),
     ),
   );
-  coreBase.position.y = 12;
-  coreBase.castShadow = true;
-  scene.add(coreBase);
-  const coreSpire = new THREE.Mesh(
-    track(new THREE.BoxGeometry(6.2, 56, 6.2)),
+  shaft.position.y = bodyTopY + SHAFT_H / 2;
+  shaft.castShadow = true;
+  coreSolids.push(shaft);
+  scene.add(shaft);
+  const shaftTopY = bodyTopY + SHAFT_H; // ≈ 150.6
+
+  // the iconic glowing needle spire
+  const SPIRE_H = 66;
+  const spire = new THREE.Mesh(
+    track(new THREE.CylinderGeometry(0.06, 1.8, SPIRE_H, 18, 1)),
     track(
       new THREE.MeshStandardMaterial({
-        color: 0x16171c,
-        roughness: 0.5,
+        color: 0x0b0c0f,
+        roughness: 0.4,
         metalness: 0.6,
         emissive: 0xf7ff00,
-        emissiveIntensity: 1.5,
+        emissiveIntensity: 1.8,
       }),
     ),
   );
-  coreSpire.position.y = 24 + 28;
-  coreSpire.castShadow = true;
-  scene.add(coreSpire);
+  spire.position.y = shaftTopY + SPIRE_H / 2;
+  spire.castShadow = true;
+  coreSolids.push(spire);
+  scene.add(spire);
+  const spireTipY = shaftTopY + SPIRE_H; // ≈ 216.6
+
+  // beacon beam streaming up from the crown into the night sky
   const coreBeam = new THREE.Mesh(
-    beaconGeo,
+    track(new THREE.CylinderGeometry(0.9, 2.0, 380, 12, 1, true)),
     track(
       new THREE.MeshBasicMaterial({
         color: new THREE.Color(0xf7ff00).multiplyScalar(1.2),
         transparent: true,
-        opacity: 0.16,
+        opacity: 0.13,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
         side: THREE.DoubleSide,
       }),
     ),
   );
-  coreBeam.position.y = 220;
+  coreBeam.position.y = shaftTopY + 380 / 2 - 26;
   scene.add(coreBeam);
+
+  // red aviation beacon at the spire base (pulses in the render loop)
+  const coreBeacon = new THREE.Sprite(
+    track(
+      new THREE.SpriteMaterial({
+        map: track(glowTexture()),
+        color: new THREE.Color(0xff3326).multiplyScalar(1.7),
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    ),
+  );
+  coreBeacon.position.y = shaftTopY + 1.5;
+  coreBeacon.scale.set(5.5, 5.5, 1);
+  scene.add(coreBeacon);
+
+  // "A I" marquee floating above the spire tip
   const coreSign = new THREE.Sprite(
     track(
       new THREE.SpriteMaterial({
@@ -924,8 +1046,8 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
       }),
     ),
   );
-  coreSign.position.y = 92;
-  coreSign.scale.set(32, 4, 1);
+  coreSign.position.y = spireTipY + 12;
+  coreSign.scale.set(26, 3.4, 1);
   scene.add(coreSign);
 
   // --- traffic: shaded car bodies + head/tail lights -----------------------------------------------------------
@@ -1067,8 +1189,8 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
 
   const pickables: THREE.Object3D[] = [
     walls,
-    coreBase,
-    coreSpire,
+    coreTiers,
+    ...coreSolids,
     ...signDistrict.keys(),
     ...blockOf.keys(),
   ];
@@ -1085,7 +1207,8 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
     if (!h) return null;
     if (h.object === walls && h.instanceId !== undefined)
       return { kind: "tower", tower: slabs[h.instanceId].tower };
-    if (h.object === coreBase || h.object === coreSpire) return { kind: "core" };
+    if (h.object === coreTiers || coreSolids.includes(h.object as THREE.Mesh))
+      return { kind: "core" };
     const d = signDistrict.get(h.object);
     if (d) return { kind: "district", district: d };
     const site = blockOf.get(h.object);
@@ -1377,6 +1500,7 @@ export function createLearnMap3D(opts: CityOptions): CityHandle {
     }
 
     coreBeam.rotation.y += dt * 0.4;
+    coreBeacon.material.opacity = 0.4 + 0.5 * Math.abs(Math.sin(now / 600));
     for (const beam of beacons.values()) beam.rotation.y += dt * 0.35;
     aviMat.opacity = 0.45 + 0.55 * Math.sin(now / 540);
     if (selMarker.visible) {
