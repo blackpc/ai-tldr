@@ -221,27 +221,11 @@ export function LearnLandscapePage() {
 
   return (
     <div className="lrn-page lrn-ls-page">
-      <header className="lrn-ls-hero">
+      {/* One row: title · search · sort · stats */}
+      <div className="lrn-ls-bar">
         <h1 className="lrn-ls-title">
           AI Tooling <span className="lrn-ls-title-accent">Landscape</span>
         </h1>
-        <dl className="lrn-ls-stats">
-          <div className="lrn-ls-stat">
-            <dd>{stats.tools}</dd>
-            <dt>tools</dt>
-          </div>
-          <div className="lrn-ls-stat">
-            <dd>{stats.categories}</dd>
-            <dt>categories</dt>
-          </div>
-          <div className="lrn-ls-stat">
-            <dd>{compactInt(stats.stars)}</dd>
-            <dt>★ stars</dt>
-          </div>
-        </dl>
-      </header>
-
-      <div className="lrn-ls-bar">
         <label className="lrn-ls-search">
           <span className="lrn-ls-search-ic" aria-hidden="true">
             ⌕
@@ -264,24 +248,36 @@ export function LearnLandscapePage() {
             </button>
           )}
         </label>
-        <div className="lrn-ls-bar-actions">
-          <span className="lrn-ls-sort">
-            <button
-              type="button"
-              className={sortByStars ? "is-on" : ""}
-              onClick={() => setSortByStars(true)}
-            >
-              ★ stars
-            </button>
-            <button
-              type="button"
-              className={!sortByStars ? "is-on" : ""}
-              onClick={() => setSortByStars(false)}
-            >
-              A–Z
-            </button>
-          </span>
-        </div>
+        <span className="lrn-ls-sort">
+          <button
+            type="button"
+            className={sortByStars ? "is-on" : ""}
+            onClick={() => setSortByStars(true)}
+          >
+            ★ stars
+          </button>
+          <button
+            type="button"
+            className={!sortByStars ? "is-on" : ""}
+            onClick={() => setSortByStars(false)}
+          >
+            A–Z
+          </button>
+        </span>
+        <dl className="lrn-ls-stats">
+          <div className="lrn-ls-stat">
+            <dd>{stats.tools}</dd>
+            <dt>tools</dt>
+          </div>
+          <div className="lrn-ls-stat">
+            <dd>{stats.categories}</dd>
+            <dt>cats</dt>
+          </div>
+          <div className="lrn-ls-stat">
+            <dd>{compactInt(stats.stars)}</dd>
+            <dt>★</dt>
+          </div>
+        </dl>
       </div>
 
       {!cat || !sub ? (
