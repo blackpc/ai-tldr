@@ -388,3 +388,31 @@ aren't re-litigated blind):**
 fire for paper/dataset/algorithm until their new sources land items, and
 expect at least occasional dataset/algorithm/benchmark adds. Do NOT let
 the alarm tempt padding — an empty category is still a valid sweep.
+
+## 2026-06-15-A — landscape miss huge popular tools. discovery blind.
+
+What break: user spot OpenClaw (378k★) + NousResearch/hermes-agent (194k★)
+NOT in /learn/landscape. Scan show 230 popular AI repos (≥8k★) missing —
+incl famous old ones: huggingface/transformers, langflow, gpt4all,
+OpenHands, Flowise, gemini-cli, Continue, Quivr, khoj, composio,
+gpt-researcher. Not just new tools. Build was never complete.
+
+Cause: landscape DISCOVERY came from what research LLMs already knew
+(training cutoff + ad-hoc web). Never diffed against GitHub TOP-BY-STARS.
+So any tool the model not recall — even #1 on GitHub — never a candidate.
+And `refresh-learn-stars.ts` only update stars of tools ALREADY listed; it
+never DISCOVER new ones. Set frozen + incomplete from day one.
+
+Fix: `scripts/discover-landscape-gaps.ts` — query GitHub top-starred AI
+repos across the 9 categories' topics, drop awesome-lists/courses/books,
+subtract what we list, print missing popular tools. Wired into the 2h
+sweep (`update-releases.yml`, advisory step → run summary, never blocks).
+Run manual: `GAP_MIN_STARS=15000 bun scripts/discover-landscape-gaps.ts`.
+
+Don't repeat: never treat the landscape as "done". Discovery must pull
+from GitHub popularity, not only model memory. When adding tools, still
+README-ground each + verify repo via API (zero-hallucination) and filter
+noise (skill-packs, prompt-leaks, generic DBs, courses).
+
+Status: fix shipped. Backfill of the real missing tools = separate curated
+pass (needs detail-page gen per tool + category placement).
