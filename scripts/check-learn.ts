@@ -295,6 +295,8 @@ const REF_FIELDS = [
 ] as const;
 
 const imageBySlug = new Map<string, string>();
+// slug -> official `links` (used by the cross-article dup guard below)
+const linksBySlug = new Map<string, string[]>();
 
 for (const [slug, loc] of bySlug) {
   const file = fileBySlug.get(slug);
@@ -392,12 +394,106 @@ for (const [slug, loc] of bySlug) {
     }
     if (article.links && new Set(article.links).size !== article.links.length)
       err(slug, "duplicate links entry");
+    if (Array.isArray(article.links) && article.links.length)
+      linksBySlug.set(slug, article.links as string[]);
   }
 
   // 8. word count
   if (counters.words < 700) err(slug, `too thin: ~${counters.words} words (need ≥700)`);
   if (counters.words > 3800)
     warn(slug, `very long: ~${counters.words} words — consider splitting`);
+}
+
+// -----------------------------------------------------------------------
+// 9. Cross-article duplication guards (anti-cannibalization)
+//
+// check-learn used to enforce slug uniqueness globally but shortTitle
+// uniqueness only WITHIN a subcategory, so the same tool/concept could be —
+// and was — written twice across different subcategories. These guards make
+// the build FAIL when two pages would compete for the same listing label or
+// SERP snippet. Multiple articles per tool are fine BY DESIGN (an intro plus
+// feature deep-dives) — but each must occupy a DISTINCT slot: a unique H1,
+// listing label, <title>, meta description, and promise.
+// -----------------------------------------------------------------------
+
+// (a) global metadata uniqueness — title / shortTitle / seoTitle /
+//     metaDescription / oneLiner must each be unique across ALL articles.
+//     (Two pages with the same one are either duplicates or self-competing
+//     search results — neither is acceptable.)
+{
+  const fields: [string, (r: LearnArticleRef) => string][] = [
+    ["title", (r) => r.title],
+    ["shortTitle", (r) => r.shortTitle],
+    ["seoTitle", (r) => r.seoTitle],
+    ["metaDescription", (r) => r.metaDescription],
+    ["oneLiner", (r) => r.oneLiner],
+  ];
+  for (const [name, get] of fields) {
+    const seen = new Map<string, string>();
+    for (const [slug, loc] of bySlug) {
+      const key = get(loc.ref).toLowerCase().trim();
+      if (!key) continue;
+      const prev = seen.get(key);
+      if (prev)
+        err(
+          "dup",
+          `${name} duplicated across articles — differentiate or merge: "${get(loc.ref).slice(0, 60)}" in "${slug}" and "${prev}"`,
+        );
+      else seen.set(key, slug);
+    }
+  }
+}
+
+// (b) same-tool intro guard (WARNING) — two "What is X" intros that share an
+//     official product link AND overlap heavily on keywords are almost
+//     certainly the same tool introduced twice (the failure mode that slips
+//     past (a) when the two happen to pick different shortTitles). A warning,
+//     not an error: different products from one vendor legitimately share a
+//     homepage, and a tool can appear as a link in another tool's article.
+{
+  const normUrl = (u: string) =>
+    u
+      .toLowerCase()
+      .replace(/^https?:\/\/(www\.)?/, "")
+      .replace(/\/+$/, "")
+      .replace(/[#?].*$/, "");
+  const isIntro = (title: string) =>
+    /^(what (?:is|are|was|were)|what's|introduction to|intro to)\b/i.test(
+      title.trim(),
+    );
+  const kwOf = (slug: string) =>
+    new Set((bySlug.get(slug)!.ref.keywords ?? []).map((k) => k.toLowerCase().trim()));
+  const byLink = new Map<string, string[]>();
+  for (const [slug, links] of linksBySlug) {
+    const loc = bySlug.get(slug);
+    if (!loc || !isIntro(loc.ref.title)) continue; // intros only
+    for (const u of links) {
+      const n = normUrl(u);
+      if (!n) continue;
+      (byLink.get(n) ?? byLink.set(n, []).get(n)!).push(slug);
+    }
+  }
+  const warned = new Set<string>();
+  for (const [u, slugs] of byLink) {
+    const uniq = [...new Set(slugs)];
+    if (uniq.length < 2) continue;
+    for (let i = 0; i < uniq.length; i++)
+      for (let j = i + 1; j < uniq.length; j++) {
+        const a = kwOf(uniq[i]);
+        const b = kwOf(uniq[j]);
+        let inter = 0;
+        for (const x of a) if (b.has(x)) inter++;
+        const jac = inter / (a.size + b.size - inter || 1);
+        const key = [uniq[i], uniq[j]].sort().join("|");
+        if (jac >= 0.4 && !warned.has(key)) {
+          warned.add(key);
+          warn(
+            "dup",
+            `possible same-tool duplicate intros (share ${u}, keyword overlap ${jac.toFixed(2)}): "${uniq[i]}" and "${uniq[j]}"`,
+          );
+        }
+      }
+  }
 }
 
 // -----------------------------------------------------------------------

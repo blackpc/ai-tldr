@@ -63,6 +63,18 @@ Extra drafts from the initial run are parked in
   liveness, SEO length limits, and regenerates
   `src/data/learn/count.json` (the nav badge — keeps the taxonomy out
   of the main bundle).
+- **No duplicate topics (anti-cannibalization)**: check-learn fails the
+  build if `title`, `shortTitle`, `seoTitle`, `metaDescription`, or
+  `oneLiner` is reused by **any** other article (not just within a
+  subcategory). Multiple articles per tool are fine BY DESIGN (an intro
+  plus feature deep-dives) — but each must occupy a DISTINCT slot: its own
+  H1, listing label, `<title>`, snippet, and promise. Before writing a new
+  article, check whether the tool/concept is already covered and either
+  pick a genuinely different angle or extend the existing page (see
+  [the SEO memory](feedback_learn_seo_no_cannibalization.md)). A removed
+  article must 301 to its survivor via `src/data/learn/redirects.json`
+  (read by the Worker) and have its inbound `related` + inline links
+  repointed.
 - **Code splitting**: the SPA imports the whole section lazily
   (`LearnSection` chunk); each article JSON is its own vite chunk.
   Never import taxonomy/articles from main-bundle modules.
