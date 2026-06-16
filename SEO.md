@@ -4,9 +4,15 @@ Single source of truth for SEO work on this repo. Update this file whenever
 you ship, remove, or plan an SEO change — future-you should be able to read
 it top-to-bottom and know exactly what the site looks like to a crawler.
 
-**Last updated**: 2026-04-13
+**Last updated**: 2026-06-15
 **Public domain**: https://ai-tldr.dev
-**Canonical host**: `ai-tldr.dev` (Cloudflare Pages / Workers)
+**Canonical host**: `ai-tldr.dev` (Cloudflare Worker)
+
+> **Companion doc:** AI-era search — GEO/AEO, i.e. getting cited *inside*
+> ChatGPT / Perplexity / Google AI Overviews — lives in
+> [GEO_AEO_PLAYBOOK.md](GEO_AEO_PLAYBOOK.md). **This file** is the classic
+> Google SERP; **the playbook** is AI answers. When they overlap, the playbook
+> governs the AI surfaces.
 
 ## 1. Crawlable pages
 
@@ -114,6 +120,15 @@ for the explainer copy.
 
 ## 7. Done — shipped optimizations
 
+- [x] **2026-06-15** — GEO/AEO pass (see [GEO_AEO_PLAYBOOK.md](GEO_AEO_PLAYBOOK.md)):
+  - `Organization` `sameAs` (entity-linking to the verified source repo) on home + the dev fallback
+  - `author.url` on Article / SoftwareApplication / SoftwareSourceCode / TechArticle / Dataset JSON-LD, via a curated, conservative org→homepage map (`ORG_HOMEPAGES`); unknown orgs ship no URL
+  - `article:author` OG tag + self-referential `hreflang="x-default"` on every page
+  - Atom feed at `/feed.xml` (last 50 releases) + `<link rel="alternate" type="application/atom+xml">` discovery in the template
+  - `/llms.txt` + `/llms-full.txt` (cheap hedge — no major engine consumes it as of mid-2026)
+  - Question-shaped release headings ("What is it?", "How does it work?", "Why does it matter?", "Who is it for?")
+  - **"Related releases"** internal-link nav on every release page (scored by org/category/tags) — kills the crawl dead-end where releases were reachable only from home or the sitemap
+  - Preconnect to the image CDNs (`cdn-uploads.huggingface.co`, `opengraph.githubassets.com`) for LCP
 - [x] **2026-04-13** — Full on-page SEO pass:
   - Rewrote home, influencers, log titles + descriptions (keyword-first, ≤60ch)
   - Smart title truncation for release pages (drop org before truncating release name)
@@ -137,7 +152,7 @@ Ordered by impact.
 
 ### High impact
 
-- [ ] **Add a real RSS/Atom feed at `/feed.xml`** — high ROI for AI release trackers. Should emit the last N items from `releases.json` with full tagline + image. Prerender step, no UI change. _~30 min of work._
+- [x] **Add a real RSS/Atom feed at `/feed.xml`** — ✅ shipped 2026-06-15 (Atom 1.0, last 50 releases; see §7).
 - [ ] **Submit sitemap to Google Search Console + Bing Webmaster Tools** — one-time. Set up the property on `ai-tldr.dev` and verify via DNS or HTML file. Bing also accepts the sitemap via IndexNow. _User action, not code._
 - [ ] **Claim the brand on X/Twitter and add `<meta name="twitter:site" content="@ai_tldr">`** — once the handle exists. Improves Twitter card attribution. _Code change is 1 line in `renderMetaBlock`._
 - [ ] **Per-release OG image validation**: during prerender, HEAD-check each `item.image.url` and warn if it doesn't return `image/*`. Prevents a bad agent run from shipping broken social cards. _~15 min of work._
@@ -145,18 +160,18 @@ Ordered by impact.
 ### Medium impact
 
 - [ ] **`SearchAction` in WebSite JSON-LD** — requires honoring `?q=<query>` as an initial search state in `App.tsx` `parseRoute()`. Unlocks Google sitelinks search box. _~20 min, small App.tsx change._
-- [ ] **Add `author.url` to release Article schema** pointing at the org's homepage (e.g. `https://anthropic.com` for Anthropic releases) — improves E-E-A-T signals. Requires mapping org name → org URL.
+- [x] **Add `author.url` to release Article schema** — ✅ shipped 2026-06-15 via `ORG_HOMEPAGES` curated map (Article + Software + TechArticle + Dataset).
 - [ ] **`DefinedTerm` / `ItemList` JSON-LD on `/influencers`** so each creator becomes a discoverable entity with `sameAs` links to their social profiles. Currently the page is just a generic `CollectionPage`.
 - [ ] **`FAQPage` schema on selected tall release explainers** where the explainer has clearly Q&A-like content. Big CTR lift if it earns a rich result.
-- [ ] **Internal linking from release modal → related releases** (same primary category, same org, or same tags). Right now each release page is a dead-end — no internal links back to the feed _other than the brand_. A "More X releases" rail on the modal would help crawl depth and dwell time.
+- [x] **Internal linking → related releases** — ✅ shipped 2026-06-15 as a static "Related releases" nav (scored by org/category/tags) in the prerendered release body, so crawlers follow it. A live React rail on the *modal* is still open (UI work).
 
 ### Lower impact / nice to have
 
-- [ ] **hreflang `x-default`** — single-language site but the tag prevents warnings.
-- [ ] **Preconnect to `cdn-uploads.huggingface.co`, `opengraph.githubassets.com`** — the two most common image CDNs — shaves ~100ms off LCP on release pages. Add to `index.html` template.
+- [x] **hreflang `x-default`** — ✅ shipped 2026-06-15 (self-referential, every page).
+- [x] **Preconnect to `cdn-uploads.huggingface.co`, `opengraph.githubassets.com`** — ✅ shipped 2026-06-15 (+ dns-prefetch for `i.ytimg.com`, `pbs.twimg.com`).
 - [ ] **Skip-link for accessibility** (also a ranking signal for accessibility tests).
-- [ ] **`<link rel="preload" as="font">`** for JetBrains Mono + Inter to improve CLS / LCP.
-- [ ] **`article:author` OG tag** on release pages (currently we emit `article:published_time` only).
+- [ ] **`<link rel="preload" as="font">`** for JetBrains Mono + Inter — _deferred: Google Fonts woff2 URLs are hashed/unstable; preconnect to gstatic (already present) is the safe win._
+- [x] **`article:author` OG tag** on release pages — ✅ shipped 2026-06-15 (set to `item.org`).
 - [ ] **Break cache-busted URLs out of sitemap** — not currently an issue but watch when asset URLs get long.
 
 ## 9. Maintenance playbook

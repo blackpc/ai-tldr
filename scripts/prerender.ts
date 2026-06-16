@@ -130,6 +130,8 @@ interface PageMeta {
   ogImage: string;
   ogImageAlt?: string;
   publishedTime?: string;
+  /** Author/byline org name — emits an `article:author` OG tag when set. */
+  author?: string;
 }
 
 // -----------------------------------------------------------------------
@@ -157,7 +159,57 @@ const ORG_REF = {
     width: 1200,
     height: 630,
   },
+  // Entity-linking (sameAs) so AI engines + Google's Knowledge Graph resolve
+  // "AI/TLDR" to ONE entity instead of hallucinating. Only verified,
+  // brand-owned profiles belong here (zero-hallucination): the public source
+  // repo. No brand X/LinkedIn handle exists yet — add them to this array when
+  // claimed, and mirror the change in the dev fallback in index.html.
+  sameAs: ["https://github.com/blackpc/ai-tldr"],
 };
+
+// Canonical homepages for the orgs that author releases — used as
+// `author.url` on the Article/Software/TechArticle/Dataset schema (an
+// E-E-A-T / provenance signal that AI answer engines and Google use). Curated
+// and conservative: ONLY well-known, unambiguous official domains. An org not
+// in this map ships NO author.url (graceful) rather than a guessed one.
+const ORG_HOMEPAGES: Record<string, string> = {
+  Anthropic: "https://www.anthropic.com",
+  OpenAI: "https://openai.com",
+  Google: "https://www.google.com",
+  "Google DeepMind": "https://deepmind.google",
+  NVIDIA: "https://www.nvidia.com",
+  Microsoft: "https://www.microsoft.com",
+  Meta: "https://about.meta.com",
+  xAI: "https://x.ai",
+  "Mistral AI": "https://mistral.ai",
+  "Hugging Face": "https://huggingface.co",
+  Apple: "https://www.apple.com",
+  GitHub: "https://github.com",
+  DeepSeek: "https://www.deepseek.com",
+  Cohere: "https://cohere.com",
+  Cloudflare: "https://www.cloudflare.com",
+  "Allen Institute for AI": "https://allenai.org",
+  "IBM Research": "https://research.ibm.com",
+  "Stanford University": "https://www.stanford.edu",
+  "Nous Research": "https://nousresearch.com",
+  Spotify: "https://www.spotify.com",
+  Snowflake: "https://www.snowflake.com",
+  Mozilla: "https://www.mozilla.org",
+  Tencent: "https://www.tencent.com",
+  "Vercel Labs": "https://vercel.com",
+  Vercel: "https://vercel.com",
+  LlamaIndex: "https://www.llamaindex.ai",
+  "Liquid AI": "https://www.liquid.ai",
+  Cursor: "https://www.cursor.com",
+  "Zed Industries": "https://zed.dev",
+  "Z.ai": "https://z.ai",
+  Cognition: "https://cognition.ai",
+};
+
+/** Verified homepage for an org, or undefined if we don't have one. */
+function orgUrl(org: string): string | undefined {
+  return ORG_HOMEPAGES[org];
+}
 
 const WEBSITE_REF = {
   "@type": "WebSite",
@@ -319,6 +371,7 @@ function renderJsonLdArticle(item: ReleaseItem): string {
     author: {
       "@type": "Organization",
       name: item.org,
+      ...(orgUrl(item.org) ? { url: orgUrl(item.org) } : {}),
     },
     publisher: { "@id": `${SITE_URL}/#org` },
     image: jsonLdImage(item.image?.url ?? DEFAULT_OG_IMAGE),
@@ -388,7 +441,7 @@ function renderJsonLdSoftware(item: ReleaseItem): string | null {
       description: item.explainer?.tagline ?? item.summary,
       codeRepository: item.url,
       url,
-      author: { "@type": "Organization", name: item.org },
+      author: { "@type": "Organization", name: item.org, ...(orgUrl(item.org) ? { url: orgUrl(item.org) } : {}) },
       programmingLanguage: item.tags.find((t) =>
         ["python", "typescript", "javascript", "rust", "go", "c++", "cuda"].includes(
           t.toLowerCase(),
@@ -405,7 +458,7 @@ function renderJsonLdSoftware(item: ReleaseItem): string | null {
     url,
     applicationCategory: isModel ? "DeveloperApplication" : "DeveloperApplication",
     operatingSystem: "Any",
-    author: { "@type": "Organization", name: item.org },
+    author: { "@type": "Organization", name: item.org, ...(orgUrl(item.org) ? { url: orgUrl(item.org) } : {}) },
     image: item.image?.url ?? DEFAULT_OG_IMAGE,
     // Most items we track are free / open-weight; the rare paid model
     // still benefits from being listed as $0 because the offer block
@@ -430,7 +483,7 @@ function renderJsonLdDataset(item: ReleaseItem): string | null {
     name: item.title,
     description: item.explainer?.tagline ?? item.summary,
     url: releaseUrl(item.id),
-    creator: { "@type": "Organization", name: item.org },
+    creator: { "@type": "Organization", name: item.org, ...(orgUrl(item.org) ? { url: orgUrl(item.org) } : {}) },
     datePublished: item.date,
     keywords: item.tags.join(", "),
     distribution: {
@@ -457,7 +510,7 @@ function renderJsonLdTechArticle(item: ReleaseItem): string | null {
     description: item.explainer?.tagline ?? item.summary,
     url,
     datePublished: item.date,
-    author: { "@type": "Organization", name: item.org },
+    author: { "@type": "Organization", name: item.org, ...(orgUrl(item.org) ? { url: orgUrl(item.org) } : {}) },
     publisher: { "@id": `${SITE_URL}/#org` },
     proficiencyLevel: "Expert",
     dependencies: item.tags.join(", "),
@@ -673,6 +726,9 @@ function renderMetaBlock(meta: PageMeta): string {
     `<title>${escapeText(meta.title)}</title>`,
     `<meta name="description" content="${escapeAttr(meta.description)}" />`,
     `<link rel="canonical" href="${escapeAttr(meta.canonical)}" />`,
+    // Self-referential x-default — single-language site, but the tag keeps
+    // Search Console quiet and states the default-language URL explicitly.
+    `<link rel="alternate" hreflang="x-default" href="${escapeAttr(meta.canonical)}" />`,
     `<meta property="og:type" content="${meta.ogType}" />`,
     `<meta property="og:site_name" content="AI/TLDR" />`,
     `<meta property="og:title" content="${escapeAttr(meta.title)}" />`,
@@ -694,6 +750,9 @@ function renderMetaBlock(meta: PageMeta): string {
     `<meta property="og:locale" content="en_US" />`,
     meta.publishedTime
       ? `<meta property="article:published_time" content="${escapeAttr(meta.publishedTime)}" />`
+      : null,
+    meta.author
+      ? `<meta property="article:author" content="${escapeAttr(meta.author)}" />`
       : null,
     `<meta name="twitter:card" content="summary_large_image" />`,
     `<meta name="twitter:title" content="${escapeAttr(meta.title)}" />`,
@@ -817,6 +876,7 @@ function releaseMeta(item: ReleaseItem): PageMeta {
     ogImage: item.image?.url ?? DEFAULT_OG_IMAGE,
     ogImageAlt: item.image?.alt,
     publishedTime: item.date,
+    author: item.org,
   };
 }
 
@@ -854,6 +914,7 @@ const RELEASE_BODY_STYLE = `<style data-rls-css>
       .rls-feed-item a{color:#fff;text-decoration:none;font-size:18px}
       .rls-feed-meta{display:block;font-size:12px;color:#9a9a9a;margin:4px 0}
       .rls-feed-item p{margin:6px 0 0;color:#bbb;font-size:14px}
+      .rls-related{margin-top:28px;border-top:1px solid #1e1e1e;padding-top:8px}
     </style>`;
 
 function section(label: string, text?: string): string {
@@ -861,7 +922,48 @@ function section(label: string, text?: string): string {
   return `<section><h2>${escapeText(label)}</h2><p>${escapeText(text)}</p></section>`;
 }
 
-function renderReleaseBody(item: ReleaseItem): string {
+/**
+ * Related releases for crawl-depth + co-citation: until now every release
+ * page only linked back to `/`, making each a dead-end reachable only from
+ * the homepage or the sitemap. Score other items by shared org (3), shared
+ * primary category (2), and shared tags (≤2), newest-first as the tiebreak.
+ */
+function relatedReleases(item: ReleaseItem, all: ReleaseItem[]): ReleaseItem[] {
+  const primary = item.categories[0];
+  return all
+    .filter((x) => x.id !== item.id)
+    .map((x) => {
+      let score = 0;
+      if (x.org === item.org) score += 3;
+      if (x.categories[0] === primary) score += 2;
+      score += Math.min(x.tags.filter((t) => item.tags.includes(t)).length, 2);
+      return { x, score };
+    })
+    .filter((s) => s.score > 0)
+    .sort(
+      (a, b) =>
+        b.score - a.score ||
+        String(b.x.publishDate ?? b.x.date).localeCompare(String(a.x.publishDate ?? a.x.date)),
+    )
+    .slice(0, 6)
+    .map((s) => s.x);
+}
+
+function renderRelatedSection(item: ReleaseItem, all: ReleaseItem[]): string {
+  const related = relatedReleases(item, all);
+  if (!related.length) return "";
+  const links = related
+    .map(
+      (r) =>
+        `<li class="rls-feed-item"><a href="${escapeAttr(`/releases/${r.id}/`)}">` +
+        `<strong>${escapeText(r.title)}</strong></a>` +
+        `<span class="rls-feed-meta">${escapeText(r.org)} · ${escapeText(r.date)} · ${escapeText(r.categories[0])}</span></li>`,
+    )
+    .join("");
+  return `<nav class="rls-related" aria-label="Related releases"><h2>Related releases</h2><ul class="rls-feed">${links}</ul></nav>`;
+}
+
+function renderReleaseBody(item: ReleaseItem, allItems: ReleaseItem[]): string {
   const ex = item.explainer;
   const img = item.image;
   const metricRows = Object.entries(item.metrics ?? {})
@@ -892,16 +994,17 @@ function renderReleaseBody(item: ReleaseItem): string {
       ? `<img class="rls-img" src="${escapeAttr(img.url)}" alt="${escapeAttr(img.alt ?? item.title)}" loading="lazy" />`
       : "") +
     (ex?.tagline ? `<p class="rls-tagline">${escapeText(ex.tagline)}</p>` : "") +
-    section("What is it", ex?.whatIsIt) +
-    section("How it works", ex?.howItWorks) +
-    section("Why it matters", ex?.whyItMatters) +
-    section("Who it's for", ex?.forWho) +
+    section("What is it?", ex?.whatIsIt) +
+    section("How does it work?", ex?.howItWorks) +
+    section("Why does it matter?", ex?.whyItMatters) +
+    section("Who is it for?", ex?.forWho) +
     (ex?.tryIt
       ? `<section><h2>Try it</h2><pre><code>${escapeText(ex.tryIt)}</code></pre></section>`
       : "") +
     (metricRows ? `<section><h2>Key numbers</h2><ul class="rls-metrics">${metricRows}</ul></section>` : "") +
     (linkRows ? `<section><h2>Links</h2><ul class="rls-links">${linkRows}</ul></section>` : "") +
     (tagRows ? `<section><h2>Tags</h2><ul class="rls-tags">${tagRows}</ul></section>` : "") +
+    renderRelatedSection(item, allItems) +
     `<p class="rls-back"><a href="/">← All releases</a> · <a href="/learn/">Learn AI</a></p>` +
     `</article></main></div>`
   );
@@ -910,11 +1013,15 @@ function renderReleaseBody(item: ReleaseItem): string {
 /** Inline the release body styles and fill the empty #root with the
  *  crawlable article. Function replacements throughout: release content
  *  can contain `$`, which String.replace would otherwise interpret. */
-function injectReleaseBody(html: string, item: ReleaseItem): string {
+function injectReleaseBody(
+  html: string,
+  item: ReleaseItem,
+  allItems: ReleaseItem[],
+): string {
   html = html.replace("</head>", () => `  ${RELEASE_BODY_STYLE}\n  </head>`);
   html = html.replace(
     /<div id="root"><\/div>/,
-    () => `<div id="root">${renderReleaseBody(item)}</div>`,
+    () => `<div id="root">${renderReleaseBody(item, allItems)}</div>`,
   );
   return html;
 }
@@ -1239,6 +1346,129 @@ ${body}
 }
 
 // -----------------------------------------------------------------------
+// Atom feed + llms.txt (AI-era discovery surfaces)
+// -----------------------------------------------------------------------
+
+/**
+ * Atom 1.0 feed of the last 50 releases — a clean, machine-readable surface
+ * for RSS readers, aggregators, and AI ingestion. Discovered via the
+ * `<link rel="alternate" type="application/atom+xml">` in index.html.
+ */
+function buildAtomFeed(items: ReleaseItem[]): string {
+  const recent = [...items]
+    .sort((a, b) =>
+      String(b.publishDate ?? b.date).localeCompare(String(a.publishDate ?? a.date)),
+    )
+    .slice(0, 50);
+  const updated = recent[0]
+    ? recent[0].publishDate ?? new Date(recent[0].date).toISOString()
+    : new Date().toISOString();
+  const entries = recent
+    .map((it) => {
+      const url = releaseUrl(it.id);
+      const published = new Date(it.date).toISOString();
+      const upd = it.publishDate ?? published;
+      const summary = it.explainer?.tagline ?? it.summary;
+      return `  <entry>
+    <title>${escapeText(it.title)}</title>
+    <id>${escapeText(url)}</id>
+    <link href="${escapeAttr(url)}" />
+    <published>${published}</published>
+    <updated>${upd}</updated>
+    <author><name>${escapeText(it.org)}</name></author>
+    <category term="${escapeAttr(it.categories[0])}" />
+    <summary>${escapeText(summary)}</summary>
+  </entry>`;
+    })
+    .join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>AI/TLDR — New AI Releases</title>
+  <subtitle>Every new AI model, repo, tool, and paper worth knowing — refreshed every few hours and explained in plain English.</subtitle>
+  <id>${SITE_URL}/</id>
+  <link href="${SITE_URL}/" />
+  <link rel="self" type="application/atom+xml" href="${SITE_URL}/feed.xml" />
+  <updated>${updated}</updated>
+  <author><name>AI/TLDR</name></author>
+${entries}
+</feed>
+`;
+}
+
+/**
+ * /llms.txt — the emerging AI-crawler convention (llmstxt.org). Honest
+ * verdict: no major engine consumes it as of mid-2026, but it's a cheap,
+ * harmless hedge. Plain Markdown/text, served as text/plain, so no escaping.
+ */
+function buildLlmsTxt(items: ReleaseItem[]): string {
+  const recent = [...items]
+    .sort((a, b) =>
+      String(b.publishDate ?? b.date).localeCompare(String(a.publishDate ?? a.date)),
+    )
+    .slice(0, 20);
+  const releaseLines = recent
+    .map((it) => `- [${it.title}](${releaseUrl(it.id)}): ${it.explainer?.tagline ?? it.summary}`)
+    .join("\n");
+  return `# AI/TLDR
+
+> Every new AI model, repo, tool, paper, dataset and benchmark worth knowing — refreshed every few hours and explained in plain English. Zero-hallucination: every URL, metric and claim is fetched and verified before publishing.
+
+## Site
+- [Home — latest AI releases](${SITE_URL}/): the live feed, newest first, sized by impact.
+- [Learn AI](${SITE_URL}/learn/): a beginner-friendly AI encyclopedia (structured articles, FAQs, diagrams).
+- [Open-source AI landscape](${SITE_URL}/learn/landscape/): a map of open-source AI tools by category, each with its own page.
+- [AI influencers](${SITE_URL}/influencers/): AI people worth following, grouped by role.
+- [Changelog](${SITE_URL}/log/): every automated sweep that refreshed the feed.
+
+## Latest releases
+${releaseLines}
+
+## Optional
+- [Atom feed](${SITE_URL}/feed.xml)
+- [Sitemap index](${SITE_URL}/sitemap.xml)
+`;
+}
+
+/**
+ * /llms-full.txt — fuller inlined context for AI ingestion. Bounds size to
+ * the 60 most recent releases; the always-current full feed is feed.json.
+ */
+function buildLlmsFullTxt(items: ReleaseItem[]): string {
+  const recent = [...items]
+    .sort((a, b) =>
+      String(b.publishDate ?? b.date).localeCompare(String(a.publishDate ?? a.date)),
+    )
+    .slice(0, 60);
+  const blocks = recent
+    .map((it) => {
+      const ex = it.explainer;
+      return `### ${it.title}
+- URL: ${releaseUrl(it.id)}
+- Org: ${it.org} · Date: ${it.date} · Importance: ${it.importance} · Category: ${it.categories[0]}
+- ${ex?.tagline ?? it.summary}${ex?.whatIsIt ? `\n- What it is: ${ex.whatIsIt}` : ""}`;
+    })
+    .join("\n\n");
+  return `# AI/TLDR — full context
+
+> Every new AI model, repo, tool, paper, dataset and benchmark worth knowing, refreshed every few hours and explained in plain English. Zero-hallucination: every URL, metric and claim is verified.
+
+This file inlines the most recent releases for AI ingestion. The full,
+always-current feed is at ${SITE_URL}/feed.json and ${SITE_URL}/feed.xml.
+
+## Sections
+- Home: ${SITE_URL}/
+- Learn AI encyclopedia: ${SITE_URL}/learn/
+- Open-source AI landscape: ${SITE_URL}/learn/landscape/
+- AI influencers: ${SITE_URL}/influencers/
+- Changelog: ${SITE_URL}/log/
+
+## Recent releases
+
+${blocks}
+`;
+}
+
+// -----------------------------------------------------------------------
 // Main
 // -----------------------------------------------------------------------
 
@@ -1320,7 +1550,7 @@ async function main() {
     ].filter((b): b is string => !!b);
     const jsonLd = blocks.join("\n    ");
     let html = injectMeta(template, releaseMeta(item), jsonLd);
-    html = injectReleaseBody(html, item);
+    html = injectReleaseBody(html, item, items);
     await writeHtml(`releases/${item.id}/index.html`, html);
     count++;
   }
@@ -1432,8 +1662,16 @@ Sitemap: ${SITE_URL}/sitemap-news.xml
 `;
   await writeFile(join(DIST, "robots.txt"), robots, "utf8");
 
+  // 9. Atom feed — last 50 releases (RSS readers, aggregators, AI ingestion).
+  await writeFile(join(DIST, "feed.xml"), buildAtomFeed(items), "utf8");
+
+  // 10. llms.txt / llms-full.txt — AI-crawler convention. Cheap hedge;
+  //     no major engine consumes it yet (mid-2026), so we don't over-invest.
+  await writeFile(join(DIST, "llms.txt"), buildLlmsTxt(items), "utf8");
+  await writeFile(join(DIST, "llms-full.txt"), buildLlmsFullTxt(items), "utf8");
+
   console.log(
-    `[prerender] wrote ${count} release pages + influencers + /log + sitemap index + main + news + robots.txt`,
+    `[prerender] wrote ${count} release pages + influencers + /log + sitemap index + main + news + robots.txt + feed.xml + llms.txt`,
   );
 }
 
