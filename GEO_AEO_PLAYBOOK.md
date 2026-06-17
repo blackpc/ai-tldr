@@ -403,14 +403,18 @@ Ordered by leverage. File anchors from the audit.
 > real per-page date, so none is stamped (zero-hallucination). ✅ Shipped
 > 2026-06-17 — #5 **comparison tables** on the crawlable tool detail pages
 > ("How X compares") + a top-nav stats icon (the footer is unreachable under
-> the feed's infinite scroll). **All code items are done.** 👤 User-action
-> only: #7 Bing Webmaster Tools verify (for analytics), #8 GA4 AI-traffic
-> channel, a Wikidata item, claim an X handle (then I wire it into `sameAs`).
+> the feed's infinite scroll). **All code items are done.** ✅ Shipped
+> 2026-06-17 — **GA4** (`gtag.js`, `G-7BKSYJWWVM`) in the shared template, so
+> it loads on every prerendered page; **Wikidata item**
+> [Q140264340](https://www.wikidata.org/wiki/Q140264340) created and wired into
+> `Organization.sameAs` (both `prerender.ts` ORG_REF + the `index.html` dev
+> fallback). **Bing Webmaster Tools verified** (imported from Search Console).
+> 👤 No user-actions remain — X handle declined by the owner.
 > ✅ **IndexNow wired** — the sweep workflow pings IndexNow (Bing/Yandex/Seznam/
 > Naver) after each content push, submitting only the homepage, `/stats`, and
 > the release pages added that sweep (ownership via `public/<key>.txt`;
 > `scripts/ping-indexnow.ts`). This is the automated half of "get into Bing";
-> the manual half (verifying the property for the dashboard) is still #7.
+> the manual half (verifying the property for the dashboard) is now done too.
 
 1. **Add `Organization` `sameAs`** to `ORG_REF` in
    [scripts/prerender.ts](scripts/prerender.ts) — point at the brand's X, GitHub,
@@ -453,9 +457,11 @@ Ordered by leverage. File anchors from the audit.
    figure derives from the verified feed/landscape, recomputed each build (so it
    tracks the sweep). **The single strongest citation magnet** — a unique number
    forces attribution, all policy-safe derived data. (§6.1)
-2. **Create a Wikidata item for AI/TLDR**, then point `Organization.sameAs` at
-   it — the controllable bridge to the Google Knowledge Graph (no notability bar,
-   unlike Wikipedia). (§6.2)
+2. **Create a Wikidata item for AI/TLDR.** ✅ Shipped 2026-06-17 —
+   [Q140264340](https://www.wikidata.org/wiki/Q140264340) (instance of: website;
+   official website; source-code repo; language English) and
+   `Organization.sameAs` now points at it. The controllable bridge to the Google
+   Knowledge Graph (no notability bar, unlike Wikipedia). (§6.2)
 3. **Related-releases internal-linking rail** (same category / org / tags) on
    release pages — today each release is a crawl dead-end reachable only from home
    or sitemap. Improves crawl depth + co-citation surface.

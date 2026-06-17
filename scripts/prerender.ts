@@ -167,10 +167,14 @@ const ORG_REF = {
   },
   // Entity-linking (sameAs) so AI engines + Google's Knowledge Graph resolve
   // "AI/TLDR" to ONE entity instead of hallucinating. Only verified,
-  // brand-owned profiles belong here (zero-hallucination): the public source
-  // repo. No brand X/LinkedIn handle exists yet — add them to this array when
-  // claimed, and mirror the change in the dev fallback in index.html.
-  sameAs: ["https://github.com/blackpc/ai-tldr"],
+  // brand-owned references belong here (zero-hallucination): the canonical
+  // Wikidata item (Q140264340) and the public source repo. No brand
+  // X/LinkedIn handle exists yet — add them to this array when claimed, and
+  // mirror any change in the dev fallback in index.html.
+  sameAs: [
+    "https://www.wikidata.org/wiki/Q140264340",
+    "https://github.com/blackpc/ai-tldr",
+  ],
 };
 
 // Canonical homepages for the orgs that author releases — used as
