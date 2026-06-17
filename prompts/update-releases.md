@@ -346,6 +346,16 @@ sense and still names the thing.
   dates, benchmark numbers); stay attributed on subjective claims.
 - **Repeat the name instead of pronouns** across `whatIsIt` / `howItWorks`
   / `whyItMatters`, so any one of them still makes sense quoted on its own.
+- **Name models/tools EXACTLY so they auto-link (wiki-style).** The
+  prerenderer cross-links the first mention of any model in our LLM
+  registry (`/models/<slug>`) or tool in the landscape
+  (`/learn/landscape/<slug>`) that you NAME, as a whole word, in the
+  release `title`/`tags` — straight into its evergreen detail page. You do
+  NOT add these links by hand; just write the canonical name exactly
+  ("GPT-5.5", "Claude Opus 4.8", "Llama 4 Maverick", "vLLM") and the build
+  links it. A near-miss ("GPT 5.5" vs "GPT-5.5") won't match, so match the
+  registry's spelling. If a hot model isn't in the registry yet, that's a
+  signal to add it there (see `src/data/models/`), not to fake a link.
 
 ### `title`
 

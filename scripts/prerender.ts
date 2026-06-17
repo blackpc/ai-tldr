@@ -48,12 +48,19 @@ import {
   injectLearnLinksIntoHome,
   prerenderLearn,
 } from "./prerender-learn.tsx";
+import {
+  injectModelsLinksIntoHome,
+  prerenderModels,
+} from "./prerender-models.tsx";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { StatsPage } from "../src/components/StatsPage";
 import statsData from "../src/data/stats.json" with { type: "json" };
 import type { StatsData } from "../src/data/stats";
 import landscapeData from "../src/data/learn/landscape.json" with { type: "json" };
+import registryData from "../src/data/models/registry.json" with { type: "json" };
+import type { ModelRegistry } from "../src/data/models/schema";
+import { modelPath } from "../src/data/models/schema";
 import { normalizeMetrics } from "../src/lib/metric-labels";
 
 // Flat list of landscape tool pages ({name, slug}) — used to cross-link a
@@ -65,6 +72,15 @@ const LANDSCAPE_TOOLS: { name: string; slug: string }[] = (
   }
 ).categories.flatMap((c) =>
   c.subcategories.flatMap((s) => s.tools.map((t) => ({ name: t.name, slug: t.slug }))),
+);
+
+// Flat list of LLM-registry model pages ({name, slug}) — used to cross-link a
+// release that NAMES a model (e.g. "GPT-5.5", "Claude Opus 4.8") to its
+// evergreen /models/<slug> detail page. Build-script only; never bundled.
+const LLM_MODELS: { name: string; slug: string }[] = (
+  registryData as ModelRegistry
+).makers.flatMap((mk) =>
+  mk.families.flatMap((f) => f.models.map((m) => ({ name: m.name, slug: m.slug }))),
 );
 
 // -----------------------------------------------------------------------
@@ -1247,42 +1263,47 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/** An entity (landscape tool OR registry model) eligible for in-prose linking,
+ *  carrying its own destination href + a unique key for first-mention dedup. */
+type LinkEntity = { name: string; key: string; href: string };
+
 /**
- * Linkify the FIRST mention of each high-confidence tool in a prose string to
- * its evergreen `/learn/landscape/<slug>` page. Operates on RAW text and
- * escapes every segment as it builds, so it can never split an HTML tag.
+ * Linkify the FIRST mention of each high-confidence entity in a prose string to
+ * its evergreen page — a landscape tool (`/learn/landscape/<slug>`) or a
+ * registry model (`/models/<slug>/`). Operates on RAW text and escapes every
+ * segment as it builds, so it can never split an HTML tag.
  *
  * Conservative on purpose (avoids the false-positive trap of free-text entity
- * linking over 500+ tool names — "Continue", "Cursor", "Jan" are real English
- * words too): callers pass ONLY tools that `matchedTools()` already matched in
- * this release's title/tags, so we know the page is genuinely about them. The
- * shared `used` set enforces first-mention-only across the whole page.
+ * linking over 500+ names — "Continue", "Cursor", "Jan" are real English words
+ * too): callers pass ONLY entities that `matchedTools()` / `matchedModels()`
+ * already matched in this release's title/tags, so we know the page is genuinely
+ * about them. The shared `used` set enforces first-mention-only across the page.
  */
-function linkifyTools(
+function linkifyEntities(
   text: string,
-  tools: { name: string; slug: string }[],
+  entities: LinkEntity[],
   used: Set<string>,
 ): string {
   if (!text) return "";
-  // earliest not-yet-linked whole-word tool match in this string
-  let best: { idx: number; len: number; slug: string } | null = null;
-  for (const t of tools) {
-    if (used.has(t.slug) || t.name.length < 3) continue;
-    const re = new RegExp(`(?<![A-Za-z0-9])${escapeRegExp(t.name)}(?![A-Za-z0-9])`, "i");
+  // earliest not-yet-linked whole-word entity match in this string
+  let best: { idx: number; len: number; href: string; key: string } | null = null;
+  for (const e of entities) {
+    if (used.has(e.key) || e.name.length < 3) continue;
+    const re = new RegExp(`(?<![A-Za-z0-9])${escapeRegExp(e.name)}(?![A-Za-z0-9])`, "i");
     const m = re.exec(text);
     if (m && (best === null || m.index < best.idx)) {
-      best = { idx: m.index, len: m[0].length, slug: t.slug };
+      best = { idx: m.index, len: m[0].length, href: e.href, key: e.key };
     }
   }
   if (!best) return escapeText(text);
-  used.add(best.slug);
+  used.add(best.key);
   const before = text.slice(0, best.idx);
   const matched = text.slice(best.idx, best.idx + best.len);
   const after = text.slice(best.idx + best.len);
   return (
     escapeText(before) +
-    `<a href="/learn/landscape/${best.slug}">${escapeText(matched)}</a>` +
-    linkifyTools(after, tools, used) // keep linking other tools in the remainder
+    `<a href="${escapeAttr(best.href)}">${escapeText(matched)}</a>` +
+    linkifyEntities(after, entities, used) // keep linking other entities
   );
 }
 
@@ -1346,12 +1367,51 @@ function matchedTools(item: ReleaseItem): { name: string; slug: string }[] {
   return out;
 }
 
+/** Registry models NAMED (as a whole word) in this release's title or tags —
+ *  e.g. a "GPT-5.5" release links to /models/gpt-5-5/. Model names are highly
+ *  distinctive ("Claude Opus 4.8", "Llama 4 Maverick"), so false-positive risk
+ *  is far lower than for tool names; still whole-word + capped for safety. */
+function matchedModels(item: ReleaseItem): { name: string; slug: string }[] {
+  const hay = ` ${item.title} ${item.tags.join(" ")} `.toLowerCase();
+  const boundary = (ch: string | undefined) => ch === undefined || !/[a-z0-9]/.test(ch);
+  const out: { name: string; slug: string }[] = [];
+  for (const model of LLM_MODELS) {
+    const n = model.name.toLowerCase();
+    if (n.length < 3) continue;
+    const idx = hay.indexOf(n);
+    if (idx === -1) continue;
+    if (boundary(hay[idx - 1]) && boundary(hay[idx + n.length])) {
+      out.push(model);
+      if (out.length >= 3) break;
+    }
+  }
+  return out;
+}
+
+/** Combined in-prose link entities for a release: matched landscape tools
+ *  (→ /learn/landscape/<slug>) + matched registry models (→ /models/<slug>/).
+ *  Keys are namespaced so a tool and a model can't collide in the `used` set. */
+function releaseLinkEntities(item: ReleaseItem): LinkEntity[] {
+  return [
+    ...matchedTools(item).map((t) => ({
+      name: t.name,
+      key: `tool:${t.slug}`,
+      href: `/learn/landscape/${t.slug}`,
+    })),
+    ...matchedModels(item).map((m) => ({
+      name: m.name,
+      key: `model:${m.slug}`,
+      href: modelPath(m.slug),
+    })),
+  ];
+}
+
 /**
  * Cross-link a release page INTO the evergreen silos (Learn, landscape,
  * /stats). Releases were near crawl dead-ends — reachable only from home or
  * the sitemap, and passing no link equity to the high-authority evergreen
- * pages. Matched tool links add topical relevance; the always-on links use
- * varied, descriptive anchors (anchor variety beats one templated keyword).
+ * pages. Matched tool + model links add topical relevance; the always-on links
+ * use varied, descriptive anchors (anchor variety beats one templated keyword).
  */
 function renderLearnCrossLinks(item: ReleaseItem): string {
   const toolLinks = matchedTools(item)
@@ -1360,14 +1420,21 @@ function renderLearnCrossLinks(item: ReleaseItem): string {
         `<li><a href="/learn/landscape/${escapeAttr(t.slug)}">${escapeText(t.name)} — overview &amp; getting started</a></li>`,
     )
     .join("");
+  const modelLinks = matchedModels(item)
+    .map(
+      (m) =>
+        `<li><a href="${escapeAttr(modelPath(m.slug))}">${escapeText(m.name)} — specs, benchmarks &amp; pricing</a></li>`,
+    )
+    .join("");
   const evergreen =
     `<li><a href="/learn/">Learn AI — a plain-English encyclopedia</a></li>` +
     `<li><a href="/learn/landscape/">The open-source AI landscape</a></li>` +
+    `<li><a href="/models/">The LLM registry — compare AI models</a></li>` +
     `<li><a href="/stats/">AI Release Index — live release stats</a></li>`;
   return (
     `<nav class="rls-related" aria-label="Learn more on AI/TLDR">` +
     `<h2>Learn more on AI/TLDR</h2>` +
-    `<ul class="rls-links">${toolLinks}${evergreen}</ul></nav>`
+    `<ul class="rls-links">${modelLinks}${toolLinks}${evergreen}</ul></nav>`
   );
 }
 
@@ -1455,13 +1522,14 @@ function renderReleaseBody(item: ReleaseItem, allItems: ReleaseItem[]): string {
           .join("")
       : "";
 
-  // Inline entity links: first mention of each tool this release is genuinely
-  // about (matched in its title/tags) → its evergreen landscape page. `used`
-  // enforces first-mention-only across the whole body. Contextual in-prose
-  // links beat a footer list for both crawl-depth and entity association.
-  const tools = matchedTools(item);
+  // Inline entity links: first mention of each tool/model this release is
+  // genuinely about (matched in its title/tags) → its evergreen landscape or
+  // /models page. `used` enforces first-mention-only across the whole body.
+  // Contextual in-prose links beat a footer list for crawl-depth + entity
+  // association (a release naming "GPT-5.5" links straight to /models/gpt-5-5/).
+  const entities = releaseLinkEntities(item);
   const usedLinks = new Set<string>();
-  const prose = (t?: string) => (t ? linkifyTools(t, tools, usedLinks) : "");
+  const prose = (t?: string) => (t ? linkifyEntities(t, entities, usedLinks) : "");
 
   const cat = item.categories[0];
 
@@ -2134,6 +2202,7 @@ function buildLlmsTxt(items: ReleaseItem[]): string {
 - [Home — latest AI releases](${SITE_URL}/): the live feed, newest first, sized by impact.
 - [Learn AI](${SITE_URL}/learn/): a beginner-friendly AI encyclopedia (structured articles, FAQs, diagrams).
 - [Open-source AI landscape](${SITE_URL}/learn/landscape/): a map of open-source AI tools by category, each with its own page.
+- [LLM registry](${SITE_URL}/models/): every notable large language model — frontier and open-weight — with verified specs, benchmarks, pricing and APIs, one detail page each.
 - [AI influencers](${SITE_URL}/influencers/): AI people worth following, grouped by role.
 - [Changelog](${SITE_URL}/log/): every automated sweep that refreshed the feed.
 
@@ -2181,6 +2250,7 @@ always-current feed is at ${SITE_URL}/feed.json and ${SITE_URL}/feed.xml.
 - Home: ${SITE_URL}/
 - Learn AI encyclopedia: ${SITE_URL}/learn/
 - Open-source AI landscape: ${SITE_URL}/learn/landscape/
+- LLM registry (specs, benchmarks, pricing): ${SITE_URL}/models/
 - AI influencers: ${SITE_URL}/influencers/
 - Changelog: ${SITE_URL}/log/
 
@@ -2222,6 +2292,9 @@ async function main() {
   // Static, crawler-visible link strip into the Learn section — internal
   // links from the homepage are the strongest discovery signal we have.
   homeHtml = injectLearnLinksIntoHome(homeHtml);
+  // …and into the LLM registry — the second evergreen hub crawlers should
+  // reach straight from the homepage.
+  homeHtml = injectModelsLinksIntoHome(homeHtml);
   await writeHtml("index.html", homeHtml);
 
   // 2. Influencers page — ProfilePage + ItemList of Person entries, plus a
@@ -2327,6 +2400,19 @@ async function main() {
     writeHtml,
   });
 
+  // 4c. LLM registry — the /models hub + one page per model, each with
+  // prerendered content, meta and JSON-LD. Returns its own sitemap URL set
+  // (kept separate, like learn, so the 2h release churn doesn't re-date the
+  // evergreen model pages).
+  const modelUrls = await prerenderModels({
+    template,
+    siteUrl: SITE_URL,
+    defaultOgImage: DEFAULT_OG_IMAGE,
+    injectMeta,
+    wrapJsonLd,
+    writeHtml,
+  });
+
   // 5. Main sitemap — every URL, with image + video extensions on
   // release pages so Google Images / Video also picks them up.
   const today = new Date().toISOString().slice(0, 10);
@@ -2409,12 +2495,18 @@ async function main() {
   const learnSitemap = buildSitemap(learnUrls);
   await writeFile(join(DIST, "sitemap-learn.xml"), learnSitemap, "utf8");
 
+  // 6c. Models sitemap — the /models hub + every model detail page. Kept
+  // separate (evergreen, like learn) so release churn never re-dates them.
+  const modelsSitemap = buildSitemap(modelUrls);
+  await writeFile(join(DIST, "sitemap-models.xml"), modelsSitemap, "utf8");
+
   // 7. Sitemap index — what robots.txt points at. Splits the load across
   // a static main sitemap, the learn sitemap, and the live
   // Worker-served news sitemap.
   const sitemapIndex = buildSitemapIndex([
     { loc: `${SITE_URL}/sitemap-main.xml`, lastmod: today },
     { loc: `${SITE_URL}/sitemap-learn.xml`, lastmod: today },
+    { loc: `${SITE_URL}/sitemap-models.xml`, lastmod: today },
     { loc: `${SITE_URL}/sitemap-news.xml`, lastmod: today },
   ]);
   await writeFile(join(DIST, "sitemap.xml"), sitemapIndex, "utf8");

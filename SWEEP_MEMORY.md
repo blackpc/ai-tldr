@@ -539,3 +539,44 @@ model/tool items so the UI isn't empty. Watch: if a sweep starts attaching
 benchmarks/pricing to items WITHOUT a matching source link, the build will
 fail in check-releases — that's the guard working; fix the data, don't relax
 the source rule.
+
+## 2026-06-17-D — LLM registry (/models) + automatic wiki-style cross-linking from releases
+
+**Trigger:** user asked for an Artificial-Analysis-style registry of LLMs
+(Miller columns + tags, per-model detail pages with benchmarks/costs/APIs/
+version history) AND for new sweeps to auto-link any LLM named in a release to
+that registry (and tools to the landscape), "wiki links style".
+
+**What shipped:**
+- New `/models` section: `src/data/models/` (schema, registry.json tree,
+  per-model `models/<slug>.json`, count.json), `src/components/models/*`,
+  `scripts/prerender-models.tsx` (hub CollectionPage + per-model
+  SoftwareApplication/Breadcrumb/FAQ JSON-LD, `__MODELS_DATA__`,
+  sitemap-models.xml), `scripts/check-models.ts` validator (wired into
+  build+typecheck after check-landscape). 16 verified models / 12 makers seeded.
+- **Cross-linking is BUILD-TIME + automatic, not an agent task.** The
+  prerenderer's entity-linker (`linkifyEntities` + `matchedModels` /
+  `matchedTools`) links the FIRST whole-word mention of any registry model →
+  `/models/<slug>` and any landscape tool → `/learn/landscape/<slug>`, in the
+  release prose, plus a "Learn more" footer list. The agent does nothing
+  except NAME models/tools with their exact canonical spelling.
+
+**Scar discipline (why this is safe):**
+- The linker only fires on entities ALREADY matched in the item's own
+  title/tags (whole-word, capped at 3 each), so it can't invent associations
+  or pressure an inclusion decision. It documents what the agent already wrote.
+- Model names are highly distinctive ("Claude Opus 4.8", "Llama 4 Maverick"),
+  so false-positive risk is far below generic tool words; still whole-word
+  bounded + first-mention-only (`used` set, namespaced keys tool:/model:).
+- Zero-hallucination holds: every benchmark/pricing `source` on a model page
+  MUST be present in that model's `links[]` or check-models FAILS THE BUILD —
+  same mechanical guard as check-releases. A near-miss name simply doesn't link
+  (no fake link is ever emitted).
+
+**Prompt change:** added a GEO bullet — name models/tools EXACTLY so they
+auto-link; do NOT hand-add these links; if a hot model isn't in the registry,
+that's a signal to add it to `src/data/models/`, not to fake a link.
+
+**Status:** Applied (registry + prerender + validator + cross-linking + prompt).
+Watch: if a model page ships a benchmark/pricing source not in its links[], the
+build fails in check-models — that's the guard; fix the data, don't relax it.

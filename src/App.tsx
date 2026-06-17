@@ -24,7 +24,9 @@ import { Subscribe } from "./components/Subscribe";
 import { BuyMeCoffee } from "./components/BuyMeCoffee";
 import { track, useHeartbeat, useScrollDepth } from "./lib/analytics";
 import type { LearnRoute } from "./components/learn/LearnSection";
+import type { ModelsRoute } from "./components/models/ModelsSection";
 import learnCount from "./data/learn/count.json";
+import modelsCount from "./data/models/count.json";
 import statsData from "./data/stats.json";
 import type { StatsData } from "./data/stats";
 
@@ -33,6 +35,12 @@ import type { StatsData } from "./data/stats";
 // the nav comes from the tiny generated count.json instead, so the
 // main bundle stays taxonomy-free (check-learn.ts keeps it in sync).
 const LearnSection = lazy(() => import("./components/learn/LearnSection"));
+
+// The LLM registry (/models) is likewise a self-contained lazy chunk —
+// the registry tree, every per-model detail JSON, and its CSS ship apart
+// from the feed bundle. The nav badge reads the tiny generated count.json
+// (check-models keeps it in sync) so the registry stays out of main.
+const ModelsSection = lazy(() => import("./components/models/ModelsSection"));
 
 /** Parse current URL into a route. Supported paths:
  *   /                     → feed home
@@ -51,7 +59,8 @@ type Route =
   | { kind: "release"; id: string }
   | { kind: "release-cat"; cat: Category }
   | { kind: "stats" }
-  | LearnRoute;
+  | LearnRoute
+  | ModelsRoute;
 
 function parseRoute(): Route {
   const hash = window.location.hash.slice(1);
@@ -68,6 +77,12 @@ function parseRoute(): Route {
   if (path === "/stats" || path === "/stats/") {
     return { kind: "stats" };
   }
+  if (path === "/models" || path === "/models/") {
+    return { kind: "models" };
+  }
+  const modelMatch = path.match(/^\/models\/([^/]+)\/?$/);
+  if (modelMatch) return { kind: "model", slug: modelMatch[1] };
+
   const m = path.match(/^\/releases\/([^/]+)\/?$/);
   if (m) {
     // /releases/<category>/ is a hub page (prerendered) — render it in the
@@ -198,12 +213,13 @@ function itemFromRoute(
   return items.find((i) => i.id === route.id) ?? null;
 }
 
-type Page = "feed" | "influencers" | "log" | "learn" | "stats";
+type Page = "feed" | "influencers" | "log" | "learn" | "stats" | "models";
 
 function pageFromRoute(route: Route): Page {
   if (route.kind === "influencers") return "influencers";
   if (route.kind === "log") return "log";
   if (route.kind === "stats") return "stats";
+  if (route.kind === "models" || route.kind === "model") return "models";
   if (route.kind.startsWith("learn")) return "learn";
   return "feed";
 }
@@ -334,6 +350,16 @@ function App() {
     window.scrollTo(0, 0);
   }, []);
 
+  // Nav within the LLM registry (and into it). ModelsSection renders plain
+  // <a href data-internal> links and delegates clicks here, mirroring the
+  // Learn section. Registry pages always start at the top.
+  const goModelsPath = useCallback((path: string) => {
+    track("nav", { to: path, from: pageRef.current });
+    window.history.pushState(null, "", path);
+    setRoute(parseRoute());
+    window.scrollTo(0, 0);
+  }, []);
+
   // Open modal = navigate to /releases/<id>
   const openModal = useCallback((item: ReleaseItem) => {
     track("release:open", {
@@ -405,6 +431,8 @@ function App() {
     // Learn pages own their <title>/<meta> (set inside LearnSection,
     // which has the taxonomy data) — don't fight them here.
     if (route.kind.startsWith("learn")) return;
+    // Likewise the LLM registry sets its own <title>/<meta> in ModelsSection.
+    if (route.kind === "models" || route.kind === "model") return;
     if (route.kind === "release") {
       const item = sorted.find((i) => i.id === route.id);
       if (item) {
@@ -445,7 +473,7 @@ function App() {
   // other page the static file has no such section, so this is a no-op.)
   useEffect(() => {
     document
-      .querySelectorAll<HTMLElement>(".static-faq, .static-learn")
+      .querySelectorAll<HTMLElement>(".static-faq, .static-learn, .static-models")
       .forEach((el) => {
         el.style.display = page === "feed" ? "" : "none";
       });
@@ -678,6 +706,17 @@ function App() {
             </button>
             <button
               type="button"
+              className={`nav-link ${page === "models" ? "nav-active" : ""}`}
+              onClick={() => {
+                setMenuOpen(false);
+                goModelsPath("/models/");
+              }}
+            >
+              <span className="nav-link-lbl">MODELS</span>
+              <span className="nav-link-num">{modelsCount.models}</span>
+            </button>
+            <button
+              type="button"
               className={`nav-link ${page === "influencers" ? "nav-active" : ""}`}
               onClick={() => {
                 setMenuOpen(false);
@@ -763,6 +802,12 @@ function App() {
           fallback={<div className="lrn-loading-fallback">// loading…</div>}
         >
           <LearnSection route={route as LearnRoute} onNavigate={goLearnPath} />
+        </Suspense>
+      ) : page === "models" ? (
+        <Suspense
+          fallback={<div className="lrn-loading-fallback">// loading…</div>}
+        >
+          <ModelsSection route={route as ModelsRoute} onNavigate={goModelsPath} />
         </Suspense>
       ) : page === "log" ? (
         <SweepLogPage onOpenRelease={openReleaseById} />
