@@ -151,9 +151,144 @@ function withSecurityHeaders(res: Response): Response {
   return out;
 }
 
+// ----------------------------------------------------------------------
+// AI-crawler telemetry (lightweight, best-effort)
+// ----------------------------------------------------------------------
+const AI_BOT_UA =
+  /(GPTBot|OAI-SearchBot|ChatGPT-User|PerplexityBot|Perplexity-User|ClaudeBot|Claude-Web|anthropic-ai|Google-Extended|Bingbot|Amazonbot|CCBot|Applebot-Extended|Bytespider|Meta-ExternalAgent)/i;
+const AI_REFERER =
+  /(chatgpt\.com|chat\.openai\.com|perplexity\.ai|claude\.ai|gemini\.google\.com|copilot\.microsoft\.com)/i;
+
+/**
+ * Log AI search-crawler hits + AI-engine referrals. GA4 ignores bots, so
+ * without this every GEO experiment is unfalsifiable. Captured by Workers
+ * observability (enabled in wrangler.jsonc) — queryable in the CF dashboard.
+ *
+ * Coverage caveat: the asset server answers most static paths WITHOUT
+ * invoking the Worker (assets-first routing), so this sees only
+ * worker-handled paths (sitemap, /api, /embed, redirects, SPA fallback).
+ * Full per-page coverage would need run_worker_first:true, which also forces
+ * the CSP onto every page (and the CSP currently omits GA4) — deferred.
+ */
+function logAiTraffic(request: Request, url: URL): void {
+  const ua = request.headers.get("user-agent") ?? "";
+  const bot = AI_BOT_UA.exec(ua);
+  if (bot) {
+    console.log(`[ai-crawl] bot=${bot[1]} path=${url.pathname}`);
+    return;
+  }
+  const eng = AI_REFERER.exec(request.headers.get("referer") ?? "");
+  if (eng) console.log(`[ai-referral] engine=${eng[1]} path=${url.pathname}`);
+}
+
+/** A 304 if the client already holds a copy at least as new as lastModified. */
+function notModified(request: Request, lastModified: string): Response | null {
+  const ims = request.headers.get("if-modified-since");
+  if (!ims) return null;
+  const since = Date.parse(ims);
+  const mod = Date.parse(lastModified);
+  if (
+    Number.isFinite(since) &&
+    Number.isFinite(mod) &&
+    Math.floor(mod / 1000) <= Math.floor(since / 1000)
+  ) {
+    return new Response(null, { status: 304 });
+  }
+  return null;
+}
+
+// ----------------------------------------------------------------------
+// Free public JSON API (/api/*) — CORS-enabled mirrors of the build data so
+// other people's tools/newsletters can build on it (each integration is a
+// "via ai-tldr.dev" mention). Served from the ASSETS binding; the Worker
+// only adds CORS + cache + Last-Modified + conditional 304.
+// ----------------------------------------------------------------------
+const API_TO_ASSET: Record<string, string> = {
+  "/api/releases.json": "/feed.json",
+  "/api/tools.json": "/landscape.json",
+  "/api/stats.json": "/stats.json",
+};
+
+async function serveApiJson(
+  env: Env,
+  request: Request,
+  assetPath: string,
+  lastModified: string,
+): Promise<Response> {
+  const nm = notModified(request, lastModified);
+  if (nm) return withSecurityHeaders(nm);
+  const res = await env.ASSETS.fetch(new Request(new URL(assetPath, request.url)));
+  if (!res.ok) {
+    return withSecurityHeaders(
+      new Response(`{"error":"not found"}`, {
+        status: 404,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      }),
+    );
+  }
+  const out = new Response(res.body, res);
+  out.headers.set("content-type", "application/json; charset=utf-8");
+  out.headers.set("access-control-allow-origin", "*");
+  out.headers.set("cache-control", "public, max-age=600, s-maxage=600");
+  out.headers.set("last-modified", new Date(lastModified).toUTCString());
+  return withSecurityHeaders(out);
+}
+
+// ----------------------------------------------------------------------
+// Embeddable badge — a tiny self-updating SVG ("AI releases this week: N").
+// Tool makers / newsletters embed it; each embed is a live backlink that
+// STAYS embedded because the number stays fresh (2h sweep) — a no-budget
+// answer to a brand-new domain's authority gap.
+// ----------------------------------------------------------------------
+function releasesInLastDays(items: ReleaseItem[], days: number): number {
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  return items.filter((it) => {
+    const t = Date.parse(it.publishDate ?? it.date);
+    return Number.isFinite(t) && t >= cutoff;
+  }).length;
+}
+
+function badgeSvg(count: number): string {
+  const label = "AI releases this week";
+  const value = String(count);
+  const lw = Math.round(label.length * 6.2) + 16;
+  const vw = Math.round(value.length * 9) + 18;
+  const w = lw + vw;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="20" role="img" aria-label="${label}: ${value}">
+  <rect width="${w}" height="20" fill="#0b0b0b"/>
+  <rect x="${lw}" width="${vw}" height="20" fill="#f7ff00"/>
+  <g font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">
+    <text x="8" y="14" fill="#f5f5f0">${label}</text>
+    <text x="${lw + 9}" y="14" fill="#0b0b0b" font-weight="bold">${value}</text>
+  </g>
+</svg>`;
+}
+
+function embedDocsHtml(count: number): string {
+  const o = SITE_URL;
+  const snippet = `<a href="${o}/"><img src="${o}/embed/releases-this-week.svg" alt="AI releases this week, via ai-tldr.dev"></a>`;
+  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Embed the AI/TLDR release badge — AI/TLDR</title>
+<meta name="description" content="Embed a free, live badge showing how many AI releases AI/TLDR tracked this week. Auto-updates, no signup.">
+<link rel="canonical" href="${o}/embed">
+<style>body{background:#050505;color:#f5f5f0;font-family:system-ui,sans-serif;max-width:680px;margin:0 auto;padding:40px 22px;line-height:1.6}a{color:#00f0a8}pre{background:#111;border:1px solid #222;padding:14px;overflow:auto;font-size:13px;font-family:ui-monospace,monospace}h1{font-size:26px}</style>
+</head><body>
+<h1>Embed the AI/TLDR badge</h1>
+<p>A live badge showing how many AI releases <a href="${o}/">AI/TLDR</a> tracked in the last 7 days. It updates itself — the feed refreshes every 2 hours. Free, no signup, CC-BY.</p>
+<p>Preview: <img src="${o}/embed/releases-this-week.svg" alt="AI releases this week, via ai-tldr.dev"></p>
+<h2>HTML</h2>
+<pre>${esc(snippet)}</pre>
+<h2>Markdown</h2>
+<pre>[![AI releases this week](${o}/embed/releases-this-week.svg)](${o}/)</pre>
+<p>Tracking <strong>${count}</strong> AI releases this week. See the full <a href="${o}/stats/">AI Release Index</a> or build on the free <a href="${o}/api/releases.json">JSON API</a>.</p>
+</body></html>`;
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    logAiTraffic(request, url);
 
     // 301 removed-and-merged Learn articles to their surviving canonical URL
     // (try the path as-is and with a trailing slash, since the map is
@@ -177,6 +312,47 @@ export default {
             // so freshness here is generous; we just don't want the
             // sitemap to be regenerated on every Googlebot poke.
             "cache-control": "public, max-age=300, s-maxage=300",
+            ...(feed.generatedAt
+              ? { "last-modified": new Date(feed.generatedAt).toUTCString() }
+              : {}),
+          },
+        }),
+      );
+    }
+
+    // Free public JSON API (CORS) — releases / tools / stats.
+    const apiAsset = API_TO_ASSET[url.pathname];
+    if (apiAsset) {
+      const feed = await loadFeed(env, request);
+      return serveApiJson(env, request, apiAsset, feed.generatedAt ?? new Date().toUTCString());
+    }
+
+    // Embeddable, self-updating SVG badge.
+    if (url.pathname === "/embed/releases-this-week.svg") {
+      const feed = await loadFeed(env, request);
+      const lm = feed.generatedAt ?? new Date().toUTCString();
+      const nm = notModified(request, lm);
+      if (nm) return withSecurityHeaders(nm);
+      return withSecurityHeaders(
+        new Response(badgeSvg(releasesInLastDays(feed.items, 7)), {
+          headers: {
+            "content-type": "image/svg+xml; charset=utf-8",
+            "access-control-allow-origin": "*",
+            "cache-control": "public, max-age=600, s-maxage=600",
+            "last-modified": new Date(lm).toUTCString(),
+          },
+        }),
+      );
+    }
+
+    // Embed docs (worker-rendered HTML — no SPA, so no flash-to-home).
+    if (url.pathname === "/embed" || url.pathname === "/embed/") {
+      const feed = await loadFeed(env, request);
+      return withSecurityHeaders(
+        new Response(embedDocsHtml(releasesInLastDays(feed.items, 7)), {
+          headers: {
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "public, max-age=600, s-maxage=600",
           },
         }),
       );

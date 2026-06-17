@@ -1704,6 +1704,11 @@ function buildLlmsTxt(items: ReleaseItem[]): string {
 ${releaseLines}
 
 ## Optional
+- [AI Release Index (stats)](${SITE_URL}/stats/): original derived data — release velocity, lab cadence, most-starred tools.
+- [Free JSON API — releases](${SITE_URL}/api/releases.json): the full verified feed (CORS-enabled, CC-BY).
+- [Free JSON API — open-source tools](${SITE_URL}/api/tools.json): the landscape of tracked OSS AI tools.
+- [Free JSON API — stats](${SITE_URL}/api/stats.json): the AI Release Index data.
+- [Embeddable badge](${SITE_URL}/embed): a live "AI releases this week" SVG you can embed.
 - [Atom feed](${SITE_URL}/feed.xml)
 - [Sitemap index](${SITE_URL}/sitemap.xml)
 `;
@@ -1956,6 +1961,10 @@ async function main() {
   // machine-readable download referenced by the Dataset JSON-LD's
   // `distribution`, and what the Worker serves (with CORS) at /api/stats.json.
   await writeFile(join(DIST, "stats.json"), JSON.stringify(statsData), "utf8");
+
+  // 7d. Expose the open-source landscape at /landscape.json — the source the
+  // Worker serves (with CORS) at /api/tools.json (the free public API).
+  await writeFile(join(DIST, "landscape.json"), JSON.stringify(landscapeData), "utf8");
 
   // 8. robots.txt — point at the index AND the news sitemap directly so
   // Google News surfaces it explicitly. The AI answer-engine / search
