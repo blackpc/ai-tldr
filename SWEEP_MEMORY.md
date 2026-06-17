@@ -457,3 +457,47 @@ throttled. Left for an explicit editor decision.
 coverage array + an informative summary (the `coverage: 0/15` finalize warning
 should stop firing on empty runs). If an empty sweep still shows `cov:[]`, the
 agent ignored the rule — investigate, do NOT respond by loosening the bar.
+
+## 2026-06-17-B — sweep COMMITTED but never PUSHED: rebase aborted on a dirty tree (generated stats.json)
+
+**Trigger:** User: "your updated sweep failed in GH action" (run 27693045961).
+The sweep DID its job — committed `9f265e7 feat(content): scheduled release
+sweep 2026-06-17T13:51Z, 3 files changed` — then the push step died:
+`error: cannot rebase: You have unstaged changes. Please commit or stash them.`
+Exit 1. The whole sweep failed and that content was LOST (ephemeral runner).
+
+**Root cause (confirmed from the run's "Show diff" step, not guessed):** the
+commit stages only `$FILES = releases.json sweeps.json learn/github-stars.json`,
+but `git status` showed a FOURTH dirty file: `src/data/stats.json`. The sweep's
+validation `bun run build` starts with `bun scripts/build-stats.ts`, which
+REGENERATES `src/data/stats.json` from the new feed (and check-learn rewrites
+`learn/count.json` + `learn/article-images.json` when touched). Those derived,
+TRACKED files were left unstaged → `git rebase FETCH_HEAD` refuses to run on a
+dirty tree → exit 1. Not a content/filter problem; a push-mechanics regression
+that surfaced once stats.json became build-regenerated AND feed-dependent.
+
+**Change (`.github/workflows/update-releases.yml`, commit step only):** after
+`git add $FILES && git commit`, added `git checkout -- . 2>/dev/null || true`
+BEFORE the fetch/rebase/push loop. The intended files are already safe in the
+commit; this discards every stray unstaged change (stats.json, count.json,
+article-images.json, and any future generated file) so the rebase starts clean.
+Reproduced the exact abort in a throwaway repo and confirmed the checkout
+clears it and the rebase then succeeds.
+
+**Why discard, not commit, the generated files:** Cloudflare's deploy build runs
+`bun run build` (which starts with `build-stats`), so stats.json + the learn
+JSON are regenerated FRESH from the pushed feed at deploy. Committing them from
+the sweep would only add rebase-conflict risk on generated JSON for zero
+production benefit. The committed copies are a dev/seed convenience; production
+is always rebuilt.
+
+**Deliberately NOT changed:** the `$FILES` list (didn't add stats.json — see
+above), the build pipeline, the inclusion bar / 72h cap / coverage rule from
+2026-06-17-A. Single-line, surgical push-step guard.
+
+**Status:** Applied. Watch the next cron: it should commit AND push (look for
+`pushed=true` + a new `feat(content): scheduled release sweep` commit on
+master). If a sweep ever again commits-but-fails-to-push, check `git status`
+in the "Show diff" step for a NEW generated tracked file — the checkout already
+covers all of them, but a new write OUTSIDE the working tree reset would need
+the same treatment.
