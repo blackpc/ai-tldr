@@ -234,7 +234,7 @@ export async function prerenderModels(opts: {
     const mp = modelPath(detail.slug);
     const mUrl = `${siteUrl}${mp}`;
     const maker = REGISTRY.makers.find((mk) => mk.id === detail.maker);
-    const makerHref = `/models/?maker=${detail.maker}&family=${detail.family}`;
+    const makerHref = `/models/?maker=${detail.maker}&model=${detail.slug}`;
 
     const softwareLd: Record<string, unknown> = {
       "@context": "https://schema.org",

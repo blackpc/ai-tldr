@@ -28,6 +28,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
 const MODELS_DIR = join(ROOT, "src", "data", "models", "models");
 const COUNT_FILE = join(ROOT, "src", "data", "models", "count.json");
+const REGISTRY_FILE = join(ROOT, "src", "data", "models", "registry.json");
 
 const registry = registryData as ModelRegistry;
 
@@ -92,6 +93,7 @@ try {
 }
 
 const detailSlugs = new Set<string>();
+const detailBySlug = new Map<string, ModelDetail>();
 for (const file of detailFiles) {
   let d: ModelDetail;
   try {
@@ -104,6 +106,7 @@ for (const file of detailFiles) {
   const expected = `${d.slug}.json`;
   if (file !== expected) err(scope, `filename ${file} must match slug (${expected})`);
   detailSlugs.add(d.slug);
+  detailBySlug.set(d.slug, d);
 
   // required identity fields
   for (const k of ["slug", "name", "maker", "makerTitle", "family", "familyTitle",
@@ -185,6 +188,19 @@ if (errors.length > 0) {
   process.exit(1);
 }
 
+// Sync each tile's `versions` from its detail file's versionHistory — the
+// detail file is the single source of truth, so the registry hub can render
+// the version-timeline cards without loading per-model chunks, and the two can
+// never drift. Then persist count.json (nav badge) + the synced registry.
+for (const mk of registry.makers)
+  for (const fam of mk.families)
+    for (const m of fam.models) {
+      const vh = detailBySlug.get(m.slug)?.versionHistory;
+      if (vh && vh.length) m.versions = vh;
+      else delete m.versions;
+    }
+
+writeFileSync(REGISTRY_FILE, JSON.stringify(registry, null, 2) + "\n");
 writeFileSync(COUNT_FILE, JSON.stringify({ models: tileCount, makers: makerCount }, null, 2) + "\n");
 
-console.log(`models ok — ${tileCount} models across ${makerCount} makers, ${detailSlugs.size} detail files, all sourced; count.json refreshed`);
+console.log(`models ok — ${tileCount} models across ${makerCount} makers, ${detailSlugs.size} detail files, all sourced; registry versions + count.json refreshed`);

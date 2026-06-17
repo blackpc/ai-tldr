@@ -91,7 +91,7 @@ function BenchBars({ detail }: { detail: ModelDetail }) {
 
 export function ModelDetailPage({ detail }: { detail: ModelDetail }) {
   const related = relatedModels(detail);
-  const makerHref = `/models/?maker=${detail.maker}&family=${detail.family}`;
+  const makerHref = `/models/?maker=${detail.maker}&model=${detail.slug}`;
 
   const specs: { k: string; v: string }[] = [];
   if (detail.releaseDate) specs.push({ k: "Released", v: detail.releaseDate });

@@ -1,12 +1,13 @@
 /**
  * /models — the LLM registry.
  *
- * Finder-style Miller columns: maker ▸ family ▸ model (the same pattern as
- * /learn/landscape's category ▸ subcategory ▸ tool). The whole structure is
- * visible at a glance and you drill across by clicking. NO inner scrollbars —
- * only the page scrolls; the two nav columns stick while the models column
- * scrolls past them. Cross-cutting TAG filters (open-weights / reasoning /
- * multimodal / …) narrow every column at once.
+ * Finder-style Miller columns, structured EXACTLY like /learn/landscape
+ * (category ▸ subcategory ▸ tools): here it's maker ▸ model ▸ versions. Pick a
+ * maker, pick one of its models, and the third column fills with that model's
+ * VERSION TIMELINE as cards — the current release (a card that opens the full
+ * detail page) plus every older version in its lineage. The whole structure is
+ * visible at a glance; NO inner scrollbars — only the page scrolls while the
+ * two nav columns stick. Cross-cutting TAG filters narrow every column at once.
  *
  * Pure / SSR-safe — also rendered server-side by prerender-models.tsx.
  */
@@ -19,12 +20,13 @@ import type {
   ModelMaker,
   ModelEntry,
   ModelTag,
+  ModelVersion,
 } from "../../data/models/schema";
 import { modelPath } from "../../data/models/schema";
 
 const DATA = registryData as ModelRegistry;
 
-/** Per-maker accent, cycled across a fixed neon palette. */
+/** Per-maker accent, cycled across the same fixed neon palette as landscape. */
 const ACCENTS = [
   "#f7ff00", "#4fe0c0", "#6aa6ff", "#ff86c2", "#b98bff", "#ffb14a",
   "#8ce85a", "#ff6b5d", "#39d0d8", "#d8d84a", "#ff9e64", "#7aa2f7",
@@ -47,67 +49,35 @@ const TAG_LABELS: Record<ModelTag, string> = {
 };
 const TAG_ORDER = Object.keys(TAG_LABELS) as ModelTag[];
 
+/** A maker's models, flattened out of its families (the family level is an
+ *  implementation detail of the data; the registry browses maker ▸ model). */
+function makerModels(mk: ModelMaker): ModelEntry[] {
+  return mk.families.flatMap((f) => f.models);
+}
+
 function matchModel(m: ModelEntry, q: string): boolean {
   return (
     m.name.toLowerCase().includes(q) ||
     m.blurb.toLowerCase().includes(q) ||
-    (m.license ?? "").toLowerCase().includes(q)
+    (m.license ?? "").toLowerCase().includes(q) ||
+    (m.versions ?? []).some((v) => v.version.toLowerCase().includes(q))
   );
 }
 
-function ModelTile({ model }: { model: ModelEntry }) {
-  return (
-    <div className="reg-tile">
-      <a
-        className="reg-tile-link"
-        href={modelPath(model.slug)}
-        data-internal="true"
-        aria-label={`${model.name} — details`}
-      >
-        <span className="reg-tile-row">
-          <span className="reg-tile-name">{model.name}</span>
-          {model.contextWindow && (
-            <span className="reg-tile-ctx" title="Context window">
-              {model.contextWindow}
-            </span>
-          )}
-        </span>
-        <span className="reg-tile-desc">{model.blurb}</span>
-        <span className="reg-tile-tags">
-          {model.license && <span className="reg-tile-lic">{model.license}</span>}
-          {model.tags.slice(0, 3).map((t) => (
-            <span className="reg-tile-tag" key={t}>
-              {TAG_LABELS[t]}
-            </span>
-          ))}
-        </span>
-      </a>
-      <span className="reg-tile-foot">
-        <span className="reg-tile-cta">details →</span>
-      </span>
-    </div>
-  );
-}
-
-interface FilteredFamily {
-  id: string;
-  title: string;
-  models: ModelEntry[];
-}
 interface FilteredMaker {
   id: string;
   title: string;
   blurb: string;
   accent: string;
   count: number;
-  families: FilteredFamily[];
+  models: ModelEntry[];
 }
 
-/** Read the current maker / family selection from the URL query (?maker=&family=). */
-function readSelection(): { maker: string | null; family: string | null } {
-  if (typeof window === "undefined") return { maker: null, family: null };
+/** Read the current maker / model selection from the URL query (?maker=&model=). */
+function readSelection(): { maker: string | null; model: string | null } {
+  if (typeof window === "undefined") return { maker: null, model: null };
   const p = new URLSearchParams(window.location.search);
-  return { maker: p.get("maker"), family: p.get("family") };
+  return { maker: p.get("maker"), model: p.get("model") };
 }
 
 /** Read active tag filters from the URL (?tag=a,b). */
@@ -118,6 +88,50 @@ function readTags(): Set<ModelTag> {
   const valid = new Set(TAG_ORDER);
   return new Set(
     raw.split(",").map((t) => t.trim()).filter((t): t is ModelTag => valid.has(t as ModelTag)),
+  );
+}
+
+/** One version of the selected model, as a card. The current release links to
+ *  the full detail page; older versions are informational lineage cards. */
+function VersionCard({
+  version,
+  model,
+}: {
+  version: ModelVersion;
+  model: ModelEntry;
+}) {
+  if (version.current) {
+    return (
+      <a
+        className="reg-ver reg-ver-cur"
+        href={modelPath(model.slug)}
+        data-internal="true"
+        aria-label={`${model.name} — full specs, benchmarks and pricing`}
+      >
+        <span className="reg-ver-top">
+          <span className="reg-ver-name">{version.version}</span>
+          <span className="reg-ver-badge">current</span>
+        </span>
+        {version.date && <span className="reg-ver-date">{version.date}</span>}
+        <span className="reg-ver-desc">{model.blurb}</span>
+        <span className="reg-ver-tags">
+          {model.license && <span className="reg-ver-lic">{model.license}</span>}
+          {model.tags.slice(0, 3).map((t) => (
+            <span className="reg-ver-tag" key={t}>{TAG_LABELS[t]}</span>
+          ))}
+        </span>
+        <span className="reg-ver-cta">full specs, benchmarks &amp; pricing →</span>
+      </a>
+    );
+  }
+  return (
+    <div className="reg-ver reg-ver-old">
+      <span className="reg-ver-top">
+        <span className="reg-ver-name">{version.version}</span>
+        {version.date && <span className="reg-ver-date">{version.date}</span>}
+      </span>
+      {version.note && <span className="reg-ver-note">{version.note}</span>}
+    </div>
   );
 }
 
@@ -139,8 +153,7 @@ export function ModelsRegistryPage() {
 
   const stats = useMemo(() => {
     let models = 0;
-    for (const mk of DATA.makers)
-      for (const f of mk.families) models += f.models.length;
+    for (const mk of DATA.makers) models += makerModels(mk).length;
     return { models, makers: DATA.makers.length };
   }, []);
 
@@ -148,8 +161,7 @@ export function ModelsRegistryPage() {
   const availableTags = useMemo(() => {
     const s = new Set<ModelTag>();
     for (const mk of DATA.makers)
-      for (const f of mk.families)
-        for (const m of f.models) for (const t of m.tags) s.add(t);
+      for (const m of makerModels(mk)) for (const t of m.tags) s.add(t);
     return TAG_ORDER.filter((t) => s.has(t));
   }, []);
 
@@ -161,46 +173,47 @@ export function ModelsRegistryPage() {
 
   const tree = useMemo<FilteredMaker[]>(() => {
     return DATA.makers
-      .map((mk: ModelMaker, i) => {
-        const families = mk.families
-          .map((f) => ({
-            id: f.id,
-            title: f.title,
-            models: f.models.filter(passes),
-          }))
-          .filter((f) => f.models.length > 0);
-        const count = families.reduce((n, f) => n + f.models.length, 0);
+      .map((mk: ModelMaker, i): FilteredMaker => {
+        const models = makerModels(mk).filter(passes);
         return {
           id: mk.id,
           title: mk.title,
           blurb: mk.blurb,
           accent: accentOf(i),
-          count,
-          families,
+          count: models.length,
+          models,
         };
       })
-      .filter((mk) => mk.families.length > 0);
+      .filter((mk) => mk.models.length > 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, tags]);
 
   const maker = tree.find((mk) => mk.id === sel.maker) ?? tree[0];
-  const family = maker
-    ? maker.families.find((f) => f.id === sel.family) ?? maker.families[0]
+  const model = maker
+    ? maker.models.find((m) => m.slug === sel.model) ?? maker.models[0]
     : undefined;
 
-  const navigate = (makerId: string, familyId: string) => {
+  // Version cards for the selected model (newest first). Fall back to a single
+  // synthetic "current" entry if a model has no recorded version history.
+  const versions: ModelVersion[] = useMemo(() => {
+    if (!model) return [];
+    if (model.versions?.length) return model.versions;
+    return [{ version: model.name, date: model.releaseDate, current: true }];
+  }, [model]);
+
+  const navigate = (makerId: string, modelSlug: string) => {
     const params = new URLSearchParams(window.location.search);
     params.set("maker", makerId);
-    params.set("family", familyId);
+    params.set("model", modelSlug);
     window.history.pushState({}, "", `${window.location.pathname}?${params}`);
-    setSel({ maker: makerId, family: familyId });
+    setSel({ maker: makerId, model: modelSlug });
   };
   const selectMaker = (id: string) => {
     const next = tree.find((mk) => mk.id === id);
-    navigate(id, next?.families[0]?.id ?? "");
+    navigate(id, next?.models[0]?.slug ?? "");
   };
-  const selectFamily = (id: string) => {
-    if (maker) navigate(maker.id, id);
+  const selectModel = (slug: string) => {
+    if (maker) navigate(maker.id, slug);
   };
 
   const toggleTag = (t: ModelTag) => {
@@ -216,6 +229,7 @@ export function ModelsRegistryPage() {
 
   return (
     <div className="reg-page">
+      {/* One toolbar row: title · search · stats (mirrors the landscape bar) */}
       <div className="reg-bar">
         <h1 className="reg-title">
           LLM <span className="reg-title-accent">Registry</span>
@@ -224,7 +238,7 @@ export function ModelsRegistryPage() {
           <span className="reg-search-ic" aria-hidden="true">⌕</span>
           <input
             type="search"
-            placeholder="Filter models — name or what it's for…"
+            placeholder="Filter models — name, version or license…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             aria-label="Filter models"
@@ -282,7 +296,7 @@ export function ModelsRegistryPage() {
         </div>
       )}
 
-      {!maker || !family ? (
+      {!maker || !model ? (
         <p className="reg-empty">
           No models match{query ? ` “${query}”` : ""}
           {tags.size ? " with those tags" : ""}. Try a broader filter.
@@ -313,44 +327,44 @@ export function ModelsRegistryPage() {
             </div>
           </div>
 
-          {/* Column 2 — families of the selected maker */}
+          {/* Column 2 — the selected maker's models */}
           <div
-            className="reg-mcol reg-mcol-families"
+            className="reg-mcol reg-mcol-models-nav"
             style={{ ["--cat" as string]: maker.accent }}
           >
             <div className="reg-msticky">
               <div className="reg-mhdr">{maker.title}</div>
-              {maker.families.map((f) => (
+              {maker.models.map((m) => (
                 <button
-                  key={f.id}
+                  key={m.slug}
                   type="button"
-                  className={`reg-mrow${f.id === family.id ? " is-on" : ""}`}
-                  onClick={() => selectFamily(f.id)}
-                  aria-current={f.id === family.id}
+                  className={`reg-mrow${m.slug === model.slug ? " is-on" : ""}`}
+                  onClick={() => selectModel(m.slug)}
+                  aria-current={m.slug === model.slug}
                 >
-                  <span className="reg-mname">{f.title}</span>
-                  <span className="reg-mn">{f.models.length}</span>
+                  <span className="reg-mname">{m.name}</span>
+                  {m.contextWindow && <span className="reg-mn">{m.contextWindow}</span>}
                   <span className="reg-marr" aria-hidden="true">›</span>
                 </button>
               ))}
             </div>
           </div>
 
-          {/* Column 3 — models in the selected family */}
+          {/* Column 3 — version timeline of the selected model, as cards */}
           <div
-            className="reg-mcol reg-mcol-models"
+            className="reg-mcol reg-mcol-versions"
             style={{ ["--cat" as string]: maker.accent }}
           >
-            <div className="reg-mhdr reg-mhdr-models">
-              <span className="reg-mhdr-title">{family.title}</span>
+            <div className="reg-mhdr reg-mhdr-versions">
+              <span className="reg-mhdr-title">{model.name}</span>
               <span className="reg-mhdr-sub">
-                {maker.title} · {family.models.length} model
-                {family.models.length === 1 ? "" : "s"}
+                {maker.title} · {versions.length} version
+                {versions.length === 1 ? "" : "s"}
               </span>
             </div>
-            <div className="reg-mtiles">
-              {family.models.map((m) => (
-                <ModelTile key={m.slug} model={m} />
+            <div className="reg-vtiles">
+              {versions.map((v, i) => (
+                <VersionCard key={`${v.version}-${i}`} version={v} model={model} />
               ))}
             </div>
           </div>
@@ -358,9 +372,10 @@ export function ModelsRegistryPage() {
       )}
 
       <p className="reg-note">
-        A registry of large language models — frontier and open-weight — with
-        specs, benchmarks, pricing and APIs. Click any model for a detail page.
-        Numbers trace to verified sources and refresh as models ship.
+        A registry of large language models — frontier and open-weight. Pick a
+        maker, then a model, to see its full version history; click the current
+        release for specs, benchmarks, pricing and APIs. Numbers trace to
+        verified sources and refresh as models ship.
       </p>
     </div>
   );

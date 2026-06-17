@@ -48,6 +48,14 @@ export interface ModelEntry {
   license?: string;
   /** Public release date, YYYY-MM-DD or YYYY-MM. */
   releaseDate?: string;
+  /**
+   * The model line's version timeline, NEWEST FIRST — mirrored from the detail
+   * file's `versionHistory` so the registry hub can render each version as a
+   * card (column 3) without loading the per-model chunk. The `current` entry is
+   * this tile's shipping model (links to its detail page); older entries are
+   * informational lineage cards.
+   */
+  versions?: ModelVersion[];
 }
 
 export interface ModelFamily {
