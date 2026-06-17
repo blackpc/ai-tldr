@@ -147,8 +147,8 @@ function breadcrumbLd(
 function allModelsIndex(): string {
   const groups = REGISTRY.makers
     .map((mk) => {
-      const links = mk.families
-        .flatMap((f) => f.models)
+      const links = mk.lines
+        .flatMap((l) => l.versions)
         .map(
           (m) =>
             `<li><a href="${modelPath(m.slug)}" data-internal="true">${m.name}</a></li>`,
@@ -179,7 +179,7 @@ export async function prerenderModels(opts: {
   const today = new Date().toISOString().slice(0, 10);
 
   const allModels = REGISTRY.makers.flatMap((mk) =>
-    mk.families.flatMap((f) => f.models),
+    mk.lines.flatMap((l) => l.versions),
   );
 
   // ---- hub (/models) ----
@@ -234,7 +234,8 @@ export async function prerenderModels(opts: {
     const mp = modelPath(detail.slug);
     const mUrl = `${siteUrl}${mp}`;
     const maker = REGISTRY.makers.find((mk) => mk.id === detail.maker);
-    const makerHref = `/models/?maker=${detail.maker}&model=${detail.slug}`;
+    const makerHref = `/models/?maker=${detail.maker}`;
+    const lineHref = `/models/?maker=${detail.maker}&line=${detail.line}`;
 
     const softwareLd: Record<string, unknown> = {
       "@context": "https://schema.org",
@@ -274,6 +275,7 @@ export async function prerenderModels(opts: {
         { name: "AI/TLDR", path: "/" },
         { name: "LLM Registry", path: MODELS_PATH },
         { name: detail.makerTitle, path: makerHref },
+        { name: detail.lineTitle, path: lineHref },
         { name: detail.name, path: mp },
       ]),
       ...(detail.faq?.length
@@ -338,7 +340,7 @@ export function injectModelsLinksIntoHome(html: string): string {
     )
     .join("");
   const total = REGISTRY.makers.reduce(
-    (n, mk) => n + mk.families.reduce((m, f) => m + f.models.length, 0),
+    (n, mk) => n + mk.lines.reduce((m, l) => m + l.versions.length, 0),
     0,
   );
   const section =

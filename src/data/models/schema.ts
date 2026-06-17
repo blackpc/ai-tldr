@@ -32,13 +32,18 @@ export type ModelTag =
   | "free-tier"
   | "agentic";
 
-/** One model tile in the registry Miller columns. */
+/**
+ * One VERSION tile in the registry's third column. EVERY version of a line is
+ * its own entry with its own detail page (`/models/<slug>`) — the current
+ * release and every historical version alike. The registry tree is therefore
+ * maker ▸ line ▸ versions (column 1 ▸ 2 ▸ 3).
+ */
 export interface ModelEntry {
   /** Display name, e.g. "Claude Opus 4.8". */
   name: string;
   /** Globally-unique URL slug for the detail page. */
   slug: string;
-  /** One plain-English sentence: what it is / what it's for. */
+  /** Card description: what changed in this version, or its tagline. */
   blurb: string;
   /** Cross-cutting filter tags. */
   tags: ModelTag[];
@@ -47,22 +52,23 @@ export interface ModelEntry {
   /** License label, e.g. "Proprietary", "Apache-2.0", "Llama 4 Community". */
   license?: string;
   /** Public release date, YYYY-MM-DD or YYYY-MM. */
-  releaseDate?: string;
-  /**
-   * The model line's version timeline, NEWEST FIRST — mirrored from the detail
-   * file's `versionHistory` so the registry hub can render each version as a
-   * card (column 3) without loading the per-model chunk. The `current` entry is
-   * this tile's shipping model (links to its detail page); older entries are
-   * informational lineage cards.
-   */
-  versions?: ModelVersion[];
+  date?: string;
+  /** True for the line's current/latest version. */
+  current?: boolean;
+  /** True when this version has a fully-researched page (benchmarks/pricing). */
+  rich?: boolean;
 }
 
-export interface ModelFamily {
+/** A model LINE / tier (e.g. "Claude Opus", "Gemini Flash", "Gemma") — column 2
+ *  of the registry. Its `versions` (column 3) are the line's releases, newest
+ *  first, each a clickable detail page. */
+export interface ModelLine {
   id: string;
-  /** Display name, e.g. "Claude", "GPT", "Gemini", "Llama". */
+  /** Display name, e.g. "Claude Opus", "Gemini Flash". */
   title: string;
-  models: ModelEntry[];
+  /** One plain sentence: what this line is for. */
+  blurb: string;
+  versions: ModelEntry[];
 }
 
 export interface ModelMaker {
@@ -73,7 +79,7 @@ export interface ModelMaker {
   blurb: string;
   /** Official homepage (https). */
   homepage?: string;
-  families: ModelFamily[];
+  lines: ModelLine[];
 }
 
 export interface ModelRegistry {
@@ -150,8 +156,10 @@ export interface ModelDetail {
   name: string;
   maker: string;
   makerTitle: string;
-  family: string;
-  familyTitle: string;
+  /** The model line this version belongs to, e.g. line id "claude-opus". */
+  line: string;
+  /** Line display name, e.g. "Claude Opus". */
+  lineTitle: string;
   tagline: string;
   seoTitle: string;
   metaDescription: string;
@@ -201,4 +209,11 @@ export interface ModelVersion {
   note?: string;
   /** True for the model this page is about. */
   current?: boolean;
+  /**
+   * Slug of this version's own detail page, when one exists. Every version in
+   * the registry now gets its own page, so the version-history timeline links
+   * straight to each sibling version (the current entry points back at this
+   * page). Omitted only for legacy lineage entries with no dedicated page.
+   */
+  slug?: string;
 }

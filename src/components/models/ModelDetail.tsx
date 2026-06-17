@@ -16,17 +16,31 @@ import { modelPath } from "../../data/models/schema";
 
 const DATA = registryData as ModelRegistry;
 
-/** Sibling models in the same family (excluding the current one). */
+/** All versions of this model's LINE, newest-first (for comparison + nav). */
+function lineVersions(detail: ModelDetail): ModelEntry[] {
+  const mk = DATA.makers.find((m) => m.id === detail.maker);
+  return mk?.lines.find((l) => l.id === detail.line)?.versions ?? [];
+}
+
+/** Prev = the next newer version, next = the next older version, within the
+ *  line (the registry stores versions newest-first). */
+function prevNext(detail: ModelDetail): { newer?: ModelEntry; older?: ModelEntry } {
+  const vs = lineVersions(detail);
+  const i = vs.findIndex((v) => v.slug === detail.slug);
+  if (i < 0) return {};
+  return { newer: i > 0 ? vs[i - 1] : undefined, older: i < vs.length - 1 ? vs[i + 1] : undefined };
+}
+
+/** Related models: other lines' current flagships from the same maker. */
 function relatedModels(detail: ModelDetail): ModelEntry[] {
   const mk = DATA.makers.find((m) => m.id === detail.maker);
-  const fam = mk?.families.find((f) => f.id === detail.family);
-  const sibs = (fam?.models ?? []).filter((m) => m.slug !== detail.slug);
-  if (sibs.length >= 2) return sibs.slice(0, 6);
-  // top up with other models from the same maker
-  const more = (mk?.families ?? [])
-    .flatMap((f) => f.models)
-    .filter((m) => m.slug !== detail.slug && !sibs.some((s) => s.slug === m.slug));
-  return [...sibs, ...more].slice(0, 6);
+  const out: ModelEntry[] = [];
+  for (const l of mk?.lines ?? []) {
+    if (l.id === detail.line) continue;
+    const head = l.versions.find((v) => v.current) ?? l.versions[0];
+    if (head && head.slug !== detail.slug) out.push(head);
+  }
+  return out.slice(0, 6);
 }
 
 const LINK_GROUP_LABEL: Record<ModelLinkKind, string> = {
@@ -53,45 +67,56 @@ function hostOf(url: string): string {
   }
 }
 
-function BenchBars({ detail }: { detail: ModelDetail }) {
+/** Benchmark scores as a gridded horizontal bar chart (0–100 scale, 25-point
+ *  gridlines). Each row links to its source. */
+function BenchChart({ detail }: { detail: ModelDetail }) {
   if (!detail.benchmarks?.length) return null;
   return (
     <section id="benchmarks" className="mdl-section" aria-labelledby="benchmarks-h">
       <h2 className="mdl-h2" id="benchmarks-h">
         <span className="mdl-h2-mark" aria-hidden="true">//</span> Benchmarks
       </h2>
-      <table className="mdl-bench">
-        <tbody>
-          {detail.benchmarks.map((b) => {
-            const max = b.max ?? 100;
-            const unit = b.unit ?? "%";
-            const w = Math.min(100, Math.max(0, (b.score / max) * 100));
-            return (
-              <tr key={b.name}>
-                <th scope="row" className="mdl-bench-name">
-                  <a href={b.source} target="_blank" rel="noreferrer noopener">
-                    {b.name}
-                  </a>
-                </th>
-                <td className="mdl-bench-bar">
-                  <span className="mdl-bar" style={{ width: `${w}%` }} aria-hidden="true" />
-                </td>
-                <td className="mdl-bench-val">
-                  {b.score}
-                  {unit}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+      <ol className="mdl-chart" aria-label="Benchmark scores">
+        {detail.benchmarks.map((b) => {
+          const max = b.max ?? 100;
+          const unit = b.unit ?? "%";
+          const w = Math.min(100, Math.max(0, (b.score / max) * 100));
+          return (
+            <li className="mdl-chart-row" key={b.name}>
+              <a
+                className="mdl-chart-name"
+                href={b.source}
+                target="_blank"
+                rel="noreferrer noopener"
+                title={`Source: ${hostOf(b.source)}`}
+              >
+                {b.name}
+              </a>
+              <span className="mdl-chart-track">
+                <span className="mdl-chart-fill" style={{ width: `${w}%` }} aria-hidden="true" />
+              </span>
+              <span className="mdl-chart-val">
+                {b.score}
+                {unit}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+      <p className="mdl-chart-cap">
+        Scores on a 0–100 scale (25-point gridlines); higher is better. Each
+        benchmark links to its published source.
+      </p>
     </section>
   );
 }
 
 export function ModelDetailPage({ detail }: { detail: ModelDetail }) {
   const related = relatedModels(detail);
-  const makerHref = `/models/?maker=${detail.maker}&model=${detail.slug}`;
+  const versions = lineVersions(detail);
+  const { newer, older } = prevNext(detail);
+  const makerHref = `/models/?maker=${detail.maker}`;
+  const lineHref = `/models/?maker=${detail.maker}&line=${detail.line}`;
 
   const specs: { k: string; v: string }[] = [];
   if (detail.releaseDate) specs.push({ k: "Released", v: detail.releaseDate });
@@ -112,7 +137,9 @@ export function ModelDetailPage({ detail }: { detail: ModelDetail }) {
     ...(detail.strengths.length ? [{ id: "strengths", title: "Strengths" }] : []),
     ...(detail.useCases.length ? [{ id: "use-cases", title: "Best for" }] : []),
     ...(detail.apis?.length ? [{ id: "access", title: "How to access" }] : []),
-    ...(detail.versionHistory?.length ? [{ id: "history", title: "Version history" }] : []),
+    ...(versions.length > 1 || detail.versionHistory?.length
+      ? [{ id: "history", title: "Version history" }]
+      : []),
     ...(detail.faq?.length ? [{ id: "faq", title: "FAQ" }] : []),
   ];
 
@@ -128,6 +155,8 @@ export function ModelDetailPage({ detail }: { detail: ModelDetail }) {
           <span aria-hidden="true"> › </span>
           <a href={makerHref} data-internal="true">{detail.makerTitle}</a>
           <span aria-hidden="true"> › </span>
+          <a href={lineHref} data-internal="true">{detail.lineTitle}</a>
+          <span aria-hidden="true"> › </span>
           <span>{detail.name}</span>
         </nav>
         <h1 className="mdl-title">{detail.name}</h1>
@@ -137,6 +166,22 @@ export function ModelDetailPage({ detail }: { detail: ModelDetail }) {
             <span className="mdl-tag" key={t}>{t}</span>
           ))}
         </div>
+        {(newer || older) && (
+          <div className="mdl-vnav" aria-label="Adjacent versions in this line">
+            {newer ? (
+              <a className="mdl-vnav-link" href={modelPath(newer.slug)} data-internal="true">
+                <span className="mdl-vnav-dir">← newer</span>
+                <span className="mdl-vnav-name">{newer.name}</span>
+              </a>
+            ) : <span />}
+            {older ? (
+              <a className="mdl-vnav-link mdl-vnav-older" href={modelPath(older.slug)} data-internal="true">
+                <span className="mdl-vnav-dir">older →</span>
+                <span className="mdl-vnav-name">{older.name}</span>
+              </a>
+            ) : <span />}
+          </div>
+        )}
       </header>
 
       <div className="mdl-layout">
@@ -171,7 +216,7 @@ export function ModelDetailPage({ detail }: { detail: ModelDetail }) {
             </table>
           </section>
 
-          <BenchBars detail={detail} />
+          <BenchChart detail={detail} />
 
           {detail.pricing && (
             <section id="pricing" className="mdl-section" aria-labelledby="pricing-h">
@@ -275,20 +320,43 @@ export function ModelDetailPage({ detail }: { detail: ModelDetail }) {
             </section>
           )}
 
-          {detail.versionHistory && detail.versionHistory.length > 0 && (
+          {versions.length > 1 && (
             <section id="history" className="mdl-section" aria-labelledby="history-h">
               <h2 className="mdl-h2" id="history-h">
-                <span className="mdl-h2-mark" aria-hidden="true">//</span> Version history
+                <span className="mdl-h2-mark" aria-hidden="true">//</span> {detail.lineTitle} — every version
               </h2>
-              <ol className="mdl-history">
-                {detail.versionHistory.map((v, i) => (
-                  <li key={i} className={v.current ? "mdl-hist-cur" : undefined}>
-                    <span className="mdl-hist-ver">{v.version}</span>
-                    {v.date && <span className="mdl-hist-date">{v.date}</span>}
-                    {v.note && <span className="mdl-hist-note">{v.note}</span>}
-                  </li>
-                ))}
-              </ol>
+              <p className="mdl-p mdl-fine">
+                The full lineage of the {detail.lineTitle} line, newest first.
+                Every version has its own page — click any to compare specs,
+                benchmarks and pricing.
+              </p>
+              <div className="mdl-cmp-wrap">
+                <table className="mdl-cmp">
+                  <thead>
+                    <tr><th>Version</th><th>Released</th><th>Context</th><th>License</th></tr>
+                  </thead>
+                  <tbody>
+                    {versions.map((v) => {
+                      const isCur = v.slug === detail.slug;
+                      return (
+                        <tr key={v.slug} className={isCur ? "mdl-cmp-cur" : undefined}>
+                          <th scope="row">
+                            {isCur ? (
+                              <span className="mdl-cmp-self">{v.name}</span>
+                            ) : (
+                              <a href={modelPath(v.slug)} data-internal="true">{v.name}</a>
+                            )}
+                            {v.current && <span className="mdl-cmp-badge">current</span>}
+                          </th>
+                          <td>{v.date ?? "—"}</td>
+                          <td>{v.contextWindow ?? "—"}</td>
+                          <td>{v.license ?? "—"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </section>
           )}
 

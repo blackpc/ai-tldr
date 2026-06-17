@@ -58,26 +58,26 @@ for (const mk of registry.makers ?? []) {
   makerCount++;
   if (!mk.id || !mk.title) err("registry", `maker missing id/title: ${JSON.stringify(mk.id)}`);
   if (typeof mk.blurb !== "string") err(mk.id, "maker.blurb must be a string");
-  if (!Array.isArray(mk.families) || mk.families.length === 0) {
-    err(mk.id, "maker.families must be a non-empty array");
+  if (!Array.isArray(mk.lines) || mk.lines.length === 0) {
+    err(mk.id, "maker.lines must be a non-empty array");
     continue;
   }
-  for (const fam of mk.families) {
-    if (!fam.id || !fam.title) err(mk.id, `family missing id/title: ${JSON.stringify(fam.id)}`);
-    if (!Array.isArray(fam.models) || fam.models.length === 0) {
-      err(`${mk.id}/${fam.id}`, "family.models must be a non-empty array");
+  for (const line of mk.lines) {
+    if (!line.id || !line.title) err(mk.id, `line missing id/title: ${JSON.stringify(line.id)}`);
+    if (!Array.isArray(line.versions) || line.versions.length === 0) {
+      err(`${mk.id}/${line.id}`, "line.versions must be a non-empty array");
       continue;
     }
-    for (const m of fam.models) {
-      const scope = `${mk.id}/${fam.id}/${m.slug}`;
+    for (const v of line.versions) {
+      const scope = `${mk.id}/${line.id}/${v.slug}`;
       tileCount++;
-      if (!m.slug || !SLUG_RE.test(m.slug)) err(scope, `invalid slug ${JSON.stringify(m.slug)}`);
-      if (tileSlugs.has(m.slug)) err(scope, `duplicate slug ${m.slug}`);
-      tileSlugs.add(m.slug);
-      if (!m.name) err(scope, "tile.name required");
-      if (!m.blurb) err(scope, "tile.blurb required");
-      if (!Array.isArray(m.tags) || m.tags.length === 0) err(scope, "tile.tags required");
-      for (const t of m.tags ?? [])
+      if (!v.slug || !SLUG_RE.test(v.slug)) err(scope, `invalid slug ${JSON.stringify(v.slug)}`);
+      if (tileSlugs.has(v.slug)) err(scope, `duplicate slug ${v.slug}`);
+      tileSlugs.add(v.slug);
+      if (!v.name) err(scope, "version.name required");
+      if (!v.blurb) err(scope, "version.blurb required");
+      if (!Array.isArray(v.tags) || v.tags.length === 0) err(scope, "version.tags required");
+      for (const t of v.tags ?? [])
         if (!VALID_TAGS.has(t)) err(scope, `unknown tag "${t}"`);
     }
   }
@@ -109,15 +109,17 @@ for (const file of detailFiles) {
   detailBySlug.set(d.slug, d);
 
   // required identity fields
-  for (const k of ["slug", "name", "maker", "makerTitle", "family", "familyTitle",
+  for (const k of ["slug", "name", "maker", "makerTitle", "line", "lineTitle",
     "tagline", "seoTitle", "metaDescription", "license"] as const) {
     if (!d[k] || typeof d[k] !== "string") err(scope, `missing required string field "${k}"`);
   }
   if (typeof d.openWeights !== "boolean") err(scope, "openWeights must be a boolean");
   if (!Array.isArray(d.modalities) || d.modalities.length === 0) err(scope, "modalities must be a non-empty array");
   if (!Array.isArray(d.overview) || d.overview.length === 0) err(scope, "overview must be a non-empty array");
-  if (!Array.isArray(d.strengths) || d.strengths.length === 0) err(scope, "strengths must be a non-empty array");
-  if (!Array.isArray(d.useCases) || d.useCases.length === 0) err(scope, "useCases must be a non-empty array");
+  // strengths/useCases are OPTIONAL (concise lineage pages may omit them) but
+  // must be arrays when present.
+  if (!Array.isArray(d.strengths)) err(scope, "strengths must be an array");
+  if (!Array.isArray(d.useCases)) err(scope, "useCases must be an array");
   if (!Array.isArray(d.tags) || d.tags.length === 0) err(scope, "tags must be a non-empty array");
   for (const t of d.tags ?? []) if (!VALID_TAGS.has(t)) err(scope, `unknown tag "${t}"`);
 
@@ -188,19 +190,23 @@ if (errors.length > 0) {
   process.exit(1);
 }
 
-// Sync each tile's `versions` from its detail file's versionHistory — the
-// detail file is the single source of truth, so the registry hub can render
-// the version-timeline cards without loading per-model chunks, and the two can
-// never drift. Then persist count.json (nav badge) + the synced registry.
-for (const mk of registry.makers)
-  for (const fam of mk.families)
-    for (const m of fam.models) {
-      const vh = detailBySlug.get(m.slug)?.versionHistory;
-      if (vh && vh.length) m.versions = vh;
-      else delete m.versions;
+// Mark each tile's `rich` flag from its detail file (has benchmarks/pricing) so
+// the hub can badge fully-researched versions, then persist count.json. The
+// detail files are the source of truth; the registry tree is curated, so we
+// don't rewrite it here beyond the derived `rich` flag.
+let lineCount = 0;
+let dirty = false;
+for (const mk of registry.makers) {
+  lineCount += mk.lines.length;
+  for (const line of mk.lines)
+    for (const v of line.versions) {
+      const d = detailBySlug.get(v.slug);
+      const rich = !!(d?.benchmarks?.length || d?.pricing);
+      if (rich && !v.rich) { v.rich = true; dirty = true; }
+      else if (!rich && v.rich) { delete v.rich; dirty = true; }
     }
+}
+if (dirty) writeFileSync(REGISTRY_FILE, JSON.stringify(registry, null, 2) + "\n");
+writeFileSync(COUNT_FILE, JSON.stringify({ models: tileCount, makers: makerCount, lines: lineCount }, null, 2) + "\n");
 
-writeFileSync(REGISTRY_FILE, JSON.stringify(registry, null, 2) + "\n");
-writeFileSync(COUNT_FILE, JSON.stringify({ models: tileCount, makers: makerCount }, null, 2) + "\n");
-
-console.log(`models ok — ${tileCount} models across ${makerCount} makers, ${detailSlugs.size} detail files, all sourced; registry versions + count.json refreshed`);
+console.log(`models ok — ${tileCount} versions across ${lineCount} lines, ${makerCount} makers, ${detailSlugs.size} detail files; count.json refreshed`);

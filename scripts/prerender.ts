@@ -80,7 +80,7 @@ const LANDSCAPE_TOOLS: { name: string; slug: string }[] = (
 const LLM_MODELS: { name: string; slug: string }[] = (
   registryData as ModelRegistry
 ).makers.flatMap((mk) =>
-  mk.families.flatMap((f) => f.models.map((m) => ({ name: m.name, slug: m.slug }))),
+  mk.lines.flatMap((l) => l.versions.map((v) => ({ name: v.name, slug: v.slug }))),
 );
 
 // -----------------------------------------------------------------------
