@@ -120,6 +120,14 @@ for the explainer copy.
 
 ## 7. Done — shipped optimizations
 
+- [x] **2026-06-17** — **IndexNow** (Bing/Yandex/Seznam/Naver auto-submit): the
+  sweep workflow runs `scripts/ping-indexnow.ts` after each content push,
+  submitting only what changed (homepage, `/stats`, the release pages added
+  that sweep). Ownership proved by the static key file
+  `public/69109beda2c94dd788a6d254b1131c7e.txt` (served at the site root — do
+  NOT delete it). Best-effort, never fails the build. This auto-pings Bing
+  (→ faster ChatGPT/Copilot retrieval); the Bing Webmaster Tools property still
+  needs a one-time manual verify for the dashboard (§8).
 - [x] **2026-06-17** — **Tool comparison tables**: each `/learn/landscape/<slug>`
   page now has a crawlable "How X compares" table (the subcategory's tools by
   GitHub stars, current tool highlighted) — what AI engines lift for "best / vs /

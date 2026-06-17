@@ -192,6 +192,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Commit and push if releases.json, sweeps.json or stars changed
+        id: commit
         env:
           # Pass the workflow's GITHUB_TOKEN explicitly. The Claude Code
           # action mutates git config during its run and the credential
@@ -203,6 +204,7 @@ jobs:
           FILES="src/data/releases.json src/data/sweeps.json src/data/learn/github-stars.json"
           if [[ -z "$(git status --porcelain $FILES)" ]]; then
             echo "No changes to releases.json, sweeps.json or github-stars.json — nothing to commit."
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git config user.name  "ai-tldr-bot"
@@ -225,6 +227,7 @@ jobs:
             git fetch "$REMOTE" "$GITHUB_REF_NAME"
             git rebase "FETCH_HEAD"
             if git push "$REMOTE" "HEAD:${GITHUB_REF_NAME}"; then
+              echo "pushed=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
             echo "Push attempt $attempt rejected — retrying after rebase."
@@ -232,3 +235,14 @@ jobs:
           done
           echo "Push failed after 5 attempts." >&2
           exit 1
+
+      - name: Notify IndexNow of new URLs
+        # After the sweep push (which triggers the Cloudflare deploy), tell
+        # IndexNow (Bing/Yandex/Seznam/Naver — one call, all engines) about the
+        # homepage, /stats, and the release pages added this sweep, so they
+        # re-crawl promptly. Ownership is proved by public/<key>.txt (always
+        # live). Only runs when something was actually pushed. Best-effort —
+        # ping-indexnow.ts never throws.
+        if: steps.commit.outputs.pushed == 'true'
+        continue-on-error: true
+        run: bun scripts/ping-indexnow.ts

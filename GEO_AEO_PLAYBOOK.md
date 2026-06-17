@@ -404,10 +404,13 @@ Ordered by leverage. File anchors from the audit.
 > 2026-06-17 — #5 **comparison tables** on the crawlable tool detail pages
 > ("How X compares") + a top-nav stats icon (the footer is unreachable under
 > the feed's infinite scroll). **All code items are done.** 👤 User-action
-> only: #7 Bing Webmaster Tools verify, #8 GA4 AI-traffic channel, a Wikidata
-> item, claim an X handle (then I wire it into `sameAs`). IndexNow deferred —
-> the Cloudflare git-deploy has no clean post-deploy hook and pinging every 2h
-> build would just re-submit unchanged URLs.
+> only: #7 Bing Webmaster Tools verify (for analytics), #8 GA4 AI-traffic
+> channel, a Wikidata item, claim an X handle (then I wire it into `sameAs`).
+> ✅ **IndexNow wired** — the sweep workflow pings IndexNow (Bing/Yandex/Seznam/
+> Naver) after each content push, submitting only the homepage, `/stats`, and
+> the release pages added that sweep (ownership via `public/<key>.txt`;
+> `scripts/ping-indexnow.ts`). This is the automated half of "get into Bing";
+> the manual half (verifying the property for the dashboard) is still #7.
 
 1. **Add `Organization` `sameAs`** to `ORG_REF` in
    [scripts/prerender.ts](scripts/prerender.ts) — point at the brand's X, GitHub,
