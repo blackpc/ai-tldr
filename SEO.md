@@ -120,6 +120,25 @@ for the explainer copy.
 
 ## 7. Done — shipped optimizations
 
+- [x] **2026-06-17** — **Growth-research batch** (deep-research workflow → 25
+  verified tactics; see [GROWTH_PLAYBOOK.md](GROWTH_PLAYBOOK.md)):
+  - Fixed the stale "every 8 hours" copy → "every 2 hours" (the cron is 2h) —
+    it was understating freshness to every AI crawler.
+  - **robots.txt** now names the AI crawlers explicitly (OAI-SearchBot,
+    GPTBot, PerplexityBot, ClaudeBot, Google-Extended, bingbot, CCBot…).
+  - **Freshness truth**: news-sitemap + NewsArticle dates now full W3C
+    datetimes (noon UTC); stopped fake-fresh `lastmod` on tool/landscape pages
+    (was stamping `today` every build — erodes lastmod trust site-wide).
+  - **Citable /stats**: AI Release Velocity Index + Release Cadence Index +
+    frontier-90d (original numbers); per-section "Cite this" permalinks +
+    methodology; Dataset `variableMeasured` + `distribution`; `/stats.json`.
+  - **Homepage answer capsule** ("What AI shipped today?") in the prerendered
+    #root; **release Quick Facts table + sub-question FAQ + FAQPage JSON-LD**
+    (schema + prompt + render — fills via the sweep); **DefinedTerm** on all
+    652 Learn articles; per-page robots-meta; release→silo cross-links.
+  - **Free JSON API** (`/api/releases.json|tools.json|stats.json`, CORS, CC-BY)
+    + **embeddable badge** (`/embed/releases-this-week.svg`, `/embed` docs) +
+    **AI-crawler/referral telemetry** (Workers observability) + Last-Modified/304.
 - [x] **2026-06-17** — **IndexNow** (Bing/Yandex/Seznam/Naver auto-submit): the
   sweep workflow runs `scripts/ping-indexnow.ts` after each content push,
   submitting only what changed (homepage, `/stats`, the release pages added
