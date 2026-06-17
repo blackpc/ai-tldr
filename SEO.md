@@ -120,6 +120,16 @@ for the explainer copy.
 
 ## 7. Done — shipped optimizations
 
+- [x] **2026-06-17** — **AI Release Index** (`/stats`): an original-data page —
+  stat cards + extractable one-sentence takeaways + ranked tables/bars (top
+  labs, categories, weekly cadence, importance, most-starred OSS tools). Built
+  from the verified feed + landscape via `scripts/build-stats.ts` → `stats.json`
+  (count.json pattern — keeps landscape out of the main bundle). Dataset +
+  BreadcrumbList JSON-LD, in `sitemap-main.xml`, linked from the homepage body +
+  footer. New URL-driven `/stats` route in `App.tsx` (Back works). `StatsPage`
+  rendered to static HTML by `prerender.ts` via `renderToStaticMarkup`.
+- [x] **2026-06-16** — `SearchAction` wired (see §8): `?q=` seeds the feed
+  search box on mount, so `/?q=term` lands on filtered results.
 - [x] **2026-06-15** — GEO/AEO pass (see [GEO_AEO_PLAYBOOK.md](GEO_AEO_PLAYBOOK.md)):
   - `Organization` `sameAs` (entity-linking to the verified source repo) on home + the dev fallback
   - `author.url` on Article / SoftwareApplication / SoftwareSourceCode / TechArticle / Dataset JSON-LD, via a curated, conservative org→homepage map (`ORG_HOMEPAGES`); unknown orgs ship no URL
@@ -159,7 +169,7 @@ Ordered by impact.
 
 ### Medium impact
 
-- [ ] **`SearchAction` in WebSite JSON-LD** — requires honoring `?q=<query>` as an initial search state in `App.tsx` `parseRoute()`. Unlocks Google sitelinks search box. _~20 min, small App.tsx change._
+- [x] **`SearchAction` in WebSite JSON-LD** — ✅ shipped 2026-06-16. `App.tsx` now seeds the feed search box from `?q=` on mount (`parseQueryFromUrl`), so `/?q=term` lands on filtered results — the Google sitelinks search-box entry point. Kept minimal/URL-driven: search stays UI-local otherwise (no feed-scroll regression).
 - [x] **Add `author.url` to release Article schema** — ✅ shipped 2026-06-15 via `ORG_HOMEPAGES` curated map (Article + Software + TechArticle + Dataset).
 - [ ] **`DefinedTerm` / `ItemList` JSON-LD on `/influencers`** so each creator becomes a discoverable entity with `sameAs` links to their social profiles. Currently the page is just a generic `CollectionPage`.
 - [ ] **`FAQPage` schema on selected tall release explainers** where the explainer has clearly Q&A-like content. Big CTR lift if it earns a rich result.

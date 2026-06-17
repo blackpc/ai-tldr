@@ -47,6 +47,11 @@ import {
   injectLearnLinksIntoHome,
   prerenderLearn,
 } from "./prerender-learn.tsx";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { StatsPage } from "../src/components/StatsPage";
+import statsData from "../src/data/stats.json" with { type: "json" };
+import type { StatsData } from "../src/data/stats";
 
 // -----------------------------------------------------------------------
 // Config
@@ -66,6 +71,7 @@ const DEFAULT_OG_IMAGE = `${SITE_URL}/og-image.png`;
 const releaseUrl = (id: string) => `${SITE_URL}/releases/${id}/`;
 const INFLUENCERS_URL = `${SITE_URL}/influencers/`;
 const LOG_URL = `${SITE_URL}/log/`;
+const STATS_URL = `${SITE_URL}/stats/`;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // `@cloudflare/vite-plugin` splits the build into:
@@ -346,6 +352,51 @@ function renderJsonLdCollectionPage(opts: {
     inLanguage: "en-US",
     isPartOf: { "@id": `${SITE_URL}/#website` },
     publisher: { "@id": `${SITE_URL}/#org` },
+  });
+}
+
+/**
+ * AI Release Index (/stats) — Dataset + BreadcrumbList. The page IS an
+ * original dataset (a GEO citation magnet — a unique number forces
+ * attribution), so Dataset is the right type; it ties back to the WebSite +
+ * Organization entities.
+ */
+function renderJsonLdStats(): string {
+  const s = statsData as StatsData;
+  return wrapJsonLd({
+    "@context": "https://schema.org",
+    "@type": "Dataset",
+    name: "AI Release Index",
+    description:
+      "Statistics on new AI releases and open-source AI tools tracked by AI/TLDR — counts by lab, category and week, plus the most-starred open-source tools.",
+    url: STATS_URL,
+    creator: { "@id": `${SITE_URL}/#org` },
+    publisher: { "@id": `${SITE_URL}/#org` },
+    isPartOf: { "@id": `${SITE_URL}/#website` },
+    inLanguage: "en-US",
+    dateModified: s.generatedAt,
+    keywords:
+      "AI releases, AI statistics, AI release tracker, open-source AI tools, AI models",
+    measurementTechnique:
+      "Aggregated from the AI/TLDR verified release feed and open-source landscape.",
+    variableMeasured: [
+      "releases tracked",
+      "releases by lab",
+      "releases by category",
+      "releases per week",
+      "GitHub stars",
+    ],
+  });
+}
+
+function renderJsonLdStatsBreadcrumb(): string {
+  return wrapJsonLd({
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: [
+      { "@type": "ListItem", position: 1, name: "AI/TLDR", item: `${SITE_URL}/` },
+      { "@type": "ListItem", position: 2, name: "AI Release Index", item: STATS_URL },
+    ],
   });
 }
 
@@ -1053,6 +1104,7 @@ function renderHomeBody(items: ReleaseItem[]): string {
     `<main class="rls-main">` +
     `<h1>AI/TLDR — every new AI model, tool, repo &amp; paper</h1>` +
     `<p class="rls-summary">The latest AI releases, refreshed every few hours and explained in plain English.</p>` +
+    `<p><a href="/stats/">AI Release Index — live stats on AI releases</a> · <a href="/learn/">Learn AI</a></p>` +
     `<ul class="rls-feed">${cards}</ul>` +
     `</main></div>`
   );
@@ -1178,6 +1230,29 @@ function injectInfluencersBody(html: string, list: Influencer[]): string {
   return html;
 }
 
+/** Crawlable AI Release Index body — renders the real StatsPage component to
+ *  static markup (styled by the bundled CSS link in the template), wrapped in
+ *  the brand-header shell. React replaces #root wholesale on mount. */
+function renderStatsRoot(): string {
+  const body = renderToStaticMarkup(
+    createElement(StatsPage, { data: statsData as StatsData }),
+  );
+  return (
+    `<div class="page"><header class="page-head">` +
+    `<a class="brand" href="/" aria-label="AI/TLDR — home">` +
+    `<span class="brand-mark">█</span><p class="brand-name">AI/TLDR</p></a></header>` +
+    body +
+    `</div>`
+  );
+}
+
+function injectStatsBody(html: string): string {
+  return html.replace(
+    /<div id="root"><\/div>/,
+    () => `<div id="root">${renderStatsRoot()}</div>`,
+  );
+}
+
 // ---- Static page meta ---------------------------------------------------
 // Title guidance:  primary keyword first, brand suffix, ≤60 chars.
 // Description guidance:  120–158 chars, natural keyword usage, CTA.
@@ -1210,6 +1285,16 @@ const LOG_META: PageMeta = {
   ogType: "website",
   ogImage: DEFAULT_OG_IMAGE,
   ogImageAlt: "AI/TLDR sweep log — changelog of AI releases",
+};
+
+const STATS_META: PageMeta = {
+  title: "AI Release Index — Stats on New AI Releases | AI/TLDR",
+  description:
+    "Live stats on the AI releases & open-source tools AI/TLDR tracks — counts by lab, category and week, plus the most-starred open-source AI tools.",
+  canonical: STATS_URL,
+  ogType: "website",
+  ogImage: DEFAULT_OG_IMAGE,
+  ogImageAlt: "AI Release Index — statistics on new AI releases",
 };
 
 // -----------------------------------------------------------------------
@@ -1532,6 +1617,19 @@ async function main() {
     await writeHtml("log/index.html", logHtml);
   }
 
+  // 3b. AI Release Index (/stats) — Dataset + Breadcrumb JSON-LD + the real
+  //     StatsPage rendered to static HTML. An original dataset built from the
+  //     verified feed + landscape (a GEO citation magnet).
+  {
+    const statsJsonLd = [
+      renderJsonLdStats(),
+      renderJsonLdStatsBreadcrumb(),
+    ].join("\n    ");
+    let statsHtml = injectMeta(template, STATS_META, statsJsonLd);
+    statsHtml = injectStatsBody(statsHtml);
+    await writeHtml("stats/index.html", statsHtml);
+  }
+
   // 4. One page per release — full structured-data stack. Most blocks
   // are conditional on category/importance; releases that don't match
   // a condition simply skip those types.
@@ -1590,6 +1688,12 @@ async function main() {
       lastmod: today,
       changefreq: "daily",
       priority: 0.7,
+    },
+    {
+      loc: STATS_URL,
+      lastmod: (statsData as StatsData).generatedAt,
+      changefreq: "daily",
+      priority: 0.8,
     },
     ...items.map((i): SitemapUrl => {
       const loc = releaseUrl(i.id);

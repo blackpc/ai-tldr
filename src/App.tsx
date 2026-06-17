@@ -18,12 +18,15 @@ import { FilterBar } from "./components/FilterBar";
 import { ReleaseModal } from "./components/ReleaseModal";
 import { InfluencersPage } from "./components/InfluencersPage";
 import { SweepLogPage } from "./components/SweepLogPage";
+import { StatsPage } from "./components/StatsPage";
 import { influencers } from "./data/influencers";
 import { Subscribe } from "./components/Subscribe";
 import { BuyMeCoffee } from "./components/BuyMeCoffee";
 import { track, useHeartbeat, useScrollDepth } from "./lib/analytics";
 import type { LearnRoute } from "./components/learn/LearnSection";
 import learnCount from "./data/learn/count.json";
+import statsData from "./data/stats.json";
+import type { StatsData } from "./data/stats";
 
 // The whole Learn section (components + taxonomy + CSS) is one lazy
 // chunk — feed readers never download it. The article count shown in
@@ -45,6 +48,7 @@ type Route =
   | { kind: "influencers" }
   | { kind: "log" }
   | { kind: "release"; id: string }
+  | { kind: "stats" }
   | LearnRoute;
 
 function parseRoute(): Route {
@@ -58,6 +62,9 @@ function parseRoute(): Route {
   }
   if (path === "/log" || path === "/log/") {
     return { kind: "log" };
+  }
+  if (path === "/stats" || path === "/stats/") {
+    return { kind: "stats" };
   }
   const m = path.match(/^\/releases\/([^/]+)\/?$/);
   if (m) return { kind: "release", id: m[1] };
@@ -84,6 +91,14 @@ function parseRoute(): Route {
 
   if (hash) return { kind: "release", id: hash };
   return { kind: "feed" };
+}
+
+/** Parse ?q=… from the current URL. Seeds the feed search box so the
+ *  WebSite SearchAction entry point — `/?q=term`, used by Google's
+ *  sitelinks search box and any shared search link — lands directly on
+ *  filtered results. Capped to a sane length. */
+function parseQueryFromUrl(): string {
+  return (new URLSearchParams(window.location.search).get("q") ?? "").slice(0, 200);
 }
 
 /** Parse ?cat=a,b,c from current URL into a validated category set. */
@@ -162,11 +177,12 @@ function itemFromRoute(
   return items.find((i) => i.id === route.id) ?? null;
 }
 
-type Page = "feed" | "influencers" | "log" | "learn";
+type Page = "feed" | "influencers" | "log" | "learn" | "stats";
 
 function pageFromRoute(route: Route): Page {
   if (route.kind === "influencers") return "influencers";
   if (route.kind === "log") return "log";
+  if (route.kind === "stats") return "stats";
   if (route.kind.startsWith("learn")) return "learn";
   return "feed";
 }
@@ -181,7 +197,7 @@ function App() {
   const [active, setActive] = useState<Set<Category>>(() =>
     parseCategoriesFromUrl(),
   );
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(() => parseQueryFromUrl());
   // Mobile hamburger drawer (nav + BMC + Subscribe). No-op on desktop
   // because CSS shows the secondary actions inline regardless.
   const [menuOpen, setMenuOpen] = useState(false);
@@ -271,6 +287,15 @@ function App() {
     track("nav", { to: "log", from: pageRef.current });
     window.history.pushState(null, "", "/log/");
     setRoute({ kind: "log" });
+  }, []);
+
+  // Nav: AI Release Index (/stats). Linked from the footer + homepage body
+  // (not the top nav — the header is already tight).
+  const goStats = useCallback(() => {
+    track("nav", { to: "stats", from: pageRef.current });
+    window.history.pushState(null, "", "/stats/");
+    setRoute({ kind: "stats" });
+    window.scrollTo(0, 0);
   }, []);
 
   // Nav within the Learn section (and into it). Learn components render
@@ -368,6 +393,10 @@ function App() {
     }
     if (route.kind === "log") {
       document.title = "Sweep Log — What Changed & When | AI/TLDR";
+      return;
+    }
+    if (route.kind === "stats") {
+      document.title = "AI Release Index — Stats on New AI Releases | AI/TLDR";
       return;
     }
     document.title = "AI/TLDR — New AI Models, Tools & Papers This Week";
@@ -691,8 +720,10 @@ function App() {
         >
           <LearnSection route={route as LearnRoute} onNavigate={goLearnPath} />
         </Suspense>
-      ) : (
+      ) : page === "log" ? (
         <SweepLogPage onOpenRelease={openReleaseById} />
+      ) : (
+        <StatsPage data={statsData as StatsData} />
       )}
 
       {openItem && <ReleaseModal item={openItem} onClose={closeModal} />}
@@ -712,6 +743,16 @@ function App() {
         </a>
         {" "}·{" "}
         <a href="mailto:support@shep.bot">support@shep.bot</a>
+        {" "}·{" "}
+        <a
+          href="/stats/"
+          onClick={(e) => {
+            e.preventDefault();
+            goStats();
+          }}
+        >
+          AI Release Index
+        </a>
       </footer>
     </div>
   );

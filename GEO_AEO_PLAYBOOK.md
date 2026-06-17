@@ -394,12 +394,15 @@ have 737+).
 
 Ordered by leverage. File anchors from the audit.
 
-> **Status (shipped 2026-06-15):** ✅ #1 `sameAs`, #2 question headings, #3
-> `llms.txt`, #6 `author.url`, #9 `/feed.xml`, #10 preconnects — plus the §5.3
-> "Related releases" internal-link nav. ⏳ Remaining (UI/feature): #4 visible
-> "Updated" stamp on Learn, #5 landscape comparison tables. 👤 User-action
-> (can't be done in code): #7 Bing Webmaster Tools submit, #8 GA4 AI-traffic
-> channel.
+> **Status:** ✅ Shipped 2026-06-15 — #1 `sameAs`, #2 question headings, #3
+> `llms.txt`, #6 `author.url`, #9 `/feed.xml`, #10 preconnects, plus the §5.3
+> "Related releases" internal-link nav. ✅ Shipped 2026-06-16 — **SearchAction**
+> `?q=` seeding (sitelinks search box). ✅ Shipped 2026-06-17 — **AI Release
+> Index** stats page (`/stats`, §5.3). ✅ Already live — #4 visible "Updated"
+> stamp **on Learn articles** (`ArticleBody.tsx`); landscape tool pages have no
+> real per-page date, so none is stamped (zero-hallucination). ⏳ Remaining
+> (UI/feature): #5 landscape comparison tables. 👤 User-action: #7 Bing
+> Webmaster Tools, #8 GA4 AI-traffic channel.
 
 1. **Add `Organization` `sameAs`** to `ORG_REF` in
    [scripts/prerender.ts](scripts/prerender.ts) — point at the brand's X, GitHub,
@@ -434,12 +437,14 @@ Ordered by leverage. File anchors from the audit.
 
 ### 5.3 Bigger bets (real GEO upside)
 
-1. **Original "AI Release Index" stats page.** Turn the feed into a recurring,
-   citable dataset: releases per lab per quarter, OSS-tool growth, star deltas
-   (already tracked in `refresh-learn-stars.ts`). Present each headline number as
-   a one-sentence extractable claim beside a chart. **This is the single strongest
-   citation magnet** — a unique number forces attribution, and every figure
-   derives from our verified feed (policy-safe). (§6.1)
+1. **Original "AI Release Index" stats page.** ✅ Shipped 2026-06-17 at
+   **`/stats`** (`StatsPage.tsx` + `scripts/build-stats.ts` → `stats.json`,
+   Dataset JSON-LD, in the sitemap, linked from home + footer). Hybrid layout:
+   stat cards + one-sentence extractable takeaways + ranked tables/bars (top
+   labs, categories, weekly cadence, importance, most-starred OSS tools). Every
+   figure derives from the verified feed/landscape, recomputed each build (so it
+   tracks the sweep). **The single strongest citation magnet** — a unique number
+   forces attribution, all policy-safe derived data. (§6.1)
 2. **Create a Wikidata item for AI/TLDR**, then point `Organization.sameAs` at
    it — the controllable bridge to the Google Knowledge Graph (no notability bar,
    unlike Wikipedia). (§6.2)
