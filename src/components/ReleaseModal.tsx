@@ -268,6 +268,86 @@ export function ReleaseModal({
               </section>
             )}
 
+            {item.benchmarks && item.benchmarks.length > 0 && (
+              <section className="panel modal-bench-panel" aria-label="Benchmarks">
+                <h3 className="panel-h">// BENCHMARKS</h3>
+                {item.benchmarks.map((b) => {
+                  const max = b.max ?? 100;
+                  const unit = b.unit ?? "%";
+                  return (
+                    <figure className="bench" key={b.name}>
+                      <figcaption className="bench-name">{b.name}</figcaption>
+                      <table className="bench-table">
+                        <tbody>
+                          {b.results.map((r) => (
+                            <tr
+                              key={r.name}
+                              className={r.highlight ? "bench-row-hl" : ""}
+                            >
+                              <th scope="row" className="bench-row-name">
+                                {r.name}
+                              </th>
+                              <td className="bench-row-bar">
+                                <span
+                                  className="bench-bar"
+                                  style={{
+                                    width: `${Math.min(100, Math.max(0, (r.score / max) * 100))}%`,
+                                  }}
+                                  aria-hidden="true"
+                                />
+                              </td>
+                              <td className="bench-row-val">
+                                {r.score}
+                                {unit}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      <a
+                        className="bench-src"
+                        href={b.source}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                      >
+                        source ↗
+                      </a>
+                    </figure>
+                  );
+                })}
+              </section>
+            )}
+
+            {item.pricing && item.pricing.tiers.length > 0 && (
+              <section className="panel modal-pricing-panel" aria-label="Pricing">
+                <h3 className="panel-h">// PRICING</h3>
+                <table className="modal-pricing">
+                  <tbody>
+                    {item.pricing.tiers.map((t) => (
+                      <tr key={`${t.plan}-${t.price}`}>
+                        <th scope="row">
+                          {t.plan}
+                          {t.note && <span className="price-note"> · {t.note}</span>}
+                        </th>
+                        <td>
+                          <span className="price-amt">{t.price}</span>
+                          {t.unit && <span className="price-unit"> {t.unit}</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <a
+                  className="bench-src"
+                  href={item.pricing.source}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                >
+                  source ↗
+                </a>
+              </section>
+            )}
+
             <div className="modal-grid">
               <section className="panel">
                 <h3 className="panel-h">// WHAT IS IT</h3>

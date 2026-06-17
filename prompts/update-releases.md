@@ -432,6 +432,37 @@ source — same zero-hallucination rule as `summary`. This drives a visible
 FAQ on the release page plus FAQPage structured data (what AI engines quote
 for the literal sub-question).
 
+### `benchmarks` (optional — ONLY when the source publishes numbers)
+
+`{ name, unit?, max?, results: { name, score, highlight? }[], source }[]`.
+Renders horizontal comparison bars. Use it ONLY when the announcement/paper
+states real benchmark scores — a model card's eval table, a leaderboard, a
+paper's results. Each `results[]` row is a model: this release PLUS the named
+competitors the source compares against (comparison bars earn far more AI-
+answer citations than a lone number). Rules:
+- Flag the release's own row with `highlight: true` (exactly one when there
+  are competitors) — it gets the accent bar.
+- `score` is a real number; `max` is the scale (default 100 for %), `unit`
+  the suffix (default "%"). A score must be ≤ `max`.
+- `source` MUST also be one of this item's `links[]` (or its `url`).
+  `check-releases.ts` fails the build otherwise — every bar must be traceable.
+- This is NOT a quota and NOT expected on most items. No published numbers →
+  omit the field. Never invent or estimate a score. Skip for
+  `notable`/`rumor`.
+
+### `pricing` (optional — ONLY when prices are PUBLISHED)
+
+`{ tiers: { plan, price, unit?, note? }[], source }`. Renders a pricing table
+(and feeds the SoftwareApplication offer data). Use ONLY for items whose maker
+has published prices — API token rates, subscription tiers. Example tiers:
+`{plan:"Input", price:"$3.00", unit:"/ 1M tokens"}`,
+`{plan:"Output", price:"$15.00", unit:"/ 1M tokens"}`,
+`{plan:"Free tier", price:"$0", note:"5 req/min"}`. Rules:
+- `source` MUST also be one of this item's `links[]` (or its `url`) — the
+  pricing/docs page. Enforced by `check-releases.ts`.
+- Open-weight / free releases usually have no pricing page → omit the field.
+  Never guess a price. If only some sides are public, list only those.
+
 ### `explainer` (REQUIRED)
 
 The heart of the card. If you can't fill these from the source, drop

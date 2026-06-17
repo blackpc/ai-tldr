@@ -616,16 +616,31 @@ function renderJsonLdSoftware(item: ReleaseItem): string | null {
     operatingSystem: "Any",
     author: { "@type": "Organization", name: item.org, ...(orgUrl(item.org) ? { url: orgUrl(item.org) } : {}) },
     image: item.image?.url ?? DEFAULT_OG_IMAGE,
-    // Most items we track are free / open-weight; the rare paid model
-    // still benefits from being listed as $0 because the offer block
-    // unlocks the SoftwareApplication rich result.
-    offers: {
-      "@type": "Offer",
-      price: 0,
-      priceCurrency: "USD",
-    },
+    // Offers: real published prices when the item has a verified pricing table,
+    // otherwise $0 (most items are free / open-weight; the $0 offer still
+    // unlocks the SoftwareApplication rich result).
+    offers: softwareOffers(item),
     keywords: item.tags.join(", "),
   });
+}
+
+/** First number in a price string ("$3.00" → 3, "Free"/"$0" → 0). */
+function parsePrice(s: string): number {
+  const m = s.replace(/,/g, "").match(/\d+(?:\.\d+)?/);
+  return m ? Number(m[0]) : 0;
+}
+
+/** Offer(s) for SoftwareApplication JSON-LD: real tiers when priced, else $0. */
+function softwareOffers(item: ReleaseItem): unknown {
+  if (item.pricing && item.pricing.tiers.length > 0) {
+    return item.pricing.tiers.map((t) => ({
+      "@type": "Offer",
+      price: parsePrice(t.price),
+      priceCurrency: "USD",
+      description: [t.plan, t.unit, t.note].filter(Boolean).join(" "),
+    }));
+  }
+  return { "@type": "Offer", price: 0, priceCurrency: "USD" };
 }
 
 /**
@@ -1203,6 +1218,23 @@ const RELEASE_BODY_STYLE = `<style data-rls-css>
       .rls-feed-meta{display:block;font-size:12px;color:#9a9a9a;margin:4px 0}
       .rls-feed-item p{margin:6px 0 0;color:#bbb;font-size:14px}
       .rls-related{margin-top:28px;border-top:1px solid #1e1e1e;padding-top:8px}
+      .rls-bench{margin:0 0 16px}
+      .rls-bench-h{font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:#fff;text-transform:uppercase;letter-spacing:.05em;margin:0 0 6px}
+      .rls-bench-table{border-collapse:collapse;width:100%;font-size:13px}
+      .rls-bench-table tr{border-bottom:1px solid #1e1e1e}
+      .rls-bench-name{text-align:left;color:#9a9a9a;font-weight:600;white-space:nowrap;padding:6px 12px 6px 0;width:1%;overflow-wrap:anywhere}
+      .rls-bench-bar{width:100%;padding:6px 10px}
+      .rls-bar{display:block;height:11px;min-width:2px;background:#2a2a2a}
+      .rls-bench-val{text-align:right;font-family:'JetBrains Mono',monospace;color:#e8e8e8;white-space:nowrap;padding:6px 0}
+      .rls-bench-hl .rls-bench-name{color:#fff}
+      .rls-bench-hl .rls-bar{background:#f7ff00}
+      .rls-bench-hl .rls-bench-val{color:#f7ff00}
+      .rls-bench-src{display:inline-block;margin-top:6px;font-family:'JetBrains Mono',monospace;font-size:11px;color:#9a9a9a}
+      .rls-price-table{border-collapse:collapse;width:100%;font-size:14px;margin:6px 0}
+      .rls-price-table th{text-align:left;color:#e8e8e8;font-weight:600;padding:7px 12px 7px 0;border-bottom:1px solid #1e1e1e;overflow-wrap:anywhere}
+      .rls-price-table td{text-align:right;padding:7px 0;border-bottom:1px solid #1e1e1e;white-space:nowrap}
+      .rls-price-amt{font-family:'JetBrains Mono',monospace;font-weight:700;color:#f7ff00}
+      .rls-price-unit,.rls-price-note{color:#9a9a9a;font-size:12px;font-weight:400}
     </style>`;
 
 /** Section whose body is already escaped/linkified HTML (entity-linked prose). */
@@ -1384,6 +1416,45 @@ function renderReleaseBody(item: ReleaseItem, allItems: ReleaseItem[]): string {
     .map((f) => `<dt>${escapeText(f.q)}</dt><dd>${escapeText(f.a)}</dd>`)
     .join("");
 
+  // Benchmark comparison bars (CSS-width, no SVG) — mirrors the modal. A
+  // labeled table + visible source = an extractable, citable comparison.
+  const benchHtml = (item.benchmarks ?? [])
+    .map((b) => {
+      const max = b.max ?? 100;
+      const unit = b.unit ?? "%";
+      const rows = b.results
+        .map((r) => {
+          const w = Math.min(100, Math.max(0, (r.score / max) * 100));
+          return (
+            `<tr class="${r.highlight ? "rls-bench-hl" : ""}">` +
+            `<th scope="row" class="rls-bench-name">${escapeText(r.name)}</th>` +
+            `<td class="rls-bench-bar"><span class="rls-bar" style="width:${w.toFixed(1)}%"></span></td>` +
+            `<td class="rls-bench-val">${escapeText(String(r.score))}${escapeText(unit)}</td></tr>`
+          );
+        })
+        .join("");
+      return (
+        `<figure class="rls-bench"><figcaption class="rls-bench-h">${escapeText(b.name)}</figcaption>` +
+        `<table class="rls-bench-table"><tbody>${rows}</tbody></table>` +
+        `<a class="rls-bench-src" href="${escapeAttr(b.source)}" rel="noopener">source ↗</a></figure>`
+      );
+    })
+    .join("");
+  // Pricing table — mirrors the modal; "<X> pricing" is a top-intent query.
+  const pricingRows =
+    item.pricing && item.pricing.tiers.length > 0
+      ? item.pricing.tiers
+          .map(
+            (t) =>
+              `<tr><th scope="row">${escapeText(t.plan)}` +
+              (t.note ? ` <span class="rls-price-note">· ${escapeText(t.note)}</span>` : "") +
+              `</th><td><span class="rls-price-amt">${escapeText(t.price)}</span>` +
+              (t.unit ? ` <span class="rls-price-unit">${escapeText(t.unit)}</span>` : "") +
+              `</td></tr>`,
+          )
+          .join("")
+      : "";
+
   // Inline entity links: first mention of each tool this release is genuinely
   // about (matched in its title/tags) → its evergreen landscape page. `used`
   // enforces first-mention-only across the whole body. Contextual in-prose
@@ -1418,6 +1489,12 @@ function renderReleaseBody(item: ReleaseItem, allItems: ReleaseItem[]): string {
     (quickFactRows
       ? `<section class="rls-quickfacts"><h2>Quick facts</h2>` +
         `<table class="rls-qf"><tbody>${quickFactRows}</tbody></table></section>`
+      : "") +
+    (benchHtml ? `<section class="rls-benchmarks"><h2>Benchmarks</h2>${benchHtml}</section>` : "") +
+    (pricingRows
+      ? `<section class="rls-pricing"><h2>Pricing</h2>` +
+        `<table class="rls-price-table"><tbody>${pricingRows}</tbody></table>` +
+        `<a class="rls-bench-src" href="${escapeAttr(item.pricing!.source)}" rel="noopener">source ↗</a></section>`
       : "") +
     sectionHtml("What is it?", prose(ex?.whatIsIt)) +
     sectionHtml("How does it work?", prose(ex?.howItWorks)) +

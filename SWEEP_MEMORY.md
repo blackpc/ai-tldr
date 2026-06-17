@@ -501,3 +501,41 @@ master). If a sweep ever again commits-but-fails-to-push, check `git status`
 in the "Show diff" step for a NEW generated tracked file — the checkout already
 covers all of them, but a new write OUTSIDE the working tree reset would need
 the same treatment.
+
+## 2026-06-17-C — added OPTIONAL typed `benchmarks` + `pricing` fields (visual upgrade, source-gated)
+
+**Trigger:** R7 "add more information and visuals to releases data". Built typed
+benchmark comparison bars + pricing tables on release pages (modal + prerender)
++ SoftwareApplication offer JSON-LD from real prices.
+
+**What shipped:** `Benchmark`/`Pricing` interfaces in schema.ts; `benchmarks?`
++ `pricing?` on ReleaseItem; `scripts/check-releases.ts` validator wired into
+build+typecheck; field docs in this prompt; bench-bar + pricing-table UI.
+
+**Scar discipline (why this is safe, given the 04-28 padding scars):** both
+fields are OPTIONAL, source-GATED, and explicitly framed as NOT a quota:
+- Every benchmark/pricing `source` MUST be a cited link (`links[]` or `url`).
+  `check-releases.ts` FAILS THE BUILD if not — so you cannot render a bar or a
+  price without pointing at where it came from. This is the same zero-
+  hallucination invariant as `summary`, just enforced mechanically.
+- The prompt says, in bold terms, "NOT a quota", "not expected on most items",
+  "never invent or estimate". Open-weight/free releases have no pricing page →
+  omit. No published eval table → omit. The UI renders nothing when the field
+  is absent (graceful, like quickFacts/faq before backfill).
+- Numbers are validated: `score ≤ max`, finite; exactly one highlighted row
+  when there are competitors. A malformed chart fails the build, never ships.
+
+**Why this does NOT repeat the padding scars:** the scars were about CADENCE/GAP
+signals pressuring the agent to ADD low-value ITEMS. These fields add structured
+DETAIL to items the agent already decided to include on their own merits — they
+can never pressure an inclusion decision. Recording a benchmark you found is
+like recording coverage (2026-06-17-A): it documents, it doesn't inflate.
+
+**Deliberately NOT done:** did not make benchmarks/pricing required, did not tie
+them to importance tier as a gate, did not add any "fill N benchmarks" target.
+
+**Status:** Applied (schema+validator+UI+prompt). Backfilled a few recent
+model/tool items so the UI isn't empty. Watch: if a sweep starts attaching
+benchmarks/pricing to items WITHOUT a matching source link, the build will
+fail in check-releases — that's the guard working; fix the data, don't relax
+the source rule.

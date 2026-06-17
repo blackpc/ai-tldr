@@ -114,6 +114,64 @@ export interface ReleaseFaq {
   a: string;
 }
 
+/** One row in a benchmark comparison bar chart. */
+export interface BenchmarkResult {
+  /**
+   * Who this score belongs to — the subject model OR a named competitor it is
+   * compared against, e.g. "GLM-5.2", "GPT-5.1", "Claude Opus 4.8".
+   */
+  name: string;
+  /** Numeric score (drives the bar width). Must be a real, sourced number. */
+  score: number;
+  /** Mark the row that IS this release's subject — gets the accent bar. */
+  highlight?: boolean;
+}
+
+/**
+ * A single benchmark rendered as horizontal comparison bars. Comparison
+ * tables/charts earn disproportionately more AI-answer citations, so a
+ * benchmark with the subject + a few real competitors is high-value — but
+ * EVERY number must trace to `source` (zero-hallucination). Optional: only
+ * present when the source actually reports the scores.
+ */
+export interface Benchmark {
+  /** Benchmark name, e.g. "SWE-bench Verified", "MMLU-Pro", "GPQA Diamond". */
+  name: string;
+  /** Display unit/suffix for the value, e.g. "%", " pts". Default "%". */
+  unit?: string;
+  /** Scale max for the bars, e.g. 100 for a percentage. Default 100. */
+  max?: number;
+  /** Rows — at least the subject; ideally the subject + named competitors. */
+  results: BenchmarkResult[];
+  /** Source URL for these numbers — MUST also appear in `links[]` or be `url`. */
+  source: string;
+}
+
+/** One row in a release's pricing table. */
+export interface PricingTier {
+  /** Plan / SKU / token side, e.g. "Input", "Output", "Pro", "Free tier". */
+  plan: string;
+  /** Price as shown, e.g. "$3.00", "$0", "Free". */
+  price: string;
+  /** Unit the price is per, e.g. "/ 1M tokens", "/ month", "/ seat". */
+  unit?: string;
+  /** Optional one-line qualifier, e.g. "cached input", "first 1M free". */
+  note?: string;
+}
+
+/**
+ * A release's pricing, rendered as a labeled table (and folded into the
+ * SoftwareApplication offer JSON-LD). "<X> pricing" is one of the highest-
+ * intent queries we can answer, so a clean table is strong for both search and
+ * AI answers. Optional + source-gated: only when the maker has PUBLISHED prices.
+ */
+export interface Pricing {
+  /** Pricing rows. */
+  tiers: PricingTier[];
+  /** Source URL for the prices — MUST also appear in `links[]` or be `url`. */
+  source: string;
+}
+
 export interface ReleaseItem {
   id: string;
   /**
@@ -158,6 +216,18 @@ export interface ReleaseItem {
    * follow-up queries ("X pricing?", "X vs Y context window?").
    */
   faq?: ReleaseFaq[];
+  /**
+   * Benchmark comparison bars (model/eval releases). Each number must trace to
+   * its `source` (which must be in `links[]`). Optional — only when the source
+   * reports the scores. Rendered as accessible CSS-width bars.
+   */
+  benchmarks?: Benchmark[];
+  /**
+   * Pricing table (model/tool releases with published prices). `source` must be
+   * in `links[]`. Optional — never invent prices. Also feeds the
+   * SoftwareApplication offer JSON-LD.
+   */
+  pricing?: Pricing;
   links?: { label: string; url: string }[];
   explainer: Explainer;
   image?: ReleaseImage;
