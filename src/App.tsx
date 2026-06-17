@@ -39,6 +39,7 @@ const LearnSection = lazy(() => import("./components/learn/LearnSection"));
  *   /influencers          → influencers page
  *   /log                  → sweep log page
  *   /releases/<id>        → feed with modal open for that item
+ *   /releases/<category>  → feed filtered to that category (hub page)
  *   /learn[/cat[/sub[/slug]]] → Learn section (lazy chunk)
  * Legacy hash formats (#id, #influencers) still work so old bookmarks
  * and shared links keep functioning.
@@ -48,6 +49,7 @@ type Route =
   | { kind: "influencers" }
   | { kind: "log" }
   | { kind: "release"; id: string }
+  | { kind: "release-cat"; cat: Category }
   | { kind: "stats" }
   | LearnRoute;
 
@@ -67,7 +69,15 @@ function parseRoute(): Route {
     return { kind: "stats" };
   }
   const m = path.match(/^\/releases\/([^/]+)\/?$/);
-  if (m) return { kind: "release", id: m[1] };
+  if (m) {
+    // /releases/<category>/ is a hub page (prerendered) — render it in the
+    // SPA as a category-filtered feed so the JS view matches the static page
+    // instead of every hub collapsing to an identical unfiltered feed.
+    if ((CATEGORY_ORDER as readonly string[]).includes(m[1])) {
+      return { kind: "release-cat", cat: m[1] as Category };
+    }
+    return { kind: "release", id: m[1] };
+  }
 
   if (path === "/learn/map" || path === "/learn/map/") {
     return { kind: "learn-map" };
@@ -112,6 +122,17 @@ function parseCategoriesFromUrl(): Set<Category> {
       .map((c) => c.trim())
       .filter((c): c is Category => valid.has(c as Category)),
   );
+}
+
+/** Active category set seeded from the URL — `?cat=…` OR a `/releases/<cat>/`
+ *  hub path (which prerenders a single-category index). Keeps the SPA's filter
+ *  in step with whichever URL scheme the user landed on. */
+function activeFromUrl(): Set<Category> {
+  const m = window.location.pathname.match(/^\/releases\/([^/]+)\/?$/);
+  if (m && (CATEGORY_ORDER as readonly string[]).includes(m[1])) {
+    return new Set<Category>([m[1] as Category]);
+  }
+  return parseCategoriesFromUrl();
 }
 
 /** Initial card count rendered; incremented by PAGE_SIZE as the
@@ -187,6 +208,12 @@ function pageFromRoute(route: Route): Page {
   return "feed";
 }
 
+/** Both the plain feed and a `/releases/<cat>/` hub render the scrollable feed,
+ *  so they share the infinite-scroll + scroll-restore machinery. */
+function isFeedRoute(route: Route): boolean {
+  return route.kind === "feed" || route.kind === "release-cat";
+}
+
 function App() {
   const [route, setRoute] = useState<Route>(() => parseRoute());
   const page: Page = pageFromRoute(route);
@@ -194,9 +221,7 @@ function App() {
   // own nav link, so split the "learn" active state between the two.
   const isLandscape =
     route.kind === "learn-landscape" || route.kind === "learn-tool";
-  const [active, setActive] = useState<Set<Category>>(() =>
-    parseCategoriesFromUrl(),
-  );
+  const [active, setActive] = useState<Set<Category>>(() => activeFromUrl());
   const [query, setQuery] = useState(() => parseQueryFromUrl());
   // Mobile hamburger drawer (nav + BMC + Subscribe). No-op on desktop
   // because CSS shows the secondary actions inline regardless.
@@ -366,7 +391,7 @@ function App() {
   useEffect(() => {
     const onPop = () => {
       setRoute(parseRoute());
-      setActive(parseCategoriesFromUrl());
+      setActive(activeFromUrl());
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
@@ -386,6 +411,13 @@ function App() {
         document.title = `${item.title} — ${item.org} | AI/TLDR`;
         return;
       }
+    }
+    if (route.kind === "release-cat") {
+      // Keep the prerendered hub title's intent on client nav (the static
+      // file's own <title> is the canonical, richer one).
+      const label = route.cat.charAt(0).toUpperCase() + route.cat.slice(1);
+      document.title = `New AI ${label} Releases | AI/TLDR`;
+      return;
     }
     if (route.kind === "influencers") {
       document.title = "AI Influencers — Who to Follow | AI/TLDR";
@@ -465,7 +497,7 @@ function App() {
   // the viewport. rootMargin 800px pre-loads the next page before the
   // user hits the bottom, so the grid appears seamless.
   useEffect(() => {
-    if (!hasMore || route.kind !== "feed") return;
+    if (!hasMore || !isFeedRoute(route)) return;
     const el = sentinelRef.current;
     if (!el) return;
     const observer = new IntersectionObserver(
@@ -478,7 +510,7 @@ function App() {
     );
     observer.observe(el);
     return () => observer.disconnect();
-  }, [hasMore, route.kind, visible.length]);
+  }, [hasMore, route, visible.length]);
 
   // Restore scroll-Y once after the initial render, if the snapshot
   // we rehydrated at mount time is still applicable. Runs in a layout
@@ -488,13 +520,13 @@ function App() {
   // lose, since our cards haven't all measured yet on the first tick.
   useLayoutEffect(() => {
     const snap = initialSnapshotRef.current;
-    if (!snap || route.kind !== "feed") return;
+    if (!snap || !isFeedRoute(route)) return;
     if ("scrollRestoration" in window.history) {
       window.history.scrollRestoration = "manual";
     }
     window.scrollTo(0, snap.y);
     initialSnapshotRef.current = null;
-  }, [route.kind]);
+  }, [route]);
 
   // Persist scrollY + visibleCount to sessionStorage as the user
   // scrolls (rAF-throttled) and on page hide. Reads the current
@@ -505,7 +537,7 @@ function App() {
   useEffect(() => { visibleCountRef.current = visibleCount; }, [visibleCount]);
   useEffect(() => { activeRef.current = active; }, [active]);
   useEffect(() => {
-    if (route.kind !== "feed") return;
+    if (!isFeedRoute(route)) return;
     let raf = 0;
     const save = () => {
       const y = window.scrollY;
@@ -537,7 +569,7 @@ function App() {
       if (raf) window.cancelAnimationFrame(raf);
       save(); // catch the final position on route change
     };
-  }, [route.kind]);
+  }, [route]);
 
   return (
     <div className="page">

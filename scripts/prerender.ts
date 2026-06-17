@@ -34,7 +34,8 @@ import { fileURLToPath } from "node:url";
 
 import feed from "../src/data/releases.json" with { type: "json" };
 import sweepsData from "../src/data/sweeps.json" with { type: "json" };
-import type { ReleaseItem } from "../src/data/schema";
+import type { ReleaseItem, Category } from "../src/data/schema";
+import { CATEGORY_ORDER as CATEGORY_ORDER_RELEASE } from "../src/data/schema";
 import {
   influencers,
   type Influencer,
@@ -53,6 +54,7 @@ import { StatsPage } from "../src/components/StatsPage";
 import statsData from "../src/data/stats.json" with { type: "json" };
 import type { StatsData } from "../src/data/stats";
 import landscapeData from "../src/data/learn/landscape.json" with { type: "json" };
+import { normalizeMetrics } from "../src/lib/metric-labels";
 
 // Flat list of landscape tool pages ({name, slug}) — used to cross-link a
 // fresh release page to the evergreen tool page it names. Build-script only;
@@ -81,6 +83,10 @@ const DEFAULT_OG_IMAGE = `${SITE_URL}/og-image.png`;
 // sitemap or a canonical that points at one. Asset files (*.png, *.xml)
 // and the root keep their exact paths.
 const releaseUrl = (id: string) => `${SITE_URL}/releases/${id}/`;
+// Category hub pages: /releases/<cat>/ — a crawlable index per primary
+// category. Gives every release a real internal link from a topical hub
+// (not just the homepage/sitemap) and a 3-level breadcrumb to sit in.
+const releaseCatUrl = (cat: Category) => `${SITE_URL}/releases/${cat}/`;
 const INFLUENCERS_URL = `${SITE_URL}/influencers/`;
 const LOG_URL = `${SITE_URL}/log/`;
 const STATS_URL = `${SITE_URL}/stats/`;
@@ -109,6 +115,17 @@ function escapeAttr(s: string): string {
 
 function escapeText(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/** Visible hostname (drops www.) — used for the source-credibility chips so
+ *  a reader (and an AI engine) can see at a glance which outlet each citation
+ *  comes from. Mirrors hostOf() in ReleaseModal.tsx. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
 }
 
 /**
@@ -458,9 +475,30 @@ function toW3CDateTime(date: string): string {
   return /^\d{4}-\d{2}-\d{2}$/.test(date) ? `${date}T12:00:00+00:00` : date;
 }
 
+/**
+ * Assemble the verified explainer prose into one `articleBody` string. This is
+ * the SAME text already shown on the page — giving the NewsArticle a real body
+ * (not just a headline + description) is what lets Google and AI answer engines
+ * treat the page as a full article rather than a stub. Zero new content: it
+ * only concatenates fields the sweep already wrote and verified.
+ */
+function buildArticleBody(item: ReleaseItem): string {
+  const ex = item.explainer;
+  return [
+    item.summary,
+    ex?.whatIsIt,
+    ex?.howItWorks,
+    ex?.whyItMatters,
+    ex?.forWho,
+  ]
+    .filter((s): s is string => !!s && s.trim().length > 0)
+    .join("\n\n");
+}
+
 function renderJsonLdArticle(item: ReleaseItem): string {
   const url = releaseUrl(item.id);
   const description = item.explainer?.tagline ?? item.summary;
+  const articleBody = buildArticleBody(item);
   const data = {
     "@context": "https://schema.org",
     // NewsArticle is the right subtype: AI/TLDR is a release-tracking news
@@ -492,6 +530,13 @@ function renderJsonLdArticle(item: ReleaseItem): string {
     },
     isPartOf: { "@id": `${SITE_URL}/#website` },
     articleSection: item.categories[0],
+    inLanguage: "en-US",
+    // Full article body (the verified explainer prose already on the page) +
+    // its word count — turns a headline-only stub into a complete article in
+    // the eyes of Google and AI answer engines.
+    ...(articleBody
+      ? { articleBody, wordCount: articleBody.split(/\s+/).filter(Boolean).length }
+      : {}),
     keywords: item.tags.join(", "),
     // Speakable: tells Google Assistant / voice surfaces which parts of
     // the page are read out loud. Still a beta feature limited to
@@ -828,7 +873,98 @@ function renderJsonLdReleaseFaq(item: ReleaseItem): string {
   });
 }
 
+/**
+ * Per-category hub copy. Hand-written (NOT templated) so each of the 15
+ * `/releases/<cat>/` pages has a distinct H1, <title>, breadcrumb label and
+ * intro — a real category index, not 15 boilerplate clones (which would risk
+ * the 2026 scaled-content penalty). `crumb` is the short breadcrumb leaf;
+ * `title`/`lede` drive the hub's meta + visible intro.
+ */
+const RELEASE_HUB_COPY: Record<Category, { crumb: string; title: string; lede: string }> = {
+  model: {
+    crumb: "Models",
+    title: "New AI Model Releases — LLMs & Open Weights | AI/TLDR",
+    lede: "Every new AI model worth knowing — frontier and open-weight releases, explained in plain English with the context window, parameters and benchmarks that matter.",
+  },
+  repo: {
+    crumb: "Repos",
+    title: "New AI GitHub Repos — Trending Open-Source Drops | AI/TLDR",
+    lede: "Trending open-source AI projects fresh off GitHub — new repos, libraries and frameworks, with what each one does and why it's picking up stars.",
+  },
+  tool: {
+    crumb: "Tools",
+    title: "New AI Tools — Products, CLIs & IDE Features | AI/TLDR",
+    lede: "The newest AI tools, products, CLIs and IDE features — what shipped, who it's for, and how to try it tonight, in plain English.",
+  },
+  security: {
+    crumb: "Security",
+    title: "AI Security Releases — Red-Teaming & LLM Guardrails | AI/TLDR",
+    lede: "New AI and LLM security work — red-teaming tools, guardrails, jailbreak research and defenses, explained for builders who actually ship.",
+  },
+  algorithm: {
+    crumb: "Algorithms",
+    title: "New AI Algorithms & Techniques Worth Knowing | AI/TLDR",
+    lede: "Named AI techniques and algorithms worth knowing — the methods behind the models, distilled into plain-English explainers.",
+  },
+  paper: {
+    crumb: "Papers",
+    title: "New AI Research Papers — arXiv Picks Explained | AI/TLDR",
+    lede: "The AI research papers worth your time — handpicked arXiv and conference work, each summarised in plain English with why it matters.",
+  },
+  dataset: {
+    crumb: "Datasets",
+    title: "New AI Datasets — Training & Eval Corpora | AI/TLDR",
+    lede: "New training and evaluation datasets for AI — fresh corpora and benchmarks, with what's inside each one and how to use it.",
+  },
+  benchmark: {
+    crumb: "Benchmarks",
+    title: "New AI Benchmarks & Leaderboards | AI/TLDR",
+    lede: "New AI benchmarks, evals and leaderboards — how today's models are measured, and who's actually on top, explained plainly.",
+  },
+  ecosystem: {
+    crumb: "Ecosystem",
+    title: "AI Ecosystem News — Governance & Licensing | AI/TLDR",
+    lede: "The AI ecosystem moves that matter — governance, foundations, funding, and the license or org changes that reshape who builds what.",
+  },
+  tutorial: {
+    crumb: "Tutorials",
+    title: "New AI Tutorials & How-To Guides | AI/TLDR",
+    lede: "Hands-on AI tutorials and cookbooks you can follow tonight — guides for building with the latest models and tools, step by step.",
+  },
+  showcase: {
+    crumb: "Showcases",
+    title: "AI Showcases — Demos & Shipped Projects | AI/TLDR",
+    lede: "The best AI demos and shipped projects — the 'look what I built' moments that show what today's models can actually do.",
+  },
+  resource: {
+    crumb: "Resources",
+    title: "AI Resources — Curated Lists & Cheat Sheets | AI/TLDR",
+    lede: "Curated AI resources — lists, cheat sheets and learning paths that save you hours of searching, gathered in one place.",
+  },
+  article: {
+    crumb: "Articles",
+    title: "AI Articles & Essays from Influential Voices | AI/TLDR",
+    lede: "Sharp AI writing worth reading — posts, threads and essays from the people shaping the field, each with a plain-English take.",
+  },
+  video: {
+    crumb: "Videos",
+    title: "AI Videos — Talks & Demos from Top Creators | AI/TLDR",
+    lede: "The AI videos worth watching — talks, explainers and viral demos from top AI creators, with a quick note on what each covers.",
+  },
+  rumor: {
+    crumb: "Rumors",
+    title: "AI Rumors — Credible Speculation, Tracked | AI/TLDR",
+    lede: "Credible AI speculation, clearly flagged as rumor — what reliable sources are hinting at before it's official, so you're not blindsided.",
+  },
+};
+
+/**
+ * 3-level BreadcrumbList for release pages: Home → category hub → release.
+ * (Previously two levels straight to `/` — the category hub is a real page
+ * now, so the trail matches the visible breadcrumb and the URL structure.)
+ */
 function renderJsonLdBreadcrumb(item: ReleaseItem): string {
+  const cat = item.categories[0];
   return wrapJsonLd({
     "@context": "https://schema.org",
     "@type": "BreadcrumbList",
@@ -842,6 +978,12 @@ function renderJsonLdBreadcrumb(item: ReleaseItem): string {
       {
         "@type": "ListItem",
         position: 2,
+        name: RELEASE_HUB_COPY[cat].crumb,
+        item: releaseCatUrl(cat),
+      },
+      {
+        "@type": "ListItem",
+        position: 3,
         name: item.title,
         item: releaseUrl(item.id),
       },
@@ -1035,14 +1177,22 @@ const RELEASE_BODY_STYLE = `<style data-rls-css>
       .rls-article p{line-height:1.6;margin:0 0 12px}
       .rls-summary{font-size:18px;color:#e8e8e8}
       .rls-tagline{font-style:italic;color:#bdbdbd}
-      .rls-img{max-width:100%;height:auto;border-radius:10px;margin:16px 0;border:1px solid #1e1e1e}
-      .rls-metrics,.rls-links{padding-left:18px}
+      .rls-figure{margin:16px 0}
+      .rls-img{max-width:100%;height:auto;border-radius:10px;border:1px solid #1e1e1e;display:block}
+      .rls-img-credit{font-size:12px;color:#7f7f7f;margin:6px 0 0}
+      .rls-metrics{padding-left:18px}
+      .rls-links{list-style:none;padding:0;margin:6px 0}
+      .rls-links li{border-bottom:1px solid #1e1e1e}
+      .rls-links a{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;padding:9px 0;text-decoration:none}
+      .rls-src-num{color:#7f7f7f;font-variant-numeric:tabular-nums;font-size:13px}
+      .rls-src-label{color:#7db3ff;font-weight:500;overflow-wrap:anywhere}
+      .rls-src-host{color:#8a8a85;font-size:12px;margin-left:auto;overflow-wrap:anywhere}
       .rls-tags{list-style:none;padding:0;display:flex;flex-wrap:wrap;gap:8px}
       .rls-tags li{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:999px;padding:3px 10px;font-size:12px;color:#bbb}
       .rls-article a{color:#7db3ff}
-      .rls-qf{border-collapse:collapse;width:100%;margin:6px 0 8px;font-size:14px}
-      .rls-qf th{text-align:left;color:#9a9a9a;font-weight:600;padding:7px 12px 7px 0;vertical-align:top;white-space:nowrap;border-bottom:1px solid #1e1e1e}
-      .rls-qf td{color:#e8e8e8;padding:7px 0;border-bottom:1px solid #1e1e1e}
+      .rls-qf,.rls-spec{border-collapse:collapse;width:100%;margin:6px 0 8px;font-size:14px}
+      .rls-qf th,.rls-spec th{text-align:left;color:#9a9a9a;font-weight:600;padding:7px 12px 7px 0;vertical-align:top;white-space:nowrap;border-bottom:1px solid #1e1e1e}
+      .rls-qf td,.rls-spec td{color:#e8e8e8;padding:7px 0;border-bottom:1px solid #1e1e1e;overflow-wrap:anywhere}
       .rls-faq dt{color:#fff;font-weight:600;margin:14px 0 4px}
       .rls-faq dd{margin:0;color:#cfcfcf;line-height:1.6}
       .rls-back{margin-top:28px}
@@ -1055,9 +1205,53 @@ const RELEASE_BODY_STYLE = `<style data-rls-css>
       .rls-related{margin-top:28px;border-top:1px solid #1e1e1e;padding-top:8px}
     </style>`;
 
-function section(label: string, text?: string): string {
+/** Section whose body is already escaped/linkified HTML (entity-linked prose). */
+function sectionHtml(label: string, innerHtml: string): string {
+  if (!innerHtml) return "";
+  return `<section><h2>${escapeText(label)}</h2><p>${innerHtml}</p></section>`;
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Linkify the FIRST mention of each high-confidence tool in a prose string to
+ * its evergreen `/learn/landscape/<slug>` page. Operates on RAW text and
+ * escapes every segment as it builds, so it can never split an HTML tag.
+ *
+ * Conservative on purpose (avoids the false-positive trap of free-text entity
+ * linking over 500+ tool names — "Continue", "Cursor", "Jan" are real English
+ * words too): callers pass ONLY tools that `matchedTools()` already matched in
+ * this release's title/tags, so we know the page is genuinely about them. The
+ * shared `used` set enforces first-mention-only across the whole page.
+ */
+function linkifyTools(
+  text: string,
+  tools: { name: string; slug: string }[],
+  used: Set<string>,
+): string {
   if (!text) return "";
-  return `<section><h2>${escapeText(label)}</h2><p>${escapeText(text)}</p></section>`;
+  // earliest not-yet-linked whole-word tool match in this string
+  let best: { idx: number; len: number; slug: string } | null = null;
+  for (const t of tools) {
+    if (used.has(t.slug) || t.name.length < 3) continue;
+    const re = new RegExp(`(?<![A-Za-z0-9])${escapeRegExp(t.name)}(?![A-Za-z0-9])`, "i");
+    const m = re.exec(text);
+    if (m && (best === null || m.index < best.idx)) {
+      best = { idx: m.index, len: m[0].length, slug: t.slug };
+    }
+  }
+  if (!best) return escapeText(text);
+  used.add(best.slug);
+  const before = text.slice(0, best.idx);
+  const matched = text.slice(best.idx, best.idx + best.len);
+  const after = text.slice(best.idx + best.len);
+  return (
+    escapeText(before) +
+    `<a href="/learn/landscape/${best.slug}">${escapeText(matched)}</a>` +
+    linkifyTools(after, tools, used) // keep linking other tools in the remainder
+  );
 }
 
 /**
@@ -1148,16 +1342,32 @@ function renderLearnCrossLinks(item: ReleaseItem): string {
 function renderReleaseBody(item: ReleaseItem, allItems: ReleaseItem[]): string {
   const ex = item.explainer;
   const img = item.image;
-  const metricRows = Object.entries(item.metrics ?? {})
+  // Spec bar — same normalizer the modal uses, so the prerendered page and
+  // the live React modal surface the SAME deduped, cleanly-labeled metrics.
+  // A labeled <table> (not a camelCase `<ul>`) is what AI engines lift.
+  const specs = normalizeMetrics(item.metrics);
+  const specRows = specs
     .map(
-      ([k, v]) =>
-        `<li><strong>${escapeText(k.replace(/_/g, " "))}:</strong> ${escapeText(String(v))}</li>`,
+      (s) =>
+        `<tr><th scope="row">${escapeText(s.label)}</th><td>${escapeText(s.value)}</td></tr>`,
     )
     .join("");
-  const linkRows = (item.links ?? [])
+  // Sources — numbered, with the visible outlet domain, mirroring the modal.
+  // Drop rel="nofollow": every link is a web-VERIFIED primary source (the
+  // zero-hallucination sweep checks each URL), so citing it dofollow is the
+  // honest signal — and a trust/provenance cue AI answer engines reward.
+  const links =
+    item.links && item.links.length > 0
+      ? item.links
+      : [{ label: "Source", url: item.url }];
+  const outlets = new Set(links.map((l) => hostOf(l.url))).size;
+  const linkRows = links
     .map(
-      (l) =>
-        `<li><a href="${escapeAttr(l.url)}" rel="noopener nofollow">${escapeText(l.label)}</a></li>`,
+      (l, i) =>
+        `<li><a href="${escapeAttr(l.url)}" rel="noopener">` +
+        `<span class="rls-src-num">[${i + 1}]</span> ` +
+        `<span class="rls-src-label">${escapeText(l.label)}</span> ` +
+        `<span class="rls-src-host">${escapeText(hostOf(l.url))}</span></a></li>`,
     )
     .join("");
   const tagRows = item.tags.map((t) => `<li>${escapeText(t)}</li>`).join("");
@@ -1174,36 +1384,55 @@ function renderReleaseBody(item: ReleaseItem, allItems: ReleaseItem[]): string {
     .map((f) => `<dt>${escapeText(f.q)}</dt><dd>${escapeText(f.a)}</dd>`)
     .join("");
 
+  // Inline entity links: first mention of each tool this release is genuinely
+  // about (matched in its title/tags) → its evergreen landscape page. `used`
+  // enforces first-mention-only across the whole body. Contextual in-prose
+  // links beat a footer list for both crawl-depth and entity association.
+  const tools = matchedTools(item);
+  const usedLinks = new Set<string>();
+  const prose = (t?: string) => (t ? linkifyTools(t, tools, usedLinks) : "");
+
+  const cat = item.categories[0];
+
   return (
     `<div class="page rls-body"><header class="page-head">` +
     `<a class="brand" href="/" aria-label="AI/TLDR — home">` +
     `<span class="brand-mark">█</span><p class="brand-name">AI/TLDR</p></a></header>` +
     `<main class="rls-main"><article class="rls-article">` +
     `<nav class="rls-crumbs" aria-label="Breadcrumb"><a href="/">AI/TLDR</a> › ` +
-    `<span>${escapeText(item.categories[0])}</span></nav>` +
+    `<a href="${escapeAttr(`/releases/${cat}/`)}">${escapeText(RELEASE_HUB_COPY[cat].crumb)}</a> › ` +
+    `<span>${escapeText(item.title)}</span></nav>` +
     `<p class="rls-kicker">${escapeText(item.org)} · ${escapeText(item.date)} · ${escapeText(item.importance)}</p>` +
     `<h1>${escapeText(item.title)}</h1>` +
-    `<p class="rls-summary">${escapeText(item.summary)}</p>` +
+    `<p class="rls-summary">${prose(item.summary)}</p>` +
     (img
-      ? `<img class="rls-img" src="${escapeAttr(img.url)}" alt="${escapeAttr(img.alt ?? item.title)}" loading="lazy" />`
+      ? `<figure class="rls-figure"><img class="rls-img" src="${escapeAttr(img.url)}" alt="${escapeAttr(img.alt ?? item.title)}" loading="lazy" />` +
+        (img.credit ? `<figcaption class="rls-img-credit">${escapeText(img.credit)}</figcaption>` : "") +
+        `</figure>`
       : "") +
     (ex?.tagline ? `<p class="rls-tagline">${escapeText(ex.tagline)}</p>` : "") +
+    (specRows
+      ? `<section class="rls-specs"><h2>Key specs</h2>` +
+        `<table class="rls-spec"><tbody>${specRows}</tbody></table></section>`
+      : "") +
     (quickFactRows
       ? `<section class="rls-quickfacts"><h2>Quick facts</h2>` +
         `<table class="rls-qf"><tbody>${quickFactRows}</tbody></table></section>`
       : "") +
-    section("What is it?", ex?.whatIsIt) +
-    section("How does it work?", ex?.howItWorks) +
-    section("Why does it matter?", ex?.whyItMatters) +
-    section("Who is it for?", ex?.forWho) +
+    sectionHtml("What is it?", prose(ex?.whatIsIt)) +
+    sectionHtml("How does it work?", prose(ex?.howItWorks)) +
+    sectionHtml("Why does it matter?", prose(ex?.whyItMatters)) +
+    sectionHtml("Who is it for?", prose(ex?.forWho)) +
     (faqItems
       ? `<section class="rls-faq"><h2>Frequently asked questions</h2><dl>${faqItems}</dl></section>`
       : "") +
     (ex?.tryIt
       ? `<section><h2>Try it</h2><pre><code>${escapeText(ex.tryIt)}</code></pre></section>`
       : "") +
-    (metricRows ? `<section><h2>Key numbers</h2><ul class="rls-metrics">${metricRows}</ul></section>` : "") +
-    (linkRows ? `<section><h2>Links</h2><ul class="rls-links">${linkRows}</ul></section>` : "") +
+    (linkRows
+      ? `<section class="rls-sources"><h2>Sources${outlets >= 2 ? ` · ${outlets} outlets` : ""}</h2>` +
+        `<ul class="rls-links">${linkRows}</ul></section>`
+      : "") +
     (tagRows ? `<section><h2>Tags</h2><ul class="rls-tags">${tagRows}</ul></section>` : "") +
     renderRelatedSection(item, allItems) +
     renderLearnCrossLinks(item) +
@@ -1224,6 +1453,137 @@ function injectReleaseBody(
   html = html.replace(
     /<div id="root"><\/div>/,
     () => `<div id="root">${renderReleaseBody(item, allItems)}</div>`,
+  );
+  return html;
+}
+
+// -----------------------------------------------------------------------
+// Category hub pages — /releases/<cat>/
+// -----------------------------------------------------------------------
+//
+// A crawlable index per primary category. Each release now has a real
+// internal link from a topical hub (not just the homepage/sitemap), the
+// 3-level breadcrumb resolves to a live page, and the hub itself is a
+// keyword-targeted landing page ("new AI models", "new AI tools", …).
+
+/** Clean H1 for a hub — the meta <title> minus the " | AI/TLDR" suffix. */
+function hubH1(cat: Category): string {
+  return RELEASE_HUB_COPY[cat].title.replace(/\s*\|\s*AI\/TLDR\s*$/, "");
+}
+
+/** Releases whose PRIMARY category is `cat`, newest-first. */
+function releasesInCategory(cat: Category, all: ReleaseItem[]): ReleaseItem[] {
+  return all
+    .filter((x) => x.categories[0] === cat)
+    .sort((a, b) =>
+      String(b.publishDate ?? b.date).localeCompare(String(a.publishDate ?? a.date)),
+    );
+}
+
+function hubMeta(cat: Category): PageMeta {
+  const copy = RELEASE_HUB_COPY[cat];
+  const description =
+    copy.lede.length > 155 ? copy.lede.slice(0, 152).trimEnd() + "…" : copy.lede;
+  return {
+    title: copy.title,
+    description,
+    canonical: releaseCatUrl(cat),
+    ogType: "website",
+    ogImage: DEFAULT_OG_IMAGE,
+    ogImageAlt: `${hubH1(cat)} — AI/TLDR`,
+  };
+}
+
+/** BreadcrumbList for a hub: Home → category. */
+function renderJsonLdHubBreadcrumb(cat: Category): string {
+  return wrapJsonLd({
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: [
+      { "@type": "ListItem", position: 1, name: "AI/TLDR", item: `${SITE_URL}/` },
+      {
+        "@type": "ListItem",
+        position: 2,
+        name: RELEASE_HUB_COPY[cat].crumb,
+        item: releaseCatUrl(cat),
+      },
+    ],
+  });
+}
+
+/** ItemList of the hub's releases (capped — Google reads ~the first 50). */
+function renderJsonLdHubItemList(cat: Category, inCat: ReleaseItem[]): string {
+  return wrapJsonLd({
+    "@context": "https://schema.org",
+    "@type": "ItemList",
+    name: hubH1(cat),
+    numberOfItems: inCat.length,
+    itemListElement: inCat.slice(0, 50).map((r, i) => ({
+      "@type": "ListItem",
+      position: i + 1,
+      url: releaseUrl(r.id),
+      name: r.title,
+    })),
+  });
+}
+
+/** Crawlable hub body: intro + newest-first release list + sibling-hub nav. */
+function renderHubBody(cat: Category, all: ReleaseItem[], hubCats: Category[]): string {
+  const copy = RELEASE_HUB_COPY[cat];
+  const inCat = releasesInCategory(cat, all);
+  // Cap the on-page list so a 180-item hub doesn't balloon page weight; the
+  // sitemap still carries every release URL, so nothing is lost to crawlers.
+  const HUB_CAP = 120;
+  const shown = inCat.slice(0, HUB_CAP);
+  const overflow = inCat.length - shown.length;
+  const listItems = shown
+    .map(
+      (r) =>
+        `<li class="rls-feed-item"><a href="${escapeAttr(`/releases/${r.id}/`)}">` +
+        `<strong>${escapeText(r.title)}</strong></a>` +
+        `<span class="rls-feed-meta">${escapeText(r.org)} · ${escapeText(r.date)} · ${escapeText(r.importance)}</span>` +
+        `<p>${escapeText(r.explainer?.tagline ?? r.summary)}</p></li>`,
+    )
+    .join("");
+  const siblings = hubCats
+    .filter((c) => c !== cat)
+    .map(
+      (c) =>
+        `<li><a href="${escapeAttr(`/releases/${c}/`)}">${escapeText(RELEASE_HUB_COPY[c].crumb)}</a></li>`,
+    )
+    .join("");
+
+  return (
+    `<div class="page rls-body"><header class="page-head">` +
+    `<a class="brand" href="/" aria-label="AI/TLDR — home">` +
+    `<span class="brand-mark">█</span><p class="brand-name">AI/TLDR</p></a></header>` +
+    `<main class="rls-main"><article class="rls-article">` +
+    `<nav class="rls-crumbs" aria-label="Breadcrumb"><a href="/">AI/TLDR</a> › ` +
+    `<span>${escapeText(copy.crumb)}</span></nav>` +
+    `<h1>${escapeText(hubH1(cat))}</h1>` +
+    `<p class="rls-summary">${escapeText(copy.lede)}</p>` +
+    `<p class="rls-kicker">${inCat.length} ${inCat.length === 1 ? "release" : "releases"} tracked</p>` +
+    `<ul class="rls-feed">${listItems}</ul>` +
+    (overflow > 0
+      ? `<p class="rls-kicker">+ ${overflow} more in the <a href="/sitemap.xml">sitemap</a>.</p>`
+      : "") +
+    `<nav class="rls-related" aria-label="Browse by category"><h2>Browse other categories</h2>` +
+    `<ul class="rls-links">${siblings}</ul></nav>` +
+    `<p class="rls-back"><a href="/">← All releases</a> · <a href="/learn/">Learn AI</a></p>` +
+    `</article></main></div>`
+  );
+}
+
+function injectHubBody(
+  html: string,
+  cat: Category,
+  all: ReleaseItem[],
+  hubCats: Category[],
+): string {
+  html = html.replace("</head>", () => `  ${RELEASE_BODY_STYLE}\n  </head>`);
+  html = html.replace(
+    /<div id="root"><\/div>/,
+    () => `<div id="root">${renderHubBody(cat, all, hubCats)}</div>`,
   );
   return html;
 }
@@ -1854,6 +2214,29 @@ async function main() {
     count++;
   }
 
+  // 4a-bis. Category hub pages — /releases/<cat>/ — one crawlable index per
+  // primary category that actually appears in the feed. Each release links up
+  // to its hub (3-level breadcrumb) and each hub links down to its releases +
+  // across to sibling hubs, so the release pages stop being crawl dead-ends.
+  const hubCats = (CATEGORY_ORDER_RELEASE as Category[]).filter((c) =>
+    items.some((i) => i.categories[0] === c),
+  );
+  for (const cat of hubCats) {
+    const inCat = releasesInCategory(cat, items);
+    const hubJsonLd = [
+      renderJsonLdCollectionPage({
+        url: releaseCatUrl(cat),
+        name: hubH1(cat),
+        description: RELEASE_HUB_COPY[cat].lede,
+      }),
+      renderJsonLdHubBreadcrumb(cat),
+      renderJsonLdHubItemList(cat, inCat),
+    ].join("\n    ");
+    let hubHtml = injectMeta(template, hubMeta(cat), hubJsonLd);
+    hubHtml = injectHubBody(hubHtml, cat, items, hubCats);
+    await writeHtml(`releases/${cat}/index.html`, hubHtml);
+  }
+
   // 4b. Learn section — hub + category + subcategory + one page per
   // article, each with full prerendered content, meta and JSON-LD.
   // Returns the URL set for its own sitemap (kept separate so the
@@ -1896,6 +2279,16 @@ async function main() {
       changefreq: "daily",
       priority: 0.8,
     },
+    // Category hubs — lastmod tracks the newest release in each category.
+    ...hubCats.map((cat): SitemapUrl => {
+      const inCat = releasesInCategory(cat, items);
+      return {
+        loc: releaseCatUrl(cat),
+        lastmod: inCat[0]?.date ?? today,
+        changefreq: "daily",
+        priority: 0.7,
+      };
+    }),
     ...items.map((i): SitemapUrl => {
       const loc = releaseUrl(i.id);
       const url: SitemapUrl = {
