@@ -233,6 +233,19 @@ export async function prerenderLearn(opts: {
   const today = new Date().toISOString().slice(0, 10);
   let pages = 0;
 
+  // Truthful lastmod for index pages: the newest `updated` among child
+  // articles. Stamping `today` on every build (even when nothing changed)
+  // teaches Google to distrust lastmod site-wide — Google treats lastmod
+  // trust as roughly binary. So we only ever claim a date we can stand
+  // behind; falls back to `today` only when a node has no dated children.
+  const latestUpdated = (refs: { slug: string }[]): string => {
+    const dates = refs
+      .map((r) => articles.get(r.slug)?.updated)
+      .filter((d): d is string => !!d)
+      .sort();
+    return dates.length ? dates[dates.length - 1] : today;
+  };
+
   // ---- hub ----
   const hubMeta: LearnPageMeta = {
     title: "Learn AI — LLMs, RAG, Agents & More, Explained | AI/TLDR",
@@ -433,7 +446,12 @@ export async function prerenderLearn(opts: {
       ),
     );
     pages++;
-    urls.push({ loc: `${siteUrl}${catPath}`, lastmod: today, changefreq: "weekly", priority: 0.7 });
+    urls.push({
+      loc: `${siteUrl}${catPath}`,
+      lastmod: latestUpdated(cat.subcategories.flatMap((s) => s.articles)),
+      changefreq: "weekly",
+      priority: 0.7,
+    });
 
     for (const sub of cat.subcategories) {
       // ---- subcategory page ----
@@ -487,7 +505,12 @@ export async function prerenderLearn(opts: {
         ),
       );
       pages++;
-      urls.push({ loc: `${siteUrl}${subPath}`, lastmod: today, changefreq: "weekly", priority: 0.6 });
+      urls.push({
+        loc: `${siteUrl}${subPath}`,
+        lastmod: latestUpdated(sub.articles),
+        changefreq: "weekly",
+        priority: 0.6,
+      });
 
       // ---- article pages ----
       for (const ref of sub.articles) {
@@ -629,7 +652,11 @@ export async function prerenderLearn(opts: {
       ),
     );
     toolPages++;
-    urls.push({ loc: tUrl, lastmod: today, changefreq: "weekly", priority: 0.6 });
+    // No lastmod: tool pages have no real per-page edit date (the live star
+    // count comes from github-stars.json, merged at render — the README-derived
+    // body is otherwise static). Omitting lastmod is more honest than stamping
+    // `today` every build, and buildSitemap only emits <lastmod> when present.
+    urls.push({ loc: tUrl, changefreq: "weekly", priority: 0.6 });
   }
 
   console.log(

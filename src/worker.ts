@@ -72,7 +72,12 @@ function buildNewsSitemap(items: ReleaseItem[]): string {
       // but slightly-older items keep surfacing — but emitting ingest time
       // here disagreed with the page on ~70% of items (audit 2026-06-13),
       // which Google News flags as a date mismatch.
-      const pubDate = it.date;
+      // Promote the date-only value to a full W3C datetime (noon UTC) so the
+      // freshness window doesn't read a bare date as midnight (≈a day old by
+      // afternoon). Mirrors toW3CDateTime() in scripts/prerender.ts.
+      const pubDate = /^\d{4}-\d{2}-\d{2}$/.test(it.date)
+        ? `${it.date}T12:00:00+00:00`
+        : it.date;
       return `  <url>
     <loc>${escapeXml(loc)}</loc>
     <news:news>

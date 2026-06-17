@@ -228,7 +228,7 @@ const WEBSITE_REF = {
   name: "AI/TLDR",
   alternateName: "AI TLDR",
   description:
-    "Every new AI model, repo, tool, and paper worth knowing — refreshed every 8 hours and explained in plain English.",
+    "Every new AI model, repo, tool, and paper worth knowing — refreshed every 2 hours and explained in plain English.",
   inLanguage: "en-US",
   publisher: { "@id": `${SITE_URL}/#org` },
   // Sitelinks SearchBox — Google deprecated this rich result Nov 2024
@@ -253,7 +253,7 @@ const WEBSITE_REF = {
 const HOME_FAQ = [
   {
     q: "What is AI/TLDR?",
-    a: "AI/TLDR is a high-volume tracker of new AI releases — models, open-source repos, developer tools, papers, datasets, benchmarks and security findings — refreshed every 8 hours and explained in plain English.",
+    a: "AI/TLDR is a high-volume tracker of new AI releases — models, open-source repos, developer tools, papers, datasets, benchmarks and security findings — refreshed every 2 hours and explained in plain English.",
   },
   {
     q: "How often is the feed updated?",
@@ -404,6 +404,19 @@ function renderJsonLdStatsBreadcrumb(): string {
   });
 }
 
+/**
+ * Promote a date-only `YYYY-MM-DD` to a full W3C datetime. Google's News
+ * sitemap + the freshness window treat a bare date as midnight UTC, which
+ * makes a launch-day story look ~a day old by afternoon and can push it out
+ * of the "fresh" window we're built to win. Noon UTC is a stable, neutral
+ * placeholder for a date-only source — it never claims a precision we don't
+ * have, and it keeps the sitemap and the page's JSON-LD agreeing to the
+ * second. An already-full ISO timestamp is passed through untouched.
+ */
+function toW3CDateTime(date: string): string {
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? `${date}T12:00:00+00:00` : date;
+}
+
 function renderJsonLdArticle(item: ReleaseItem): string {
   const url = releaseUrl(item.id);
   const description = item.explainer?.tagline ?? item.summary;
@@ -417,12 +430,14 @@ function renderJsonLdArticle(item: ReleaseItem): string {
     headline: clampHeadline(item.title),
     description,
     url,
-    datePublished: item.date,
+    datePublished: toW3CDateTime(item.date),
     // Release content doesn't change after publish and we don't track
     // per-item edits, so dateModified = the publish date. (Stamping the
     // feed-level generatedAt made every page claim "modified now" on every
-    // 8h build — a false freshness signal that wastes crawl budget.)
-    dateModified: item.date,
+    // 2h build — a false freshness signal that wastes crawl budget.)
+    // Full datetime (noon UTC) so this agrees to the second with the news
+    // sitemap's publication_date, which Google cross-checks.
+    dateModified: toW3CDateTime(item.date),
     author: {
       "@type": "Organization",
       name: item.org,
@@ -1264,7 +1279,7 @@ function injectStatsBody(html: string): string {
 const HOME_META: PageMeta = {
   title: "New AI Releases Daily — Models, Tools & Papers | AI/TLDR",
   description:
-    "Every new AI model, repo, tool, and paper worth knowing — refreshed every 8 hours and explained in plain English. Track what's shipping today.",
+    "Every new AI model, repo, tool, and paper worth knowing — refreshed every 2 hours and explained in plain English. Track what's shipping today.",
   canonical: `${SITE_URL}/`,
   ogType: "website",
   ogImage: DEFAULT_OG_IMAGE,
@@ -1390,8 +1405,10 @@ function buildNewsSitemap(items: ReleaseItem[]): string {
   const body = recent
     .map((it) => {
       const url = releaseUrl(it.id);
-      // Real release date — matches the page canonical's datePublished.
-      const pubDate = it.date;
+      // Real release date as a full W3C datetime (noon UTC) — matches the
+      // page's NewsArticle datePublished to the second and keeps launch-day
+      // items inside Google News's freshness window.
+      const pubDate = toW3CDateTime(it.date);
       return `  <url>
     <loc>${escapeText(url)}</loc>
     <news:news>
@@ -1660,7 +1677,7 @@ async function main() {
   // 4b. Learn section — hub + category + subcategory + one page per
   // article, each with full prerendered content, meta and JSON-LD.
   // Returns the URL set for its own sitemap (kept separate so the
-  // 8h-cron release churn doesn't re-date 300+ evergreen pages).
+  // 2h-cron release churn doesn't re-date 300+ evergreen pages).
   const learnUrls = await prerenderLearn({
     template,
     siteUrl: SITE_URL,
@@ -1761,9 +1778,30 @@ async function main() {
   );
 
   // 8. robots.txt — point at the index AND the news sitemap directly so
-  // Google News surfaces it explicitly.
-  const robots = `User-agent: *
+  // Google News surfaces it explicitly. The AI answer-engine / search
+  // crawlers are named EXPLICITLY (not just covered by `*`) so this file
+  // is auditable and a future "block AI bots" reflex can't silently cut
+  // the pipes into ChatGPT (OAI-SearchBot reads our pages; Bing feeds
+  // ChatGPT Search), Perplexity, Copilot, Gemini and Claude. We WANT
+  // maximum reach — training crawlers (GPTBot, ClaudeBot) are allowed too.
+  const aiBots = [
+    "OAI-SearchBot",
+    "ChatGPT-User",
+    "GPTBot",
+    "PerplexityBot",
+    "Perplexity-User",
+    "Google-Extended",
+    "ClaudeBot",
+    "Claude-Web",
+    "anthropic-ai",
+    "bingbot",
+    "CCBot",
+  ];
+  const robots = `# AI/TLDR — every crawler welcome, nothing disallowed.
+User-agent: *
 Allow: /
+
+${aiBots.map((b) => `User-agent: ${b}\nAllow: /`).join("\n\n")}
 
 Sitemap: ${SITE_URL}/sitemap.xml
 Sitemap: ${SITE_URL}/sitemap-news.xml

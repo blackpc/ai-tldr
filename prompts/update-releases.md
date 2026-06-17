@@ -311,6 +311,31 @@ Rules:
 This is about word choice and sentence length, NOT about removing real
 facts. Keep every number, name, and claim — just say it plainly.
 
+### Write so AI answer engines can quote you (GEO)
+
+AI assistants (ChatGPT, Perplexity, Gemini, Copilot) answer a question by
+LIFTING a self-contained sentence or two from a page. Write `summary` and
+each `explainer` field so a single sentence, pulled out ALONE, still makes
+sense and still names the thing.
+
+- **Answer first, name the entity.** Open with the answer, not a wind-up.
+  Write "GLM 5.2 is a 1T open-weight coding model that…", NOT "In this
+  release…", "This video covers…", or "A new model was announced…". The
+  first sentence must contain the product/model/org NAME — never start with
+  "it", "this", or "they".
+- **State verified facts definitively.** Drop empty hedges — "reportedly",
+  "around", "is said to", "appears to" — when the number is confirmed from
+  the source. Write "Kimi K2.6 scores 80.2% on SWE-bench", not "reportedly
+  scores around 80%". (Our zero-hallucination rule means anything you'd have
+  to hedge has already been dropped — so there is nothing left to soften.)
+- **BUT keep attribution for opinions and predictions.** "Andrej Karpathy
+  argues…", "the paper claims…", "Nathan Lambert predicts…". Removing the
+  verb there would turn an opinion into a fake fact and break
+  zero-hallucination. Be definitive about OBJECTIVE facts (specs, prices,
+  dates, benchmark numbers); stay attributed on subjective claims.
+- **Repeat the name instead of pronouns** across `whatIsIt` / `howItWorks`
+  / `whyItMatters`, so any one of them still makes sense quoted on its own.
+
 ### `title`
 
 **≤ 80 chars. A headline, not the whole story.** Format:

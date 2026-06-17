@@ -3,7 +3,7 @@
 ## Project
 
 AI/TLDR — a high-volume AI release tracker. Single-page React app powered by
-a JSON feed that an automated agent refreshes every 8 hours.
+a JSON feed that an automated agent refreshes every 2 hours.
 
 ## Quick commands
 
