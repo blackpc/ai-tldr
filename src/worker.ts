@@ -131,6 +131,16 @@ function withSecurityHeaders(res: Response): Response {
   for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
     out.headers.set(name, value);
   }
+  // Cloudflare's asset server serves .txt as a bare "text/plain" with NO
+  // charset, so browsers fall back to Latin-1 and mojibake the UTF-8 em
+  // dashes in llms.txt / llms-full.txt (— renders as "â€""). Declare UTF-8
+  // explicitly. The bytes are already valid UTF-8 — this is purely the
+  // missing charset label. (robots.txt / the IndexNow key file are ASCII,
+  // so the label is harmless there.)
+  const ct = out.headers.get("content-type");
+  if (ct && ct.toLowerCase().startsWith("text/plain") && !ct.toLowerCase().includes("charset")) {
+    out.headers.set("content-type", "text/plain; charset=utf-8");
+  }
   return out;
 }
 
