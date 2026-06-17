@@ -35,6 +35,13 @@ export interface StatTool {
   category: string;
 }
 
+export interface StatLabCadence {
+  name: string;
+  releases: number;
+  /** Mean days between this lab's consecutive tracked release dates. */
+  avgDaysBetween: number;
+}
+
 export interface StatsData {
   /** Build date (YYYY-MM-DD) — shown as the "updated" stamp. */
   generatedAt: string;
@@ -56,4 +63,20 @@ export interface StatsData {
   perWeek: StatWeek[];
   /** Most-starred tracked open-source tools (desc). */
   topTools: StatTool[];
+  /**
+   * Original, citable cadence/velocity numbers — the kind of figure nobody
+   * else publishes, so an AI engine or Wikipedia editor must attribute it.
+   */
+  velocity: {
+    /** Mean releases per 7-day bucket over the last 12 weeks. */
+    perWeekAvg: number;
+    last4Weeks: number;
+    prev4Weeks: number;
+    /** % change, last 4 weeks vs the prior 4 weeks (rounded). */
+    momentumPct: number;
+    /** Seismic + major releases in the last 90 days (frontier velocity). */
+    frontierLast90: number;
+  };
+  /** Fastest-shipping labs by mean days between releases (asc, 4+ releases). */
+  labCadence: StatLabCadence[];
 }

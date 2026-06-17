@@ -52,6 +52,18 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { StatsPage } from "../src/components/StatsPage";
 import statsData from "../src/data/stats.json" with { type: "json" };
 import type { StatsData } from "../src/data/stats";
+import landscapeData from "../src/data/learn/landscape.json" with { type: "json" };
+
+// Flat list of landscape tool pages ({name, slug}) — used to cross-link a
+// fresh release page to the evergreen tool page it names. Build-script only;
+// this never reaches the SPA bundle (the "no landscape in main bundle" rule).
+const LANDSCAPE_TOOLS: { name: string; slug: string }[] = (
+  landscapeData as {
+    categories: { subcategories: { tools: { name: string; slug: string }[] }[] }[];
+  }
+).categories.flatMap((c) =>
+  c.subcategories.flatMap((s) => s.tools.map((t) => ({ name: t.name, slug: t.slug }))),
+);
 
 // -----------------------------------------------------------------------
 // Config
@@ -138,7 +150,18 @@ interface PageMeta {
   publishedTime?: string;
   /** Author/byline org name — emits an `article:author` OG tag when set. */
   author?: string;
+  /**
+   * Robots directive for this page. Defaults to DEFAULT_ROBOTS (index,
+   * follow + rich-result hints). Set to e.g. "noindex, follow" to keep a
+   * thin/utility page out of the index while still letting crawlers follow
+   * its links.
+   */
+  robots?: string;
 }
+
+// Default robots directive: index everything, allow large image previews and
+// unbounded snippets (lets Google show the hero + full explainer text).
+const DEFAULT_ROBOTS = "index, follow, max-image-preview:large, max-snippet:-1";
 
 // -----------------------------------------------------------------------
 // JSON-LD helpers
@@ -384,11 +407,29 @@ function renderJsonLdStats(): string {
     measurementTechnique:
       "Aggregated from the AI/TLDR verified release feed and open-source landscape.",
     variableMeasured: [
-      "releases tracked",
-      "releases by lab",
-      "releases by category",
-      "releases per week",
-      "GitHub stars",
+      "AI releases tracked",
+      "AI Release Velocity Index (releases per week)",
+      "AI Release Cadence Index (mean days between releases per lab)",
+      "Frontier releases in the last 90 days",
+      "Releases by lab",
+      "Releases by category",
+      "Releases per week",
+      "GitHub stars of tracked open-source tools",
+    ],
+    // Machine-readable download surfaces so an engine can fetch the data,
+    // not just read the page. /stats.json is emitted by main(); the Worker
+    // also serves it (and /api/stats.json) with CORS.
+    distribution: [
+      {
+        "@type": "DataDownload",
+        encodingFormat: "application/json",
+        contentUrl: `${SITE_URL}/stats.json`,
+      },
+      {
+        "@type": "DataDownload",
+        encodingFormat: "text/html",
+        contentUrl: STATS_URL,
+      },
     ],
   });
 }
@@ -796,6 +837,7 @@ function renderMetaBlock(meta: PageMeta): string {
     `<title>${escapeText(meta.title)}</title>`,
     `<meta name="description" content="${escapeAttr(meta.description)}" />`,
     `<link rel="canonical" href="${escapeAttr(meta.canonical)}" />`,
+    `<meta name="robots" content="${escapeAttr(meta.robots ?? DEFAULT_ROBOTS)}" />`,
     // Self-referential x-default — single-language site, but the tag keeps
     // Search Console quiet and states the default-language URL explicitly.
     `<link rel="alternate" hreflang="x-default" href="${escapeAttr(meta.canonical)}" />`,
@@ -857,6 +899,10 @@ function injectMeta(
     "",
   );
   html = html.replace(/<link\s+rel="canonical"[^>]*?>\s*/g, "");
+  // Strip the template's default robots meta so renderMetaBlock can emit a
+  // per-page directive (default index,follow — or noindex for utility pages)
+  // without leaving two conflicting robots tags in the head.
+  html = html.replace(/<meta\s+name="robots"[^>]*?>\s*/g, "");
   // Strip the dev-fallback JSON-LD block from the template. Prerender
   // injects a page-specific JSON-LD stack (WebSite+Org for home,
   // CollectionPage for /influencers + /log, Article+Breadcrumb for each
@@ -1033,6 +1079,50 @@ function renderRelatedSection(item: ReleaseItem, all: ReleaseItem[]): string {
   return `<nav class="rls-related" aria-label="Related releases"><h2>Related releases</h2><ul class="rls-feed">${links}</ul></nav>`;
 }
 
+/** Landscape tool pages whose tool name is named (as a whole word) in this
+ *  release's title or tags — relevant evergreen links from a fresh page. */
+function matchedTools(item: ReleaseItem): { name: string; slug: string }[] {
+  const hay = ` ${item.title} ${item.tags.join(" ")} `.toLowerCase();
+  const boundary = (ch: string | undefined) => ch === undefined || !/[a-z0-9]/.test(ch);
+  const out: { name: string; slug: string }[] = [];
+  for (const tool of LANDSCAPE_TOOLS) {
+    const n = tool.name.toLowerCase();
+    if (n.length < 3) continue; // skip 1-2 char names ("ML") to avoid noise
+    const idx = hay.indexOf(n);
+    if (idx === -1) continue;
+    if (boundary(hay[idx - 1]) && boundary(hay[idx + n.length])) {
+      out.push(tool);
+      if (out.length >= 3) break;
+    }
+  }
+  return out;
+}
+
+/**
+ * Cross-link a release page INTO the evergreen silos (Learn, landscape,
+ * /stats). Releases were near crawl dead-ends — reachable only from home or
+ * the sitemap, and passing no link equity to the high-authority evergreen
+ * pages. Matched tool links add topical relevance; the always-on links use
+ * varied, descriptive anchors (anchor variety beats one templated keyword).
+ */
+function renderLearnCrossLinks(item: ReleaseItem): string {
+  const toolLinks = matchedTools(item)
+    .map(
+      (t) =>
+        `<li><a href="/learn/landscape/${escapeAttr(t.slug)}">${escapeText(t.name)} — overview &amp; getting started</a></li>`,
+    )
+    .join("");
+  const evergreen =
+    `<li><a href="/learn/">Learn AI — a plain-English encyclopedia</a></li>` +
+    `<li><a href="/learn/landscape/">The open-source AI landscape</a></li>` +
+    `<li><a href="/stats/">AI Release Index — live release stats</a></li>`;
+  return (
+    `<nav class="rls-related" aria-label="Learn more on AI/TLDR">` +
+    `<h2>Learn more on AI/TLDR</h2>` +
+    `<ul class="rls-links">${toolLinks}${evergreen}</ul></nav>`
+  );
+}
+
 function renderReleaseBody(item: ReleaseItem, allItems: ReleaseItem[]): string {
   const ex = item.explainer;
   const img = item.image;
@@ -1075,6 +1165,7 @@ function renderReleaseBody(item: ReleaseItem, allItems: ReleaseItem[]): string {
     (linkRows ? `<section><h2>Links</h2><ul class="rls-links">${linkRows}</ul></section>` : "") +
     (tagRows ? `<section><h2>Tags</h2><ul class="rls-tags">${tagRows}</ul></section>` : "") +
     renderRelatedSection(item, allItems) +
+    renderLearnCrossLinks(item) +
     `<p class="rls-back"><a href="/">← All releases</a> · <a href="/learn/">Learn AI</a></p>` +
     `</article></main></div>`
   );
@@ -1101,12 +1192,53 @@ function injectReleaseBody(
  *  the only internal-link path to the 725 release pages was the sitemap.
  *  This emits real anchors (the strongest discovery signal). React
  *  replaces #root on mount, so JS users still get the live feed. */
+/** "A", "A and B", or "A, B and C". */
+function listJoin(parts: string[]): string {
+  if (parts.length <= 1) return parts[0] ?? "";
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+  return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+}
+
+/**
+ * Extractable "answer capsule" for the homepage: a question heading + a
+ * single self-contained paragraph an AI engine can lift whole to answer
+ * "what AI shipped today / latest AI releases". Every number is real
+ * (counted from the feed at build time), names the entity instead of "it",
+ * and states the 2h freshness — our strongest, most-citable fact. Rendered
+ * inside the prerendered #root, so JS-less AI crawlers read it.
+ */
+function renderHomeAnswerBlock(items: ReleaseItem[]): string {
+  const sorted = [...items].sort((a, b) =>
+    String(b.publishDate ?? b.date).localeCompare(String(a.publishDate ?? a.date)),
+  );
+  const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+  const n = sorted.filter((it) => {
+    const t = Date.parse(it.publishDate ?? it.date);
+    return Number.isFinite(t) && t >= dayAgo;
+  }).length;
+  const names = sorted.slice(0, 3).map((it) => escapeText(it.title));
+  const lead =
+    n > 0
+      ? `In the last 24 hours AI/TLDR tracked ${n} new AI release${n === 1 ? "" : "s"}`
+      : `AI/TLDR tracks new AI releases as they ship`;
+  const examples = names.length ? `, including ${listJoin(names)}` : "";
+  return (
+    `<section class="rls-answer"><h2>What AI shipped today?</h2>` +
+    `<p>${lead}${examples}. AI/TLDR is an AI release tracker that follows new AI ` +
+    `models, open-source tools, papers, datasets and benchmarks — refreshed every ` +
+    `2 hours from verified primary sources and explained in plain English.</p></section>`
+  );
+}
+
 function renderHomeBody(items: ReleaseItem[]): string {
+  // Cap the crawlable list at 40: link-equity per outbound link thins out
+  // past ~45-50 links on a page (Zyppy), and React replaces #root on mount
+  // so JS users still get the full live feed.
   const recent = [...items]
     .sort((a, b) =>
       String(b.publishDate ?? b.date).localeCompare(String(a.publishDate ?? a.date)),
     )
-    .slice(0, 60);
+    .slice(0, 40);
   const cards = recent
     .map(
       (it) =>
@@ -1122,7 +1254,8 @@ function renderHomeBody(items: ReleaseItem[]): string {
     `<span class="brand-mark">█</span><p class="brand-name">AI/TLDR</p></a></header>` +
     `<main class="rls-main">` +
     `<h1>AI/TLDR — every new AI model, tool, repo &amp; paper</h1>` +
-    `<p class="rls-summary">The latest AI releases, refreshed every few hours and explained in plain English.</p>` +
+    `<p class="rls-summary">The latest AI releases, refreshed every 2 hours and explained in plain English.</p>` +
+    renderHomeAnswerBlock(items) +
     `<p><a href="/stats/">AI Release Index — live stats on AI releases</a> · <a href="/learn/">Learn AI</a></p>` +
     `<ul class="rls-feed">${cards}</ul>` +
     `</main></div>`
@@ -1776,6 +1909,11 @@ async function main() {
     JSON.stringify(feed),
     "utf8",
   );
+
+  // 7c. Expose the precomputed AI Release Index at /stats.json — the
+  // machine-readable download referenced by the Dataset JSON-LD's
+  // `distribution`, and what the Worker serves (with CORS) at /api/stats.json.
+  await writeFile(join(DIST, "stats.json"), JSON.stringify(statsData), "utf8");
 
   // 8. robots.txt — point at the index AND the news sitemap directly so
   // Google News surfaces it explicitly. The AI answer-engine / search

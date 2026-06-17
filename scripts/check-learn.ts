@@ -362,6 +362,22 @@ for (const [slug, loc] of bySlug) {
   }
   if (counters.visuals < 1) err(slug, "article has no diagram or image");
 
+  // Answer-first GEO gate (WARN-only — must never break the 2h sweep build):
+  // the in-plain-english section should OPEN with a self-contained paragraph
+  // an AI engine can lift whole. Lead block a <p>, a quotable length, and it
+  // should name the topic rather than open with a bare pronoun.
+  const ipe = (article.sections ?? []).find((s) => s.id === "in-plain-english");
+  const leadP = ipe?.blocks?.find((b) => b.type === "p") as { md?: string } | undefined;
+  if (ipe && !leadP) {
+    warn(slug, "in-plain-english has no paragraph to lead with (answer-first)");
+  } else if (leadP?.md) {
+    const w = wordsOf(leadP.md);
+    if (w < 35 || w > 110)
+      warn(slug, `in-plain-english lede is ${w} words (aim ~40-90 for an extractable answer)`);
+    if (/^\s*\**(it|this|they|these|those|that)\b/i.test(leadP.md))
+      warn(slug, "in-plain-english lede opens with a pronoun — name the topic so a quoted sentence stands alone");
+  }
+
   // FAQ / related / furtherReading
   if (!article.faq || article.faq.length < 3 || article.faq.length > 7)
     err(slug, `faq count ${article.faq?.length ?? 0} (need 3–7)`);

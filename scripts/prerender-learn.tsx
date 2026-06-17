@@ -553,6 +553,23 @@ export async function prerenderLearn(opts: {
               acceptedAnswer: { "@type": "Answer", text: f.a },
             })),
           }),
+          // DefinedTerm: the Learn section is a glossary of "what is X" topics,
+          // and DefinedTerm is the schema type AI engines use to extract a
+          // term's authoritative definition. name = the bare-topic shortTitle,
+          // description = the one-liner definition, set = the category glossary.
+          wrapJsonLd({
+            "@context": "https://schema.org",
+            "@type": "DefinedTerm",
+            "@id": `${artUrl}#term`,
+            name: article.shortTitle,
+            description: article.oneLiner,
+            url: artUrl,
+            inDefinedTermSet: {
+              "@type": "DefinedTermSet",
+              name: `AI/TLDR Learn — ${cat.title}`,
+              url: `${siteUrl}${catPath}`,
+            },
+          }),
           breadcrumbLd(wrapJsonLd, siteUrl, [
             { name: "AI/TLDR", path: "/" },
             { name: "Learn AI", path: learnHubPath },
