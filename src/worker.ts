@@ -135,8 +135,10 @@ function withSecurityHeaders(res: Response): Response {
   // charset, so browsers fall back to Latin-1 and mojibake the UTF-8 em
   // dashes in llms.txt / llms-full.txt (— renders as "â€""). Declare UTF-8
   // explicitly. The bytes are already valid UTF-8 — this is purely the
-  // missing charset label. (robots.txt / the IndexNow key file are ASCII,
-  // so the label is harmless there.)
+  // missing charset label. NOTE: this only fires for paths that actually
+  // reach the Worker — /llms.txt and /llms-full.txt are listed in
+  // wrangler.jsonc `run_worker_first` for exactly this reason; static files
+  // not in that list are served by the asset server and never see this code.
   const ct = out.headers.get("content-type");
   if (ct && ct.toLowerCase().startsWith("text/plain") && !ct.toLowerCase().includes("charset")) {
     out.headers.set("content-type", "text/plain; charset=utf-8");
