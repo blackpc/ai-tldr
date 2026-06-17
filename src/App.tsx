@@ -667,6 +667,18 @@ function App() {
             >
               <span className="nav-link-glyph" aria-hidden="true">▤</span>
             </button>
+            <button
+              type="button"
+              className={`nav-link nav-link-icon ${page === "stats" ? "nav-active" : ""}`}
+              onClick={() => {
+                setMenuOpen(false);
+                goStats();
+              }}
+              title="AI Release Index — stats on AI releases"
+              aria-label="AI Release Index"
+            >
+              <span className="nav-link-glyph" aria-hidden="true">▦</span>
+            </button>
           </nav>
           <Subscribe />
         </div>

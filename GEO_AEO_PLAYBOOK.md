@@ -400,9 +400,14 @@ Ordered by leverage. File anchors from the audit.
 > `?q=` seeding (sitelinks search box). ✅ Shipped 2026-06-17 — **AI Release
 > Index** stats page (`/stats`, §5.3). ✅ Already live — #4 visible "Updated"
 > stamp **on Learn articles** (`ArticleBody.tsx`); landscape tool pages have no
-> real per-page date, so none is stamped (zero-hallucination). ⏳ Remaining
-> (UI/feature): #5 landscape comparison tables. 👤 User-action: #7 Bing
-> Webmaster Tools, #8 GA4 AI-traffic channel.
+> real per-page date, so none is stamped (zero-hallucination). ✅ Shipped
+> 2026-06-17 — #5 **comparison tables** on the crawlable tool detail pages
+> ("How X compares") + a top-nav stats icon (the footer is unreachable under
+> the feed's infinite scroll). **All code items are done.** 👤 User-action
+> only: #7 Bing Webmaster Tools verify, #8 GA4 AI-traffic channel, a Wikidata
+> item, claim an X handle (then I wire it into `sameAs`). IndexNow deferred —
+> the Cloudflare git-deploy has no clean post-deploy hook and pinging every 2h
+> build would just re-submit unchanged URLs.
 
 1. **Add `Organization` `sameAs`** to `ORG_REF` in
    [scripts/prerender.ts](scripts/prerender.ts) — point at the brand's X, GitHub,

@@ -41,16 +41,52 @@ function relatedTools(detail: LandscapeToolDetail) {
   return (sub?.tools ?? []).filter((t) => t.slug !== detail.slug).slice(0, 6);
 }
 
+interface CmpRow {
+  name: string;
+  slug: string;
+  stars: number;
+  description: string;
+  isCurrent: boolean;
+}
+
+/**
+ * Comparison rows for the whole subcategory (incl. this tool), by stars desc.
+ * A crawlable comparison table is what AI answer engines lift for "best /
+ * vs / alternatives" queries — built from data we already verify (tile
+ * descriptions + stars). The current tool is always kept in the table.
+ */
+function comparisonRows(detail: LandscapeToolDetail): CmpRow[] {
+  const cat = DATA.categories.find((c) => c.id === detail.category);
+  const sub = cat?.subcategories.find((s) => s.id === detail.subcategory);
+  const rows: CmpRow[] = (sub?.tools ?? [])
+    .map((t) => ({
+      name: t.name,
+      slug: t.slug,
+      stars: starsOf(t.repo),
+      description: t.slug === detail.slug ? detail.tagline : t.description,
+      isCurrent: t.slug === detail.slug,
+    }))
+    .sort((a, b) => b.stars - a.stars);
+  const top = rows.slice(0, 8);
+  if (!top.some((r) => r.isCurrent)) {
+    const cur = rows.find((r) => r.isCurrent);
+    if (cur) top[top.length - 1] = cur;
+  }
+  return top;
+}
+
 export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
   const stars = starsOf(detail.repo);
   const ghUrl = `https://github.com/${detail.repo}`;
   const related = relatedTools(detail);
+  const comparison = comparisonRows(detail);
 
   const toc = [
     { id: "overview", title: "Overview" },
     ...(detail.features.length > 0 ? [{ id: "features", title: "What it does" }] : []),
     { id: "getting-started", title: "Getting started" },
     ...(detail.useCases.length > 0 ? [{ id: "use-cases", title: "When to use it" }] : []),
+    ...(comparison.length > 1 ? [{ id: "compare", title: "Compare" }] : []),
   ];
 
   const catHref = `${learnLandscapePath}?cat=${detail.category}&sub=${detail.subcategory}`;
@@ -146,6 +182,48 @@ export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
                   <li key={i}>{u}</li>
                 ))}
               </ul>
+            </section>
+          )}
+
+          {comparison.length > 1 && (
+            <section id="compare" className="lrn-section" aria-labelledby="compare-h">
+              <h2 className="lrn-h2" id="compare-h">
+                <span className="lrn-h2-mark" aria-hidden="true">//</span> How{" "}
+                {detail.name} compares
+              </h2>
+              <p className="lrn-p">
+                {detail.name} alongside other open-source{" "}
+                {detail.subcategoryTitle.toLowerCase()} tools AI/TLDR tracks,
+                ranked by GitHub stars.
+              </p>
+              <div className="lrn-table-wrap"><table className="lrn-table lrn-cmp">
+                <thead>
+                  <tr>
+                    <th>Tool</th>
+                    <th className="lrn-cmp-stars">Stars</th>
+                    <th>What it does</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {comparison.map((r) => (
+                    <tr key={r.slug} className={r.isCurrent ? "lrn-cmp-cur" : undefined}>
+                      <td className="lrn-cmp-name">
+                        {r.isCurrent ? (
+                          <strong>{r.name}</strong>
+                        ) : (
+                          <a href={learnToolPath(r.slug)} data-internal="true">
+                            {r.name}
+                          </a>
+                        )}
+                      </td>
+                      <td className="lrn-cmp-stars">
+                        {r.stars > 0 ? `★ ${formatStars(r.stars)}` : "—"}
+                      </td>
+                      <td>{r.description}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table></div>
             </section>
           )}
         </div>

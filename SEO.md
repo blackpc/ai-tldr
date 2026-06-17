@@ -120,6 +120,12 @@ for the explainer copy.
 
 ## 7. Done — shipped optimizations
 
+- [x] **2026-06-17** — **Tool comparison tables**: each `/learn/landscape/<slug>`
+  page now has a crawlable "How X compares" table (the subcategory's tools by
+  GitHub stars, current tool highlighted) — what AI engines lift for "best / vs /
+  alternatives" queries. Built from already-verified tile data; **does not touch
+  the Miller-columns landscape UI**. Also added a top-nav **stats icon** for
+  `/stats` (the footer is unreachable under the feed's infinite scroll).
 - [x] **2026-06-17** — **AI Release Index** (`/stats`): an original-data page —
   stat cards + extractable one-sentence takeaways + ranked tables/bars (top
   labs, categories, weekly cadence, importance, most-starred OSS tools). Built
