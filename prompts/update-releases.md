@@ -74,8 +74,19 @@ You write a draft. Scripts validate and merge. You do **NOT** edit
    would have added from; do not list a category just because you
    glanced at a page. (Historically `coverage` claimed "video"/"dataset"
    on sweeps that added zero of them for weeks — the listing was
-   meaningless. Keep it honest.) Don't pad it. On a zero-add sweep, omit
-   `coverage` entirely or pass an empty array — informational only.
+   meaningless. Keep it honest.) Don't pad it.
+
+   **ALWAYS fill `coverage`, ESPECIALLY on a zero-add sweep.** A zero-add
+   sweep is a valid, successful result — but it must be AUDITABLE. List
+   every category you genuinely searched so the record proves you looked
+   across the board, not that you gave up early. An empty `coverage` on a
+   zero-add sweep is indistinguishable from a short-circuit, which makes
+   "are we missing real news?" impossible to answer from the log. Recording
+   what you searched can NEVER pressure you to add an item — it is the
+   opposite of a quota (you list the categories you queried; whether any
+   item qualified is separate). So: searched 8 categories, none qualified →
+   `coverage` has 8 entries and `newItems` is `[]`. That is the ideal empty
+   sweep.
 5. **Verify.**
    ```
    bun scripts/verify-draft.ts sweep-draft.json
@@ -599,5 +610,9 @@ and `sweeps.json` updates from your draft. Do NOT edit those files
 directly.
 
 This prompt is idempotent: re-running with no new qualifying releases
-must produce a draft with `newItems: []` (and a `summary` describing
-what you searched). Empty sweep is success.
+must produce a draft with `newItems: []`, a FULL `coverage` array (every
+category you searched), and a `summary` that names WHICH sources you
+checked and WHY nothing qualified (e.g. "Searched lab blogs, GitHub
+trending, HF, HN and 8 YouTube feeds; Anthropic/Meta/Mistral quiet, no
+≤72h release met the bar."). Empty sweep is success — but a logged,
+auditable success, not a blank `cov:[]` that hides whether you looked.

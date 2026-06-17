@@ -416,3 +416,44 @@ noise (skill-packs, prompt-leaks, generic DBs, courses).
 
 Status: fix shipped. Backfill of the real missing tools = separate curated
 pass (needs detail-page gen per tool + category placement).
+
+## 2026-06-17-A — "too many empty sweeps?" — NOT over-filtering; empty sweeps were un-auditable
+
+**Trigger:** User asked whether the many empty sweeps mean we filter out too
+much. Data: 181/535 all-time sweeps empty (34%); 12/50 recent (24%). EVERY
+empty sweep showed `coverage: []`, while every productive sweep had a full
+coverage list.
+
+**Root cause (proven from a real CI run log, not guessed):** Empty sweeps are
+LEGITIMATE. Pulled the 2026-06-17T03:25 CI run (→ the 03:37 "+0 cov:[]"
+sweep). The agent DID search and reasoned in its own draft: "Lab blogs are
+quiet: Anthropic/Meta/Mistral/Moonshot have no new…", then correctly shipped
+zero. So it is NOT short-circuiting and NOT over-filtering — the opposite of
+the padding scars (04-28-A/B/C). Two real findings instead:
+1. The prompt told the agent `coverage` was "informational only — omit or pass
+   an empty array" on zero-add sweeps. So empty sweeps recorded `cov:[]`,
+   making them indistinguishable from a short-circuit — you literally cannot
+   answer "did we miss news?" from the log.
+2. GitHub THROTTLES the schedule: 30 recent runs landed ~every 4–5h, not the
+   configured 2h (scheduled-workflow drop under load). So there are genuinely
+   fewer sweeps than 12/day — not a filtering issue, a GH platform limit.
+
+**Change (prompt only — NO filter/bar/72h-cap change, those are scar-protected):**
+- `prompts/update-releases.md`: `coverage` is now REQUIRED on every sweep,
+  ESPECIALLY zero-add ones (list every category genuinely queried → proves
+  breadth-of-search). Framed explicitly as NOT a quota: recording what you
+  searched can never pressure an add. Empty-sweep `summary` must now name the
+  sources checked + why nothing qualified.
+- Did NOT loosen the inclusion bar or 72h cap, and did NOT add any cadence/gap
+  signal — that is exactly what caused the 04-28 padding scars. Over-filtering
+  was the user's hypothesis; the data refuted it.
+
+**Deliberately NOT changed (logged so it isn't re-litigated):** the GH cron
+frequency. Bumping `0 */2 * * *` → hourly to hedge GH's dropped runs would risk
+queueing against the 65-min job cap + concurrency group, and may itself be
+throttled. Left for an explicit editor decision.
+
+**Status:** Applied. Watch next ~10 crons: empty sweeps should now carry a FULL
+coverage array + an informative summary (the `coverage: 0/15` finalize warning
+should stop firing on empty runs). If an empty sweep still shows `cov:[]`, the
+agent ignored the rule — investigate, do NOT respond by loosening the bar.
