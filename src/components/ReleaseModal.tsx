@@ -143,6 +143,22 @@ export function ReleaseModal({
             <p className="modal-tagline">{ex.tagline}</p>
           </header>
 
+          {item.quickFacts && item.quickFacts.length > 0 && (
+            <section className="panel modal-qf-panel">
+              <h3 className="panel-h">// QUICK FACTS</h3>
+              <table className="modal-qf">
+                <tbody>
+                  {item.quickFacts.map((f) => (
+                    <tr key={f.label}>
+                      <th scope="row">{f.label}</th>
+                      <td>{f.value}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          )}
+
           <div className="modal-grid">
             <section className="panel">
               <h3 className="panel-h">// WHAT IS IT</h3>
@@ -173,6 +189,20 @@ export function ReleaseModal({
               </section>
             )}
           </div>
+
+          {item.faq && item.faq.length > 0 && (
+            <section className="panel modal-faq-panel">
+              <h3 className="panel-h">// FAQ</h3>
+              <dl className="modal-faq">
+                {item.faq.map((f) => (
+                  <div className="modal-faq-item" key={f.q}>
+                    <dt>{f.q}</dt>
+                    <dd>{f.a}</dd>
+                  </div>
+                ))}
+              </dl>
+            </section>
+          )}
 
           <footer className="modal-foot">
             {(item.metrics || (item.tags && item.tags.length > 0)) && (

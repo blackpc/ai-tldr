@@ -400,6 +400,27 @@ per million tokens. Every key/value must trace to a fetched source —
 no estimates. Omit the field rather than guess. The UI surfaces
 metrics as small chips under the title.
 
+### `quickFacts` (optional — strongly preferred for `seismic`/`major`)
+
+`{ label, value }[]`, 3–7 rows. A LABELED facts table — AI answer engines
+lift a labeled table far more readily than the same facts buried in prose.
+Use only VERIFIED values from the source. Good labels: "Maker", "License",
+"Context window", "Price (input)", "Price (output)", "Availability",
+"What's new". Keep each value short and concrete ("$3 / 1M tokens",
+"200K tokens", "Apache-2.0", "API + open weights"). Omit a row rather than
+guess. Skip the whole field for `notable`/`rumor` items.
+
+### `faq` (optional — strongly preferred for `seismic`/`major`)
+
+`{ q, a }[]`, 3–5 entries (cap 7). Each `q` is a LITERAL follow-up question
+a person would type — "How much does <X> cost?", "Is <X> open source?",
+"How does <X> compare to <Y>?". Each `a` is a self-contained 40–75 word
+answer that NAMES the entity (never starts with "it"/"this") so it still
+makes sense quoted on its own. Every answer must be grounded in the fetched
+source — same zero-hallucination rule as `summary`. This drives a visible
+FAQ on the release page plus FAQPage structured data (what AI engines quote
+for the literal sub-question).
+
 ### `explainer` (REQUIRED)
 
 The heart of the card. If you can't fill these from the source, drop

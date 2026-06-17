@@ -95,6 +95,25 @@ export interface ReleaseAuthor {
   profileUrl?: string;
 }
 
+/** A single labeled fact in a release's Quick Facts table. */
+export interface QuickFact {
+  /** Short label, e.g. "Context window", "Price (input)", "License". */
+  label: string;
+  /** Verified value, e.g. "200K tokens", "$3 / 1M tokens", "Apache-2.0". */
+  value: string;
+}
+
+/** One sub-question + standalone answer in a release's FAQ. */
+export interface ReleaseFaq {
+  /** A literal follow-up query, e.g. "How much does Claude Opus 4.8 cost?". */
+  q: string;
+  /**
+   * A self-contained 40–75 word answer that NAMES the entity (no leading
+   * "it"/"this") so it survives being quoted out of context by an AI engine.
+   */
+  a: string;
+}
+
 export interface ReleaseItem {
   id: string;
   /**
@@ -126,6 +145,19 @@ export interface ReleaseItem {
   tags: string[];
   importance: Importance;
   metrics?: Record<string, string | number>;
+  /**
+   * Labeled "quick facts" for seismic/major releases — price, context window,
+   * license, availability, what's new vs the prior version, maker. AI answer
+   * engines lift a labeled table far more readily than the same facts in
+   * prose. Every value must trace to a verified source (zero-hallucination).
+   */
+  quickFacts?: QuickFact[];
+  /**
+   * Sub-question FAQ for seismic/major releases — drives a visible <dl> +
+   * FAQPage JSON-LD on the release page so AI engines can answer the literal
+   * follow-up queries ("X pricing?", "X vs Y context window?").
+   */
+  faq?: ReleaseFaq[];
   links?: { label: string; url: string }[];
   explainer: Explainer;
   image?: ReleaseImage;

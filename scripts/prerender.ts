@@ -811,6 +811,23 @@ function renderJsonLdInfluencers(list: Influencer[]): string {
  * (There's no intermediate `/releases` index page — the homepage IS
  * the release listing — so we link straight back to `/`.)
  */
+/** FAQPage JSON-LD for a release's sub-question FAQ (only when present).
+ *  This is the schema AI answer engines lift for literal follow-up queries
+ *  ("X pricing?", "X vs Y?"). The helper existed only for the homepage; this
+ *  wires it to release pages, where the launch-day Q&A demand actually is. */
+function renderJsonLdReleaseFaq(item: ReleaseItem): string {
+  if (!item.faq?.length) return "";
+  return wrapJsonLd({
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    mainEntity: item.faq.map((f) => ({
+      "@type": "Question",
+      name: f.q,
+      acceptedAnswer: { "@type": "Answer", text: f.a },
+    })),
+  });
+}
+
 function renderJsonLdBreadcrumb(item: ReleaseItem): string {
   return wrapJsonLd({
     "@context": "https://schema.org",
@@ -1023,6 +1040,11 @@ const RELEASE_BODY_STYLE = `<style data-rls-css>
       .rls-tags{list-style:none;padding:0;display:flex;flex-wrap:wrap;gap:8px}
       .rls-tags li{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:999px;padding:3px 10px;font-size:12px;color:#bbb}
       .rls-article a{color:#7db3ff}
+      .rls-qf{border-collapse:collapse;width:100%;margin:6px 0 8px;font-size:14px}
+      .rls-qf th{text-align:left;color:#9a9a9a;font-weight:600;padding:7px 12px 7px 0;vertical-align:top;white-space:nowrap;border-bottom:1px solid #1e1e1e}
+      .rls-qf td{color:#e8e8e8;padding:7px 0;border-bottom:1px solid #1e1e1e}
+      .rls-faq dt{color:#fff;font-weight:600;margin:14px 0 4px}
+      .rls-faq dd{margin:0;color:#cfcfcf;line-height:1.6}
       .rls-back{margin-top:28px}
       .rls-body pre{background:#111;border:1px solid #222;border-radius:8px;padding:12px;overflow:auto}
       .rls-feed{list-style:none;padding:0;margin:24px 0 0}
@@ -1139,6 +1161,18 @@ function renderReleaseBody(item: ReleaseItem, allItems: ReleaseItem[]): string {
     )
     .join("");
   const tagRows = item.tags.map((t) => `<li>${escapeText(t)}</li>`).join("");
+  // Labeled facts table — AI engines lift a labeled table far more readily
+  // than the same facts in prose.
+  const quickFactRows = (item.quickFacts ?? [])
+    .map(
+      (f) =>
+        `<tr><th scope="row">${escapeText(f.label)}</th><td>${escapeText(f.value)}</td></tr>`,
+    )
+    .join("");
+  // Sub-question FAQ as a visible <dl> (matched by the FAQPage JSON-LD).
+  const faqItems = (item.faq ?? [])
+    .map((f) => `<dt>${escapeText(f.q)}</dt><dd>${escapeText(f.a)}</dd>`)
+    .join("");
 
   return (
     `<div class="page rls-body"><header class="page-head">` +
@@ -1154,10 +1188,17 @@ function renderReleaseBody(item: ReleaseItem, allItems: ReleaseItem[]): string {
       ? `<img class="rls-img" src="${escapeAttr(img.url)}" alt="${escapeAttr(img.alt ?? item.title)}" loading="lazy" />`
       : "") +
     (ex?.tagline ? `<p class="rls-tagline">${escapeText(ex.tagline)}</p>` : "") +
+    (quickFactRows
+      ? `<section class="rls-quickfacts"><h2>Quick facts</h2>` +
+        `<table class="rls-qf"><tbody>${quickFactRows}</tbody></table></section>`
+      : "") +
     section("What is it?", ex?.whatIsIt) +
     section("How does it work?", ex?.howItWorks) +
     section("Why does it matter?", ex?.whyItMatters) +
     section("Who is it for?", ex?.forWho) +
+    (faqItems
+      ? `<section class="rls-faq"><h2>Frequently asked questions</h2><dl>${faqItems}</dl></section>`
+      : "") +
     (ex?.tryIt
       ? `<section><h2>Try it</h2><pre><code>${escapeText(ex.tryIt)}</code></pre></section>`
       : "") +
@@ -1792,6 +1833,7 @@ async function main() {
     const blocks = [
       renderJsonLdArticle(item),       // NewsArticle (always)
       renderJsonLdBreadcrumb(item),    // BreadcrumbList (always)
+      renderJsonLdReleaseFaq(item),    // FAQPage (when the item has a sub-question FAQ)
       renderJsonLdReview(item),        // Review (when itemReviewed is supported)
       renderJsonLdVideo(item),         // VideoObject (video category)
       renderJsonLdSoftware(item),      // SoftwareApplication / SoftwareSourceCode
