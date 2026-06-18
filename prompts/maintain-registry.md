@@ -107,6 +107,11 @@ Benchmark `score` must be 0–`max` (no Elo/throughput in the bar chart).
 demoted automatically. But edit its blurb/overview if it used time-relative
 wording ("Current Flash…") so it now reads as a dated fact.
 
+> If you ever add a BRAND-NEW maker (rare), give it a `logo`: download its
+> official brand symbol (Wikimedia Commons SVG or the brand's app-icon) into
+> `public/models-logos/<makerId>.<ext>` and set `maker.logo` to that path.
+> `check-models` requires the file to exist. Existing makers already have logos.
+
 **d. Add the published benchmark COMPARISON.** A lone benchmark bar ("84%") is
 weak — what readers want is this model vs the field, which is exactly what the
 maker publishes at launch. Capture whichever of these the source actually has
