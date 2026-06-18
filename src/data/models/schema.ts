@@ -79,6 +79,10 @@ export interface ModelMaker {
   blurb: string;
   /** Official homepage (https). */
   homepage?: string;
+  /** Self-hosted brand symbol logo, "/models-logos/<id>.<ext>" (real official
+   *  mark, verified at authoring time). Rendered in the makers column + on
+   *  detail pages; absent → the accent bar stands in. */
+  logo?: string;
   lines: ModelLine[];
 }
 

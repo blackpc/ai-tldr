@@ -32,6 +32,11 @@ function lineVersions(detail: ModelDetail): ModelEntry[] {
   return mk?.lines.find((l) => l.id === detail.line)?.versions ?? [];
 }
 
+/** The maker's self-hosted brand logo, if one is on file. */
+function makerLogo(detail: ModelDetail): string | undefined {
+  return DATA.makers.find((m) => m.id === detail.maker)?.logo;
+}
+
 /** Newer = the next newer version, older = the next older version, within the
  *  line (the registry stores versions newest-first). */
 function prevNext(detail: ModelDetail): { newer?: ModelEntry; older?: ModelEntry } {
@@ -277,7 +282,14 @@ export function ModelDetailPage({ detail }: { detail: ModelDetail }) {
             <span className="lrn-crumb-here" aria-current="page">{detail.name}</span>
           </span>
         </nav>
-        <h1 className="lrn-art-title">{detail.name}</h1>
+        <div className="mdl-art-headrow">
+          {makerLogo(detail) && (
+            <span className="reg-mlogo mdl-art-logo" aria-hidden="true">
+              <img src={makerLogo(detail)} alt="" />
+            </span>
+          )}
+          <h1 className="lrn-art-title">{detail.name}</h1>
+        </div>
         <p className="lrn-art-tagline">{detail.tagline}</p>
       </header>
 

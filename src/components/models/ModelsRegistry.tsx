@@ -66,7 +66,19 @@ interface FilteredMaker {
   blurb: string;
   accent: string;
   count: number;
+  logo?: string;
   lines: FilteredLine[];
+}
+
+/** Small square brand mark shown beside a maker. Falls back to nothing (the
+ *  accent bar carries identity) when a maker has no logo yet. */
+function MakerLogo({ logo }: { logo?: string }) {
+  if (!logo) return null;
+  return (
+    <span className="reg-mlogo" aria-hidden="true">
+      <img src={logo} alt="" loading="lazy" />
+    </span>
+  );
 }
 
 /** One version of the selected line, as a clickable card → its detail page. */
@@ -154,7 +166,7 @@ export function ModelsRegistryPage() {
           .map((l: ModelLine) => ({ id: l.id, title: l.title, blurb: l.blurb, versions: l.versions.filter(passes) }))
           .filter((l) => l.versions.length > 0);
         const count = lines.reduce((n, l) => n + l.versions.length, 0);
-        return { id: mk.id, title: mk.title, blurb: mk.blurb, accent: accentOf(i), count, lines };
+        return { id: mk.id, title: mk.title, blurb: mk.blurb, accent: accentOf(i), count, logo: mk.logo, lines };
       })
       .filter((mk) => mk.lines.length > 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -265,6 +277,7 @@ export function ModelsRegistryPage() {
                   aria-current={mk.id === maker.id}
                 >
                   <span className="reg-mbar" aria-hidden="true" />
+                  <MakerLogo logo={mk.logo} />
                   <span className="reg-mname">{mk.title}</span>
                   <span className="reg-mn">{mk.count}</span>
                   <span className="reg-marr" aria-hidden="true">›</span>
@@ -276,7 +289,10 @@ export function ModelsRegistryPage() {
           {/* Column 2 — lines of the selected maker */}
           <div className="reg-mcol reg-mcol-lines" style={{ ["--cat" as string]: maker.accent }}>
             <div className="reg-msticky">
-              <div className="reg-mhdr">{maker.title}</div>
+              <div className="reg-mhdr reg-mhdr-maker">
+                <MakerLogo logo={maker.logo} />
+                {maker.title}
+              </div>
               {maker.lines.map((l) => (
                 <button
                   key={l.id}

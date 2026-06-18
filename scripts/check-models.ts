@@ -59,6 +59,10 @@ for (const mk of registry.makers ?? []) {
   makerCount++;
   if (!mk.id || !mk.title) err("registry", `maker missing id/title: ${JSON.stringify(mk.id)}`);
   if (typeof mk.blurb !== "string") err(mk.id, "maker.blurb must be a string");
+  if (mk.logo) {
+    if (!mk.logo.startsWith("/")) err(mk.id, `maker.logo must be a site-rooted path: ${mk.logo}`);
+    else if (!existsSync(join(PUBLIC_DIR, mk.logo))) err(mk.id, `maker.logo "${mk.logo}" — file not found in public/`);
+  }
   if (!Array.isArray(mk.lines) || mk.lines.length === 0) {
     err(mk.id, "maker.lines must be a non-empty array");
     continue;
