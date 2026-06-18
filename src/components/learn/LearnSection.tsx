@@ -216,7 +216,7 @@ export default function LearnSection({
       );
     } else if (route.kind === "learn-landscape") {
       setPageMeta(
-        "AI Tooling Landscape — Open-Source Libraries & Frameworks | AI/TLDR",
+        "Open-Source AI Tools — Libraries & Frameworks | AI/TLDR",
         "A browsable map of the open-source AI stack: runtimes, agents, RAG, vector databases, fine-tuning, eval, serving and more — grouped by category, ranked by GitHub stars.",
         learnLandscapePath,
       );

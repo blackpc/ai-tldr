@@ -438,7 +438,7 @@ function renderJsonLdStats(): string {
     keywords:
       "AI releases, AI statistics, AI release tracker, open-source AI tools, AI models",
     measurementTechnique:
-      "Aggregated from the AI/TLDR verified release feed and open-source landscape.",
+      "Aggregated from the AI/TLDR verified release feed and open-source AI tools directory.",
     variableMeasured: [
       "AI releases tracked",
       "AI Release Velocity Index (releases per week)",
@@ -1428,7 +1428,7 @@ function renderLearnCrossLinks(item: ReleaseItem): string {
     .join("");
   const evergreen =
     `<li><a href="/learn/">Learn AI — a plain-English encyclopedia</a></li>` +
-    `<li><a href="/learn/landscape/">The open-source AI landscape</a></li>` +
+    `<li><a href="/learn/landscape/">The open-source AI tools directory</a></li>` +
     `<li><a href="/models/">The LLM registry — compare AI models</a></li>` +
     `<li><a href="/stats/">AI Release Index — live release stats</a></li>`;
   return (

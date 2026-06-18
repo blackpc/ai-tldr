@@ -224,7 +224,7 @@ export function LearnLandscapePage() {
       {/* One row: title · search · sort · stats */}
       <div className="lrn-ls-bar">
         <h1 className="lrn-ls-title">
-          AI Tooling <span className="lrn-ls-title-accent">Landscape</span>
+          Open-Source AI <span className="lrn-ls-title-accent">Tools</span>
         </h1>
         <label className="lrn-ls-search">
           <span className="lrn-ls-search-ic" aria-hidden="true">

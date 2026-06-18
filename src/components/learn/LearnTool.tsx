@@ -97,7 +97,7 @@ export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
         <Breadcrumbs
           trail={[
             { label: "LEARN", href: learnHubPath },
-            { label: "Landscape", href: learnLandscapePath },
+            { label: "Tools", href: learnLandscapePath },
             { label: detail.name },
           ]}
         />
@@ -322,7 +322,7 @@ export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
 
       <nav className="lrn-pn" aria-label="Back to the landscape">
         <a className="lrn-pn-link lrn-pn-prev" href={learnLandscapePath} data-internal="true">
-          <span className="lrn-pn-dir">← LANDSCAPE</span>
+          <span className="lrn-pn-dir">← AI TOOLS</span>
           <span className="lrn-pn-title">All open-source AI tools</span>
         </a>
         <span className="lrn-pn-spacer" />

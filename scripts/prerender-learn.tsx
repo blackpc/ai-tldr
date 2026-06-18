@@ -350,7 +350,7 @@ export async function prerenderLearn(opts: {
   );
   const lsMeta: LearnPageMeta = {
     title:
-      "AI Tooling Landscape — Open-Source Libraries & Frameworks | AI/TLDR",
+      "Open-Source AI Tools — Libraries & Frameworks | AI/TLDR",
     description:
       "A browsable map of the open-source AI stack: runtimes, agents, RAG, vector databases, fine-tuning, eval, serving and more — grouped by category, ranked by GitHub stars.",
     canonical: `${siteUrl}${lsPath}`,
@@ -363,7 +363,7 @@ export async function prerenderLearn(opts: {
       "@type": "CollectionPage",
       "@id": `${siteUrl}${lsPath}#webpage`,
       url: `${siteUrl}${lsPath}`,
-      name: "AI Tooling Landscape",
+      name: "Open-Source AI Tools",
       description: lsMeta.description,
       inLanguage: "en-US",
       isPartOf: { "@id": `${siteUrl}/#website` },
@@ -383,7 +383,7 @@ export async function prerenderLearn(opts: {
     breadcrumbLd(wrapJsonLd, siteUrl, [
       { name: "AI/TLDR", path: "/" },
       { name: "Learn AI", path: learnHubPath },
-      { name: "Landscape", path: lsPath },
+      { name: "Tools", path: lsPath },
     ]),
   ].join("\n    ");
   await writeHtml(
@@ -646,7 +646,7 @@ export async function prerenderLearn(opts: {
       breadcrumbLd(wrapJsonLd, siteUrl, [
         { name: "AI/TLDR", path: "/" },
         { name: "Learn AI", path: learnHubPath },
-        { name: "Landscape", path: learnLandscapePath },
+        { name: "Tools", path: learnLandscapePath },
         { name: detail.name, path: tp },
       ]),
     ].join("\n    ");

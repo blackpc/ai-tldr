@@ -144,7 +144,7 @@ export function LearnHubPage() {
               <TreeGlyph />
             </span>
             <span className="lrn-hub-landcta-tx">
-              <span className="lrn-hub-landcta-lead">Open-Source Landscape</span>
+              <span className="lrn-hub-landcta-lead">Open-Source AI Tools</span>
               <span className="lrn-hub-landcta-sub">
                 every AI tool &amp; framework, by category — with live GitHub stars
               </span>

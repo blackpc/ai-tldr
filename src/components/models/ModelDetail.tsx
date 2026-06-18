@@ -168,7 +168,7 @@ export function ModelDetailPage({ detail }: { detail: ModelDetail }) {
       <header className="lrn-art-head">
         <nav className="lrn-crumbs" aria-label="Breadcrumb">
           <span className="lrn-crumb">
-            <a href="/models/" data-internal="true">MODELS</a>
+            <a href="/models/" data-internal="true">LLMS</a>
           </span>
           <span className="lrn-crumb">
             <span className="lrn-crumb-sep" aria-hidden="true">/</span>

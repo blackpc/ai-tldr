@@ -695,7 +695,7 @@ function App() {
                 goLearnPath("/learn/landscape/");
               }}
             >
-              <span className="nav-link-lbl">LANDSCAPE</span>
+              <span className="nav-link-lbl">TOOLS</span>
             </button>
             <button
               type="button"
@@ -705,7 +705,7 @@ function App() {
                 goModelsPath("/models/");
               }}
             >
-              <span className="nav-link-lbl">MODELS</span>
+              <span className="nav-link-lbl">LLMS</span>
             </button>
             <button
               type="button"
