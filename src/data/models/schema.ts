@@ -102,6 +102,50 @@ export interface ModelBenchmark {
   source: string;
 }
 
+/**
+ * A benchmark COMPARISON the maker published at launch — the chart that sets
+ * this model against named peers. A lone bar says "84%"; this says "84% vs the
+ * field", which is the whole point of a benchmark. Two shapes, both optional,
+ * both source-cited (zero-hallucination — never our own numbers, only what the
+ * maker published):
+ *
+ *   - `comparisonFigures` — the maker's OWN published chart IMAGE(S), shown
+ *     verbatim on a plate with a credit + source link. This is the literal
+ *     graphic OpenAI / xAI / Mistral / Meta put in their launch post.
+ *   - `comparisonTable` — the published comparison transcribed as numbers, this
+ *     model's column highlighted against named competitors. Used when the maker
+ *     gave a table rather than an image (Anthropic, Google), and as the
+ *     accessible, crawlable companion to a figure.
+ */
+export interface ModelBenchmarkFigure {
+  /** Self-hosted "/models-media/<slug>-cmp-N.png" (preferred) or a verified
+   *  external https image asset, confirmed live + depicting the comparison. */
+  url: string;
+  /** Describes what the chart shows (this model vs which peers, on what). */
+  alt: string;
+  /** Optional one-line caption under the plate. */
+  caption?: string;
+  /** Attribution to whoever published it, e.g. "OpenAI", "xAI". */
+  credit?: string;
+  /** Launch-post / source URL the figure came from — MUST be in `links[]`. */
+  source: string;
+}
+
+/** A published benchmark comparison transcribed as a numeric table: this model
+ *  set against named competitors, exactly as the maker reported it. */
+export interface ModelComparisonTable {
+  /** One short framing line, e.g. "Claude Opus 4.8 vs leading models". */
+  caption?: string;
+  /** Column model names, left to right — MUST include this model. */
+  models: string[];
+  /** Index in `models` that IS this page's model (its column is highlighted). */
+  subject: number;
+  /** One row per benchmark. `scores[i]` aligns with `models[i]`; null → "—". */
+  rows: { benchmark: string; unit?: string; scores: (number | string | null)[] }[];
+  /** Source URL the figures were read from — MUST be present in `links[]`. */
+  source: string;
+}
+
 /** A provider that serves the model via API. */
 export interface ModelApi {
   /** Provider name, e.g. "Anthropic API", "OpenRouter", "Together". */
@@ -187,6 +231,10 @@ export interface ModelDetail {
   strengths: string[];
   useCases: string[];
   benchmarks?: ModelBenchmark[];
+  /** Maker-published comparison chart image(s) — this model vs named peers. */
+  comparisonFigures?: ModelBenchmarkFigure[];
+  /** Maker-published comparison transcribed as a numeric table. */
+  comparisonTable?: ModelComparisonTable;
   pricing?: ModelPricing;
   apis?: ModelApi[];
   links: ModelLink[];

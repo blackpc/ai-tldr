@@ -107,6 +107,27 @@ Benchmark `score` must be 0–`max` (no Elo/throughput in the bar chart).
 demoted automatically. But edit its blurb/overview if it used time-relative
 wording ("Current Flash…") so it now reads as a dated fact.
 
+**d. Add the published benchmark COMPARISON.** A lone benchmark bar ("84%") is
+weak — what readers want is this model vs the field, which is exactly what the
+maker publishes at launch. Capture whichever of these the source actually has
+(both is best), each source cited in `links[]`:
+
+- `comparisonTable` (PREFERRED — reliable + crawlable): the maker's comparison
+  transcribed as numbers. `{ models: [<names incl. this one>], subject: <index
+  of this model>, rows: [{ benchmark, unit?, scores: [aligned 1:1 with models,
+  null for a blank cell] }], source }`. Transcribe ONLY figures that literally
+  appear in the cited source — never fill a competitor cell from memory. If you
+  can't read an exact number, use null.
+- `comparisonFigures`: the maker's OWN published chart image(s).
+  `[{ url, alt, caption?, credit, source }]`. `url` is either a self-hosted
+  `/models-media/<slug>-cmp-N.<ext>` (download the real chart with
+  `curl` into `public/models-media/` first) or a verified **https** vendor/CDN
+  image that you confirmed is live AND is the benchmark chart (not a hero/og
+  image, logo, or screenshot of prose). `check-models.ts` requires self-hosted
+  files to exist and every `source` to be in `links[]`.
+
+Skipping is fine when the maker published no comparison — never fabricate one.
+
 ### 2. Add missing notable tools
 
 From the tool-gap candidates, pick the genuinely notable open-source tools we
@@ -126,7 +147,10 @@ language. Ground every step in the project's own docs.
 ### 3. Update materially-changed entries
 
 Apply verified price/benchmark/status changes to existing detail files, keeping
-every new number's source in `links[]`.
+every new number's source in `links[]`. If a flagship you're already touching
+has benchmarks but no `comparisonTable`/`comparisonFigures`, backfill the
+published comparison (step 1.d) while you're there — but don't go hunting beyond
+the entries this run already touches.
 
 ### 4. Validate (this is your gate — do NOT skip)
 

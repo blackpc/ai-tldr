@@ -17,7 +17,7 @@
  * regenerates src/data/models/count.json (the nav badge) — keeps the registry
  * out of the main bundle, like check-learn does for the Learn count.
  */
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -27,6 +27,7 @@ import type { ModelRegistry, ModelDetail, ModelTag, ModelLinkKind } from "../src
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
 const MODELS_DIR = join(ROOT, "src", "data", "models", "models");
+const PUBLIC_DIR = join(ROOT, "public");
 const COUNT_FILE = join(ROOT, "src", "data", "models", "count.json");
 const REGISTRY_FILE = join(ROOT, "src", "data", "models", "registry.json");
 
@@ -143,6 +144,41 @@ for (const file of detailFiles) {
     const max = b.max ?? 100;
     if (typeof b.score !== "number" || !Number.isFinite(b.score)) err(scope, `${at}.score must be finite (got ${b.score})`);
     else if (b.score < 0 || b.score > max) err(scope, `${at}.score ${b.score} outside 0..${max}`);
+  }
+
+  // comparison figures — maker-published chart images. Source must be cited;
+  // self-hosted files must actually exist on disk (a 404'd chart is worse than
+  // none); external assets must be https.
+  for (const [fi, f] of (d.comparisonFigures ?? []).entries()) {
+    const at = `comparisonFigures[${fi}]`;
+    if (!f.url) err(scope, `${at}.url required`);
+    if (!f.alt) err(scope, `${at}.alt required (describe what the chart shows)`);
+    if (!f.source || !linkUrls.has(f.source.trim()))
+      err(scope, `${at}.source "${f.source}" must be present in links[] (zero-hallucination)`);
+    if (f.url?.startsWith("/")) {
+      if (!existsSync(join(PUBLIC_DIR, f.url))) err(scope, `${at}.url "${f.url}" — file not found in public/`);
+    } else if (f.url && !/^https:\/\//.test(f.url)) {
+      err(scope, `${at}.url must be a site-rooted path or an https URL: ${f.url}`);
+    }
+  }
+
+  // comparison table — published numbers, this model vs named peers. Every row
+  // must align with the model columns and the source must be cited.
+  if (d.comparisonTable) {
+    const t = d.comparisonTable;
+    if (!Array.isArray(t.models) || t.models.length < 2)
+      err(scope, "comparisonTable.models must list ≥2 model names (subject + ≥1 peer)");
+    if (typeof t.subject !== "number" || t.subject < 0 || t.subject >= (t.models?.length ?? 0))
+      err(scope, `comparisonTable.subject ${t.subject} out of range 0..${(t.models?.length ?? 1) - 1}`);
+    if (!Array.isArray(t.rows) || t.rows.length === 0)
+      err(scope, "comparisonTable.rows must be a non-empty array");
+    for (const [ri, r] of (t.rows ?? []).entries()) {
+      if (!r.benchmark) err(scope, `comparisonTable.rows[${ri}].benchmark required`);
+      if (!Array.isArray(r.scores) || r.scores.length !== (t.models?.length ?? 0))
+        err(scope, `comparisonTable.rows[${ri}].scores must have one value per model (${t.models?.length})`);
+    }
+    if (!t.source || !linkUrls.has(t.source.trim()))
+      err(scope, `comparisonTable.source "${t.source}" must be present in links[] (zero-hallucination)`);
   }
 
   // pricing — source must be cited

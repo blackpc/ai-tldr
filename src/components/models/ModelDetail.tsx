@@ -77,15 +77,92 @@ function hostOf(url: string): string {
   }
 }
 
-/** Benchmark scores as a gridded horizontal bar chart (0–100 scale, 25-point
- *  gridlines). Lives inside a standard lrn-section; only the bars are bespoke. */
-function BenchChart({ detail }: { detail: ModelDetail }) {
-  if (!detail.benchmarks?.length) return null;
+/** True when the page has any benchmark content worth a "Benchmarks" section. */
+function hasBenchmarks(detail: ModelDetail): boolean {
+  return Boolean(
+    detail.comparisonFigures?.length ||
+      detail.comparisonTable?.rows?.length ||
+      detail.benchmarks?.length,
+  );
+}
+
+/** The maker's own published comparison chart(s), shown verbatim on a plate
+ *  (same figure primitive as a Learn article image) with a credit + source. */
+function ComparisonFigures({ detail }: { detail: ModelDetail }) {
+  if (!detail.comparisonFigures?.length) return null;
   return (
-    <section id="benchmarks" className="lrn-section" aria-labelledby="benchmarks-h">
-      <h2 className="lrn-h2" id="benchmarks-h">
-        <span className="lrn-h2-mark" aria-hidden="true">//</span> Benchmarks
-      </h2>
+    <>
+      {detail.comparisonFigures.map((f, i) => (
+        <figure className="lrn-image" key={i}>
+          <a href={f.source} target="_blank" rel="noreferrer noopener">
+            <img src={f.url} alt={f.alt} loading="lazy" />
+          </a>
+          <figcaption>
+            {f.caption ?? f.alt}
+            {f.credit && <span className="lrn-image-credit"> — {f.credit}</span>}
+          </figcaption>
+        </figure>
+      ))}
+    </>
+  );
+}
+
+/** The published comparison transcribed as numbers — benchmarks down the side,
+ *  models across the top, this model's column highlighted. Reuses the shared
+ *  lrn-table/lrn-cmp look; the subject column gets .mdl-cmp-col. */
+function ComparisonTable({ detail }: { detail: ModelDetail }) {
+  const t = detail.comparisonTable;
+  if (!t?.rows?.length) return null;
+  const subj = t.subject;
+  return (
+    <div className="mdl-cmp-block">
+      {t.caption && <p className="lrn-p">{t.caption}</p>}
+      <div className="lrn-table-wrap">
+        <table className="lrn-table lrn-cmp mdl-cmp-table">
+          <thead>
+            <tr>
+              <th>Benchmark</th>
+              {t.models.map((m, i) => (
+                <th key={i} className={i === subj ? "mdl-cmp-col" : undefined}>
+                  {m}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {t.rows.map((r) => (
+              <tr key={r.benchmark}>
+                <td className="lrn-cmp-name">{r.benchmark}</td>
+                {r.scores.map((s, i) => (
+                  <td key={i} className={i === subj ? "mdl-cmp-col" : undefined}>
+                    {s == null ? "—" : `${s}${!r.unit ? "" : r.unit === "%" ? "%" : ` ${r.unit}`}`}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="lrn-p">
+        <a href={t.source} target="_blank" rel="noreferrer noopener">
+          Comparison source ↗
+        </a>
+      </p>
+    </div>
+  );
+}
+
+/** This model's own published scores as a gridded horizontal bar chart (0–100
+ *  scale). An absolute scorecard — the comparison above is what sets it against
+ *  peers; these bars link each number to its source. */
+function BenchBars({ detail }: { detail: ModelDetail }) {
+  if (!detail.benchmarks?.length) return null;
+  const hasComparison = Boolean(
+    detail.comparisonFigures?.length || detail.comparisonTable?.rows?.length,
+  );
+  return (
+    <>
+      {hasComparison && <h3 className="lrn-h3">This model&apos;s scores</h3>}
       <ol className="mdl-chart" aria-label="Benchmark scores">
         {detail.benchmarks.map((b) => {
           const max = b.max ?? 100;
@@ -117,6 +194,23 @@ function BenchChart({ detail }: { detail: ModelDetail }) {
         Scores on a 0–100 scale (25-point gridlines); higher is better. Each
         benchmark links to its published source.
       </p>
+    </>
+  );
+}
+
+/** Benchmarks section: the maker's published comparison first (chart image
+ *  and/or numeric table — this model against named peers), then this model's
+ *  own absolute scores. Renders only if at least one of those exists. */
+function BenchSection({ detail }: { detail: ModelDetail }) {
+  if (!hasBenchmarks(detail)) return null;
+  return (
+    <section id="benchmarks" className="lrn-section" aria-labelledby="benchmarks-h">
+      <h2 className="lrn-h2" id="benchmarks-h">
+        <span className="lrn-h2-mark" aria-hidden="true">//</span> Benchmarks
+      </h2>
+      <ComparisonFigures detail={detail} />
+      <ComparisonTable detail={detail} />
+      <BenchBars detail={detail} />
     </section>
   );
 }
@@ -142,7 +236,7 @@ export function ModelDetailPage({ detail }: { detail: ModelDetail }) {
 
   const toc = [
     { id: "overview", title: "Overview" },
-    ...(detail.benchmarks?.length ? [{ id: "benchmarks", title: "Benchmarks" }] : []),
+    ...(hasBenchmarks(detail) ? [{ id: "benchmarks", title: "Benchmarks" }] : []),
     ...(detail.pricing ? [{ id: "pricing", title: "Pricing" }] : []),
     ...(detail.strengths.length ? [{ id: "strengths", title: "Strengths" }] : []),
     ...(detail.useCases.length ? [{ id: "use-cases", title: "Best for" }] : []),
@@ -221,7 +315,7 @@ export function ModelDetailPage({ detail }: { detail: ModelDetail }) {
             </div>
           </section>
 
-          <BenchChart detail={detail} />
+          <BenchSection detail={detail} />
 
           {detail.pricing && (
             <section id="pricing" className="lrn-section" aria-labelledby="pricing-h">
