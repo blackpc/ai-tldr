@@ -580,3 +580,51 @@ that's a signal to add it to `src/data/models/`, not to fake a link.
 **Status:** Applied (registry + prerender + validator + cross-linking + prompt).
 Watch: if a model page ships a benchmark/pricing source not in its links[], the
 build fails in check-models — that's the guard; fix the data, don't relax it.
+
+## 2026-06-18-A — registry/Tools went STALE: nothing maintained them after launch
+
+**Trigger:** User: "does our sweep update LLMs/Tools when new is published? for
+some models we write Latest/Current/etc — such things must be updated if a new
+model arrives (or tool)." Correct: the 2h feed sweep only commits
+`releases.json`/`sweeps.json`/`github-stars.json` and `git checkout -- .`
+discards everything else — so it CANNOT maintain `/models` or `/learn/landscape`
+content. Tool STARS auto-refresh; new tools were only flagged advisory; the
+registry was untouched. 88 hand-set `current:true` flags + ~12 "Current/Latest"
+blurbs would rot the moment a newer model shipped.
+
+**Fix — a NEW separate daily job + structural anti-rot (NOT bolted onto the 2h
+feed sweep — different rules: evergreen pages, no 72h cap):**
+- `prompts/maintain-registry.md` — SSoT for the daily sweep. Adds newly-shipped
+  models + notable missing OSS tools + verified price/benchmark/status changes.
+  Same scar discipline as the feed sweep: zero-hallucination, source-in-links
+  enforced by check-models/check-landscape, NO padding (a no-op day is correct),
+  per-run caps are ceilings not targets, evergreen wording only.
+- `.github/workflows/maintain-registry.yml` — daily `30 5 * * *` + dispatch.
+  Discovers tool gaps → builds freshness context → runs Claude → `bun run build`
+  GATE (invalid data fails the job, never commits) → commits ONLY the catalog
+  allowlist (`registry.json`, `models/`, `landscape.json`, `tools/`,
+  `github-stars.json`) then `git checkout -- .` (the 06-17-B discard guard) →
+  rebase-with-retry push.
+- `scripts/registry-freshness.ts` — read-only context seed (current flagship per
+  line + tool gaps). Framed "where to look", explicitly NOT a quota (the 04-28
+  padding scar): recording our current state can never pressure an add.
+- `scripts/check-models.ts` — STRUCTURAL anti-rot: (1) `current` is now DERIVED
+  per line at build (advance-only, **released-gated**: only a GA, non-future,
+  strictly-newer sibling can take the badge — a naive newest-date rule promoted
+  Preview/Announced/Superseded entries like gemini-3-5-pro / gpt-5-3-codex-spark,
+  so it must check detail `status`). Adding a GA newer model now auto-demotes the
+  old current. (2) Soft-WARN (never fail) when a registry blurb uses time-relative
+  words ("current/latest/newest") — surfaces the ~10 rotting blurbs for the daily
+  sweep to fix; cosmetic, so soft like the feed sweep's title-length warn.
+
+**Deliberately NOT done:** did not give the 2h feed sweep write-access to the
+catalog (keeps its blast radius tiny); did not hard-fail the build on
+time-relative wording (would break the build on 10 existing blurbs — soft-warn
+instead); did not auto-flip `current` by raw date (regresses curated flags —
+released-gate required).
+
+**Status:** Applied (prompt + workflow + 2 scripts). First run should be
+triggered by hand (`workflow_dispatch`) and WATCHED before trusting the cron —
+confirm it commits valid catalog data and the build gate holds. If the daily
+sweep ever commits a model/tool whose benchmark/price has no source link, the
+build gate fails — that's the guard; fix the data, never relax it.

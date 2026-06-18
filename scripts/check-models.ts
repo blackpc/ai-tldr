@@ -190,23 +190,71 @@ if (errors.length > 0) {
   process.exit(1);
 }
 
-// Mark each tile's `rich` flag from its detail file (has benchmarks/pricing) so
-// the hub can badge fully-researched versions, then persist count.json. The
-// detail files are the source of truth; the registry tree is curated, so we
-// don't rewrite it here beyond the derived `rich` flag.
+// Derive two flags onto the registry tree (the detail files / version dates are
+// the source of truth), then persist count.json:
+//   - `current`: the line's newest version. DERIVED so it can't go stale —
+//     adding a newer-dated version auto-demotes the old "current" (this is what
+//     keeps the daily registry-maintenance sweep honest). Advance-only: current
+//     only ever moves to a STRICTLY-newer-dated sibling, never backward, so a
+//     correct hand-set flag is never regressed by a missing/odd date.
+//   - `rich`: the version has a fully-researched page (benchmarks/pricing).
+// `date` is "YYYY-MM-DD" or "YYYY-MM"; pad the latter so string compare is
+// chronological. Missing date sorts oldest.
+const dkey = (d?: string) => (!d ? "" : d.length === 7 ? `${d}-01` : d);
+const TODAY = new Date().toISOString().slice(0, 10);
+// A version may only BECOME current if it's actually RELEASED — the registry is
+// full of preview / announced / research-preview / superseded / retired entries
+// (and gemini-3-1-pro is even a curated "current" despite Preview status), so a
+// naive newest-date rule would promote an unshipped model. Gate on the detail's
+// status + a non-future date. The existing current stays the baseline even if
+// it's itself a preview; we only ADVANCE to a released, strictly-newer sibling.
+const NOT_RELEASED =
+  /preview|announce|supersed|deprecat|retire|upcoming|unreleased|not released|coming (?:next|soon|month)/i;
+const isReleased = (slug: string, date?: string) => {
+  const st = detailBySlug.get(slug)?.status ?? "";
+  if (NOT_RELEASED.test(st)) return false;
+  return dkey(date) <= dkey(TODAY);
+};
+
+// Time-relative words rot on an evergreen catalog page (a "current"/"latest"
+// model is only current until the next ships). check derives `current`
+// mechanically above and the maintenance sweep is told to phrase blurbs by
+// DATE, not recency — so SOFT-warn stale wording here (cosmetic, not a
+// fabrication: never fail the build on it, same discipline as the feed sweep).
+const TIME_RELATIVE =
+  /\b(current(?:ly)?|latest|newest|most[- ]recent|now the|brand[- ]new|just (?:released|launched|shipped|out))\b/i;
+const rotWarnings: string[] = [];
+
 let lineCount = 0;
 let dirty = false;
 for (const mk of registry.makers) {
   lineCount += mk.lines.length;
-  for (const line of mk.lines)
+  for (const line of mk.lines) {
+    // start from the existing current (or the first/newest-authored entry),
+    // then advance only to a RELEASED, strictly-newer-dated sibling.
+    let head = line.versions.find((v) => v.current) ?? line.versions[0];
+    for (const v of line.versions)
+      if (isReleased(v.slug, v.date) && dkey(v.date) > dkey(head.date)) head = v;
     for (const v of line.versions) {
+      const wantCurrent = v === head;
+      if (wantCurrent && !v.current) { v.current = true; dirty = true; }
+      else if (!wantCurrent && v.current) { delete v.current; dirty = true; }
+
       const d = detailBySlug.get(v.slug);
       const rich = !!(d?.benchmarks?.length || d?.pricing);
       if (rich && !v.rich) { v.rich = true; dirty = true; }
       else if (!rich && v.rich) { delete v.rich; dirty = true; }
+
+      if (TIME_RELATIVE.test(v.blurb))
+        rotWarnings.push(`  [${v.slug}] blurb uses time-relative wording (rots on evergreen page): "${v.blurb}"`);
     }
+  }
 }
 if (dirty) writeFileSync(REGISTRY_FILE, JSON.stringify(registry, null, 2) + "\n");
 writeFileSync(COUNT_FILE, JSON.stringify({ models: tileCount, makers: makerCount, lines: lineCount }, null, 2) + "\n");
 
+if (rotWarnings.length > 0) {
+  console.warn(`models WARN — ${rotWarnings.length} blurb(s) use time-relative wording (use dated phrasing instead):`);
+  console.warn(rotWarnings.join("\n"));
+}
 console.log(`models ok — ${tileCount} versions across ${lineCount} lines, ${makerCount} makers, ${detailSlugs.size} detail files; count.json refreshed`);

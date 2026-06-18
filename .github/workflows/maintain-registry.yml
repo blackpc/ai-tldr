@@ -1,0 +1,161 @@
+name: Maintain LLMs + Tools (daily)
+
+# Daily evergreen-catalog maintenance — SEPARATE from the 2h release sweep.
+#
+# Keeps the /models LLM registry and /learn/landscape (Tools) directory fresh:
+# adds newly-shipped models + notable missing open-source tools, and applies
+# verified price/benchmark/status changes to existing entries. Unlike the feed
+# sweep these are evergreen pages, so there is NO 72h news cap.
+#
+# What it does:
+#   1. Checks out the repo, installs deps
+#   2. Discovers missing popular tools (writes .claude/tmp/landscape-gaps.json)
+#   3. Builds the registry-freshness context the agent reads (current flagship
+#      per line + tool gaps) and prints it into the run summary
+#   4. Runs Claude Code against prompts/maintain-registry.md (web-verify every
+#      fact; add/update registry.json + landscape.json + per-entry detail files)
+#   5. Runs `bun run build` to PROVE the new data validates (check-models +
+#      check-landscape). If it doesn't, the job fails and nothing is committed.
+#   6. Commits the allow-listed catalog files and pushes (rebase-with-retry)
+#
+# Required secret: CLAUDE_CODE_OAUTH_TOKEN (same as update-releases.yml).
+
+on:
+  schedule:
+    # once a day at 05:30 UTC — offset from the 2h feed sweep (minute 0)
+    - cron: "30 5 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: maintain-registry
+  cancel-in-progress: false
+
+jobs:
+  maintain:
+    runs-on: ubuntu-latest
+    # One 40m sweep step + ~10m for checkout / install / discovery / build /
+    # commit / push.
+    timeout-minutes: 55
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Discover missing popular tools
+        # Writes .claude/tmp/landscape-gaps.json (the tool candidates the agent
+        # reads) and prints the gap list into the run summary. Best-effort.
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          GAP_MIN_STARS=15000 bun scripts/discover-landscape-gaps.ts --json || true
+          {
+            echo '## Tool-gap candidates (popular OSS AI tools we do not list)'
+            echo '```'
+            GAP_MIN_STARS=15000 bun scripts/discover-landscape-gaps.ts 2>&1 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build registry-freshness context
+        # Writes .claude/tmp/registry-context.json (current flagship per line +
+        # tool gaps) the agent reads, and mirrors it into the run summary.
+        run: |
+          {
+            echo '## Registry freshness (current flagship per line)'
+            echo '```'
+            bun scripts/registry-freshness.ts
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Capture current date
+        id: now
+        run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Run maintenance sweep with Claude Code
+        uses: anthropics/claude-code-action@v1
+        timeout-minutes: 40
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          show_full_output: "true"
+          display_report: "true"
+          prompt: |
+            You are the AI/TLDR daily LLMs + Tools maintenance sweeper running
+            in GitHub Actions. Working dir is the repo root.
+
+            TODAY'S DATE IS ${{ steps.now.outputs.date }} (real UTC, not a
+            fixture). Trust the system clock and what WebFetch returns even if
+            releases look unfamiliar — your training data predates today.
+
+            Read `prompts/maintain-registry.md` and follow it exactly. Verify
+            every fact from a primary source. If nothing has genuinely shipped
+            or changed, change nothing. Do NOT commit or push — the next
+            workflow step does that.
+          claude_args: |
+            --model claude-opus-4-7
+            --verbose
+            --max-turns 6000
+            --permission-mode acceptEdits
+            --allowedTools "WebSearch,WebFetch,Read,Write,Edit,Bash(bun:*),Bash(ls:*),Bash(cat:*),Bash(grep:*),Bash(curl:*),Bash(gh:*),Bash(rm:*)"
+
+      - name: Validate the new catalog (gate)
+        # Backstop: re-run the full build so check-models + check-landscape PROVE
+        # the agent's edits are valid before we commit. A failure here fails the
+        # job, so invalid data is never pushed. (Also regenerates derived files,
+        # which the commit step discards.)
+        run: bun run build
+
+      - name: Commit and push if the catalog changed
+        id: commit
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # The evergreen catalog files only. Detail dirs catch new + modified
+          # files; registry.json carries the build-derived current/rich flags.
+          FILES="src/data/models/registry.json src/data/models/models src/data/learn/landscape.json src/data/learn/tools src/data/learn/github-stars.json"
+          if [[ -z "$(git status --porcelain $FILES)" ]]; then
+            echo "No catalog changes — nothing to commit."
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git config user.name  "ai-tldr-bot"
+          git config user.email "41898282+ai-tldr-bot@users.noreply.github.com"
+          git add $FILES
+          git commit -m "feat(catalog): daily LLMs + Tools maintenance $(date -u +%Y-%m-%dT%H:%MZ)
+
+          Added/updated models in src/data/models and tools in
+          src/data/learn via prompts/maintain-registry.md (web-verified).
+
+          Co-Authored-By: Claude Code Action <noreply@anthropic.com>"
+          # The validation build regenerated DERIVED tracked files (stats.json,
+          # models/count.json, learn/{count,article-images}.json). Discard every
+          # stray unstaged change so the rebase starts clean — the intended files
+          # are already in the commit. (Same guard as the feed sweep, 06-17-B.)
+          git checkout -- . 2>/dev/null || true
+          REMOTE="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          for attempt in 1 2 3 4 5; do
+            git fetch "$REMOTE" "$GITHUB_REF_NAME"
+            git rebase "FETCH_HEAD"
+            if git push "$REMOTE" "HEAD:${GITHUB_REF_NAME}"; then
+              echo "pushed=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "Push attempt $attempt rejected — retrying after rebase."
+            sleep 5
+          done
+          echo "Push failed after 5 attempts." >&2
+          exit 1
