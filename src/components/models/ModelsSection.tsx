@@ -8,6 +8,12 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+// The model DETAIL page reuses the landscape/article layout primitives
+// (lrn-article, lrn-tool-layout, lrn-section, lrn-h2, lrn-table, lrn-pn …) so
+// it shares the EXACT same styling as /learn/landscape and can't drift. Those
+// rules live in learn.css, so the models chunk imports it. No class names
+// collide (registry board uses reg-*, detail extras use mdl-*).
+import "../learn/learn.css";
 import "./models.css";
 
 import type { ModelDetail } from "../../data/models/schema";

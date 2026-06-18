@@ -1,7 +1,17 @@
 /**
  * /models/<slug> — a single LLM's detail page (Artificial-Analysis style):
- * specs, benchmark bars, pricing, API providers, and every useful link.
- * Pure / SSR-safe — also rendered by prerender-models.tsx.
+ * specs, a benchmark graph, pricing, API providers, the full version lineage
+ * and every useful link.
+ *
+ * CONSISTENCY: this page is built from the SAME layout primitives as a
+ * /learn/landscape tool page and a Learn article (lrn-article → lrn-art-head +
+ * lrn-tool-layout with a TOC rail and aside → lrn-section / lrn-h2 / lrn-p /
+ * lrn-list / lrn-table / lrn-pn). It reuses those exact CSS classes — defined
+ * once in learn.css, imported by the models chunk — so a model page can never
+ * drift away from the landscape look. The only model-specific styles are the
+ * benchmark chart bars (.mdl-chart*), the price emphasis (.mdl-price-*) and the
+ * "current" pill in the version table (.mdl-cmp-badge), all additive in
+ * models.css. Pure / SSR-safe — also rendered by prerender-models.tsx.
  */
 
 import registryData from "../../data/models/registry.json";
@@ -22,7 +32,7 @@ function lineVersions(detail: ModelDetail): ModelEntry[] {
   return mk?.lines.find((l) => l.id === detail.line)?.versions ?? [];
 }
 
-/** Prev = the next newer version, next = the next older version, within the
+/** Newer = the next newer version, older = the next older version, within the
  *  line (the registry stores versions newest-first). */
 function prevNext(detail: ModelDetail): { newer?: ModelEntry; older?: ModelEntry } {
   const vs = lineVersions(detail);
@@ -68,13 +78,13 @@ function hostOf(url: string): string {
 }
 
 /** Benchmark scores as a gridded horizontal bar chart (0–100 scale, 25-point
- *  gridlines). Each row links to its source. */
+ *  gridlines). Lives inside a standard lrn-section; only the bars are bespoke. */
 function BenchChart({ detail }: { detail: ModelDetail }) {
   if (!detail.benchmarks?.length) return null;
   return (
-    <section id="benchmarks" className="mdl-section" aria-labelledby="benchmarks-h">
-      <h2 className="mdl-h2" id="benchmarks-h">
-        <span className="mdl-h2-mark" aria-hidden="true">//</span> Benchmarks
+    <section id="benchmarks" className="lrn-section" aria-labelledby="benchmarks-h">
+      <h2 className="lrn-h2" id="benchmarks-h">
+        <span className="lrn-h2-mark" aria-hidden="true">//</span> Benchmarks
       </h2>
       <ol className="mdl-chart" aria-label="Benchmark scores">
         {detail.benchmarks.map((b) => {
@@ -137,56 +147,49 @@ export function ModelDetailPage({ detail }: { detail: ModelDetail }) {
     ...(detail.strengths.length ? [{ id: "strengths", title: "Strengths" }] : []),
     ...(detail.useCases.length ? [{ id: "use-cases", title: "Best for" }] : []),
     ...(detail.apis?.length ? [{ id: "access", title: "How to access" }] : []),
-    ...(versions.length > 1 || detail.versionHistory?.length
-      ? [{ id: "history", title: "Version history" }]
-      : []),
+    ...(versions.length > 1 ? [{ id: "history", title: "Version history" }] : []),
     ...(detail.faq?.length ? [{ id: "faq", title: "FAQ" }] : []),
   ];
 
-  const linksByKind = LINK_GROUP_ORDER
-    .map((kind) => ({ kind, links: detail.links.filter((l) => l.kind === kind) }))
-    .filter((g) => g.links.length > 0);
+  // Aside links: a couple of primary buttons (official site, playground), the
+  // rest as a compact reference list — ordered by kind for a stable layout.
+  const orderIdx = (k: ModelLinkKind) => LINK_GROUP_ORDER.indexOf(k);
+  const primaryLinks = [
+    detail.links.find((l) => l.kind === "official"),
+    detail.links.find((l) => l.kind === "playground"),
+  ].filter((l): l is ModelLink => Boolean(l));
+  const primaryUrls = new Set(primaryLinks.map((l) => l.url));
+  const restLinks = detail.links
+    .filter((l) => !primaryUrls.has(l.url))
+    .sort((a, b) => orderIdx(a.kind) - orderIdx(b.kind));
 
   return (
-    <article className="mdl-article">
-      <header className="mdl-head">
-        <nav className="mdl-crumbs" aria-label="Breadcrumb">
-          <a href="/models/" data-internal="true">MODELS</a>
-          <span aria-hidden="true"> › </span>
-          <a href={makerHref} data-internal="true">{detail.makerTitle}</a>
-          <span aria-hidden="true"> › </span>
-          <a href={lineHref} data-internal="true">{detail.lineTitle}</a>
-          <span aria-hidden="true"> › </span>
-          <span>{detail.name}</span>
+    <article className="lrn-article">
+      <header className="lrn-art-head">
+        <nav className="lrn-crumbs" aria-label="Breadcrumb">
+          <span className="lrn-crumb">
+            <a href="/models/" data-internal="true">MODELS</a>
+          </span>
+          <span className="lrn-crumb">
+            <span className="lrn-crumb-sep" aria-hidden="true">/</span>
+            <a href={makerHref} data-internal="true">{detail.makerTitle}</a>
+          </span>
+          <span className="lrn-crumb">
+            <span className="lrn-crumb-sep" aria-hidden="true">/</span>
+            <a href={lineHref} data-internal="true">{detail.lineTitle}</a>
+          </span>
+          <span className="lrn-crumb">
+            <span className="lrn-crumb-sep" aria-hidden="true">/</span>
+            <span className="lrn-crumb-here" aria-current="page">{detail.name}</span>
+          </span>
         </nav>
-        <h1 className="mdl-title">{detail.name}</h1>
-        <p className="mdl-tagline">{detail.tagline}</p>
-        <div className="mdl-tagrow">
-          {detail.tags.map((t) => (
-            <span className="mdl-tag" key={t}>{t}</span>
-          ))}
-        </div>
-        {(newer || older) && (
-          <div className="mdl-vnav" aria-label="Adjacent versions in this line">
-            {newer ? (
-              <a className="mdl-vnav-link" href={modelPath(newer.slug)} data-internal="true">
-                <span className="mdl-vnav-dir">← newer</span>
-                <span className="mdl-vnav-name">{newer.name}</span>
-              </a>
-            ) : <span />}
-            {older ? (
-              <a className="mdl-vnav-link mdl-vnav-older" href={modelPath(older.slug)} data-internal="true">
-                <span className="mdl-vnav-dir">older →</span>
-                <span className="mdl-vnav-name">{older.name}</span>
-              </a>
-            ) : <span />}
-          </div>
-        )}
+        <h1 className="lrn-art-title">{detail.name}</h1>
+        <p className="lrn-art-tagline">{detail.tagline}</p>
       </header>
 
-      <div className="mdl-layout">
-        <nav className="mdl-toc" aria-label="On this page">
-          <span className="mdl-toc-h">// ON THIS PAGE</span>
+      <div className="lrn-tool-layout">
+        <nav className="lrn-toc" aria-label="On this page">
+          <span className="lrn-toc-h">// ON THIS PAGE</span>
           <ol>
             {toc.map((t) => (
               <li key={t.id}>
@@ -196,82 +199,83 @@ export function ModelDetailPage({ detail }: { detail: ModelDetail }) {
           </ol>
         </nav>
 
-        <div className="mdl-content">
-          <section id="overview" className="mdl-section" aria-labelledby="overview-h">
-            <h2 className="mdl-h2" id="overview-h">
-              <span className="mdl-h2-mark" aria-hidden="true">//</span> Overview
+        <div className="lrn-art-content">
+          <section id="overview" className="lrn-section" aria-labelledby="overview-h">
+            <h2 className="lrn-h2" id="overview-h">
+              <span className="lrn-h2-mark" aria-hidden="true">//</span> Overview
             </h2>
             {detail.overview.map((p, i) => (
-              <p className="mdl-p" key={i}>{p}</p>
+              <p className="lrn-p" key={i}>{p}</p>
             ))}
-            <table className="mdl-specs">
-              <tbody>
-                {specs.map((s) => (
-                  <tr key={s.k}>
-                    <th scope="row">{s.k}</th>
-                    <td>{s.v}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="lrn-table-wrap">
+              <table className="lrn-table">
+                <tbody>
+                  {specs.map((s) => (
+                    <tr key={s.k}>
+                      <th scope="row">{s.k}</th>
+                      <td>{s.v}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </section>
 
           <BenchChart detail={detail} />
 
           {detail.pricing && (
-            <section id="pricing" className="mdl-section" aria-labelledby="pricing-h">
-              <h2 className="mdl-h2" id="pricing-h">
-                <span className="mdl-h2-mark" aria-hidden="true">//</span> Pricing
+            <section id="pricing" className="lrn-section" aria-labelledby="pricing-h">
+              <h2 className="lrn-h2" id="pricing-h">
+                <span className="lrn-h2-mark" aria-hidden="true">//</span> Pricing
               </h2>
-              <table className="mdl-pricing">
-                <tbody>
-                  {detail.pricing.input && (
-                    <tr>
-                      <th scope="row">Input</th>
-                      <td>
-                        <span className="mdl-price-amt">{detail.pricing.input}</span>{" "}
-                        <span className="mdl-price-unit">{detail.pricing.unit ?? "/ 1M tokens"}</span>
-                      </td>
-                    </tr>
-                  )}
-                  {detail.pricing.cachedInput && (
-                    <tr>
-                      <th scope="row">Cached input</th>
-                      <td>
-                        <span className="mdl-price-amt">{detail.pricing.cachedInput}</span>{" "}
-                        <span className="mdl-price-unit">{detail.pricing.unit ?? "/ 1M tokens"}</span>
-                      </td>
-                    </tr>
-                  )}
-                  {detail.pricing.output && (
-                    <tr>
-                      <th scope="row">Output</th>
-                      <td>
-                        <span className="mdl-price-amt">{detail.pricing.output}</span>{" "}
-                        <span className="mdl-price-unit">{detail.pricing.unit ?? "/ 1M tokens"}</span>
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-              {detail.pricing.note && <p className="mdl-p mdl-fine">{detail.pricing.note}</p>}
-              <a
-                className="mdl-src"
-                href={detail.pricing.source}
-                target="_blank"
-                rel="noreferrer noopener"
-              >
-                pricing source ↗
-              </a>
+              <div className="lrn-table-wrap">
+                <table className="lrn-table">
+                  <tbody>
+                    {detail.pricing.input && (
+                      <tr>
+                        <th scope="row">Input</th>
+                        <td>
+                          <span className="mdl-price-amt">{detail.pricing.input}</span>{" "}
+                          <span className="mdl-price-unit">{detail.pricing.unit ?? "/ 1M tokens"}</span>
+                        </td>
+                      </tr>
+                    )}
+                    {detail.pricing.cachedInput && (
+                      <tr>
+                        <th scope="row">Cached input</th>
+                        <td>
+                          <span className="mdl-price-amt">{detail.pricing.cachedInput}</span>{" "}
+                          <span className="mdl-price-unit">{detail.pricing.unit ?? "/ 1M tokens"}</span>
+                        </td>
+                      </tr>
+                    )}
+                    {detail.pricing.output && (
+                      <tr>
+                        <th scope="row">Output</th>
+                        <td>
+                          <span className="mdl-price-amt">{detail.pricing.output}</span>{" "}
+                          <span className="mdl-price-unit">{detail.pricing.unit ?? "/ 1M tokens"}</span>
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              {detail.pricing.note && <p className="lrn-p">{detail.pricing.note}</p>}
+              <p className="lrn-p">
+                <a href={detail.pricing.source} target="_blank" rel="noreferrer noopener">
+                  Pricing source ↗
+                </a>
+              </p>
             </section>
           )}
 
           {detail.strengths.length > 0 && (
-            <section id="strengths" className="mdl-section" aria-labelledby="strengths-h">
-              <h2 className="mdl-h2" id="strengths-h">
-                <span className="mdl-h2-mark" aria-hidden="true">//</span> Strengths
+            <section id="strengths" className="lrn-section" aria-labelledby="strengths-h">
+              <h2 className="lrn-h2" id="strengths-h">
+                <span className="lrn-h2-mark" aria-hidden="true">//</span> Strengths
               </h2>
-              <ul className="mdl-list">
+              <ul className="lrn-list">
                 {detail.strengths.map((s, i) => (
                   <li key={i}>{s}</li>
                 ))}
@@ -280,11 +284,11 @@ export function ModelDetailPage({ detail }: { detail: ModelDetail }) {
           )}
 
           {detail.useCases.length > 0 && (
-            <section id="use-cases" className="mdl-section" aria-labelledby="use-cases-h">
-              <h2 className="mdl-h2" id="use-cases-h">
-                <span className="mdl-h2-mark" aria-hidden="true">//</span> Best for
+            <section id="use-cases" className="lrn-section" aria-labelledby="use-cases-h">
+              <h2 className="lrn-h2" id="use-cases-h">
+                <span className="lrn-h2-mark" aria-hidden="true">//</span> Best for
               </h2>
-              <ul className="mdl-list">
+              <ul className="lrn-list">
                 {detail.useCases.map((u, i) => (
                   <li key={i}>{u}</li>
                 ))}
@@ -293,45 +297,47 @@ export function ModelDetailPage({ detail }: { detail: ModelDetail }) {
           )}
 
           {detail.apis && detail.apis.length > 0 && (
-            <section id="access" className="mdl-section" aria-labelledby="access-h">
-              <h2 className="mdl-h2" id="access-h">
-                <span className="mdl-h2-mark" aria-hidden="true">//</span> How to access
+            <section id="access" className="lrn-section" aria-labelledby="access-h">
+              <h2 className="lrn-h2" id="access-h">
+                <span className="lrn-h2-mark" aria-hidden="true">//</span> How to access
               </h2>
-              <table className="mdl-apis">
-                <thead>
-                  <tr>
-                    <th>Provider</th>
-                    <th>Model ID</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {detail.apis.map((a) => (
-                    <tr key={a.provider}>
-                      <td>
-                        <a href={a.url} target="_blank" rel="noreferrer noopener">
-                          {a.provider} ↗
-                        </a>
-                      </td>
-                      <td>{a.modelId ? <code className="mdl-code">{a.modelId}</code> : "—"}</td>
+              <div className="lrn-table-wrap">
+                <table className="lrn-table">
+                  <thead>
+                    <tr>
+                      <th>Provider</th>
+                      <th>Model ID</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {detail.apis.map((a) => (
+                      <tr key={a.provider}>
+                        <td>
+                          <a href={a.url} target="_blank" rel="noreferrer noopener">
+                            {a.provider} ↗
+                          </a>
+                        </td>
+                        <td>{a.modelId ? <code>{a.modelId}</code> : "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </section>
           )}
 
           {versions.length > 1 && (
-            <section id="history" className="mdl-section" aria-labelledby="history-h">
-              <h2 className="mdl-h2" id="history-h">
-                <span className="mdl-h2-mark" aria-hidden="true">//</span> {detail.lineTitle} — every version
+            <section id="history" className="lrn-section" aria-labelledby="history-h">
+              <h2 className="lrn-h2" id="history-h">
+                <span className="lrn-h2-mark" aria-hidden="true">//</span> {detail.lineTitle} — every version
               </h2>
-              <p className="mdl-p mdl-fine">
+              <p className="lrn-p">
                 The full lineage of the {detail.lineTitle} line, newest first.
                 Every version has its own page — click any to compare specs,
                 benchmarks and pricing.
               </p>
-              <div className="mdl-cmp-wrap">
-                <table className="mdl-cmp">
+              <div className="lrn-table-wrap">
+                <table className="lrn-table lrn-cmp">
                   <thead>
                     <tr><th>Version</th><th>Released</th><th>Context</th><th>License</th></tr>
                   </thead>
@@ -339,15 +345,15 @@ export function ModelDetailPage({ detail }: { detail: ModelDetail }) {
                     {versions.map((v) => {
                       const isCur = v.slug === detail.slug;
                       return (
-                        <tr key={v.slug} className={isCur ? "mdl-cmp-cur" : undefined}>
-                          <th scope="row">
+                        <tr key={v.slug} className={isCur ? "lrn-cmp-cur" : undefined}>
+                          <td className="lrn-cmp-name">
                             {isCur ? (
-                              <span className="mdl-cmp-self">{v.name}</span>
+                              <strong>{v.name}</strong>
                             ) : (
                               <a href={modelPath(v.slug)} data-internal="true">{v.name}</a>
                             )}
                             {v.current && <span className="mdl-cmp-badge">current</span>}
-                          </th>
+                          </td>
                           <td>{v.date ?? "—"}</td>
                           <td>{v.contextWindow ?? "—"}</td>
                           <td>{v.license ?? "—"}</td>
@@ -361,49 +367,65 @@ export function ModelDetailPage({ detail }: { detail: ModelDetail }) {
           )}
 
           {detail.faq && detail.faq.length > 0 && (
-            <section id="faq" className="mdl-section" aria-labelledby="faq-h">
-              <h2 className="mdl-h2" id="faq-h">
-                <span className="mdl-h2-mark" aria-hidden="true">//</span> FAQ
+            <section id="faq" className="lrn-section lrn-faq" aria-labelledby="faq-h">
+              <h2 className="lrn-h2" id="faq-h">
+                <span className="lrn-h2-mark" aria-hidden="true">//</span> FAQ
               </h2>
-              <dl className="mdl-faq">
-                {detail.faq.map((f, i) => (
-                  <div className="mdl-faq-item" key={i}>
-                    <dt>{f.q}</dt>
-                    <dd>{f.a}</dd>
-                  </div>
-                ))}
-              </dl>
+              {detail.faq.map((f, i) => (
+                <details className="lrn-faq-item" key={i}>
+                  <summary>{f.q}</summary>
+                  <p>{f.a}</p>
+                </details>
+              ))}
             </section>
           )}
         </div>
 
-        <aside className="mdl-aside" aria-label="Model links">
-          {linksByKind.map((g) => (
-            <div className="mdl-links-group" key={g.kind}>
-              <span className="mdl-aside-h">// {LINK_GROUP_LABEL[g.kind].toUpperCase()}</span>
+        <aside className="lrn-tool-aside" aria-label="Model details">
+          {primaryLinks.length > 0 && (
+            <div className="lrn-tool-links">
+              {primaryLinks.map((l) => (
+                <a
+                  className="lrn-art-home"
+                  key={l.url}
+                  href={l.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <span className="lrn-art-home-kind">{LINK_GROUP_LABEL[l.kind].toUpperCase()}</span>
+                  <span className="lrn-art-home-loc">{hostOf(l.url)}</span>
+                  <span className="lrn-art-home-arrow" aria-hidden="true">↗</span>
+                </a>
+              ))}
+            </div>
+          )}
+
+          {restLinks.length > 0 && (
+            <div className="lrn-tool-related">
+              <span className="lrn-tool-aside-h">// LINKS</span>
               <ul>
-                {g.links.map((l: ModelLink) => (
+                {restLinks.map((l) => (
                   <li key={l.url}>
-                    <a href={l.url} target="_blank" rel="noreferrer noopener">
-                      <span className="mdl-link-label">{l.label}</span>
-                      <span className="mdl-link-host">{hostOf(l.url)} ↗</span>
+                    <a href={l.url} target="_blank" rel="noopener noreferrer">
+                      <span className="lrn-tool-related-name">{l.label}</span>
+                      <span className="lrn-tool-related-stars">{hostOf(l.url)} ↗</span>
                     </a>
                   </li>
                 ))}
               </ul>
             </div>
-          ))}
+          )}
 
           {related.length > 0 && (
-            <div className="mdl-related">
-              <span className="mdl-aside-h">// MORE FROM {detail.makerTitle.toUpperCase()}</span>
+            <div className="lrn-tool-related">
+              <span className="lrn-tool-aside-h">// MORE FROM {detail.makerTitle.toUpperCase()}</span>
               <ul>
                 {related.map((m) => (
                   <li key={m.slug}>
                     <a href={modelPath(m.slug)} data-internal="true">
-                      <span className="mdl-related-name">{m.name}</span>
+                      <span className="lrn-tool-related-name">{m.name}</span>
                       {m.contextWindow && (
-                        <span className="mdl-related-ctx">{m.contextWindow}</span>
+                        <span className="lrn-tool-related-stars">{m.contextWindow}</span>
                       )}
                     </a>
                   </li>
@@ -414,11 +436,26 @@ export function ModelDetailPage({ detail }: { detail: ModelDetail }) {
         </aside>
       </div>
 
-      <nav className="mdl-pn" aria-label="Back to the registry">
-        <a className="mdl-pn-link" href="/models/" data-internal="true">
-          <span className="mdl-pn-dir">← LLM REGISTRY</span>
-          <span className="mdl-pn-title">All language models — specs, benchmarks &amp; pricing</span>
-        </a>
+      <nav className="lrn-pn" aria-label="More versions in this line">
+        {older ? (
+          <a className="lrn-pn-link lrn-pn-prev" href={modelPath(older.slug)} data-internal="true">
+            <span className="lrn-pn-dir">← OLDER VERSION</span>
+            <span className="lrn-pn-title">{older.name}</span>
+          </a>
+        ) : (
+          <a className="lrn-pn-link lrn-pn-prev" href="/models/" data-internal="true">
+            <span className="lrn-pn-dir">← LLM REGISTRY</span>
+            <span className="lrn-pn-title">All language models</span>
+          </a>
+        )}
+        {newer ? (
+          <a className="lrn-pn-link lrn-pn-next" href={modelPath(newer.slug)} data-internal="true">
+            <span className="lrn-pn-dir">NEWER VERSION →</span>
+            <span className="lrn-pn-title">{newer.name}</span>
+          </a>
+        ) : (
+          <span className="lrn-pn-spacer" />
+        )}
       </nav>
     </article>
   );

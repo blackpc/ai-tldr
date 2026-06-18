@@ -11,7 +11,7 @@ import {
 
 import "./App.css";
 
-import { allItems, categoryCounts, feed, filterItems } from "./data/feed";
+import { allItems, categoryCounts, filterItems } from "./data/feed";
 import { CATEGORY_ORDER, type Category, type ReleaseItem } from "./data/schema";
 import { ReleaseCard } from "./components/ReleaseCard";
 import { FilterBar } from "./components/FilterBar";
@@ -19,27 +19,22 @@ import { ReleaseModal } from "./components/ReleaseModal";
 import { InfluencersPage } from "./components/InfluencersPage";
 import { SweepLogPage } from "./components/SweepLogPage";
 import { StatsPage } from "./components/StatsPage";
-import { influencers } from "./data/influencers";
 import { Subscribe } from "./components/Subscribe";
 import { BuyMeCoffee } from "./components/BuyMeCoffee";
 import { track, useHeartbeat, useScrollDepth } from "./lib/analytics";
 import type { LearnRoute } from "./components/learn/LearnSection";
 import type { ModelsRoute } from "./components/models/ModelsSection";
-import learnCount from "./data/learn/count.json";
-import modelsCount from "./data/models/count.json";
 import statsData from "./data/stats.json";
 import type { StatsData } from "./data/stats";
 
 // The whole Learn section (components + taxonomy + CSS) is one lazy
-// chunk — feed readers never download it. The article count shown in
-// the nav comes from the tiny generated count.json instead, so the
-// main bundle stays taxonomy-free (check-learn.ts keeps it in sync).
+// chunk — feed readers never download it, so the main bundle stays
+// taxonomy-free.
 const LearnSection = lazy(() => import("./components/learn/LearnSection"));
 
 // The LLM registry (/models) is likewise a self-contained lazy chunk —
 // the registry tree, every per-model detail JSON, and its CSS ship apart
-// from the feed bundle. The nav badge reads the tiny generated count.json
-// (check-models keeps it in sync) so the registry stays out of main.
+// from the feed bundle so the registry stays out of main.
 const ModelsSection = lazy(() => import("./components/models/ModelsSection"));
 
 /** Parse current URL into a route. Supported paths:
@@ -681,7 +676,6 @@ function App() {
               }}
             >
               <span className="nav-link-lbl">RELEASES</span>
-              <span className="nav-link-num">{feed.items.length}</span>
             </button>
             <button
               type="button"
@@ -692,7 +686,6 @@ function App() {
               }}
             >
               <span className="nav-link-lbl">LEARN</span>
-              <span className="nav-link-num">{learnCount.articles}</span>
             </button>
             <button
               type="button"
@@ -713,7 +706,6 @@ function App() {
               }}
             >
               <span className="nav-link-lbl">MODELS</span>
-              <span className="nav-link-num">{modelsCount.models}</span>
             </button>
             <button
               type="button"
@@ -724,7 +716,6 @@ function App() {
               }}
             >
               <span className="nav-link-lbl">INFLUENCERS</span>
-              <span className="nav-link-num">{influencers.length}</span>
             </button>
             <button
               type="button"

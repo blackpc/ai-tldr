@@ -34,6 +34,13 @@ const MODELS_CSS = readFileSync(
   join(ROOT, "src", "components", "models", "models.css"),
   "utf8",
 );
+// The model detail page reuses the landscape/article layout classes (lrn-*),
+// so the static HTML needs learn.css too — inlined the same way the Learn
+// prerender does it, keeping the model page styled before the lazy chunk loads.
+const LEARN_CSS = readFileSync(
+  join(ROOT, "src", "components", "learn", "learn.css"),
+  "utf8",
+);
 
 const REGISTRY = registryData as ModelRegistry;
 const MODELS_PATH = "/models/";
@@ -99,7 +106,9 @@ function staticShell(inner: string): string {
 function injectBody(html: string, bodyHtml: string, payload?: unknown): string {
   html = html.replace(
     "</head>",
-    () => `  <style data-models-css>\n${MODELS_CSS}\n</style>\n  </head>`,
+    () =>
+      `  <style data-learn-css>\n${LEARN_CSS}\n</style>\n` +
+      `  <style data-models-css>\n${MODELS_CSS}\n</style>\n  </head>`,
   );
   html = html.replace(
     /<div id="root"><\/div>/,
