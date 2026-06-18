@@ -72,7 +72,7 @@ async function search(q: string) {
 const data = JSON.parse(readFileSync("src/data/learn/landscape.json", "utf8"));
 const ours = new Set<string>();
 for (const c of data.categories)
-  for (const s of c.subcategories) for (const t of s.tools) ours.add(t.repo.toLowerCase());
+  for (const s of c.subcategories) for (const t of s.tools) if (t.repo) ours.add(t.repo.toLowerCase());
 
 const found = new Map<string, { repo: string; stars: number; desc: string; topics: string[] }>();
 for (const q of QUERIES) {

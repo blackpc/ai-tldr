@@ -12,7 +12,7 @@
  * calls at view time. Also rendered server-side by prerender-learn.tsx.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 
 import landscapeData from "../../data/learn/landscape.json";
 import githubStars from "../../data/learn/github-stars.json";
@@ -37,8 +37,46 @@ const ACCENTS = [
 ];
 const accentOf = (idx: number) => ACCENTS[idx % ACCENTS.length];
 
-function starsOf(repo: string): number {
-  return STARS[repo.toLowerCase()] ?? 0;
+function starsOf(repo?: string): number {
+  return repo ? STARS[repo.toLowerCase()] ?? 0 : 0;
+}
+
+/** Bare domain of a homepage URL, e.g. "https://www.pinecone.io/" → "pinecone.io". */
+function domainOf(url: string): string {
+  return url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/.*$/, "");
+}
+
+const ACCESS_LABEL: Record<string, string> = {
+  "open-core": "OPEN CORE",
+  freemium: "FREEMIUM",
+  commercial: "COMMERCIAL",
+  enterprise: "ENTERPRISE",
+};
+
+/** Deterministic dark hue for a tool's monogram fallback (no logo on file). */
+function monoStyle(seed: string): CSSProperties {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) % 360;
+  return { background: `hsl(${h} 42% 26%)` };
+}
+
+/** Brand/owner logo on a small plate, or a deterministic monogram fallback so
+ *  EVERY tool has a visual. */
+function ToolLogo({ tool }: { tool: LandscapeTool }) {
+  if (tool.logo) {
+    return (
+      <span className="lrn-ls-logo" aria-hidden="true">
+        <img src={tool.logo} alt="" loading="lazy" />
+      </span>
+    );
+  }
+  const letter =
+    tool.name.replace(/[^a-zA-Z0-9]/g, "").charAt(0).toUpperCase() || "#";
+  return (
+    <span className="lrn-ls-logo lrn-ls-logo-mono" style={monoStyle(tool.slug)} aria-hidden="true">
+      {letter}
+    </span>
+  );
 }
 
 /** GitHub-style star count: 950, 1.2k, 82.9k, 174k. */
@@ -57,7 +95,7 @@ function compactInt(n: number): string {
 function matchTool(t: LandscapeTool, q: string): boolean {
   return (
     t.name.toLowerCase().includes(q) ||
-    t.repo.toLowerCase().includes(q) ||
+    (t.repo?.toLowerCase().includes(q) ?? false) ||
     t.description.toLowerCase().includes(q)
   );
 }
@@ -70,24 +108,32 @@ function sortTools(tools: LandscapeTool[], byStars: boolean): LandscapeTool[] {
 
 function ToolTile({ tool }: { tool: LandscapeTool }) {
   const stars = starsOf(tool.repo);
-  const ghUrl = `https://github.com/${tool.repo}`;
-  // The whole card is the (internal) detail link via a stretched ::after; the
-  // repo link in the footer is raised above it so it opens GitHub directly.
+  const ghUrl = tool.repo ? `https://github.com/${tool.repo}` : undefined;
+  const toDetail = !!tool.detail;
+  // Tools with a detail page open it (internal SPA nav, stretched ::after);
+  // tile-only entries open their homepage directly in a new tab.
+  const primaryHref = toDetail
+    ? learnToolPath(tool.slug)
+    : tool.homepage ?? ghUrl ?? "#";
+  const access = tool.access && tool.access !== "open-source" ? tool.access : null;
   return (
     <div className="lrn-ls-tool">
       <a
         className="lrn-ls-tool-link"
-        href={learnToolPath(tool.slug)}
-        data-internal="true"
-        aria-label={`${tool.name} — details`}
+        href={primaryHref}
+        {...(toDetail
+          ? { "data-internal": "true" }
+          : { target: "_blank", rel: "noopener noreferrer" })}
+        aria-label={`${tool.name}${toDetail ? " — details" : ""}`}
       >
         <span className="lrn-ls-tool-row">
-          <span className="lrn-ls-gh" aria-hidden="true">
-            <svg viewBox="0 0 16 16" width="13" height="13">
-              <path fill="currentColor" d={GH_MARK} />
-            </svg>
-          </span>
+          <ToolLogo tool={tool} />
           <span className="lrn-ls-tool-name">{tool.name}</span>
+          {access && (
+            <span className={`lrn-ls-acc lrn-ls-acc-${access}`}>
+              {ACCESS_LABEL[access]}
+            </span>
+          )}
           {stars > 0 && (
             <span className="lrn-ls-tool-stars">
               <span className="lrn-ls-star" aria-hidden="true">
@@ -100,16 +146,35 @@ function ToolTile({ tool }: { tool: LandscapeTool }) {
         <span className="lrn-ls-tool-desc">{tool.description}</span>
       </a>
       <span className="lrn-ls-tool-foot">
-        <a
-          className="lrn-ls-tool-repo"
-          href={ghUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          title={`Open ${tool.repo} on GitHub`}
-        >
-          {tool.repo} ↗
-        </a>
-        <span className="lrn-ls-tool-site">details →</span>
+        {tool.repo ? (
+          <a
+            className="lrn-ls-tool-repo"
+            href={ghUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={`Open ${tool.repo} on GitHub`}
+          >
+            <span className="lrn-ls-gh" aria-hidden="true">
+              <svg viewBox="0 0 16 16" width="12" height="12">
+                <path fill="currentColor" d={GH_MARK} />
+              </svg>
+            </span>
+            {tool.repo} ↗
+          </a>
+        ) : tool.homepage ? (
+          <a
+            className="lrn-ls-tool-repo"
+            href={tool.homepage}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={`Open ${tool.name}`}
+          >
+            {domainOf(tool.homepage)} ↗
+          </a>
+        ) : (
+          <span />
+        )}
+        <span className="lrn-ls-tool-site">{toDetail ? "details →" : "visit ↗"}</span>
       </span>
     </div>
   );
@@ -224,7 +289,7 @@ export function LearnLandscapePage() {
       {/* One row: title · search · sort · stats */}
       <div className="lrn-ls-bar">
         <h1 className="lrn-ls-title">
-          Open-Source AI <span className="lrn-ls-title-accent">Tools</span>
+          AI <span className="lrn-ls-title-accent">Tools</span>
         </h1>
         <label className="lrn-ls-search">
           <span className="lrn-ls-search-ic" aria-hidden="true">
@@ -351,7 +416,7 @@ export function LearnLandscapePage() {
             </div>
             <div className="lrn-ls-mtiles">
               {sub.tools.map((t) => (
-                <ToolTile key={t.repo} tool={t} />
+                <ToolTile key={t.slug} tool={t} />
               ))}
             </div>
           </div>

@@ -30,8 +30,8 @@ function formatStars(n: number): string {
   return `${Math.round(n / 1000)}k`;
 }
 
-function starsOf(repo: string): number {
-  return STARS[repo.toLowerCase()] ?? 0;
+function starsOf(repo?: string): number {
+  return repo ? STARS[repo.toLowerCase()] ?? 0 : 0;
 }
 
 /** Sibling tools in the same subcategory (excluding the current one). */
@@ -101,7 +101,7 @@ function domainOf(url: string): string {
 
 export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
   const stars = starsOf(detail.repo);
-  const ghUrl = `https://github.com/${detail.repo}`;
+  const ghUrl = detail.repo ? `https://github.com/${detail.repo}` : undefined;
   const related = relatedTools(detail);
   const comparison = comparisonRows(detail);
 
@@ -128,20 +128,22 @@ export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
         <h1 className="lrn-art-title">{detail.name}</h1>
         <p className="lrn-art-tagline">{detail.tagline}</p>
         <div className="lrn-art-meta">
-          <a
-            className="lrn-art-meta-link"
-            href={ghUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <svg className="lrn-gh-mark" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-              <path fill="currentColor" d={GH_MARK} />
-            </svg>
-            <span>github.com/{detail.repo}</span>
-            {stars > 0 && (
-              <span className="lrn-art-meta-stars">★ {formatStars(stars)}</span>
-            )}
-          </a>
+          {detail.repo && (
+            <a
+              className="lrn-art-meta-link"
+              href={ghUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <svg className="lrn-gh-mark" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+                <path fill="currentColor" d={GH_MARK} />
+              </svg>
+              <span>github.com/{detail.repo}</span>
+              {stars > 0 && (
+                <span className="lrn-art-meta-stars">★ {formatStars(stars)}</span>
+              )}
+            </a>
+          )}
           {detail.homepage && (
             <a
               className="lrn-art-meta-link"
@@ -217,8 +219,8 @@ export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
             <p className="lrn-p lrn-tool-src">
               Commands and code are distilled from the project's own
               documentation — always check the{" "}
-              <a href={ghUrl} target="_blank" rel="noopener noreferrer">
-                official repo
+              <a href={ghUrl ?? detail.homepage} target="_blank" rel="noopener noreferrer">
+                {ghUrl ? "official repo" : "official docs"}
               </a>{" "}
               for the latest.
             </p>
@@ -282,31 +284,33 @@ export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
 
         <aside className="lrn-tool-aside" aria-label="Tool details">
           <div className="lrn-tool-links">
-            <a
-              className="lrn-art-home lrn-art-gh"
-              href={ghUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              <svg
-                className="lrn-gh-mark"
-                viewBox="0 0 16 16"
-                width="15"
-                height="15"
-                aria-hidden="true"
+            {detail.repo && (
+              <a
+                className="lrn-art-home lrn-art-gh"
+                href={ghUrl}
+                target="_blank"
+                rel="noopener noreferrer"
               >
-                <path fill="currentColor" d={GH_MARK} />
-              </svg>
-              <span className="lrn-art-home-loc">{detail.repo}</span>
-              {stars > 0 && (
-                <span className="lrn-gh-stars">
-                  <span className="lrn-gh-star" aria-hidden="true">
-                    ★
+                <svg
+                  className="lrn-gh-mark"
+                  viewBox="0 0 16 16"
+                  width="15"
+                  height="15"
+                  aria-hidden="true"
+                >
+                  <path fill="currentColor" d={GH_MARK} />
+                </svg>
+                <span className="lrn-art-home-loc">{detail.repo}</span>
+                {stars > 0 && (
+                  <span className="lrn-gh-stars">
+                    <span className="lrn-gh-star" aria-hidden="true">
+                      ★
+                    </span>
+                    {formatStars(stars)}
                   </span>
-                  {formatStars(stars)}
-                </span>
-              )}
-            </a>
+                )}
+              </a>
+            )}
             {detail.homepage && (
               <a
                 className="lrn-art-home"

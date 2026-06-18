@@ -350,9 +350,9 @@ export async function prerenderLearn(opts: {
   );
   const lsMeta: LearnPageMeta = {
     title:
-      "Open-Source AI Tools — Libraries & Frameworks | AI/TLDR",
+      "AI Tools Directory — Open-Source & Commercial | AI/TLDR",
     description:
-      "A browsable map of the open-source AI stack: runtimes, agents, RAG, vector databases, fine-tuning, eval, serving and more — grouped by category, ranked by GitHub stars.",
+      "A browsable map of the AI stack — open-source libraries and commercial/enterprise platforms alike: model APIs, cloud AI, agents, RAG, vector databases, coding assistants, observability, media generation and more, grouped by category.",
     canonical: `${siteUrl}${lsPath}`,
     ogType: "website",
     ogImage: defaultOgImage,
@@ -363,7 +363,7 @@ export async function prerenderLearn(opts: {
       "@type": "CollectionPage",
       "@id": `${siteUrl}${lsPath}#webpage`,
       url: `${siteUrl}${lsPath}`,
-      name: "Open-Source AI Tools",
+      name: "AI Tools Directory",
       description: lsMeta.description,
       inLanguage: "en-US",
       isPartOf: { "@id": `${siteUrl}/#website` },
@@ -376,7 +376,9 @@ export async function prerenderLearn(opts: {
           position: i + 1,
           name: t.name,
           description: t.description,
-          url: `https://github.com/${t.repo}`,
+          url: t.repo
+            ? `https://github.com/${t.repo}`
+            : t.homepage ?? `${siteUrl}${learnToolPath(t.slug)}`,
         })),
       },
     }),

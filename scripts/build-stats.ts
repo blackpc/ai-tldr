@@ -110,6 +110,7 @@ const toolRows: StatTool[] = [];
 for (const c of landscape.categories) {
   for (const s of c.subcategories) {
     for (const t of s.tools) {
+      if (!t.repo) continue; // commercial tools have no repo / star count
       const n = stars[t.repo.toLowerCase()];
       if (typeof n === "number") {
         toolRows.push({ name: t.name, slug: t.slug, stars: n, category: c.title });

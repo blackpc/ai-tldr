@@ -284,17 +284,36 @@ export function learnArticlePath(
 // `github-stars.json` (keyed by lowercased "owner/repo"), refreshed by the
 // 2h sweep — never hard-coded in the landscape data.
 
+/** Licensing / access model — drives the tile badge. Open-source tools (the
+ *  original directory) carry no badge; the rest are flagged. */
+export type ToolAccess =
+  | "open-source"
+  | "open-core"
+  | "freemium"
+  | "commercial"
+  | "enterprise";
+
 export interface LandscapeTool {
   /** Display name of the project. */
   name: string;
   /** URL slug for the tool's detail page (globally unique). */
   slug: string;
-  /** GitHub "owner/repo" (case as on GitHub); the join key for star counts. */
-  repo: string;
-  /** Official site / docs URL, if any. */
+  /** GitHub "owner/repo" (case as on GitHub); the join key for star counts.
+   *  Present for open-source / open-core tools; omitted for pure SaaS, where
+   *  `homepage` is required instead. */
+  repo?: string;
+  /** Official site / docs URL. Required when there is no `repo`. */
   homepage?: string;
   /** One plain-English sentence: what it is and what it is for. */
   description: string;
+  /** Access model. Absent ⇒ treated as "open-source" (no badge). */
+  access?: ToolAccess;
+  /** Self-hosted brand/owner logo ("/tools-logos/<file>") or a verified https
+   *  image. Absent ⇒ a deterministic monogram is rendered. */
+  logo?: string;
+  /** DERIVED by check-landscape: true when a detail page exists for this slug.
+   *  Tiles link to the detail page when true, else out to homepage / repo. */
+  detail?: boolean;
 }
 
 /** Canonical site path for a single tool's detail page. */
@@ -321,8 +340,11 @@ export interface ToolStartStep {
 export interface LandscapeToolDetail {
   slug: string;
   name: string;
-  repo: string;
+  /** "owner/repo" for OSS/open-core tools; omitted for pure SaaS. */
+  repo?: string;
   homepage?: string;
+  access?: ToolAccess;
+  logo?: string;
   category: string;
   categoryTitle: string;
   subcategory: string;
