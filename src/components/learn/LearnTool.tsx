@@ -75,6 +75,30 @@ function comparisonRows(detail: LandscapeToolDetail): CmpRow[] {
   return top;
 }
 
+/** Small globe glyph for the website link. */
+function GlobeGlyph() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.2}
+      aria-hidden="true"
+    >
+      <circle cx="8" cy="8" r="6.4" />
+      <ellipse cx="8" cy="8" rx="2.6" ry="6.4" />
+      <line x1="1.6" y1="8" x2="14.4" y2="8" />
+    </svg>
+  );
+}
+
+/** The full domain of a homepage URL, e.g. "https://www.ray.io/" → "ray.io". */
+function domainOf(url: string): string {
+  return url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "");
+}
+
 export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
   const stars = starsOf(detail.repo);
   const ghUrl = `https://github.com/${detail.repo}`;
@@ -103,6 +127,34 @@ export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
         />
         <h1 className="lrn-art-title">{detail.name}</h1>
         <p className="lrn-art-tagline">{detail.tagline}</p>
+        <div className="lrn-art-meta">
+          <a
+            className="lrn-art-meta-link"
+            href={ghUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <svg className="lrn-gh-mark" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+              <path fill="currentColor" d={GH_MARK} />
+            </svg>
+            <span>github.com/{detail.repo}</span>
+            {stars > 0 && (
+              <span className="lrn-art-meta-stars">★ {formatStars(stars)}</span>
+            )}
+          </a>
+          {detail.homepage && (
+            <a
+              className="lrn-art-meta-link"
+              href={detail.homepage}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <GlobeGlyph />
+              <span>{domainOf(detail.homepage)}</span>
+              <span className="lrn-art-meta-arrow" aria-hidden="true">↗</span>
+            </a>
+          )}
+        </div>
       </header>
 
       <div className="lrn-tool-layout">

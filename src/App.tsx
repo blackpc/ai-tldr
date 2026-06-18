@@ -225,9 +225,27 @@ function isFeedRoute(route: Route): boolean {
   return route.kind === "feed" || route.kind === "release-cat";
 }
 
+/** Cool isometric 3D-city glyph for the nav CITY link — two shaded towers, the
+ *  faces lit at different opacities so it reads as 3D in a single colour. */
+function CityGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false">
+      {/* tall tower (left) */}
+      <polygon points="8,4 12,6 8,8 4,6" />
+      <polygon points="4,6 8,8 8,18 4,16" opacity="0.5" />
+      <polygon points="12,6 8,8 8,18 12,16" opacity="0.78" />
+      {/* short tower (right) */}
+      <polygon points="16,9 20,11 16,13 12,11" opacity="0.92" />
+      <polygon points="12,11 16,13 16,20 12,18" opacity="0.45" />
+      <polygon points="20,11 16,13 16,20 20,18" opacity="0.68" />
+    </svg>
+  );
+}
+
 function App() {
   const [route, setRoute] = useState<Route>(() => parseRoute());
   const page: Page = pageFromRoute(route);
+  const isMap = route.kind === "learn-map";
   // The landscape + per-tool pages live under the Learn section but get their
   // own nav link, so split the "learn" active state between the two.
   const isLandscape =
@@ -679,7 +697,7 @@ function App() {
             </button>
             <button
               type="button"
-              className={`nav-link ${page === "learn" && !isLandscape ? "nav-active" : ""}`}
+              className={`nav-link ${page === "learn" && !isLandscape && !isMap ? "nav-active" : ""}`}
               onClick={() => {
                 setMenuOpen(false);
                 goLearnPath("/learn/");
@@ -696,6 +714,20 @@ function App() {
               }}
             >
               <span className="nav-link-lbl">TOOLS</span>
+            </button>
+            <button
+              type="button"
+              className={`nav-link nav-link-city ${isMap ? "nav-active" : ""}`}
+              onClick={() => {
+                setMenuOpen(false);
+                goLearnPath("/learn/map/");
+              }}
+              title="Knowledge City — the interactive 3D map of Learn"
+            >
+              <span className="nav-link-3dic" aria-hidden="true">
+                <CityGlyph />
+              </span>
+              <span className="nav-link-lbl">CITY</span>
             </button>
             <button
               type="button"

@@ -19,7 +19,6 @@ import {
   learnArticlePath,
   learnCategoryPath,
   learnHubPath,
-  learnLandscapePath,
   learnMapPath,
   learnSubcategoryPath,
 } from "../../data/learn/schema";
@@ -60,29 +59,6 @@ function MapGlyph() {
       <circle cx="25" cy="21" r="1.7" />
       <circle cx="9" cy="23" r="1.7" />
       <circle cx="7" cy="12" r="1.7" />
-    </svg>
-  );
-}
-
-/** Tiny collapsible-tree glyph for the "open-source landscape" hub link. */
-function TreeGlyph() {
-  return (
-    <svg
-      viewBox="0 0 32 32"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.6}
-      strokeLinecap="square"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <line x1="7" y1="7" x2="7" y2="25" />
-      <line x1="7" y1="9" x2="13" y2="9" />
-      <line x1="7" y1="16" x2="13" y2="16" />
-      <line x1="7" y1="23" x2="13" y2="23" />
-      <rect x="14" y="6.5" width="11" height="5" />
-      <rect x="14" y="13.5" width="11" height="5" />
-      <rect x="14" y="20.5" width="11" height="5" />
     </svg>
   );
 }
@@ -133,24 +109,6 @@ export function LearnHubPage() {
               <span className="lrn-hub-citycta-go">
                 ENTER <span aria-hidden="true">→</span>
               </span>
-            </span>
-          </a>
-          <a
-            className="lrn-hub-landcta"
-            href={learnLandscapePath}
-            data-internal="true"
-          >
-            <span className="lrn-hub-landcta-ic" aria-hidden="true">
-              <TreeGlyph />
-            </span>
-            <span className="lrn-hub-landcta-tx">
-              <span className="lrn-hub-landcta-lead">Open-Source AI Tools</span>
-              <span className="lrn-hub-landcta-sub">
-                every AI tool &amp; framework, by category — with live GitHub stars
-              </span>
-            </span>
-            <span className="lrn-hub-landcta-go" aria-hidden="true">
-              →
             </span>
           </a>
         </div>
