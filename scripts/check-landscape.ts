@@ -16,6 +16,20 @@ const PUBLIC_DIR = "public";
 const ACCESS = new Set([
   "open-source", "open-core", "freemium", "commercial", "enterprise",
 ]);
+// Homepages shared by GENUINELY DISTINCT products of one company (reviewed
+// 2026-06-19). Anything NOT here that shares a homepage is warned as a likely
+// duplicate. Same DISPLAY NAME is always an error (see below) — these pairs all
+// have distinct names.
+const HOMEPAGE_MULTI = new Set([
+  "lambda.ai",          // GPU cloud vs hosted inference API
+  "writer.com",         // Palmyra model API vs the Writer app
+  "stability.ai",       // OSS model code vs the media API
+  "resemble.ai",        // Chatterbox (OSS TTS) vs the platform
+  "lakera.ai",          // Lakera Red vs Lakera Guard
+  "invariantlabs.ai",   // Invariant guardrails vs gateway
+]);
+const normHome = (u: string) =>
+  u.toLowerCase().replace(/^https?:\/\/(www\.)?/, "").replace(/\/+$/, "");
 
 const errors: string[] = [];
 const warnings: string[] = [];
@@ -31,6 +45,8 @@ if (!Array.isArray(data.categories) || data.categories.length === 0)
 
 const repoSeen = new Map<string, string>(); // lower → first display location
 const slugSeen = new Map<string, string>();
+const nameSeen = new Map<string, string>(); // lower name → first location (dup guard)
+const homeSeen = new Map<string, string[]>(); // normalized homepage → slugs
 const catIds = new Set<string>();
 let toolCount = 0;
 let detailMissing = 0;
@@ -63,6 +79,17 @@ for (const c of data.categories ?? []) {
       toolCount++;
       const tw = `${sw} → "${t.name}"`;
       if (!t.name || typeof t.name !== "string") err(`${sw} a tool is missing a name`);
+      // Duplicate-product guard: the commercial expansion added some products
+      // TWICE under different slugs (modal/modal-labs, scale-ai/…). A shared
+      // DISPLAY NAME is a reliable "same product" signal → hard error. Two
+      // genuinely-different tools that share a name (e.g. two "Infinity"s) must
+      // be disambiguated in their `name`, not allowlisted here.
+      if (typeof t.name === "string") {
+        const nk = t.name.toLowerCase().trim();
+        if (nameSeen.has(nk))
+          err(`duplicate product name "${t.name}" (also in ${nameSeen.get(nk)}) — same name = same product; dedupe, or disambiguate the names if truly distinct`);
+        else nameSeen.set(nk, tw);
+      }
       let hasDetail = false;
       if (typeof t.slug !== "string" || !SLUG_RE.test(t.slug))
         err(`${tw} slug invalid: ${t.slug}`);
@@ -132,6 +159,10 @@ for (const c of data.categories ?? []) {
           err(`${tw} homepage not https: ${t.homepage}`);
         else if (/^https?:\/\/(www\.)?github\.com\//i.test(t.homepage))
           err(`${tw} homepage points at github (redundant): ${t.homepage}`);
+        else if (typeof t.slug === "string") {
+          const hk = normHome(t.homepage);
+          (homeSeen.get(hk) ?? homeSeen.set(hk, []).get(hk)!).push(t.slug);
+        }
       }
       // Derive the `detail` flag (tiles use it to link in vs out).
       if (hasDetail && t.detail !== true) { t.detail = true; dirty = true; }
@@ -142,9 +173,23 @@ for (const c of data.categories ?? []) {
 
 if (detailMissing)
   console.warn(`[check-landscape] ${detailMissing}/${toolCount} tools are tile-only (no detail page — link out to homepage)`);
-// Persist the derived `detail` flags (only when something changed).
+
+// Soft duplicate check: distinct slugs sharing a homepage are often (not always)
+// the same product listed twice. Reviewed-OK multi-product domains are skipped;
+// anything else is surfaced for a human to confirm it isn't a dupe.
+const sharedHomes = [...homeSeen].filter(
+  ([h, slugs]) => slugs.length > 1 && !HOMEPAGE_MULTI.has(h),
+);
+if (sharedHomes.length) {
+  console.warn(`[check-landscape] ${sharedHomes.length} homepage(s) shared by multiple tools — verify these aren't duplicates:`);
+  for (const [h, slugs] of sharedHomes)
+    console.warn(`  - ${h}: ${slugs.join(", ")}`);
+}
+
+// Persist the derived `detail` flags (only when something changed). Keep the
+// 1-space indent the data file uses so this never reformats the whole file.
 if (dirty && errors.length === 0)
-  writeFileSync(LANDSCAPE, JSON.stringify(data, null, 2) + "\n");
+  writeFileSync(LANDSCAPE, JSON.stringify(data, null, 1) + "\n");
 const starless = warnings.filter((w) => w.includes("star count")).length;
 if (starless)
   console.warn(`[check-landscape] ${starless} repos missing star counts (will fill on next refresh)`);

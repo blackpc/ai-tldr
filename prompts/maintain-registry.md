@@ -142,7 +142,19 @@ lack. For each: confirm the repo via the GitHub API
 
 **a. Add the tile** to the right category → subcategory in `landscape.json`
 (`name`, `slug`, `repo` as `owner/repo`, `homepage` if non-GitHub, one-sentence
-`description`). Stars are NOT stored — they're refreshed elsewhere.
+`description`, plus `access` for non-OSS tools). Stars are NOT stored — they're
+refreshed elsewhere.
+
+> **Categorize by what the tool IS, not what it is used WITH.** Categories are
+> function-first; a tool's PRIMARY function decides its home. A
+> documentation/retrieval/data/eval/gateway tool that agents happen to call is
+> NOT an agent — e.g. Context7 (serves up-to-date library docs to an LLM) is
+> `retrieval-knowledge/rag-frameworks`, never `agents`. An MCP server is not a
+> category; classify the underlying function it exposes. License
+> (open-source / commercial / enterprise) is the `access` field and a chip
+> filter — NEVER a category. When unsure, pick the subcategory whose siblings
+> share the tool's core job. Run the `audit-tool-categories` workflow
+> (`.claude/tmp/audit-categories.mjs`) after any bulk add to catch slips.
 
 **b. Write the detail file** `src/data/learn/tools/<slug>.json` matching
 `LandscapeToolDetail`: overview (≥2 paras), feature bullets, a README-grounded
