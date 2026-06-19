@@ -115,6 +115,14 @@ for (const c of data.categories ?? []) {
               if (d[k] == null) err(`${t.slug}.json missing ${k}`);
             if (d.slug !== t.slug) err(`${t.slug}.json slug mismatch (${d.slug})`);
             if (t.repo && d.repo && d.repo !== t.repo) err(`${t.slug}.json repo mismatch (${d.repo})`);
+            // The detail file caches its category/subcategory (+ titles) for the
+            // breadcrumb, related list and compare table. They MUST track the
+            // tool's real home in landscape.json — a move that doesn't update
+            // both leaves the page pointing at the wrong subcategory.
+            if (d.category !== c.id) err(`${t.slug}.json category "${d.category}" ≠ landscape "${c.id}" (re-sync detail)`);
+            if (d.subcategory !== s.id) err(`${t.slug}.json subcategory "${d.subcategory}" ≠ landscape "${s.id}" (re-sync detail)`);
+            if (d.categoryTitle !== c.title) err(`${t.slug}.json categoryTitle stale ("${d.categoryTitle}" ≠ "${c.title}")`);
+            if (d.subcategoryTitle !== s.title) err(`${t.slug}.json subcategoryTitle stale ("${d.subcategoryTitle}" ≠ "${s.title}")`);
             if (!Array.isArray(d.overview) || d.overview.length < 2)
               err(`${t.slug}.json overview needs ≥2 paragraphs`);
             if (!d.gettingStarted?.steps?.length)

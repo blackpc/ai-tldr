@@ -80,8 +80,8 @@ function GlobeGlyph() {
   return (
     <svg
       viewBox="0 0 16 16"
-      width="14"
-      height="14"
+      width="17"
+      height="17"
       fill="none"
       stroke="currentColor"
       strokeWidth={1.2}
@@ -117,44 +117,52 @@ export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
 
   return (
     <article className="lrn-article lrn-tool">
-      <header className="lrn-art-head">
+      <header className="lrn-art-head lrn-tool-head">
         <Breadcrumbs
           trail={[
             { label: "LEARN", href: learnHubPath },
             { label: "Tools", href: learnLandscapePath },
+            { label: detail.categoryTitle, href: `${learnLandscapePath}?cat=${detail.category}` },
+            { label: detail.subcategoryTitle, href: catHref },
             { label: detail.name },
           ]}
         />
-        <h1 className="lrn-art-title">{detail.name}</h1>
-        <p className="lrn-art-tagline">{detail.tagline}</p>
-        <div className="lrn-art-meta">
-          {detail.repo && (
-            <a
-              className="lrn-art-meta-link"
-              href={ghUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              <svg className="lrn-gh-mark" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-                <path fill="currentColor" d={GH_MARK} />
-              </svg>
-              <span>github.com/{detail.repo}</span>
-              {stars > 0 && (
-                <span className="lrn-art-meta-stars">★ {formatStars(stars)}</span>
+        <div className="lrn-tool-head-row">
+          <div className="lrn-tool-head-main">
+            <h1 className="lrn-art-title">{detail.name}</h1>
+            <p className="lrn-art-tagline">{detail.tagline}</p>
+          </div>
+          {(detail.repo || detail.homepage) && (
+            <div className="lrn-tool-head-links">
+              {detail.repo && (
+                <a
+                  className="lrn-tool-headlink"
+                  href={ghUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <svg className="lrn-gh-mark" viewBox="0 0 16 16" width="18" height="18" aria-hidden="true">
+                    <path fill="currentColor" d={GH_MARK} />
+                  </svg>
+                  <span className="lrn-tool-headlink-loc">github.com/{detail.repo}</span>
+                  {stars > 0 && (
+                    <span className="lrn-tool-headlink-stars">★ {formatStars(stars)}</span>
+                  )}
+                </a>
               )}
-            </a>
-          )}
-          {detail.homepage && (
-            <a
-              className="lrn-art-meta-link"
-              href={detail.homepage}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              <GlobeGlyph />
-              <span>{domainOf(detail.homepage)}</span>
-              <span className="lrn-art-meta-arrow" aria-hidden="true">↗</span>
-            </a>
+              {detail.homepage && (
+                <a
+                  className="lrn-tool-headlink"
+                  href={detail.homepage}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <GlobeGlyph />
+                  <span className="lrn-tool-headlink-loc">{domainOf(detail.homepage)}</span>
+                  <span className="lrn-tool-headlink-arrow" aria-hidden="true">↗</span>
+                </a>
+              )}
+            </div>
           )}
         </div>
       </header>
@@ -283,74 +291,24 @@ export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
         </div>
 
         <aside className="lrn-tool-aside" aria-label="Tool details">
-          <div className="lrn-tool-links">
-            {detail.repo && (
-              <a
-                className="lrn-art-home lrn-art-gh"
-                href={ghUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <svg
-                  className="lrn-gh-mark"
-                  viewBox="0 0 16 16"
-                  width="15"
-                  height="15"
-                  aria-hidden="true"
-                >
-                  <path fill="currentColor" d={GH_MARK} />
-                </svg>
-                <span className="lrn-art-home-loc">{detail.repo}</span>
-                {stars > 0 && (
-                  <span className="lrn-gh-stars">
-                    <span className="lrn-gh-star" aria-hidden="true">
-                      ★
-                    </span>
-                    {formatStars(stars)}
-                  </span>
-                )}
-              </a>
-            )}
-            {detail.homepage && (
-              <a
-                className="lrn-art-home"
-                href={detail.homepage}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <span className="lrn-art-home-kind">WEBSITE</span>
-                <span className="lrn-art-home-loc">
-                  {detail.homepage.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "")}
-                </span>
-                <span className="lrn-art-home-arrow" aria-hidden="true">
-                  ↗
-                </span>
-              </a>
-            )}
-          </div>
-
-          <dl className="lrn-tool-facts">
-            <div>
-              <dt>Category</dt>
-              <dd>
-                <a href={catHref} data-internal="true">
-                  {detail.subcategoryTitle}
-                </a>
-              </dd>
-            </div>
-            {detail.language && (
-              <div>
-                <dt>Language</dt>
-                <dd>{detail.language}</dd>
-              </div>
-            )}
-            {detail.license && (
-              <div>
-                <dt>License</dt>
-                <dd>{detail.license}</dd>
-              </div>
-            )}
-          </dl>
+          {/* Repo + website live in the header now (not duplicated here).
+              Category + subcategory live in the breadcrumb. */}
+          {(detail.language || detail.license) && (
+            <dl className="lrn-tool-facts">
+              {detail.language && (
+                <div>
+                  <dt>Language</dt>
+                  <dd>{detail.language}</dd>
+                </div>
+              )}
+              {detail.license && (
+                <div>
+                  <dt>License</dt>
+                  <dd>{detail.license}</dd>
+                </div>
+              )}
+            </dl>
+          )}
 
           {related.length > 0 && (
             <div className="lrn-tool-related">

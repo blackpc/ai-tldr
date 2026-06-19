@@ -649,6 +649,8 @@ export async function prerenderLearn(opts: {
         { name: "AI/TLDR", path: "/" },
         { name: "Learn AI", path: learnHubPath },
         { name: "Tools", path: learnLandscapePath },
+        { name: detail.categoryTitle, path: `${learnLandscapePath}?cat=${detail.category}` },
+        { name: detail.subcategoryTitle, path: `${learnLandscapePath}?cat=${detail.category}&sub=${detail.subcategory}` },
         { name: detail.name, path: tp },
       ]),
     ].join("\n    ");
