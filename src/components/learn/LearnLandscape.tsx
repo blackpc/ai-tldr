@@ -1,11 +1,16 @@
 /**
- * /learn/landscape — the open-source AI tooling landscape.
+ * /learn/landscape — the AI tooling directory (open-source + commercial).
  *
  * Finder-style "Miller columns": category ▸ subcategory ▸ tools. The whole
  * structure is visible at a glance (every category in the left column, every
  * subcategory of the selected one in the middle) and you drill in by clicking
  * across. There are NO inner scrollbars — only the page scrolls; the two nav
  * columns stick while the (often long) tools column scrolls past them.
+ *
+ * Categories are organised by FUNCTION, never by license — a tool's access
+ * (open-source / open-core / freemium / commercial / enterprise) is a
+ * cross-cutting chip filter (?access=, shared .reg-chip styling with /models),
+ * so commercial and OSS tools live side by side in the same category.
  *
  * Live GitHub star counts come from github-stars.json (refreshed by the 2h
  * sweep). Pure/presentational — the data is a static JSON chunk, no network
@@ -52,6 +57,32 @@ const ACCESS_LABEL: Record<string, string> = {
   commercial: "COMMERCIAL",
   enterprise: "ENTERPRISE",
 };
+
+/** License/access facet — a cross-cutting filter, NOT a category. Every tool
+ *  has exactly one value (OSS tools omit the field → "open-source"). The chip
+ *  row mirrors the tag filter on /models (shared .reg-chip styling). */
+type Access =
+  | "open-source"
+  | "open-core"
+  | "freemium"
+  | "commercial"
+  | "enterprise";
+const ACCESS_ORDER: Access[] = [
+  "open-source",
+  "open-core",
+  "freemium",
+  "commercial",
+  "enterprise",
+];
+const ACCESS_CHIP: Record<Access, string> = {
+  "open-source": "Open source",
+  "open-core": "Open core",
+  freemium: "Freemium",
+  commercial: "Commercial",
+  enterprise: "Enterprise",
+};
+const accessOf = (t: LandscapeTool): Access =>
+  (t.access as Access | undefined) ?? "open-source";
 
 /** Deterministic dark hue for a tool's monogram fallback (no logo on file). */
 function monoStyle(seed: string): CSSProperties {
@@ -200,16 +231,35 @@ function readSelection(): { cat: string | null; sub: string | null } {
   return { cat: p.get("cat"), sub: p.get("sub") };
 }
 
+/** Read the active access filter from the URL (?access=a,b). SSR-safe. */
+function readAccess(): Set<Access> {
+  if (typeof window === "undefined") return new Set();
+  const raw = new URLSearchParams(window.location.search).get("access");
+  if (!raw) return new Set();
+  const valid = new Set(ACCESS_ORDER);
+  return new Set(
+    raw
+      .split(",")
+      .map((t) => t.trim())
+      .filter((t): t is Access => valid.has(t as Access)),
+  );
+}
+
 export function LearnLandscapePage() {
   const [query, setQuery] = useState("");
   const [sortByStars, setSortByStars] = useState(true);
   // Selection lives in the URL (?cat=&sub=) so it is shareable and the
   // browser Back / Forward buttons step through it.
   const [sel, setSel] = useState(readSelection);
+  // The access filter likewise lives in the URL (?access=a,b).
+  const [access, setAccess] = useState<Set<Access>>(readAccess);
 
-  // Re-read the selection when the user navigates Back / Forward.
+  // Re-read selection + filters when the user navigates Back / Forward.
   useEffect(() => {
-    const onPop = () => setSel(readSelection());
+    const onPop = () => {
+      setSel(readSelection());
+      setAccess(readAccess());
+    };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
@@ -229,20 +279,31 @@ export function LearnLandscapePage() {
     return { tools, stars, categories: DATA.categories.length };
   }, []);
 
-  // The tree, filtered by the query and with tools sorted. Categories /
+  // Which access values actually appear, in canonical order — drives the chips.
+  const availableAccess = useMemo(() => {
+    const s = new Set<Access>();
+    for (const c of DATA.categories)
+      for (const sc of c.subcategories)
+        for (const t of sc.tools) s.add(accessOf(t));
+    return ACCESS_ORDER.filter((a) => s.has(a));
+  }, []);
+
+  // A tool survives the query AND the access facet. Access is OR-within-facet
+  // (a tool has one license): pick "Commercial" + "Enterprise" → either shows.
+  const passes = (t: LandscapeTool) => {
+    if (q && !matchTool(t, q)) return false;
+    if (access.size && !access.has(accessOf(t))) return false;
+    return true;
+  };
+
+  // The tree, filtered by query + access with tools sorted. Categories /
   // subcategories with no surviving tools drop out so the columns only ever
   // show things you can actually open.
   const tree = useMemo<FilteredCat[]>(() => {
     return DATA.categories
       .map((c, i) => {
         const subs = c.subcategories
-          .map((sc) => {
-            const tools = sortTools(
-              q ? sc.tools.filter((t) => matchTool(t, q)) : sc.tools,
-              sortByStars,
-            );
-            return { ...sc, tools };
-          })
+          .map((sc) => ({ ...sc, tools: sortTools(sc.tools.filter(passes), sortByStars) }))
           .filter((sc) => sc.tools.length > 0);
         const count = subs.reduce((n, sc) => n + sc.tools.length, 0);
         return {
@@ -255,7 +316,8 @@ export function LearnLandscapePage() {
         };
       })
       .filter((c) => c.subcategories.length > 0);
-  }, [q, sortByStars]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q, sortByStars, access]);
 
   // Resolve the effective selection during render (no setState-in-effect): if
   // the chosen category/subcategory was filtered away, fall back to the first
@@ -282,6 +344,22 @@ export function LearnLandscapePage() {
   };
   const selectSub = (id: string) => {
     if (cat) navigate(cat.id, id);
+  };
+
+  // Toggle one access chip; the set is persisted to ?access= via pushState so
+  // it is shareable and Back / Forward steps through filter states too.
+  const writeAccess = (next: Set<Access>) => {
+    const params = new URLSearchParams(window.location.search);
+    if (next.size) params.set("access", [...next].join(","));
+    else params.delete("access");
+    window.history.pushState({}, "", `${window.location.pathname}?${params}`);
+    setAccess(next);
+  };
+  const toggleAccess = (a: Access) => {
+    const next = new Set(access);
+    if (next.has(a)) next.delete(a);
+    else next.add(a);
+    writeAccess(next);
   };
 
   return (
@@ -345,9 +423,35 @@ export function LearnLandscapePage() {
         </dl>
       </div>
 
+      {availableAccess.length > 0 && (
+        <div className="reg-tagbar" role="group" aria-label="Filter by access">
+          {availableAccess.map((a) => (
+            <button
+              key={a}
+              type="button"
+              className={`reg-chip${access.has(a) ? " is-on" : ""}`}
+              onClick={() => toggleAccess(a)}
+              aria-pressed={access.has(a)}
+            >
+              {ACCESS_CHIP[a]}
+            </button>
+          ))}
+          {access.size > 0 && (
+            <button
+              type="button"
+              className="reg-chip reg-chip-clear"
+              onClick={() => writeAccess(new Set())}
+            >
+              clear
+            </button>
+          )}
+        </div>
+      )}
+
       {!cat || !sub ? (
         <p className="lrn-ls-empty">
-          No tools match “{query}”. Try a broader term.
+          No tools match{query ? ` “${query}”` : ""}
+          {access.size ? " with that access" : ""}. Try a broader filter.
         </p>
       ) : (
         <div className="lrn-ls-miller">
@@ -424,9 +528,11 @@ export function LearnLandscapePage() {
       )}
 
       <p className="lrn-ls-note">
-        Open-source projects only. Click any tool for a detail page with a
-        plain-English overview and a getting-started guide. Star counts are
-        pulled live from GitHub and refreshed every few hours.
+        Open-source and commercial AI tools, grouped by what they do — filter by
+        access (open source, freemium, commercial, enterprise) with the chips
+        above. Open-source projects link to a detail page with a plain-English
+        overview and a getting-started guide; their star counts are pulled live
+        from GitHub and refreshed every few hours.
       </p>
     </div>
   );
