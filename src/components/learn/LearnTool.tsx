@@ -1,5 +1,5 @@
 /**
- * /learn/landscape/<slug> — a single open-source tool's detail page.
+ * /tools/<slug> — a single tool's detail page.
  *
  * Uses the EXACT same layout primitives as a Learn article (lrn-article →
  * lrn-art-head + lrn-art-layout with a TOC rail → lrn-section / lrn-h2, and
@@ -11,7 +11,6 @@ import landscapeData from "../../data/learn/landscape.json";
 import githubStars from "../../data/learn/github-stars.json";
 import type { Landscape, LandscapeToolDetail } from "../../data/learn/schema";
 import {
-  learnHubPath,
   learnLandscapePath,
   learnToolPath,
 } from "../../data/learn/schema";
@@ -120,8 +119,7 @@ export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
       <header className="lrn-art-head lrn-tool-head">
         <Breadcrumbs
           trail={[
-            { label: "LEARN", href: learnHubPath },
-            { label: "Tools", href: learnLandscapePath },
+            { label: "AI Tools", href: learnLandscapePath },
             { label: detail.categoryTitle, href: `${learnLandscapePath}?cat=${detail.category}` },
             { label: detail.subcategoryTitle, href: catHref },
             { label: detail.name },

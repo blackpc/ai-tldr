@@ -1269,7 +1269,7 @@ type LinkEntity = { name: string; key: string; href: string };
 
 /**
  * Linkify the FIRST mention of each high-confidence entity in a prose string to
- * its evergreen page — a landscape tool (`/learn/landscape/<slug>`) or a
+ * its evergreen page — a tool (`/tools/<slug>`) or a
  * registry model (`/models/<slug>/`). Operates on RAW text and escapes every
  * segment as it builds, so it can never split an HTML tag.
  *
@@ -1389,14 +1389,14 @@ function matchedModels(item: ReleaseItem): { name: string; slug: string }[] {
 }
 
 /** Combined in-prose link entities for a release: matched landscape tools
- *  (→ /learn/landscape/<slug>) + matched registry models (→ /models/<slug>/).
+ *  (→ /tools/<slug>) + matched registry models (→ /models/<slug>/).
  *  Keys are namespaced so a tool and a model can't collide in the `used` set. */
 function releaseLinkEntities(item: ReleaseItem): LinkEntity[] {
   return [
     ...matchedTools(item).map((t) => ({
       name: t.name,
       key: `tool:${t.slug}`,
-      href: `/learn/landscape/${t.slug}`,
+      href: `/tools/${t.slug}`,
     })),
     ...matchedModels(item).map((m) => ({
       name: m.name,
@@ -1417,7 +1417,7 @@ function renderLearnCrossLinks(item: ReleaseItem): string {
   const toolLinks = matchedTools(item)
     .map(
       (t) =>
-        `<li><a href="/learn/landscape/${escapeAttr(t.slug)}">${escapeText(t.name)} — overview &amp; getting started</a></li>`,
+        `<li><a href="/tools/${escapeAttr(t.slug)}">${escapeText(t.name)} — overview &amp; getting started</a></li>`,
     )
     .join("");
   const modelLinks = matchedModels(item)
@@ -1428,7 +1428,7 @@ function renderLearnCrossLinks(item: ReleaseItem): string {
     .join("");
   const evergreen =
     `<li><a href="/learn/">Learn AI — a plain-English encyclopedia</a></li>` +
-    `<li><a href="/learn/landscape/">The open-source AI tools directory</a></li>` +
+    `<li><a href="/tools/">The AI tools directory</a></li>` +
     `<li><a href="/models/">The LLM registry — compare AI models</a></li>` +
     `<li><a href="/stats/">AI Release Index — live release stats</a></li>`;
   return (
@@ -2201,7 +2201,7 @@ function buildLlmsTxt(items: ReleaseItem[]): string {
 ## Site
 - [Home — latest AI releases](${SITE_URL}/): the live feed, newest first, sized by impact.
 - [Learn AI](${SITE_URL}/learn/): a beginner-friendly AI encyclopedia (structured articles, FAQs, diagrams).
-- [Open-source AI landscape](${SITE_URL}/learn/landscape/): a map of open-source AI tools by category, each with its own page.
+- [AI tools directory](${SITE_URL}/tools/): a map of open-source and commercial AI tools by category, each with its own page.
 - [LLM registry](${SITE_URL}/models/): every notable large language model — frontier and open-weight — with verified specs, benchmarks, pricing and APIs, one detail page each.
 - [AI influencers](${SITE_URL}/influencers/): AI people worth following, grouped by role.
 - [Changelog](${SITE_URL}/log/): every automated sweep that refreshed the feed.
@@ -2249,7 +2249,7 @@ always-current feed is at ${SITE_URL}/feed.json and ${SITE_URL}/feed.xml.
 ## Sections
 - Home: ${SITE_URL}/
 - Learn AI encyclopedia: ${SITE_URL}/learn/
-- Open-source AI landscape: ${SITE_URL}/learn/landscape/
+- AI tools directory: ${SITE_URL}/tools/
 - LLM registry (specs, benchmarks, pricing): ${SITE_URL}/models/
 - AI influencers: ${SITE_URL}/influencers/
 - Changelog: ${SITE_URL}/log/

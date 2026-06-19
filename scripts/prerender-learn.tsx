@@ -340,7 +340,7 @@ export async function prerenderLearn(opts: {
   pages++;
   urls.push({ loc: `${siteUrl}${mapPath}`, lastmod: today, changefreq: "weekly", priority: 0.8 });
 
-  // ---- landscape (/learn/landscape) ----
+  // ---- AI tools directory (/tools) ----
   // A static, fully-crawlable list of every open-source tool with its
   // description + repo link. The ItemList JSON-LD exposes the whole catalog.
   const lsPath = learnLandscapePath;
@@ -384,12 +384,11 @@ export async function prerenderLearn(opts: {
     }),
     breadcrumbLd(wrapJsonLd, siteUrl, [
       { name: "AI/TLDR", path: "/" },
-      { name: "Learn AI", path: learnHubPath },
-      { name: "Tools", path: lsPath },
+      { name: "AI Tools", path: lsPath },
     ]),
   ].join("\n    ");
   await writeHtml(
-    "learn/landscape/index.html",
+    "tools/index.html",
     injectBody(
       injectMeta(template, lsMeta, lsLd),
       renderToStaticMarkup(<LearnLandscapePage />),
@@ -611,7 +610,7 @@ export async function prerenderLearn(opts: {
     }
   }
 
-  // ---- tool detail pages (/learn/landscape/<slug>) ----
+  // ---- tool detail pages (/tools/<slug>) ----
   const toolDetails = loadToolDetails();
   let toolPages = 0;
   for (const detail of toolDetails.values()) {
@@ -647,15 +646,14 @@ export async function prerenderLearn(opts: {
       }),
       breadcrumbLd(wrapJsonLd, siteUrl, [
         { name: "AI/TLDR", path: "/" },
-        { name: "Learn AI", path: learnHubPath },
-        { name: "Tools", path: learnLandscapePath },
+        { name: "AI Tools", path: learnLandscapePath },
         { name: detail.categoryTitle, path: `${learnLandscapePath}?cat=${detail.category}` },
         { name: detail.subcategoryTitle, path: `${learnLandscapePath}?cat=${detail.category}&sub=${detail.subcategory}` },
         { name: detail.name, path: tp },
       ]),
     ].join("\n    ");
     await writeHtml(
-      `learn/landscape/${detail.slug}/index.html`,
+      `tools/${detail.slug}/index.html`,
       injectBody(
         injectMeta(
           template,

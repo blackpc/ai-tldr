@@ -325,7 +325,7 @@ export function StatsPage({ data }: { data: StatsData }) {
               <tr key={tool.slug}>
                 <td className="stx-rank">{i + 1}</td>
                 <td>
-                  <a href={`/learn/landscape/${tool.slug}`}>{tool.name}</a>
+                  <a href={`/tools/${tool.slug}`}>{tool.name}</a>
                 </td>
                 <td className="stx-cat">{tool.category}</td>
                 <td className="stx-num">{formatStars(tool.stars)}</td>
@@ -347,7 +347,7 @@ export function StatsPage({ data }: { data: StatsData }) {
           />
         )}
         <p className="stx-more">
-          <a href="/learn/landscape/">Explore the full open-source AI landscape →</a>
+          <a href="/tools/">Explore the full AI tools directory →</a>
         </p>
       </section>
 

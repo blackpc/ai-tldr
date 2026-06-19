@@ -1,6 +1,6 @@
 /**
- * Validate src/data/learn/landscape.json (the open-source AI tooling
- * landscape rendered at /learn/landscape). Mirrors check-learn's spirit:
+ * Validate src/data/learn/landscape.json (the AI tools directory rendered
+ * at /tools). Mirrors check-learn's spirit:
  * fail the build on any structural problem so a bad edit can't ship.
  *
  * Checks: required fields + types, "owner/repo" repo format, globally

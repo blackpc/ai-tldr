@@ -302,6 +302,21 @@ export default {
       );
     }
 
+    // The AI tools directory moved out of /learn: /learn/landscape* → /tools*.
+    // One prefix rule 301s the hub and all ~500 tool pages (slug + any
+    // ?cat=&sub= query preserved) so every indexed old URL keeps its equity.
+    if (url.pathname === "/learn/landscape" || url.pathname === "/learn/landscape/") {
+      return withSecurityHeaders(
+        new Response(null, { status: 301, headers: { Location: `/tools/${url.search}` } }),
+      );
+    }
+    if (url.pathname.startsWith("/learn/landscape/")) {
+      const rest = url.pathname.slice("/learn/landscape/".length);
+      return withSecurityHeaders(
+        new Response(null, { status: 301, headers: { Location: `/tools/${rest}${url.search}` } }),
+      );
+    }
+
     if (url.pathname === "/sitemap-news.xml") {
       const feed = await loadFeed(env, request);
       return withSecurityHeaders(

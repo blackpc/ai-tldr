@@ -1,5 +1,5 @@
 /**
- * /learn/landscape — the AI tooling directory (open-source + commercial).
+ * /tools — the AI tooling directory (open-source + commercial).
  *
  * Finder-style "Miller columns": category ▸ subcategory ▸ tools. The whole
  * structure is visible at a glance (every category in the left column, every

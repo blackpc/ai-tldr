@@ -98,7 +98,7 @@ function staticShell(inner: string): string {
     `<main class="reg-main">${inner}</main>` +
     `<footer class="page-footer">` +
     `<a href="/">Releases</a> · <a href="${MODELS_PATH}">LLM Registry</a> · ` +
-    `<a href="/learn/">Learn AI</a> · <a href="/learn/landscape/">AI Tools</a></footer>` +
+    `<a href="/learn/">Learn AI</a> · <a href="/tools/">AI Tools</a></footer>` +
     `</div>`
   );
 }

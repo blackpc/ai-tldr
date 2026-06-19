@@ -93,11 +93,13 @@ function parseRoute(): Route {
     return { kind: "learn-map" };
   }
 
-  if (path === "/learn/landscape" || path === "/learn/landscape/") {
+  // AI tools directory — top-level /tools (moved out of /learn; old
+  // /learn/landscape* URLs 301 to here in the Worker).
+  if (path === "/tools" || path === "/tools/") {
     return { kind: "learn-landscape" };
   }
 
-  const toolMatch = path.match(/^\/learn\/landscape\/([^/]+)\/?$/);
+  const toolMatch = path.match(/^\/tools\/([^/]+)\/?$/);
   if (toolMatch) return { kind: "learn-tool", slug: toolMatch[1] };
 
   const learn = path.match(/^\/learn(?:\/([^/]+))?(?:\/([^/]+))?(?:\/([^/]+))?\/?$/);
@@ -710,10 +712,10 @@ function App() {
               className={`nav-link ${isLandscape ? "nav-active" : ""}`}
               onClick={() => {
                 setMenuOpen(false);
-                goLearnPath("/learn/landscape/");
+                goLearnPath("/tools/");
               }}
             >
-              <span className="nav-link-lbl">TOOLS</span>
+              <span className="nav-link-lbl">AI Tools</span>
             </button>
             <button
               type="button"

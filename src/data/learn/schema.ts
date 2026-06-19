@@ -254,8 +254,10 @@ export const learnHubPath = "/learn/";
 /** Canonical site path for the Learn mind map. */
 export const learnMapPath = "/learn/map/";
 
-/** Canonical site path for the open-source AI tooling landscape. */
-export const learnLandscapePath = "/learn/landscape/";
+/** Canonical site path for the AI tools directory. Lives at the top level
+ *  (/tools/), NOT under /learn — old /learn/landscape* URLs 301 here in the
+ *  Worker. The constant name keeps the `learn*` prefix only as an identifier. */
+export const learnLandscapePath = "/tools/";
 
 /** Canonical site path for a category listing page. */
 export function learnCategoryPath(cat: string): string {
@@ -277,7 +279,7 @@ export function learnArticlePath(
 }
 
 // ---------------------------------------------------------------------------
-// Open-source AI tooling landscape (/learn/landscape)
+// AI tools directory (/tools)
 // ---------------------------------------------------------------------------
 // A curated, collapsible directory of open-source AI projects grouped by
 // category → subcategory. Live GitHub star counts come from
@@ -316,9 +318,9 @@ export interface LandscapeTool {
   detail?: boolean;
 }
 
-/** Canonical site path for a single tool's detail page. */
+/** Canonical site path for a single tool's detail page (top-level /tools/). */
 export function learnToolPath(slug: string): string {
-  return `/learn/landscape/${slug}/`;
+  return `/tools/${slug}/`;
 }
 
 /** One step in a tool's getting-started walkthrough. */
