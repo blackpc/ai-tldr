@@ -421,17 +421,22 @@ per million tokens. Every key/value must trace to a fetched source —
 no estimates. Omit the field rather than guess. The UI surfaces
 metrics as small chips under the title.
 
-### `quickFacts` (optional — strongly preferred for `seismic`/`major`)
+### `quickFacts` (**REQUIRED for `seismic`/`major`**; omit for `notable`/`rumor`)
 
 `{ label, value }[]`, 3–7 rows. A LABELED facts table — AI answer engines
 lift a labeled table far more readily than the same facts buried in prose.
 Use only VERIFIED values from the source. Good labels: "Maker", "License",
 "Context window", "Price (input)", "Price (output)", "Availability",
-"What's new". Keep each value short and concrete ("$3 / 1M tokens",
-"200K tokens", "Apache-2.0", "API + open weights"). Omit a row rather than
-guess. Skip the whole field for `notable`/`rumor` items.
+"Version", "What's new". Keep each value short and concrete ("$3 / 1M tokens",
+"200K tokens", "Apache-2.0", "API + open weights"). Omit a single ROW rather
+than guess, but a `seismic`/`major` item must still carry the field — there is
+ALWAYS a handful of labeled facts in an announcement worth a `major` slot.
+Skip the whole field only for `notable`/`rumor`. (Unlike `pricing`/`benchmarks`,
+which need PUBLISHED numbers and are legitimately absent, `quickFacts` never
+depends on special data — so a `major` item without it is a miss, not a
+judgment call.)
 
-### `faq` (optional — strongly preferred for `seismic`/`major`)
+### `faq` (**REQUIRED for `seismic`/`major`**; omit for `notable`/`rumor`)
 
 `{ q, a }[]`, 3–5 entries (cap 7). Each `q` is a LITERAL follow-up question
 a person would type — "How much does <X> cost?", "Is <X> open source?",
@@ -440,7 +445,11 @@ answer that NAMES the entity (never starts with "it"/"this") so it still
 makes sense quoted on its own. Every answer must be grounded in the fetched
 source — same zero-hallucination rule as `summary`. This drives a visible
 FAQ on the release page plus FAQPage structured data (what AI engines quote
-for the literal sub-question).
+for the literal sub-question). A `seismic`/`major` item ALWAYS has 3+ obvious
+follow-ups (what is it, how does it work, what's new, how to use it) you can
+answer from the source — write them. `finalize-sweep.ts` soft-warns when a
+`major`/`seismic` item ships without `faq` or `quickFacts`; that warning means
+you skipped required structure, not that it's optional.
 
 ### `benchmarks` (optional — ONLY when the source publishes numbers)
 
@@ -480,7 +489,10 @@ the item.
 
 - `tagline` — one sentence, ≤140 chars, plain. Elevator pitch.
 - `whatIsIt` — what it is in plain language. Reader has heard of LLMs,
-  not this specific thing. 2–4 sentences.
+  not this specific thing. 2–4 sentences. **Lead with the NEW THING, not a
+  wind-up.** Open on the actual feature/change ("Cursor 3.8 introduces Cursor
+  Automations — …"), never with filler like "X is the latest release of …"
+  or "X is a Y that …" before you've said what's new.
 - `howItWorks` — actual mechanism. Name the technique, describe what
   the system does. No marketing.
 - `whyItMatters` — practical impact. What does this unblock? Who saves
@@ -490,6 +502,14 @@ the item.
   or URL. Concrete and runnable.
 
 Same banned words as `summary`.
+
+**Each field must ADD information — do not restate the same sentence across
+fields.** Repeating the entity NAME in each field's first sentence is correct
+(it makes a quoted sentence stand alone). Repeating the same EXPLANATION is
+not: if `whatIsIt` already said what `/automate` does, `howItWorks` and
+`whyItMatters` should cover the mechanism and the impact, not re-explain
+`/automate` again. A reader scanning all four fields should learn four
+different things, not read the headline feature four times.
 
 ### `image` (REQUIRED)
 

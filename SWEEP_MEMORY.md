@@ -628,3 +628,46 @@ triggered by hand (`workflow_dispatch`) and WATCHED before trusting the cron —
 confirm it commits valid catalog data and the build gate holds. If the daily
 sweep ever commits a model/tool whose benchmark/price has no source link, the
 build gate fails — that's the guard; fix the data, never relax it.
+
+## 2026-06-20-A — major releases shipping without faq/quickFacts (missing SEO structure)
+
+**Trigger:** User saw Cursor 3.8 (`cursor-3-8`, `major`) live with weak content:
+the explainer led with a wind-up ("Cursor 3.8 is the latest release of the
+Cursor coding agent…") instead of the new feature, restated `/automate` in
+nearly every field (4×), and carried NO `faq` and NO `quickFacts` — so the
+release page had no labeled-facts table and no FAQPage JSON-LD. Not a one-off:
+17/25 recent `major`/`seismic` items had `faq`, 18/25 had `quickFacts`, so this
+was an inconsistent skip.
+
+**Root cause:** the prompt framed `quickFacts` + `faq` as "optional — strongly
+preferred for seismic/major". The agent read "optional" and skipped them. That
+framing was copied from `pricing`/`benchmarks` (2026-06-17-C), but those need
+PUBLISHED numbers and are legitimately absent; `quickFacts`/`faq` are ALWAYS
+derivable from any major announcement, so "optional" was simply wrong for them.
+
+**Change:**
+- `prompts/update-releases.md`: `quickFacts` + `faq` are now **REQUIRED for
+  seismic/major** (with the "always derivable, unlike pricing/benchmarks"
+  rationale so the agent can't treat them as a judgment call). Added explainer
+  rules: `whatIsIt` must LEAD with the new thing (no "X is the latest release…"
+  wind-up), and each field must ADD information — repeat the entity NAME for
+  quote-ability, never the same EXPLANATION.
+- `scripts/finalize-sweep.ts`: new SOFT warning when a new `seismic`/`major`
+  item lacks `faq` or `quickFacts`. **Soft, not hard** — hard-failing an
+  unattended cron drops real news (the 06-12-A scar) and a hard gate would
+  pressure fabricated FAQs to pass, which zero-hallucination forbids. Same
+  pattern as the title-length/drought warnings.
+- Backfilled `cursor-3-8`: rewrote the explainer (feature-first, `/automate`
+  4→2, one entity-name per field), added 7 `quickFacts` + 4 `faq`, every fact
+  verified against `cursor.com/changelog/06-18-26`.
+
+**Deliberately NOT done:** did NOT hard-fail `check-releases` on missing
+faq/quickFacts (drops news + fabrication pressure — see above). Did NOT
+backfill the other older major items missing these (content-sensitive,
+zero-hallucination → each needs a source re-fetch; separate pass if the editor
+wants it).
+
+**Status:** Applied (prompt + finalize-sweep + cursor-3-8 backfill). Watch the
+next ~10 crons: the new "SEO structure" finalize warning should fire 0× on new
+major items if the prompt lands. If it fires, the agent skipped required
+structure — reinforce the prompt, do NOT convert it to a hard gate.

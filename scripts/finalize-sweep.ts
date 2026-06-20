@@ -18,8 +18,8 @@
  *      counts, added[], updated[], removed[], summary, coverage.
  *   8. Appends to sweeps.json.
  *   9. Runs check-feed validation inline.
- *  10. Soft-fails (warns) on: >2 paper-primary, 0 video + cadence
- *      breach, coverage <15.
+ *  10. Soft-fails (warns) on: >2 paper-primary, per-category drought,
+ *      long title/summary, and seismic/major items missing faq/quickFacts.
  *
  * Exits non-zero ONLY on hard validation failures. Soft warnings go to
  * stderr but the process completes successfully so the cron commit
@@ -332,6 +332,31 @@ if (longSummaries.length > 0) {
     `summary length: ${longSummaries.length} new item(s) over 240 chars: ` +
       longSummaries
         .map((i) => `${i.id} (${i.summary.length})`)
+        .join(", "),
+  );
+}
+
+// SEO structure: `quickFacts` + `faq` are REQUIRED for seismic/major (prompt
+// "REQUIRED for seismic/major") — they drive the labeled facts table + FAQPage
+// JSON-LD that AI answer engines quote. Unlike pricing/benchmarks (which need
+// PUBLISHED numbers and are legitimately absent), these are always derivable
+// from a major announcement, so a major/seismic item missing them is a skipped
+// requirement, not a judgment call. SOFT warn, never hard-fail: an unattended
+// cron must still ship real news (the 06-12-A scar), and a hard gate would
+// pressure fabricated FAQs to pass — exactly what zero-hallucination forbids.
+const missingSeo = newItems.filter(
+  (i) =>
+    (i.importance === "seismic" || i.importance === "major") &&
+    (!Array.isArray(i.faq) || i.faq.length === 0 ||
+      !Array.isArray(i.quickFacts) || i.quickFacts.length === 0),
+);
+if (missingSeo.length > 0) {
+  warnings.push(
+    `SEO structure: ${missingSeo.length} ${missingSeo.length === 1 ? "item is" : "items are"} ` +
+      `seismic/major but missing faq and/or quickFacts (both REQUIRED at that tier — ` +
+      `labeled facts + FAQPage JSON-LD): ` +
+      missingSeo
+        .map((i) => `${i.id} [${[!i.faq?.length && "faq", !i.quickFacts?.length && "quickFacts"].filter(Boolean).join("+")}]`)
         .join(", "),
   );
 }
