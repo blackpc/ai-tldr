@@ -344,8 +344,13 @@ sense and still names the thing.
   verb there would turn an opinion into a fake fact and break
   zero-hallucination. Be definitive about OBJECTIVE facts (specs, prices,
   dates, benchmark numbers); stay attributed on subjective claims.
-- **Repeat the name instead of pronouns** across `whatIsIt` / `howItWorks`
-  / `whyItMatters`, so any one of them still makes sense quoted on its own.
+- **Name the entity in each field, but VARY the opening.** Each of
+  `whatIsIt` / `howItWorks` / `whyItMatters` must name the thing somewhere so
+  it still makes sense quoted alone — but do NOT start all of them with the
+  same `<Product> <version>` subject. Six sentences in a row that open with
+  "Cursor 3.8 …" read as repetition; lead each field with its own angle (the
+  feature, the mechanism, the impact) and let the name fall in where it's
+  natural.
 - **Name models/tools EXACTLY so they auto-link (wiki-style).** The
   prerenderer cross-links the first mention of any model in our LLM
   registry (`/models/<slug>`) or tool in the landscape
@@ -419,7 +424,11 @@ on items older than that).
 SWE-bench score, parameter count, GitHub stars, context window, price
 per million tokens. Every key/value must trace to a fetched source —
 no estimates. Omit the field rather than guess. The UI surfaces
-metrics as small chips under the title.
+metrics as small chips under the title — directly ABOVE the `quickFacts`
+table. So do NOT duplicate a `quickFacts` row as a metric chip (a "Version
+3.8" chip sitting on top of a "Version | 3.8" table row is the exact
+repetition we're avoiding). Reserve `metrics` for the 1–2 hero numbers worth
+a big chip; if every number already lives in `quickFacts`, omit `metrics`.
 
 ### `quickFacts` (**REQUIRED for `seismic`/`major`**; omit for `notable`/`rumor`)
 
@@ -445,9 +454,16 @@ answer that NAMES the entity (never starts with "it"/"this") so it still
 makes sense quoted on its own. Every answer must be grounded in the fetched
 source — same zero-hallucination rule as `summary`. This drives a visible
 FAQ on the release page plus FAQPage structured data (what AI engines quote
-for the literal sub-question). A `seismic`/`major` item ALWAYS has 3+ obvious
-follow-ups (what is it, how does it work, what's new, how to use it) you can
-answer from the source — write them. `finalize-sweep.ts` soft-warns when a
+for the literal sub-question). The FAQ must EXTEND the page, not echo it: do
+NOT ask "What is X?", "How does X work?", or "How do you use X?" — `whatIsIt` /
+`howItWorks` / `tryIt` already answer those, and re-asking them makes the page
+read as the same paragraph four times over. Ask the LONG-TAIL questions the
+explainer leaves open that a real user would still type: pricing / which plan,
+availability or rollout, how X compares to the prior version or a named rival,
+limits and caveats, concrete "what can it actually do" examples, where it runs
+(local vs cloud), whether a change can be edited or undone. A `seismic`/`major`
+item has at least 3 such follow-ups you can answer from the source — write
+them. `finalize-sweep.ts` soft-warns when a
 `major`/`seismic` item ships without `faq` or `quickFacts`; that warning means
 you skipped required structure, not that it's optional.
 
@@ -510,6 +526,16 @@ not: if `whatIsIt` already said what `/automate` does, `howItWorks` and
 `whyItMatters` should cover the mechanism and the impact, not re-explain
 `/automate` again. A reader scanning all four fields should learn four
 different things, not read the headline feature four times.
+
+**One home per fact — across the WHOLE item, not just the explainer.** An
+enumerated list or a scannable spec (the version, the full list of triggers,
+the price) belongs in the `quickFacts` table; prose should gesture at it
+("five GitHub triggers, from a review comment to a finished CI run"), not
+re-type the whole list. The SAME fact should not appear verbatim in
+`quickFacts`, a prose `explainer` field, AND the `faq`. Pick the one block
+where it reads best — table for scannable specs, prose for the connective
+explanation, FAQ for the long-tail question — and let the others reference it
+rather than repeat it.
 
 ### `image` (REQUIRED)
 
