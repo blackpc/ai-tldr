@@ -671,3 +671,54 @@ wants it).
 next ~10 crons: the new "SEO structure" finalize warning should fire 0× on new
 major items if the prompt lands. If it fires, the agent skipped required
 structure — reinforce the prompt, do NOT convert it to a hard gate.
+
+## 2026-07-05-A — biomedical / AI-for-science was invisible unless it hit a general venue
+
+**Trigger:** Planning coverage for a biomedical-data-scientist reader segment
+(ML for genomics & imaging, digital biomarkers, biosignal/speech analysis,
+workflow automation). The feed HAS surfaced bio AI before (Claude Science,
+GeneBench-Pro, LifeSciBench, Brain2Qwerty) — but only by luck, when the item
+trended on HN / GitHub / HF. There was no biomedical-specific discovery source,
+so anything that shipped on a specialist channel (Isomorphic Labs, Arc
+Institute, EvolutionaryScale, Google/MS health research) was never seen.
+
+**Root cause:** the inclusion bar is deliberately venue-based, not topic-based
+(good — it's how we stay high-signal). But the source list only named
+general/frontier AI venues, so an entire domain our audience cares about had
+zero discovery pointers — the same failure mode as the video/dataset/algorithm
+droughts (2026-05-05-H, 2026-06-13-B): a real category with nothing aimed at
+its sources.
+
+**Change:**
+- `prompts/update-releases.md`: added an **"AI-for-science lane
+  (biomedical / life-sciences)"** block in the second pass. Points at
+  specialist org blogs (isomorphiclabs.com, evolutionaryscale.ai,
+  arcinstitute.org/news, chaidiscovery.com, health.google,
+  research.google/blog, MS Research Health Futures) + a gated
+  community/aggregator lane (HF biology/medical trending, r/bioinformatics,
+  Papers-with-Code Medical, and bioRxiv/medRxiv ONLY with code + HN/HF
+  traction). Notes that the frontier labs already in the first pass ship bio
+  work too (AlphaFold/AlphaGenome, GeneBench, Claude Science).
+- **No bar relaxed**: same 72h cap, same dedup, same 2-of-N rule for anything
+  paper-shaped (never a bioRxiv paper alone). Frontier-lab bio breakthroughs
+  are seismic-eligible under the EXISTING "SOTA/frontier-tech from a top lab"
+  rule — the block says so explicitly so the domain isn't softened.
+- **Bounded**: capped at ~1 item from this lane per sweep unless genuinely
+  seismic, so it can't crowd out core AI. Domain rides in `tags` (`genomics`,
+  `medical-imaging`, `biomarker`, `bioinformatics`, `proteomics`,
+  `clinical-nlp`) — NO new feed `category` (categories stay artifact-type).
+
+**Deliberately NOT done:** did NOT add a `biomedical` feed category or touch
+`src/data/schema.ts` (domain is a tag, not an artifact type — a new enum would
+fragment the filter bar for a cross-cutting topic). Did NOT add bioRxiv/medRxiv
+as a primary paper source (papers still need the 2-of-N signals; a bare
+preprint firehose is exactly what the no-padding rule forbids). Did NOT give the
+lane a quota — "this is where to look, not a must-fill" (same caveat as the
+dataset/benchmark lanes).
+
+**Status:** Applied (prompt only — no code change). Watch the next ~2 weeks:
+the lane should produce the occasional bio item WITH a domain tag and NOT push
+seismic/major inflation. If it never fires, the specialist channels may be
+404ing at runtime (verify the URLs and update the domain list); if it over-fires
+or crowds out core AI, tighten the ~1-per-sweep cap. Do NOT re-solve by adding a
+category — that was considered and rejected here.

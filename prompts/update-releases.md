@@ -264,6 +264,41 @@ not what was funded or announced.
   standout tutorials or hands-on guides (deeplearning.ai/the-batch, HF
   cookbook/blog) → `tutorial`. Only if something genuinely qualifies.
 
+**AI-for-science lane (biomedical / life-sciences) — same no-quota caveat:**
+Part of our audience is biomedical data scientists (ML for genomics &
+imaging, digital biomarkers, biosignal/speech analysis, workflow
+automation). AI-for-science shipped work is under-surfaced because our
+discovery is venue-only — it only appears when it happens to trend on a
+general venue. This lane points at the domain directly. It does NOT relax
+any bar: same 72h cap, same dedup, same "would I post this today", and the
+SAME 2-of-N rule for anything paper-shaped (never a bioRxiv/medRxiv paper on
+its own).
+- **Specialist lab / org blogs** (official domain; find the real news/blog
+  channel and verify every URL, skip on 404): Isomorphic Labs
+  (isomorphiclabs.com), EvolutionaryScale (evolutionaryscale.ai — ESM),
+  Arc Institute (arcinstitute.org/news — Evo), Chai Discovery
+  (chaidiscovery.com), Google Health / Google Research health AI
+  (health.google, research.google/blog), Microsoft Research Health Futures.
+  Note the frontier labs already in the first pass also ship bio work — flag
+  DeepMind AlphaFold / AlphaGenome, OpenAI GeneBench / LifeSciBench, and
+  Anthropic Claude Science when they post.
+- **Gated community / aggregators** (only with the 2-of-N signals): HuggingFace
+  `models` / `datasets` trending filtered to biology / medical; r/bioinformatics
+  and r/MachineLearning hot (≥500 upvotes); Papers-with-Code Medical;
+  bioRxiv / medRxiv **only when the item ALSO has released code plus HN or HF
+  traction**. Optional `article`-tier voices: Eric Topol ("Ground Truths"),
+  "Owl Posting", "Asimov Press".
+- **Importance**: a genuine frontier-lab bio breakthrough (AlphaFold-3-class
+  structure prediction, ESM3, Evo 2, a medical model that beats clinicians on a
+  real task) is **seismic-eligible** under the existing "SOTA / frontier-tech
+  breakthrough from a top lab" rule — do not soften it because the domain is
+  biology.
+- **Keep it bounded**: at most ~1 item from this lane per sweep unless something
+  is genuinely seismic, so it can't crowd out core AI. Domain rides in `tags`
+  (`genomics`, `medical-imaging`, `biomarker`, `bioinformatics`, `proteomics`,
+  `clinical-nlp`), NOT a new category — the `categories` stay the artifact type
+  (`model` / `paper` / `algorithm` / `benchmark` / `tool`).
+
 **Last resort (only after exhausting above with <2 items):**
 - **Tier-1 AI press**: theverge.com/ai, arstechnica.com/ai,
   techcrunch.com/ai, bloomberg.com (AI beat), theinformation.com,
