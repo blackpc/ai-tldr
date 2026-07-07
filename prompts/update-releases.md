@@ -304,9 +304,20 @@ any bar: same 72h cap, same dedup, same "would I post this today", and the SAME
   bar — even though academic repos (e.g. `mims-harvard/COMPASS`, ~90 stars)
   never hit github-trending's ≥500-star bar and rarely reach the HN front page.
   Do NOT gate this lane on star-trending; the released repo IS the artifact →
-  tag `["model", "repo", <domain>]`. A methods/finding paper with NO released
-  code/model/demo still does NOT qualify — that stays the "no papers alone"
-  rule (it's a finding, not a release).
+  tag `["model", "repo", <domain>]`.
+- **High-signal clinical / neuro FINDINGS — a BOUNDED exception to "no papers
+  alone".** Our audience explicitly wants medical/neuro AI *results*, not only
+  shipped tools (e.g. "AI reveals cortical lesions invisible on standard MRI").
+  A findings paper with NO released code MAY be added as a `paper` / `article`
+  item — but ONLY at a HIGHER bar than a normal release: a NAMED method/result +
+  genuine clinical significance + covered by ≥2 reputable outlets, OR published
+  in a top journal (Nature / Nature Medicine / Science / Cell / NEJM / Lancet /
+  Communications Medicine) plus ≥1 independent write-up. Cite BOTH the primary
+  source (journal or university PR) AND one independent outlet in `links[]`, and
+  tag `["paper", <domain hashtags>]`. This is the ONE place the feed admits a
+  finding instead of a shipped artifact — reserve it for the strongest results,
+  it still counts against the lane's ~1–2/sweep cap, and a single-outlet or
+  merely incremental result does NOT qualify (that keeps the firehose out).
 - **Neuroscience / neurotech AI**: brain-computer interfaces (Neuralink,
   Precision Neuroscience, Synchron — official channels), neural decoding /
   brain-to-text and brain-to-speech (e.g. Meta Brain2Qwerty, already in the
