@@ -264,15 +264,14 @@ not what was funded or announced.
   standout tutorials or hands-on guides (deeplearning.ai/the-batch, HF
   cookbook/blog) → `tutorial`. Only if something genuinely qualifies.
 
-**AI-for-science lane (biomedical / life-sciences) — same no-quota caveat:**
-Part of our audience is biomedical data scientists (ML for genomics &
-imaging, digital biomarkers, biosignal/speech analysis, workflow
-automation). AI-for-science shipped work is under-surfaced because our
-discovery is venue-only — it only appears when it happens to trend on a
-general venue. This lane points at the domain directly. It does NOT relax
-any bar: same 72h cap, same dedup, same "would I post this today", and the
-SAME 2-of-N rule for anything paper-shaped (never a bioRxiv/medRxiv paper on
-its own).
+**AI-for-science lane (biomedical, clinical & neuroscience) — same no-quota caveat:**
+Part of our audience is biomedical and neuro data scientists (ML for genomics &
+imaging, digital biomarkers, biosignal/speech analysis, brain-computer
+interfaces, workflow automation). AI-for-science shipped work is under-surfaced
+because our discovery is venue-only — it only appears when it happens to trend
+on a general venue. This lane points at the domain directly. It does NOT relax
+any bar: same 72h cap, same dedup, same "would I post this today", and the SAME
+2-of-N rule for anything paper-shaped (never a preprint on its own).
 - **Specialist lab / org blogs** (official domain; find the real news/blog
   channel and verify every URL, skip on 404): Isomorphic Labs
   (isomorphiclabs.com), EvolutionaryScale (evolutionaryscale.ai — ESM),
@@ -282,22 +281,43 @@ its own).
   Note the frontier labs already in the first pass also ship bio work — flag
   DeepMind AlphaFold / AlphaGenome, OpenAI GeneBench / LifeSciBench, and
   Anthropic Claude Science when they post.
+- **Applied clinical / academic AI models** (the COMPASS class — see
+  SWEEP_MEMORY 2026-07-07-A). A named model that ships via a peer-reviewed
+  journal (Nature / Nature Medicine / Science / Cell / NEJM AI) + a public repo
+  + coverage by ≥3 independent outlets is a REAL release and clears the 2-of-N
+  bar — even though academic repos (e.g. `mims-harvard/COMPASS`, ~90 stars)
+  never hit github-trending's ≥500-star bar and rarely reach the HN front page.
+  Do NOT gate this lane on star-trending; the released repo IS the artifact →
+  tag `["model", "repo", <domain>]`. A methods/finding paper with NO released
+  code/model/demo still does NOT qualify — that stays the "no papers alone"
+  rule (it's a finding, not a release).
+- **Neuroscience / neurotech AI**: brain-computer interfaces (Neuralink,
+  Precision Neuroscience, Synchron — official channels), neural decoding /
+  brain-to-text and brain-to-speech (e.g. Meta Brain2Qwerty, already in the
+  feed), and neuroimaging / EEG / MEG deep learning. Same bars; a genuine
+  frontier result (a BCI or neural decoder that sets a real SOTA for a
+  paralyzed user) is seismic-eligible like any frontier breakthrough.
 - **Gated community / aggregators** (only with the 2-of-N signals): HuggingFace
-  `models` / `datasets` trending filtered to biology / medical; r/bioinformatics
-  and r/MachineLearning hot (≥500 upvotes); Papers-with-Code Medical;
-  bioRxiv / medRxiv **only when the item ALSO has released code plus HN or HF
-  traction**. Optional `article`-tier voices: Eric Topol ("Ground Truths"),
-  "Owl Posting", "Asimov Press".
-- **Importance**: a genuine frontier-lab bio breakthrough (AlphaFold-3-class
+  `models` / `datasets` trending filtered to biology / medical / neuro;
+  r/bioinformatics and r/MachineLearning hot (≥500 upvotes); Papers-with-Code
+  Medical; EurekAlert and Nature / Nature Medicine research highlights as
+  DISCOVERY pointers only (then verify the named model + its repo directly —
+  never cite the press release as the artifact); bioRxiv / medRxiv **only when
+  the item ALSO has released code plus HN or HF traction**. Optional
+  `article`-tier voices: Eric Topol ("Ground Truths"), "Owl Posting",
+  "Asimov Press".
+- **Importance**: a genuine frontier bio/neuro breakthrough (AlphaFold-3-class
   structure prediction, ESM3, Evo 2, a medical model that beats clinicians on a
-  real task) is **seismic-eligible** under the existing "SOTA / frontier-tech
-  breakthrough from a top lab" rule — do not soften it because the domain is
-  biology.
-- **Keep it bounded**: at most ~1 item from this lane per sweep unless something
-  is genuinely seismic, so it can't crowd out core AI. Domain rides in `tags`
-  (`genomics`, `medical-imaging`, `biomarker`, `bioinformatics`, `proteomics`,
-  `clinical-nlp`), NOT a new category — the `categories` stay the artifact type
-  (`model` / `paper` / `algorithm` / `benchmark` / `tool`).
+  real task, a SOTA neural decoder) is **seismic-eligible** under the existing
+  "SOTA / frontier-tech breakthrough from a top lab" rule — do not soften it
+  because the domain is biology or neuroscience.
+- **Keep it bounded**: at most ~1–2 items from this whole lane per sweep unless
+  something is genuinely seismic, so it can't crowd out core AI. Domain rides in
+  `tags` (`genomics`, `medical-imaging`, `biomarker`, `bioinformatics`,
+  `proteomics`, `clinical-nlp`, `oncology`, `neuroscience`,
+  `brain-computer-interface`, `neuroimaging`), NOT a new category — the
+  `categories` stay the artifact type (`model` / `paper` / `algorithm` /
+  `benchmark` / `tool`).
 
 **Last resort (only after exhausting above with <2 items):**
 - **Tier-1 AI press**: theverge.com/ai, arstechnica.com/ai,

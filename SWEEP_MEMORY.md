@@ -722,3 +722,53 @@ seismic/major inflation. If it never fires, the specialist channels may be
 404ing at runtime (verify the URLs and update the domain list); if it over-fires
 or crowds out core AI, tighten the ~1-per-sweep cap. Do NOT re-solve by adding a
 category — that was considered and rejected here.
+
+## 2026-07-07-A — biomedical/neuro news the bio lane STILL missed (COMPASS class + neuroscience)
+
+**Trigger:** User asked why two real items weren't in the feed:
+- COMPASS (Harvard / Zitnik Lab) — AI model predicting cancer-immunotherapy
+  (ICI) response from tumor gene-expression, Nature Medicine 2026, public repo
+  `mims-harvard/COMPASS` (~90 stars), covered by ~6 outlets. A genuine RELEASE
+  that qualifies — but nothing surfaced it.
+- MMCLE cortical-lesion detection (Buffalo / Genentech) — a Communications
+  Medicine methods paper with NO released code/model/demo.
+User then added: "also neuro AI news I want to have".
+
+**Root cause:** 07-05-A fixed *which domains* we look at but kept the same
+*discovery venues*, tuned for ≥500-star github-trending + HN front page + HF
+trending. Applied academic clinical models ship differently — journal paper +
+university PR + a small (~90-star) academic repo — so COMPASS cleared the
+quality bar (released repo + Nature Medicine + multi-outlet) yet was invisible
+by those metrics. Neuroscience/neurotech AI (BCIs, neural decoders,
+neuroimaging) had no explicit pointer at all.
+
+**Change (prompt only):**
+- Expanded the lane to "biomedical, clinical & neuroscience".
+- New **"Applied clinical / academic AI models (COMPASS class)"** bullet: a
+  named model with a peer-reviewed journal + public repo + ≥3 independent
+  outlets is a real release and clears 2-of-N — explicitly DO NOT gate this lane
+  on star-trending (academic repos are small but real). Repo is the artifact →
+  `["model","repo",<domain>]`.
+- New **"Neuroscience / neurotech AI"** bullet: BCIs (Neuralink, Precision
+  Neuroscience, Synchron), brain-to-text/speech decoding (Brain2Qwerty is the
+  existing exemplar), neuroimaging / EEG / MEG DL. Frontier neural decoders are
+  seismic-eligible.
+- Added EurekAlert + Nature / Nature Medicine highlights as DISCOVERY pointers
+  (verify the named model + repo directly; never cite the press release as the
+  artifact). Extended domain tags: +`oncology`, `neuroscience`,
+  `brain-computer-interface`, `neuroimaging`. Bumped the lane cap 1 → ~1–2/sweep
+  (it now spans three sub-domains).
+- Added COMPASS to the feed by hand via `propose-release.yml`.
+
+**Deliberately NOT done:** did NOT add MMCLE — a finding paper with no artifact;
+the "no papers alone" rule holds (adding it would turn the feed from a release
+tracker into a clinical-AI-findings firehose). Did NOT lower the GLOBAL
+github-trending star bar — the relaxation is scoped to THIS lane's
+journal+repo+multi-outlet signal, so core AI discovery is unchanged. Did NOT add
+a neuro/medical feed `category` (domain stays a tag).
+
+**Status:** Applied (prompt + SWEEP_MEMORY; COMPASS added out-of-band). Watch:
+the lane should now occasionally surface a COMPASS-class model or a neuro-AI
+result WITH domain tags, still ≤1–2/sweep. If it starts posting finding-papers
+with no code, the "no papers alone" line isn't landing — reinforce it, don't
+gate harder.
