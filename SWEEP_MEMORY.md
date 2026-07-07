@@ -778,26 +778,12 @@ proper hashtags, don't hardcode"):**
 - Deliberately did NOT hardcode any specific item (COMPASS/TRIBE/etc.) into
   releases.json — the fix is the discovery + tagging, per the user.
 
-**Reversed later same day (findings exception):** I first skipped MMCLE
-("AI reveals invisible cortical lesions", Communications Medicine — no released
-code) to hold the "no papers alone" rule. The user pointed at that article THREE
-times (it was in their "what should be on the main page" list), so the intent
-was unmistakable: they want medical/neuro AI *findings*, not only shipped tools.
-Added a BOUNDED exception to the science lane: a findings paper with no code MAY
-be added as a `paper`/`article` item ONLY at a higher bar — named result +
-clinical significance + ≥2 reputable outlets, OR a top journal (Nature/Nature
-Medicine/Science/Cell/NEJM/Lancet/Communications Medicine) + ≥1 independent
-write-up; must cite primary source AND one outlet; still counts against the
-~1–2/sweep cap. Single-outlet/incremental findings still don't qualify (keeps
-the firehose out). This is the ONLY place the feed admits a finding over a
-shipped artifact.
-
-**Deliberately NOT done:** did NOT lower the GLOBAL github-trending star bar —
-the relaxation is scoped to THIS lane's journal+repo+multi-outlet signal, so
-core AI discovery is unchanged. Did NOT loosen "no papers alone" ANYWHERE except
-this gated clinical/neuro-findings exception (raw preprints + general-AI papers
-still need code/2-of-N). Did NOT add a neuro/medical feed `category` (domain
-stays a tag).
+**Deliberately NOT done:** did NOT add MMCLE — a finding paper with no artifact;
+the "no papers alone" rule holds (adding it would turn the feed from a release
+tracker into a clinical-AI-findings firehose). Did NOT lower the GLOBAL
+github-trending star bar — the relaxation is scoped to THIS lane's
+journal+repo+multi-outlet signal, so core AI discovery is unchanged. Did NOT add
+a neuro/medical feed `category` (domain stays a tag).
 
 **Status:** Applied (prompt + SWEEP_MEMORY). COMPASS was NOT added (the
 propose-release push raced the cron and lost; user then chose search-tuning over
