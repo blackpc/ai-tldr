@@ -758,7 +758,25 @@ neuroimaging) had no explicit pointer at all.
   artifact). Extended domain tags: +`oncology`, `neuroscience`,
   `brain-computer-interface`, `neuroimaging`. Bumped the lane cap 1 → ~1–2/sweep
   (it now spans three sub-domains).
-- Added COMPASS to the feed by hand via `propose-release.yml`.
+- Tried adding COMPASS via `propose-release.yml`, but that workflow pushes
+  WITHOUT rebase-retry and lost a race to the 2h cron (push rejected: "fetch
+  first"). It BUILT the item fine but never landed — a real bug in that
+  workflow (its push step needs the same rebase-retry the main sweep has).
+
+**Follow-up same day (user: "didn't work … tune the news search engine and add
+proper hashtags, don't hardcode"):**
+- Made the lane's discovery ACTIVE, not passive: it now runs an explicit, dated
+  query set every sweep (brain-computer interface / neural decoding /
+  medical-imaging / genomics / drug-discovery / digital-biomarker, swapping in
+  the current month+year) instead of only listing venues — the sweep wasn't
+  proactively searching neuro/medical, so nothing surfaced.
+- Made canonical domain HASHTAGS required on every science-lane item. `tags`
+  render as `#tag` chips AND feed the site search box (`src/data/feed.ts`
+  matches `title+org+summary+tags+tagline`), so a reader searching
+  "brain"/"genomics"/"oncology" only finds the item if it's tagged. Added a
+  fixed neuro / clinical / bio hashtag vocabulary the sweep must draw 2–4 from.
+- Deliberately did NOT hardcode any specific item (COMPASS/TRIBE/etc.) into
+  releases.json — the fix is the discovery + tagging, per the user.
 
 **Deliberately NOT done:** did NOT add MMCLE — a finding paper with no artifact;
 the "no papers alone" rule holds (adding it would turn the feed from a release
@@ -767,8 +785,11 @@ github-trending star bar — the relaxation is scoped to THIS lane's
 journal+repo+multi-outlet signal, so core AI discovery is unchanged. Did NOT add
 a neuro/medical feed `category` (domain stays a tag).
 
-**Status:** Applied (prompt + SWEEP_MEMORY; COMPASS added out-of-band). Watch:
-the lane should now occasionally surface a COMPASS-class model or a neuro-AI
-result WITH domain tags, still ≤1–2/sweep. If it starts posting finding-papers
-with no code, the "no papers alone" line isn't landing — reinforce it, don't
-gate harder.
+**Status:** Applied (prompt + SWEEP_MEMORY). COMPASS was NOT added (the
+propose-release push raced the cron and lost; user then chose search-tuning over
+manual adds). Watch: the lane should now ACTIVELY search and surface a
+COMPASS-class model or a neuro-AI result WITH domain hashtags, still ≤1–2/sweep.
+If it starts posting finding-papers with no code, the "no papers alone" line
+isn't landing — reinforce it, don't gate harder. Open follow-up (not done here):
+`propose-release.yml` still lacks rebase-retry on push — fix it if the manual
+proposer is kept.

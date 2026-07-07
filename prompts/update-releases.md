@@ -272,6 +272,22 @@ because our discovery is venue-only — it only appears when it happens to trend
 on a general venue. This lane points at the domain directly. It does NOT relax
 any bar: same 72h cap, same dedup, same "would I post this today", and the SAME
 2-of-N rule for anything paper-shaped (never a preprint on its own).
+- **Actively SEARCH this domain — do not just passively watch the venues
+  below.** Every sweep, run a handful of fresh, dated web searches (swap in the
+  CURRENT month + year so results are recent), then verify each hit against its
+  primary source before adding. Baseline query set — adapt/extend as needed:
+  - `brain-computer interface AI <month year>` · `neural decoding brain-to-text
+    model release` · `Neuralink OR Synchron OR "Precision Neuroscience" update`
+  - `medical imaging AI model release OR FDA clearance <year>` · `AI clinical
+    diagnosis model Nature Medicine <year>` · `pathology OR radiology foundation
+    model`
+  - `protein design OR drug discovery AI model release` · `genomics OR
+    single-cell foundation model` · `digital biomarker wearable AI <year>`
+  Also scan these discovery feeds directly: `neurosciencenews.com`,
+  `ai.meta.com/blog` (FAIR brain/neuro work), Google Health, and EurekAlert's
+  AI/health section. These are DISCOVERY queries, NOT a quota — every hit still
+  has to clear the 72h cap and the 2-of-N bar, and a search that returns nothing
+  fresh is a fine result (add nothing).
 - **Specialist lab / org blogs** (official domain; find the real news/blog
   channel and verify every URL, skip on 404): Isomorphic Labs
   (isomorphiclabs.com), EvolutionaryScale (evolutionaryscale.ai — ESM),
@@ -311,13 +327,23 @@ any bar: same 72h cap, same dedup, same "would I post this today", and the SAME
   real task, a SOTA neural decoder) is **seismic-eligible** under the existing
   "SOTA / frontier-tech breakthrough from a top lab" rule — do not soften it
   because the domain is biology or neuroscience.
+- **Proper hashtags — REQUIRED on every science-lane item.** `tags` render as
+  `#tag` chips AND feed the site's search box, so a reader searching "brain",
+  "genomics", or "oncology" only finds the item if it carries the right tag.
+  Give each item its artifact-type + org/model-name tags PLUS **2–4 canonical
+  domain hashtags** from this vocabulary (kebab-case, NO `#` in the data — the
+  UI adds it):
+  - neuro: `neuroscience`, `neurotech`, `brain-computer-interface`, `bci`,
+    `neural-decoding`, `brain-to-text`, `neuroimaging`, `eeg`
+  - clinical / medical: `healthcare`, `clinical-ai`, `medical-imaging`,
+    `radiology`, `pathology`, `diagnostics`, `digital-biomarker`, `oncology`
+  - bio / genomics: `genomics`, `bioinformatics`, `single-cell`, `proteomics`,
+    `protein-design`, `drug-discovery`, `computational-biology`
+  Domain lives in these tags, NOT a new `category` — `categories` stay the
+  artifact type (`model` / `paper` / `algorithm` / `benchmark` / `tool` /
+  `repo`).
 - **Keep it bounded**: at most ~1–2 items from this whole lane per sweep unless
-  something is genuinely seismic, so it can't crowd out core AI. Domain rides in
-  `tags` (`genomics`, `medical-imaging`, `biomarker`, `bioinformatics`,
-  `proteomics`, `clinical-nlp`, `oncology`, `neuroscience`,
-  `brain-computer-interface`, `neuroimaging`), NOT a new category — the
-  `categories` stay the artifact type (`model` / `paper` / `algorithm` /
-  `benchmark` / `tool`).
+  something is genuinely seismic, so it can't crowd out core AI.
 
 **Last resort (only after exhausting above with <2 items):**
 - **Tier-1 AI press**: theverge.com/ai, arstechnica.com/ai,
