@@ -1,7 +1,7 @@
 // AUTO-CURATED influencer directory. Organised by ROLE (category), not raw
 // follower count. Reach is shown as a coarse, durable band (1M+/500K+/100K+)
 // rather than a precise, fast-rotting number — see CLAUDE.md zero-hallucination
-// policy. 112 people. Counts by category: labs: 16, research: 10, educators: 33, engineering: 17, tools: 16, voices: 20.
+// policy. 116 people. Counts by category: labs: 16, research: 13, educators: 33, engineering: 17, tools: 16, voices: 21.
 
 export type Platform =
   | "youtube"
@@ -438,6 +438,42 @@ export const influencers: Influencer[] = [
     url: "https://www.interconnects.ai/",
     category: "research",
     tags: ["rlhf", "alignment", "newsletter"],
+  },
+  {
+    id: "pranav-rajpurkar",
+    name: "Pranav Rajpurkar",
+    handle: "pranavrajpurkar",
+    bio: "Harvard associate professor who built CheXNet (AI chest X-ray diagnosis) and co-founded a2z Radiology AI, now researching clinical AI agents and medical foundation models.",
+    platform: "twitter",
+    url: "https://x.com/pranavrajpurkar",
+    category: "research",
+    links: [
+      { platform: "blog", url: "https://rajpurkarlab.hms.harvard.edu/" },
+    ],
+    tags: ["medical-imaging", "clinical-ai", "biomedical", "foundation-models"],
+  },
+  {
+    id: "blake-richards",
+    name: "Blake Richards",
+    handle: "tyrell_turing",
+    bio: "McGill/Mila associate professor and Google Research Scientist whose lab works at the intersection of computational neuroscience and deep learning, studying biologically plausible learning rules.",
+    platform: "twitter",
+    url: "https://x.com/tyrell_turing",
+    category: "research",
+    links: [
+      { platform: "blog", url: "https://linclab.mila.quebec/team/blake" },
+    ],
+    tags: ["computational-neuroscience", "deep-learning", "neuroscience", "mila"],
+  },
+  {
+    id: "frank-willett",
+    name: "Frank Willett",
+    handle: "WillettNeuro",
+    bio: "Stanford HHMI professor and co-director of the Neural Prosthetics Translational Lab, setting world records for brain-to-text communication speed in people with paralysis.",
+    platform: "twitter",
+    url: "https://x.com/WillettNeuro",
+    category: "research",
+    tags: ["brain-computer-interface", "neural-decoding", "neurotech", "bci"],
   },
   {
     id: "freecodecamp",
@@ -1574,6 +1610,20 @@ export const influencers: Influencer[] = [
     url: "https://x.com/craigss",
     category: "voices",
     tags: ["podcast", "ethics", "interviews"],
+  },
+  {
+    id: "eric-topol",
+    name: "Eric Topol",
+    handle: "EricTopol",
+    bio: "Scripps Research cardiologist and EVP, author of \"Deep Medicine\", running Ground Truths — the most widely-read biomedical AI newsletter with 200K+ subscribers.",
+    platform: "substack",
+    url: "https://erictopol.substack.com/",
+    category: "voices",
+    reach: "500k",
+    links: [
+      { platform: "twitter", url: "https://x.com/EricTopol" },
+    ],
+    tags: ["medical-ai", "clinical-ai", "biomedical", "newsletter"],
   },
 ];
 
