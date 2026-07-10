@@ -315,6 +315,15 @@ any bar: same 72h cap, same dedup, same "would I post this today", and the SAME
   community-level releases (open datasets, EEG/MEG models, neural-interface
   firmware) that rarely reach HN front page — but the same "released
   artifact + ≥2 signals" bar still applies, not the byline alone.
+- **Biosignal & biomedical image processing publications** (discovery pointers for AI
+  applied to biosignals and clinical imaging — same bars apply: 72h cap, released
+  artifact, ≥2 signals): Diagnostic Imaging news (diagnosticimaging.com/news) —
+  radiology/clinical AI coverage; Imaging Technology News (itnonline.com) — medical
+  imaging technology news; Biomedical Signal Processing and Control journal
+  (sciencedirect.com/journal/biomedical-signal-processing-and-control) — peer-reviewed
+  biosignal and biomedical imaging research. Use these as discovery aggregators, then
+  verify the named model, tool, or released code from the primary source directly before
+  adding.
 - **Applied clinical / academic AI models** (the COMPASS class — see
   SWEEP_MEMORY 2026-07-07-A). A named model that ships via a peer-reviewed
   journal (Nature / Nature Medicine / Science / Cell / NEJM AI) + a public repo
