@@ -297,6 +297,24 @@ any bar: same 72h cap, same dedup, same "would I post this today", and the SAME
   Note the frontier labs already in the first pass also ship bio work — flag
   DeepMind AlphaFold / AlphaGenome, OpenAI GeneBench / LifeSciBench, and
   Anthropic Claude Science when they post.
+- **Biopharma & drug-discovery AI publications** (aggregators that cover
+  AI-for-pharma, clinical-trial AI, and computational drug discovery — check
+  these the same way you check tier-1 press: discovery pointer only, then
+  verify the primary source directly): Endpoints News AI channel
+  (endpoints.news/channel/ai/), Fierce Pharma AI section
+  (fiercepharma.com/ai-and-machine-learning), BioSpace AI section
+  (biospace.com/artificial-intelligence), Decoding Bio newsletter
+  (decodingbio.com/newsletter). Same bars apply: the item must still have a
+  verified artifact (released model / repo / tool / approved product) within
+  72h; a pipeline deal or funding mention alone does NOT qualify.
+- **Neuro AI community publications** (check these alongside the BCI lab
+  blogs above): The Transmitter (thetransmitter.org) — neuroscience news
+  covering AI/ML methods and results; NeurIPS / IEEE Brain
+  (brain.ieee.org) — technical neuro-AI; NeuroTechX community
+  (neurotechx.com) — open neurotech projects and standards. These surface
+  community-level releases (open datasets, EEG/MEG models, neural-interface
+  firmware) that rarely reach HN front page — but the same "released
+  artifact + ≥2 signals" bar still applies, not the byline alone.
 - **Applied clinical / academic AI models** (the COMPASS class — see
   SWEEP_MEMORY 2026-07-07-A). A named model that ships via a peer-reviewed
   journal (Nature / Nature Medicine / Science / Cell / NEJM AI) + a public repo
@@ -310,8 +328,10 @@ any bar: same 72h cap, same dedup, same "would I post this today", and the SAME
 - **Neuroscience / neurotech AI**: brain-computer interfaces (Neuralink,
   Precision Neuroscience, Synchron — official channels), neural decoding /
   brain-to-text and brain-to-speech (e.g. Meta Brain2Qwerty, already in the
-  feed), and neuroimaging / EEG / MEG deep learning. Same bars; a genuine
-  frontier result (a BCI or neural decoder that sets a real SOTA for a
+  feed), and neuroimaging / EEG / MEG deep learning. Also check The
+  Transmitter (thetransmitter.org), IEEE Brain (brain.ieee.org), and
+  NeuroTechX (neurotechx.com) for community open releases. Same bars; a
+  genuine frontier result (a BCI or neural decoder that sets a real SOTA for a
   paralyzed user) is seismic-eligible like any frontier breakthrough.
 - **Gated community / aggregators** (only with the 2-of-N signals): HuggingFace
   `models` / `datasets` trending filtered to biology / medical / neuro;
