@@ -793,3 +793,40 @@ If it starts posting finding-papers with no code, the "no papers alone" line
 isn't landing — reinforce it, don't gate harder. Open follow-up (not done here):
 `propose-release.yml` still lacks rebase-retry on push — fix it if the manual
 proposer is kept.
+
+## 2026-07-16-A — nature.com added as explicit discovery source for neuro / clinical AI
+
+**Trigger:** User flagged a missed article (`nature.com/articles/s41591-026-04497-1`,
+a Nature Medicine AI paper) and asked for `nature.com` to be a tracked source
+for neuro AI.
+
+**Root cause:** `nature.com` was referenced twice in the AI-for-science lane but
+only as vague prose ("Nature / Nature Medicine research highlights") with no URL
+to visit. The active-search section listed `neurosciencenews.com` and EurekAlert
+but not nature.com itself, so the agent had no concrete page to scan and never
+visited it. Articles published directly on nature.com were only discovered by
+luck (if they also trended on HN/HF or were covered by EurekAlert).
+
+**Change (prompt v6.8.0 → v6.9.0 — prompt only, no code change):**
+- Active-search "Also scan" list: added `nature.com/subjects/artificial-intelligence`
+  and `nature.com/subjects/machine-learning` alongside `neurosciencenews.com`.
+- "Gated community / aggregators" block: replaced the vague "Nature / Nature
+  Medicine research highlights" with explicit URLs —
+  `nature.com/subjects/artificial-intelligence`, `nature.com/subjects/machine-learning`,
+  `nature.com/nm` (Nature Medicine) — with "visit the subject/journal page,
+  check recent articles" wording so the agent knows to fetch the page, not just
+  know it exists.
+- All existing bars unchanged: 72h cap, "no papers alone" rule (a Nature article
+  without a released model/repo/demo still does NOT qualify), 2-of-N for
+  paper-shaped items, ≤1–2/sweep cap.
+
+**Deliberately NOT done:** did NOT relax the "no papers alone" rule for Nature
+articles. If a Nature Medicine paper has no released code or model, it is still
+a finding — not a release — and does not qualify. The fix is discovery, not the
+bar. Did NOT add a new feed category.
+
+**Status:** Applied. Watch next ~10 crons: a qualifying Nature AI article (journal
++ public repo + ≥3 outlets) should now surface. If nothing appears but nature.com
+does have fresh AI content with code, check whether the agent is visiting the
+subject URLs. If pure finding-papers start appearing without code, the "no papers
+alone" rule isn't landing — reinforce it, do NOT lower the bar.

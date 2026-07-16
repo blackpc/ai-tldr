@@ -1,6 +1,6 @@
 ---
 prompt-id: tldr.update-releases
-prompt-version: 6.8.0
+prompt-version: 6.9.0
 output-target: src/data/releases.json (via finalize-sweep.ts)
 schema: src/data/schema.ts
 invoke-as: subagent
@@ -284,6 +284,9 @@ any bar: same 72h cap, same dedup, same "would I post this today", and the SAME
   - `protein design OR drug discovery AI model release` · `genomics OR
     single-cell foundation model` · `digital biomarker wearable AI <year>`
   Also scan these discovery feeds directly: `neurosciencenews.com`,
+  `nature.com/subjects/artificial-intelligence` and
+  `nature.com/subjects/machine-learning` (fresh Nature / Nature Medicine AI
+  highlights — visit the pages, sort by recent, check dates), plus
   `ai.meta.com/blog` (FAIR brain/neuro work), Google Health, and EurekAlert's
   AI/health section. These are DISCOVERY queries, NOT a quota — every hit still
   has to clear the 72h cap and the 2-of-N bar, and a search that returns nothing
@@ -345,10 +348,13 @@ any bar: same 72h cap, same dedup, same "would I post this today", and the SAME
 - **Gated community / aggregators** (only with the 2-of-N signals): HuggingFace
   `models` / `datasets` trending filtered to biology / medical / neuro;
   r/bioinformatics and r/MachineLearning hot (≥500 upvotes); Papers-with-Code
-  Medical; EurekAlert and Nature / Nature Medicine research highlights as
-  DISCOVERY pointers only (then verify the named model + its repo directly —
-  never cite the press release as the artifact); bioRxiv / medRxiv **only when
-  the item ALSO has released code plus HN or HF traction**. Optional
+  Medical; EurekAlert (eurekalert.org) and **Nature.com directly** —
+  `nature.com/subjects/artificial-intelligence`,
+  `nature.com/subjects/machine-learning`, and `nature.com/nm` (Nature Medicine)
+  — as DISCOVERY pointers only (visit the subject/journal page, check recent
+  articles, then verify the named model + its repo directly before adding —
+  never cite the press/journal article as the artifact); bioRxiv / medRxiv
+  **only when the item ALSO has released code plus HN or HF traction**. Optional
   `article`-tier voices: Eric Topol ("Ground Truths"), "Owl Posting",
   "Asimov Press".
 - **Importance**: a genuine frontier bio/neuro breakthrough (AlphaFold-3-class
