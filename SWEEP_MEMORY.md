@@ -830,3 +830,15 @@ bar. Did NOT add a new feed category.
 does have fresh AI content with code, check whether the agent is visiting the
 subject URLs. If pure finding-papers start appearing without code, the "no papers
 alone" rule isn't landing — reinforce it, do NOT lower the bar.
+
+## 2026-07-16-B — hemispheric.ai added as a neuro AI scan source; Descartes model added to feed
+
+**Trigger:** User request to add hemispheric.ai as a scan source for neuro AI news, and to add their new Descartes model to the feed.
+
+**What Descartes is:** Hemispheric's 6B-parameter EEG foundation model launched 2026-07-15, trained on 250,000+ hours of brain data from 100,000+ participants. Converts 15-min dry-electrode EEG sessions into quantitative neural profiles for clinical conditions (PTSD, mTBI, depression, Alzheimer's). Covered by 7+ outlets (HIT Consultant, Globes, AP, Pulse2, etc.); within 72h; passes inclusion bar.
+
+**Changes:**
+- `prompts/update-releases.md` (v6.9.0): Added `hemispheric.ai` to the Specialist lab / org blogs list in the AI-for-science lane. Same bars apply; this is a discovery pointer, not a quota.
+- `src/data/releases.json`: Added `hemispheric-descartes` item (manual-agent sweep). Verified all 5 URLs return 200; image confirmed `image/jpeg`. Item is `major`/`["model","tool"]` with required `quickFacts`, `faq`, and domain hashtags.
+
+**Status:** Applied. hemispheric.ai should now be visited on each sweep's neuro/science lane pass. Watch for future Descartes updates (new model versions, clinical-trial results, FDA milestones) to surface automatically.

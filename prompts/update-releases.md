@@ -296,7 +296,9 @@ any bar: same 72h cap, same dedup, same "would I post this today", and the SAME
   (isomorphiclabs.com), EvolutionaryScale (evolutionaryscale.ai — ESM),
   Arc Institute (arcinstitute.org/news — Evo), Chai Discovery
   (chaidiscovery.com), Google Health / Google Research health AI
-  (health.google, research.google/blog), Microsoft Research Health Futures.
+  (health.google, research.google/blog), Microsoft Research Health Futures,
+  **Hemispheric** (hemispheric.ai — NeuroAI EEG brain-decoding platform;
+  check for new model versions, product announcements, or clinical results).
   Note the frontier labs already in the first pass also ship bio work — flag
   DeepMind AlphaFold / AlphaGenome, OpenAI GeneBench / LifeSciBench, and
   Anthropic Claude Science when they post.
