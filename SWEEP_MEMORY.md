@@ -842,3 +842,22 @@ alone" rule isn't landing — reinforce it, do NOT lower the bar.
 - `src/data/releases.json`: Added `hemispheric-descartes` item (manual-agent sweep). Verified all 5 URLs return 200; image confirmed `image/jpeg`. Item is `major`/`["model","tool"]` with required `quickFacts`, `faq`, and domain hashtags.
 
 **Status:** Applied. hemispheric.ai should now be visited on each sweep's neuro/science lane pass. Watch for future Descartes updates (new model versions, clinical-trial results, FDA milestones) to surface automatically.
+
+## 2026-07-16-C — pharma AI sources expanded (more neuro/bio/pharma model discovery)
+
+**Trigger:** User: "find more sources for neuro/bio/pharma models topics like you recently published 'NeuroVFM — brain-scan AI outperforms GPT-5 on clinical triage'."
+
+**Root cause of gaps:** The AI-for-science lane's active search covered neuro/genomics/imaging but had no pharma-specific queries or company blogs. AI-first drug-discovery companies (Recursion, Insilico, AbSci, Schrödinger) ship models and platform updates regularly, and STAT News is a top health/biopharma outlet with dedicated AI-in-medicine coverage — none were in the prompt. The Lancet Digital Health and npj Digital Medicine were missing from the COMPASS-class journal list. Domain hashtags had no pharma vocabulary (`clinical-trial`, `pharma-ai`, `precision-medicine`) making pharma items un-searchable by those terms.
+
+**Change (prompt v6.9.0 → v6.10.0 — prompt only, no code change):**
+- **Active search queries**: added two new pharma-specific query rows:
+  - `pharma AI model drug discovery release <month year>` · `FDA clearance AI medical device OR diagnostic <year>` · `Recursion OR Insilico OR AbSci AI model <year>`
+  - `clinical trial AI results <year>` · `foundation model clinical decision support <year>` · `AI precision medicine release <year>`
+- **"Also scan" discovery feeds**: added `statnews.com/topic/artificial-intelligence` (STAT News, a leading health-science outlet with strong AI-in-medicine coverage).
+- **Specialist lab / org blogs**: added a "Pharma AI companies" block — Recursion Pharmaceuticals (recursion.com), Insilico Medicine (insilico.com/news), AbSci (abscibio.com/news), Schrödinger (schrodinger.com/news). Same bars: released model/platform update, no pipeline-deal-alone.
+- **COMPASS-class journals**: added The Lancet Digital Health and npj Digital Medicine alongside Nature Medicine / NEJM AI; added explicit discovery URLs (`thelancet.com/journals/landig/latest`, `nature.com/npjdigitalmed`).
+- **Domain hashtags**: added `clinical-trial`, `precision-medicine` to the clinical/medical set; added a new `pharma / drug discovery` set (`drug-discovery`, `pharma-ai`, `molecular-design`, `computational-chemistry`, `protein-design`, `target-identification`) so pharma items are findable via site search.
+
+**Bars unchanged:** 72h cap, "no papers alone" rule, 2-of-N for paper-shaped items, ≤1–2 per sweep cap. A pipeline deal, funding, or finding-paper with no released code still does NOT qualify.
+
+**Status:** Applied. Watch next ~10 crons: expect occasional pharma AI items (new model releases, FDA-cleared AI diagnostics, clinical-stage AI readouts) WITH pharma domain hashtags. If pharma company blogs are 404ing, skip and update the URL. Do NOT lower the inclusion bar if items are rare — pharma AI releases are infrequent by nature; an empty pharma lane is correct.

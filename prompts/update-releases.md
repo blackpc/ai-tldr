@@ -1,6 +1,6 @@
 ---
 prompt-id: tldr.update-releases
-prompt-version: 6.9.0
+prompt-version: 6.10.0
 output-target: src/data/releases.json (via finalize-sweep.ts)
 schema: src/data/schema.ts
 invoke-as: subagent
@@ -283,12 +283,15 @@ any bar: same 72h cap, same dedup, same "would I post this today", and the SAME
     model`
   - `protein design OR drug discovery AI model release` · `genomics OR
     single-cell foundation model` · `digital biomarker wearable AI <year>`
+  - `pharma AI model drug discovery release <month year>` · `FDA clearance AI medical device OR diagnostic <year>` · `Recursion OR Insilico OR AbSci AI model <year>`
+  - `clinical trial AI results <year>` · `foundation model clinical decision support <year>` · `AI precision medicine release <year>`
   Also scan these discovery feeds directly: `neurosciencenews.com`,
   `nature.com/subjects/artificial-intelligence` and
   `nature.com/subjects/machine-learning` (fresh Nature / Nature Medicine AI
   highlights — visit the pages, sort by recent, check dates), plus
-  `ai.meta.com/blog` (FAIR brain/neuro work), Google Health, and EurekAlert's
-  AI/health section. These are DISCOVERY queries, NOT a quota — every hit still
+  `statnews.com/topic/artificial-intelligence` (STAT News — top health-science
+  outlet with dedicated AI-in-medicine coverage), `ai.meta.com/blog` (FAIR
+  brain/neuro work), Google Health, and EurekAlert's AI/health section. These are DISCOVERY queries, NOT a quota — every hit still
   has to clear the 72h cap and the 2-of-N bar, and a search that returns nothing
   fresh is a fine result (add nothing).
 - **Specialist lab / org blogs** (official domain; find the real news/blog
@@ -299,6 +302,12 @@ any bar: same 72h cap, same dedup, same "would I post this today", and the SAME
   (health.google, research.google/blog), Microsoft Research Health Futures,
   **Hemispheric** (hemispheric.ai — NeuroAI EEG brain-decoding platform;
   check for new model versions, product announcements, or clinical results).
+  **Pharma AI companies** (AI-first drug discovery and biodesign — watch for
+  model releases, platform updates, and clinical-stage readouts):
+  Recursion Pharmaceuticals (recursion.com/resources/research),
+  Insilico Medicine (insilico.com/news — AI-designed small molecules through
+  clinical trials), AbSci (abscibio.com/news — generative protein and antibody
+  design), Schrödinger (schrodinger.com/news — physics-based + ML drug design).
   Note the frontier labs already in the first pass also ship bio work — flag
   DeepMind AlphaFold / AlphaGenome, OpenAI GeneBench / LifeSciBench, and
   Anthropic Claude Science when they post.
@@ -331,14 +340,17 @@ any bar: same 72h cap, same dedup, same "would I post this today", and the SAME
   adding.
 - **Applied clinical / academic AI models** (the COMPASS class — see
   SWEEP_MEMORY 2026-07-07-A). A named model that ships via a peer-reviewed
-  journal (Nature / Nature Medicine / Science / Cell / NEJM AI) + a public repo
-  + coverage by ≥3 independent outlets is a REAL release and clears the 2-of-N
+  journal (Nature / Nature Medicine / Science / Cell / NEJM AI /
+  The Lancet Digital Health / npj Digital Medicine) + a public repo +
+  coverage by ≥3 independent outlets is a REAL release and clears the 2-of-N
   bar — even though academic repos (e.g. `mims-harvard/COMPASS`, ~90 stars)
   never hit github-trending's ≥500-star bar and rarely reach the HN front page.
   Do NOT gate this lane on star-trending; the released repo IS the artifact →
   tag `["model", "repo", <domain>]`. A methods/finding paper with NO released
   code/model/demo still does NOT qualify — that stays the "no papers alone"
-  rule (it's a finding, not a release).
+  rule (it's a finding, not a release). Also check
+  `thelancet.com/journals/landig/latest` and `nature.com/npjdigitalmed` for
+  recently published applied clinical AI models with released code.
 - **Neuroscience / neurotech AI**: brain-computer interfaces (Neuralink,
   Precision Neuroscience, Synchron — official channels), neural decoding /
   brain-to-text and brain-to-speech (e.g. Meta Brain2Qwerty, already in the
@@ -373,9 +385,12 @@ any bar: same 72h cap, same dedup, same "would I post this today", and the SAME
   - neuro: `neuroscience`, `neurotech`, `brain-computer-interface`, `bci`,
     `neural-decoding`, `brain-to-text`, `neuroimaging`, `eeg`
   - clinical / medical: `healthcare`, `clinical-ai`, `medical-imaging`,
-    `radiology`, `pathology`, `diagnostics`, `digital-biomarker`, `oncology`
+    `radiology`, `pathology`, `diagnostics`, `digital-biomarker`, `oncology`,
+    `clinical-trial`, `precision-medicine`
+  - pharma / drug discovery: `drug-discovery`, `pharma-ai`, `molecular-design`,
+    `computational-chemistry`, `protein-design`, `target-identification`
   - bio / genomics: `genomics`, `bioinformatics`, `single-cell`, `proteomics`,
-    `protein-design`, `drug-discovery`, `computational-biology`
+    `computational-biology`
   Domain lives in these tags, NOT a new `category` — `categories` stay the
   artifact type (`model` / `paper` / `algorithm` / `benchmark` / `tool` /
   `repo`).
