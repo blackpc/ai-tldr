@@ -1,0 +1,76 @@
+{
+  "slug": "turbovec",
+  "name": "turbovec",
+  "repo": "RyanCodrai/turbovec",
+  "category": "retrieval-knowledge",
+  "categoryTitle": "Retrieval & Knowledge (RAG)",
+  "subcategory": "vector-db",
+  "subcategoryTitle": "Vector Databases",
+  "tagline": "A Rust vector index built on TurboQuant, with Python bindings and no training step",
+  "seoTitle": "turbovec - TurboQuant Vector Index for Rust & Python",
+  "metaDescription": "turbovec is an open-source vector index in Rust with Python bindings. It uses Google Research's TurboQuant quantizer to compress embeddings to 2 or 4 bits.",
+  "overview": [
+    "turbovec is an embedded vector index written in Rust and shipped with Python bindings. It is built on TurboQuant, a quantizer from Google Research that is data-oblivious: it needs no separate training phase and no parameter tuning, so vectors are indexed the moment you add them rather than after a build or retrain step. That makes it suited to corpora that grow continuously, where a train-then-index workflow means periodic rebuilds.",
+    "The project's headline claim is memory: a 10-million-document corpus that needs 31 GB of RAM as float32 fits in 4 GB once quantized to 4 bits. Search runs through hand-written SIMD kernels — NEON SDOT/SMMLA on ARM, AVX-512 VNNI and vpermb on x86, with AVX2 and scalar fallbacks. The maintainers benchmark against FAISS IndexPQFastScan at 100K vectors and report wins in every measured configuration, averaging roughly 3.4x at 4-bit and about 20-26% at 2-bit on both architectures.",
+    "It runs entirely in-process — there is no managed service and no data leaving your machine or VPC — so it fits air-gapped or privacy-constrained RAG stacks paired with any open-source embedding model. Two index types are exposed: TurboQuantIndex for positional results and IdMapIndex for stable uint64 external ids that survive deletes. Drop-in vector-store adapters are published for LangChain, LlamaIndex, Haystack, and Agno."
+  ],
+  "features": [
+    "Online ingest: vectors are indexed as they are added, with no train step, no parameter tuning, and no rebuilds as the corpus grows",
+    "2-bit and 4-bit TurboQuant compression, cutting a 31 GB float32 corpus of 10M documents to about 4 GB",
+    "Hand-written SIMD search kernels for ARM (NEON SDOT/SMMLA) and x86 (AVX-512 VNNI, vpermb), with AVX2 and scalar fallbacks",
+    "Incremental crash-safe persistence: sync(path) writes only what changed since the last sync, one fsync per call",
+    "Filtered search: pass an id allowlist to search() and the kernel honours it inside the SIMD scan, so selective filters skip work instead of over-fetching",
+    "IdMapIndex for stable uint64 external ids with O(1) remove-by-id",
+    "Drop-in replacements for the in-tree vector stores in LangChain, LlamaIndex, Haystack, and Agno"
+  ],
+  "gettingStarted": {
+    "intro": "turbovec ships on PyPI for Python and crates.io for Rust. Vectors and queries are 2-D float32 arrays of shape (n, dim); other dtypes are rejected rather than silently converted, so cast with np.asarray(x, dtype=np.float32) first if needed.",
+    "steps": [
+      {
+        "heading": "Install the Python package",
+        "body": "Install from PyPI. The wheel bundles the compiled Rust extension.",
+        "code": "pip install turbovec",
+        "lang": "bash"
+      },
+      {
+        "heading": "Build an index and search it",
+        "body": "Create an index for your embedding dimension and bit width, add vectors as they arrive, then search. write() takes a whole-file snapshot; sync() does a durable incremental save afterwards.",
+        "code": "from turbovec import TurboQuantIndex\n\nindex = TurboQuantIndex(dim=1536, bit_width=4)\nindex.add(vectors)\nindex.add(more_vectors)\n\nscores, indices = index.search(query, k=10)\n\nindex.write(\"my_index.tv\")\nloaded = TurboQuantIndex.load(\"my_index.tv\")\n\nindex.sync(\"my_index.tv\")   # after more changes: durable incremental save",
+        "lang": "python"
+      },
+      {
+        "heading": "Use stable ids that survive deletes",
+        "body": "IdMapIndex maps your own uint64 ids onto index slots, so search returns your ids and remove() is O(1) by id.",
+        "code": "import numpy as np\nfrom turbovec import IdMapIndex\n\nindex = IdMapIndex(dim=1536, bit_width=4)\nindex.add_with_ids(vectors, np.array([1001, 1002, 1003], dtype=np.uint64))\n\nscores, ids = index.search(query, k=10)   # ids are your uint64 external ids\nindex.remove(1002)                         # O(1) by id\n\nindex.write(\"my_index.tvim\")",
+        "lang": "python"
+      },
+      {
+        "heading": "Filter to a candidate set (hybrid retrieval)",
+        "body": "Let another system — SQL, BM25, an ACL check, a time window — narrow the candidates, then rerank densely inside that set. Blocks with no allowed slots are short-circuited before any scoring work.",
+        "code": "import numpy as np\nfrom turbovec import IdMapIndex\n\nidx = IdMapIndex(dim=1536, bit_width=4)\nidx.add_with_ids(vectors, ids)\n\n# Stage 1: external system narrows to candidate ids.\nallowed = np.array(db.execute(\"SELECT id FROM docs WHERE tenant=?\", (t,)).fetchall(),\n                   dtype=np.uint64)\n\n# Stage 2: dense rerank within the candidate set.\nscores, ids = idx.search(query, k=10, allowlist=allowed)",
+        "lang": "python"
+      },
+      {
+        "heading": "Or use it from Rust",
+        "body": "The same index types are available as a crate.",
+        "code": "cargo add turbovec",
+        "lang": "bash"
+      },
+      {
+        "heading": "Swap it into an existing framework",
+        "body": "Each integration keeps the same public surface, persistence semantics, and retriever wiring as the framework's in-tree store, so you change the import and keep the pipeline.",
+        "code": "pip install turbovec[langchain]     # replaces InMemoryVectorStore\npip install turbovec[llama-index]   # replaces SimpleVectorStore\npip install turbovec[haystack]      # replaces InMemoryDocumentStore\npip install turbovec[agno]          # replaces agno.vectordb.lancedb.LanceDb",
+        "lang": "bash"
+      }
+    ]
+  },
+  "useCases": [
+    "Run RAG retrieval fully locally or air-gapped, where sending embeddings to a managed vector service is not an option",
+    "Fit a large embedding corpus in memory on one machine instead of provisioning a cluster, using 2-bit or 4-bit quantization",
+    "Index a continuously growing corpus without periodic retrain-and-rebuild cycles",
+    "Combine an existing SQL, BM25, or permissions filter with dense reranking by passing an id allowlist into search",
+    "Replace the in-memory reference vector store in a LangChain, LlamaIndex, Haystack, or Agno pipeline without rewriting it"
+  ],
+  "language": "Rust",
+  "license": "MIT"
+}
