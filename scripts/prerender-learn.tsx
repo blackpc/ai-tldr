@@ -628,6 +628,10 @@ export async function prerenderLearn(opts: {
         codeRepository: ghUrl,
         ...(detail.language ? { programmingLanguage: detail.language } : {}),
         ...(detail.license ? { license: detail.license } : {}),
+        // The changelog gives the page a REAL edit date (newest entry).
+        ...(detail.changelog?.[0]?.date
+          ? { dateModified: detail.changelog[0].date }
+          : {}),
         applicationCategory: detail.categoryTitle,
         isAccessibleForFree: true,
         author: { "@id": `${siteUrl}/#org` },
@@ -671,11 +675,20 @@ export async function prerenderLearn(opts: {
       ),
     );
     toolPages++;
-    // No lastmod: tool pages have no real per-page edit date (the live star
-    // count comes from github-stars.json, merged at render — the README-derived
-    // body is otherwise static). Omitting lastmod is more honest than stamping
-    // `today` every build, and buildSitemap only emits <lastmod> when present.
-    urls.push({ loc: tUrl, changefreq: "weekly", priority: 0.6 });
+    // lastmod: only when the page has a changelog — its newest entry is a
+    // date we can stand behind. Otherwise omit (the live star count comes
+    // from github-stars.json, merged at render — the README-derived body is
+    // otherwise static, and stamping `today` every build would teach Google
+    // to distrust lastmod site-wide). buildSitemap only emits <lastmod>
+    // when present.
+    urls.push({
+      loc: tUrl,
+      ...(detail.changelog?.[0]?.date
+        ? { lastmod: detail.changelog[0].date }
+        : {}),
+      changefreq: "weekly",
+      priority: 0.6,
+    });
   }
 
   console.log(

@@ -23,6 +23,11 @@ import type {
   ModelLinkKind,
 } from "../../data/models/schema";
 import { modelPath } from "../../data/models/schema";
+import { learnToolPath } from "../../data/learn/schema";
+import modelNewsData from "../../data/models/model-news.json";
+import modelToolsData from "../../data/models/model-tools.json";
+import { entitiesInText, type EntityNewsRef } from "../../lib/entities";
+import { EntityNewsSection } from "../learn/EntityNews";
 
 const DATA = registryData as ModelRegistry;
 
@@ -224,6 +229,29 @@ export function ModelDetailPage({ detail }: { detail: ModelDetail }) {
   const related = relatedModels(detail);
   const versions = lineVersions(detail);
   const { newer, older } = prevNext(detail);
+  // Cross-links: feed items naming this model (news), and open-source tools
+  // named in this page's own prose (→ /tools/<slug>/) — the tools ↔ LLMs
+  // bridge, matched conservatively (case-sensitive whole word).
+  const news =
+    (modelNewsData as Record<string, EntityNewsRef[]>)[detail.slug] ?? [];
+  const proseHay = [
+    detail.tagline,
+    ...detail.overview,
+    ...detail.strengths,
+    ...detail.useCases,
+  ].join("\n");
+  // "Works with" = feed co-mentions (an item naming both this model and a
+  // tool — the strong signal) topped up with tools named in this page's own
+  // prose. Dedup by slug, cap 5.
+  const coTools =
+    (modelToolsData as Record<string, { name: string; slug: string }[]>)[
+      detail.slug
+    ] ?? [];
+  const proseTools = entitiesInText(proseHay, "tool", undefined, 5);
+  const relatedTools = [
+    ...coTools,
+    ...proseTools.filter((t) => !coTools.some((c) => c.slug === t.slug)),
+  ].slice(0, 5);
   const makerHref = `/models/?maker=${detail.maker}`;
   const lineHref = `/models/?maker=${detail.maker}&line=${detail.line}`;
 
@@ -247,6 +275,7 @@ export function ModelDetailPage({ detail }: { detail: ModelDetail }) {
     ...(detail.useCases.length ? [{ id: "use-cases", title: "Best for" }] : []),
     ...(detail.apis?.length ? [{ id: "access", title: "How to access" }] : []),
     ...(versions.length > 1 ? [{ id: "history", title: "Version history" }] : []),
+    ...(news.length ? [{ id: "news", title: "In the news" }] : []),
     ...(detail.faq?.length ? [{ id: "faq", title: "FAQ" }] : []),
   ];
 
@@ -472,6 +501,8 @@ export function ModelDetailPage({ detail }: { detail: ModelDetail }) {
             </section>
           )}
 
+          <EntityNewsSection name={detail.name} news={news} />
+
           {detail.faq && detail.faq.length > 0 && (
             <section id="faq" className="lrn-section lrn-faq" aria-labelledby="faq-h">
               <h2 className="lrn-h2" id="faq-h">
@@ -515,6 +546,22 @@ export function ModelDetailPage({ detail }: { detail: ModelDetail }) {
                     <a href={l.url} target="_blank" rel="noopener noreferrer">
                       <span className="lrn-tool-related-name">{l.label}</span>
                       <span className="lrn-tool-related-stars">{hostOf(l.url)} ↗</span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {relatedTools.length > 0 && (
+            <div className="lrn-tool-related">
+              <span className="lrn-tool-aside-h">// WORKS WITH (AI TOOLS)</span>
+              <ul>
+                {relatedTools.map((t) => (
+                  <li key={t.slug}>
+                    <a href={learnToolPath(t.slug)} data-internal="true">
+                      <span className="lrn-tool-related-name">{t.name}</span>
+                      <span className="lrn-tool-related-stars">tools →</span>
                     </a>
                   </li>
                 ))}

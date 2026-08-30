@@ -164,7 +164,20 @@ language. Ground every step in the project's own docs.
 ### 3. Update materially-changed entries
 
 Apply verified price/benchmark/status changes to existing detail files, keeping
-every new number's source in `links[]`. If a flagship you're already touching
+every new number's source in `links[]`.
+
+**Tool changelogs.** When you materially update a TOOL's detail file (or add a
+tool because a fresh version/change shipped), also prepend an entry to its
+`changelog` array (newest first; see `ToolChangelogEntry` in
+`src/data/learn/schema.ts`):
+`{ date, version?, note, releaseId?, url }` — `date` is the change's public
+date, `note` is 1–2 plain sentences, `url` is the official release-notes/
+changeset link you verified this run, and `releaseId` is set ONLY when the
+AI/TLDR feed has an item covering it (its real `id` from
+`src/data/releases.json`). `check-landscape.ts` validates all of this and
+fails the build on a fake `releaseId`, a non-https `url`, or wrong ordering.
+Routine star drift is NOT a changelog entry; a version release, price/license
+change, rename, or deprecation is. If a flagship you're already touching
 has benchmarks but no `comparisonTable`/`comparisonFigures`, backfill the
 published comparison (step 1.d) while you're there — but don't go hunting beyond
 the entries this run already touches.

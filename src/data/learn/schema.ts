@@ -323,6 +323,27 @@ export function learnToolPath(slug: string): string {
   return `/tools/${slug}/`;
 }
 
+/**
+ * One entry in a tool's changelog — appended by the sweep/registry agents
+ * whenever tracked news ships for the tool (a version release, a pricing or
+ * license change, a security fix). Newest first. Every fact must trace to a
+ * verified source (zero-hallucination); `scripts/check-landscape.ts`
+ * validates shape, date format, ordering, https URLs, and that `releaseId`
+ * exists in the feed.
+ */
+export interface ToolChangelogEntry {
+  /** YYYY-MM-DD — the public date of the change (matches the feed item's `date`). */
+  date: string;
+  /** Version label when the change is a versioned release, e.g. "v0.28.0". */
+  version?: string;
+  /** 1–2 plain-English sentences: what changed. */
+  note: string;
+  /** id of the AI/TLDR feed item covering this change → /releases/<id>/. */
+  releaseId?: string;
+  /** Official changelog / release-notes / announcement URL (https) — the changeset. */
+  url?: string;
+}
+
 /** One step in a tool's getting-started walkthrough. */
 export interface ToolStartStep {
   heading: string;
@@ -364,6 +385,12 @@ export interface LandscapeToolDetail {
   useCases: string[];
   language?: string;
   license?: string;
+  /**
+   * Update timeline, NEWEST FIRST — maintained by the sweep + registry
+   * agents whenever news ships for this tool. Each entry links back to the
+   * feed item (`releaseId`) and/or the official changeset (`url`).
+   */
+  changelog?: ToolChangelogEntry[];
 }
 
 export interface LandscapeSubcategory {

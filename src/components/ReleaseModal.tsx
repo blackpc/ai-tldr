@@ -1,9 +1,11 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import type { ReleaseItem } from "../data/schema";
 import { CATEGORY_META } from "../data/categories";
 import { ReleaseImage } from "./ReleaseImage";
 import { ShareButtons } from "./ShareButtons";
 import { AskAIButtons } from "./AskAIButtons";
+import { EntityChips, LinkedProse } from "./EntityLinks";
+import { linkifyProse, releaseEntities } from "../lib/entities";
 import { track } from "../lib/analytics";
 import { normalizeMetrics } from "../lib/metric-labels";
 
@@ -115,6 +117,20 @@ export function ReleaseModal({
 
   const ex = item.explainer;
   const specs = normalizeMetrics(item.metrics);
+  // Catalogue cross-links: chips under the tagline + first-mention inline
+  // links in the prose panels. Segments are computed in ONE pass here (local
+  // `used` set → first-mention dedup spans the whole modal body, mirroring
+  // the prerendered page) — never inside the child components, where a
+  // shared mutable set breaks under StrictMode's double render.
+  const entities = useMemo(() => releaseEntities(item), [item]);
+  const prose = useMemo(() => {
+    const used = new Set<string>();
+    return {
+      whatIsIt: linkifyProse(item.explainer.whatIsIt, entities, used),
+      howItWorks: linkifyProse(item.explainer.howItWorks, entities, used),
+      whyItMatters: linkifyProse(item.explainer.whyItMatters, entities, used),
+    };
+  }, [item, entities]);
   const links =
     item.links && item.links.length > 0
       ? item.links
@@ -235,6 +251,7 @@ export function ReleaseModal({
                 <p className="modal-org">{item.org}</p>
               )}
               <p className="modal-tagline">{ex.tagline}</p>
+              <EntityChips item={item} entities={entities} source="modal" />
             </header>
 
             {/* Spec bar — promotes the otherwise-hidden metrics up top */}
@@ -351,15 +368,15 @@ export function ReleaseModal({
             <div className="modal-grid">
               <section className="panel">
                 <h3 className="panel-h">// WHAT IS IT</h3>
-                <p>{ex.whatIsIt}</p>
+                <p><LinkedProse segments={prose.whatIsIt} /></p>
               </section>
               <section className="panel">
                 <h3 className="panel-h">// HOW IT WORKS</h3>
-                <p>{ex.howItWorks}</p>
+                <p><LinkedProse segments={prose.howItWorks} /></p>
               </section>
               <section className="panel">
                 <h3 className="panel-h">// WHY IT MATTERS</h3>
-                <p>{ex.whyItMatters}</p>
+                <p><LinkedProse segments={prose.whyItMatters} /></p>
               </section>
               {(ex.forWho || ex.tryIt) && (
                 <section className="panel">

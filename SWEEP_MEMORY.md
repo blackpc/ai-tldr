@@ -910,3 +910,56 @@ action's own arg parsing preserves `[1m]`. Watch the first cron after this
 lands: if the sweep commits nothing AND the log shows a 404 model error, the
 suffix didn't survive the action; fall back to bare `claude-opus-5` and accept
 200K, or find the action's quoting form.
+
+## 2026-08-30-A — 2h sweep now SYNCS the catalogues (tool changelogs + new tools/models) — supersedes part of 2026-06-18-A
+
+**Trigger:** User: the sweep writes news about tools / tool updates but never
+updates the Tools catalogue. Wants: sweep updates the catalogue (changelog
+entry per covered update, new tools/models added, category fixes), tool pages
+link their news by date, feed cards link to tool/model pages, tools ↔ LLMs
+interlinking, inline entity links, nav icons — all static-generated.
+
+**What changed (supersedes 2026-06-18-A's "feed sweep gets no catalog write
+access" — an explicit editor decision; the daily maintain-registry job STAYS
+as the completeness backstop):**
+- `prompts/update-releases.md` v6.11.0: new pipeline step 7 "Catalogue sync" —
+  scope is ONLY this sweep's `newItems`. Tool-update news → prepend a
+  `changelog` entry (`date/version/note/releaseId/url`) to the tool's detail
+  JSON; new notable tool (cap ~1) / new LLM version (cap ~2) → add per
+  maintain-registry's steps; obvious mis-filing → move tile + re-sync detail.
+  Explicitly NOT a quota; zero-catalogue-touch sweeps are the normal case.
+- `src/data/learn/schema.ts`: `ToolChangelogEntry` + `changelog?` on
+  `LandscapeToolDetail`. `scripts/check-landscape.ts` validates shape,
+  newest-first order, https url, and that `releaseId` EXISTS in releases.json
+  (mechanical zero-hallucination guard, same pattern as source-in-links).
+- `.github/workflows/update-releases.yml`: commit allowlist widened to the
+  same catalogue set maintain-registry.yml uses (landscape.json, learn/tools,
+  models/registry.json, models/models, public/models-{logos,media}); the
+  retry reset now also checkouts those + `git clean -fd`s new untracked
+  detail files (checkout alone can't remove files attempt 1 created).
+- Cross-linking shipped alongside (build-time, not agent work):
+  `scripts/build-entity-index.ts` → `src/data/entity-index.json` (tools WITH
+  detail pages + all registry models), `src/lib/entities.ts` (shared matcher —
+  longest-match-wins fixes "Sentence Transformers" also linking
+  "Transformers"; prerender.ts now uses it too, so releases stop linking
+  tile-only tools to nonexistent /tools/<slug> pages). Cards + modal get
+  catalogue chips, modal prose gets first-mention inline links, tool pages get
+  Changelog + "In the news" (feed items naming the tool, date desc) + related
+  LLMs, model pages get "In the news" + "works with" tools.
+
+**Scar discipline (why this doesn't reopen the old wounds):** the build gate
+is unchanged and mechanical — check-landscape/check-models still fail the
+job before the commit step on any invalid catalogue edit, so the widened
+allowlist can't ship bad data, only validated data. Caps are ceilings framed
+as NOT quotas (04-28 scars); changelog entries are structured DETAIL on items
+already independently accepted (same argument as 2026-06-17-C benchmarks).
+The 06-17-B "commit then `git checkout -- .`" discard guard still covers the
+newly-generated `entity-index.json` (regenerated at deploy build, like
+stats.json).
+
+**Status:** Applied. Watch the next ~10 crons: tool-version items (the
+vLLM/SGLang/LiteLLM/Ray class) should land WITH a changelog entry on their
+tool page; if a sweep starts padding catalogue adds (new tools/models on thin
+items), tighten step 7's caps — do NOT loosen check-landscape. Seeded 6
+changelogs (vllm, litellm, ray, sglang, unsloth, sentence-transformers) from
+already-verified feed items as the rendering exemplar.

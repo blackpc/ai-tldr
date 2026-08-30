@@ -21,6 +21,13 @@ import { SweepLogPage } from "./components/SweepLogPage";
 import { StatsPage } from "./components/StatsPage";
 import { Subscribe } from "./components/Subscribe";
 import { BuyMeCoffee } from "./components/BuyMeCoffee";
+import {
+  InfluencersGlyph,
+  LearnGlyph,
+  LlmGlyph,
+  ReleasesGlyph,
+  ToolsGlyph,
+} from "./components/glyphs";
 import { track, useHeartbeat, useScrollDepth } from "./lib/analytics";
 import type { LearnRoute } from "./components/learn/LearnSection";
 import type { ModelsRoute } from "./components/models/ModelsSection";
@@ -695,6 +702,9 @@ function App() {
                 goFeed();
               }}
             >
+              <span className="nav-link-ic" aria-hidden="true">
+                <ReleasesGlyph />
+              </span>
               <span className="nav-link-lbl">RELEASES</span>
             </button>
             <button
@@ -705,6 +715,9 @@ function App() {
                 goLearnPath("/learn/");
               }}
             >
+              <span className="nav-link-ic" aria-hidden="true">
+                <LearnGlyph />
+              </span>
               <span className="nav-link-lbl">LEARN</span>
             </button>
             <button
@@ -715,6 +728,9 @@ function App() {
                 goLearnPath("/tools/");
               }}
             >
+              <span className="nav-link-ic" aria-hidden="true">
+                <ToolsGlyph />
+              </span>
               <span className="nav-link-lbl">AI Tools</span>
             </button>
             <button
@@ -739,6 +755,9 @@ function App() {
                 goModelsPath("/models/");
               }}
             >
+              <span className="nav-link-ic" aria-hidden="true">
+                <LlmGlyph />
+              </span>
               <span className="nav-link-lbl">LLMS</span>
             </button>
             <button
@@ -749,6 +768,9 @@ function App() {
                 goInfluencers();
               }}
             >
+              <span className="nav-link-ic" aria-hidden="true">
+                <InfluencersGlyph />
+              </span>
               <span className="nav-link-lbl">INFLUENCERS</span>
             </button>
             <button

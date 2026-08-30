@@ -1,7 +1,7 @@
 ---
 prompt-id: tldr.update-releases
-prompt-version: 6.10.0
-output-target: src/data/releases.json (via finalize-sweep.ts)
+prompt-version: 6.11.0
+output-target: src/data/releases.json (via finalize-sweep.ts) + catalogue sync (src/data/learn/*, src/data/models/*)
 schema: src/data/schema.ts
 invoke-as: subagent
 ---
@@ -103,9 +103,54 @@ You write a draft. Scripts validate and merge. You do **NOT** edit
    on collision; soft-warns on coverage gaps.
    For non-cron runs override the source label:
    `--source manual-<reason>`. Default is `github-actions-sweep`.
-7. **Build check.** `bun run typecheck && bun run build`. If the build
+7. **Catalogue sync (tools + LLMs).** The feed and the evergreen
+   catalogues must not drift: when an item you JUST shipped in this sweep
+   is about a tracked tool or LLM, reflect it in the catalogue in the
+   SAME sweep. Scope is strictly `newItems` from this run — never
+   re-sweep the whole feed, never touch entries no new item is about.
+   All the maintain-registry rules apply here (zero-hallucination,
+   evergreen wording, source-in-links; read `prompts/maintain-registry.md`
+   if unsure — its steps 1–2 are the canonical add procedure):
+
+   - **Tool update news** — a new item covers a version release, pricing/
+     license change, or security fix for a tool in
+     `src/data/learn/landscape.json` that HAS a detail page
+     (`src/data/learn/tools/<slug>.json`): prepend ONE entry to that
+     file's `changelog` array (newest first, create the array if absent):
+     ```json
+     { "date": "<item.date>", "version": "vX.Y.Z (when versioned)",
+       "note": "<1–2 plain-English sentences on what changed>",
+       "releaseId": "<item.id>",
+       "url": "<official release-notes/changeset link — MUST be one of the item's verified links>" }
+     ```
+     Also fix any detail-page fact the news just changed (license,
+     description, stale claim) — verified values only.
+     `check-landscape.ts` validates the shape, newest-first order, https
+     `url`, and that `releaseId` is a real feed id.
+   - **New notable tool shipped** — the item is a `tool`/`repo` launch
+     that clearly belongs in the landscape and is missing: add the tile +
+     detail file per maintain-registry step 2. Cap ~1 per sweep; when in
+     doubt SKIP — the daily registry sweep is the backstop.
+   - **New LLM version shipped** — the item is a `model` release from a
+     maker in `src/data/models/registry.json`: add the registry tile +
+     detail file per maintain-registry step 1 (never set `current` — it
+     is derived). Cap ~2 per sweep. This is also what makes the model
+     name in your new item auto-link.
+   - **Mis-filed tool** — if a tool you're touching clearly sits in the
+     wrong category/subcategory (categorize by what the tool IS, not what
+     it's used with), move the tile AND re-sync the detail file's
+     `category`/`subcategory`/`categoryTitle`/`subcategoryTitle`
+     (check-landscape fails the build on drift).
+   - Validate what you touched:
+     `bun scripts/check-landscape.ts && bun scripts/check-models.ts`.
+
+   These are NOT quotas. A sweep whose items are about nothing we
+   catalogue touches zero catalogue files — that is the normal case.
+   Never add a changelog entry for an item you didn't ship this run, and
+   never invent a `url`/`version` the source doesn't state.
+8. **Build check.** `bun run typecheck && bun run build`. If the build
    breaks, fix; do not commit.
-8. Stop. Don't commit, don't push (the workflow handles that).
+9. Stop. Don't commit, don't push (the workflow handles that).
 
 ## Hard rules (non-negotiable)
 
@@ -492,8 +537,8 @@ sense and still names the thing.
   NOT add these links by hand; just write the canonical name exactly
   ("GPT-5.5", "Claude Opus 4.8", "Llama 4 Maverick", "vLLM") and the build
   links it. A near-miss ("GPT 5.5" vs "GPT-5.5") won't match, so match the
-  registry's spelling. If a hot model isn't in the registry yet, that's a
-  signal to add it there (see `src/data/models/`), not to fake a link.
+  registry's spelling. If a hot model isn't in the registry yet, add it in
+  pipeline step 7 (catalogue sync) — never fake a link.
 
 ### `title`
 

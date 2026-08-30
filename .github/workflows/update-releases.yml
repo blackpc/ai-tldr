@@ -139,11 +139,18 @@ jobs:
         # Attempt 1 may have written partial changes before hanging.
         # Revert tracked files to HEAD so attempt 2 starts clean — we
         # don't want attempt 2 to either see half-written JSON or fight
-        # with duplicate sweep-report entries.
+        # with duplicate sweep-report entries. The catalogue-sync step
+        # (prompt step 7) may also have edited landscape/registry files
+        # or created NEW tool/model detail JSONs — reset those too, and
+        # git-clean the untracked ones (checkout can't remove new files).
         if: steps.sweep1.outcome == 'failure'
         run: |
           echo "::warning::Sweep attempt 1 failed or timed out — resetting and retrying."
-          git checkout -- src/data/releases.json src/data/sweeps.json 2>/dev/null || true
+          git checkout -- src/data/releases.json src/data/sweeps.json \
+            src/data/learn/landscape.json src/data/learn/tools \
+            src/data/models/registry.json src/data/models/models 2>/dev/null || true
+          git clean -fd src/data/learn/tools src/data/models/models \
+            public/models-logos public/models-media 2>/dev/null || true
           git status --short
 
       - name: Run release sweep with Claude Code (attempt 2)
@@ -191,7 +198,7 @@ jobs:
           git --no-pager diff src/data/releases.json | head -200 || true
           echo "::endgroup::"
 
-      - name: Commit and push if releases.json, sweeps.json or stars changed
+      - name: Commit and push if the feed, sweep log, stars or catalogue changed
         id: commit
         env:
           # Pass the workflow's GITHUB_TOKEN explicitly. The Claude Code
@@ -201,9 +208,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          FILES="src/data/releases.json src/data/sweeps.json src/data/learn/github-stars.json"
+          # Feed + sweep log + stars, PLUS the catalogue allowlist the
+          # prompt's step 7 (catalogue sync) may touch: tool changelogs /
+          # new tool pages (learn/tools, landscape.json), new model
+          # versions (models/registry.json, models/models) and any brand
+          # assets they need. Same allowlist shape as maintain-registry.yml.
+          FILES="src/data/releases.json src/data/sweeps.json src/data/learn/github-stars.json src/data/learn/landscape.json src/data/learn/tools src/data/models/registry.json src/data/models/models public/models-media public/models-logos"
           if [[ -z "$(git status --porcelain $FILES)" ]]; then
-            echo "No changes to releases.json, sweeps.json or github-stars.json — nothing to commit."
+            echo "No changes to the feed, sweep log, stars or catalogue — nothing to commit."
             echo "pushed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -214,7 +226,9 @@ jobs:
 
           Refreshed src/data/releases.json and appended a sweep log
           entry to src/data/sweeps.json via prompts/update-releases.md.
-          Also refreshed Learn GitHub star counts (github-stars.json).
+          Also refreshed Learn GitHub star counts (github-stars.json)
+          and synced the tools/LLM catalogues (changelogs, new entries)
+          for items this sweep shipped.
 
           Co-Authored-By: Claude Code Action <noreply@anthropic.com>"
           # The sweep's validation build (`bun run build`) regenerates DERIVED,

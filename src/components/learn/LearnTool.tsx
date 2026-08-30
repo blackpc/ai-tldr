@@ -14,8 +14,18 @@ import {
   learnLandscapePath,
   learnToolPath,
 } from "../../data/learn/schema";
+import { modelPath } from "../../data/models/schema";
+import toolNewsData from "../../data/learn/tool-news.json";
+import toolModelsData from "../../data/learn/tool-models.json";
+import {
+  entitiesInText,
+  linkifyProse,
+  type EntityNewsRef,
+  type ProseSegment,
+} from "../../lib/entities";
 import { Breadcrumbs } from "./ArticleBody";
 import { Block } from "./Blocks";
+import { EntityNewsSection } from "./EntityNews";
 
 const DATA = landscapeData as Landscape;
 const STARS = githubStars as Record<string, number>;
@@ -98,17 +108,71 @@ function domainOf(url: string): string {
   return url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "");
 }
 
+/** Prose paragraph rendered from PRE-COMPUTED linkifyProse segments (models
+ *  + other tools this page names). The caller computes every paragraph's
+ *  segments in one pass with a local `used` set — mutating a shared set
+ *  inside child renders breaks under StrictMode's double render. Links
+ *  carry data-internal so the SPA router handles them. */
+function SegmentedP({ segments }: { segments: ProseSegment[] }) {
+  return (
+    <p className="lrn-p">
+      {segments.map((s, i) =>
+        s.href ? (
+          <a key={i} href={s.href} data-internal="true">
+            {s.text}
+          </a>
+        ) : (
+          <span key={i}>{s.text}</span>
+        ),
+      )}
+    </p>
+  );
+}
+
+
 export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
   const stars = starsOf(detail.repo);
   const ghUrl = detail.repo ? `https://github.com/${detail.repo}` : undefined;
   const related = relatedTools(detail);
   const comparison = comparisonRows(detail);
 
+  // Cross-links into the rest of the site:
+  //  - changelog: agent-curated update timeline (part of the detail JSON);
+  //  - news: feed items naming this tool, newest public date first;
+  //  - prose entities: LLMs + OTHER tools named in this page's own text →
+  //    first-mention inline links + the "Related LLMs" aside.
+  const changelog = detail.changelog ?? [];
+  const news =
+    (toolNewsData as Record<string, EntityNewsRef[]>)[detail.slug] ?? [];
+  const proseHay = [detail.tagline, ...detail.overview, ...detail.features].join("\n");
+  const proseModels = entitiesInText(proseHay, "model", undefined, 4);
+  const proseTools = entitiesInText(proseHay, "tool", detail.slug, 4);
+  const proseEntities = [...proseModels, ...proseTools];
+  // Related LLMs = feed co-mentions (an item naming both this tool and a
+  // model — the strong signal) topped up with models named in this page's
+  // own prose. Dedup by slug, cap 4.
+  const coModels =
+    (toolModelsData as Record<string, { name: string; slug: string }[]>)[
+      detail.slug
+    ] ?? [];
+  const relatedModels = [
+    ...coModels,
+    ...proseModels.filter((m) => !coModels.some((c) => c.slug === m.slug)),
+  ].slice(0, 4);
+  // One pass over all paragraphs with a LOCAL used set (first-mention-only
+  // page-wide), fully consumed here — see SegmentedP.
+  const overviewSegments = (() => {
+    const used = new Set<string>();
+    return detail.overview.map((p) => linkifyProse(p, proseEntities, used));
+  })();
+
   const toc = [
     { id: "overview", title: "Overview" },
     ...(detail.features.length > 0 ? [{ id: "features", title: "What it does" }] : []),
     { id: "getting-started", title: "Getting started" },
     ...(detail.useCases.length > 0 ? [{ id: "use-cases", title: "When to use it" }] : []),
+    ...(changelog.length > 0 ? [{ id: "changelog", title: "Changelog" }] : []),
+    ...(news.length > 0 ? [{ id: "news", title: "In the news" }] : []),
     ...(comparison.length > 1 ? [{ id: "compare", title: "Compare" }] : []),
   ];
 
@@ -182,10 +246,8 @@ export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
             <h2 className="lrn-h2" id="overview-h">
               <span className="lrn-h2-mark" aria-hidden="true">//</span> Overview
             </h2>
-            {detail.overview.map((p, i) => (
-              <p className="lrn-p" key={i}>
-                {p}
-              </p>
+            {overviewSegments.map((segments, i) => (
+              <SegmentedP key={i} segments={segments} />
             ))}
           </section>
 
@@ -244,6 +306,45 @@ export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
               </ul>
             </section>
           )}
+
+          {changelog.length > 0 && (
+            <section id="changelog" className="lrn-section" aria-labelledby="changelog-h">
+              <h2 className="lrn-h2" id="changelog-h">
+                <span className="lrn-h2-mark" aria-hidden="true">//</span> Changelog
+              </h2>
+              <p className="lrn-p">
+                Verified updates to {detail.name} that AI/TLDR tracked, newest
+                first — each links to our coverage and the official changeset.
+              </p>
+              <ol className="lrn-chlog">
+                {changelog.map((c, i) => (
+                  <li className="lrn-chlog-item" key={i}>
+                    <div className="lrn-chlog-head">
+                      <span className="lrn-news-date">{c.date}</span>
+                      {c.version && (
+                        <span className="lrn-chlog-ver">{c.version}</span>
+                      )}
+                    </div>
+                    <p className="lrn-chlog-note">{c.note}</p>
+                    <div className="lrn-chlog-links">
+                      {c.releaseId && (
+                        <a href={`/releases/${c.releaseId}/`} data-internal="true">
+                          our coverage →
+                        </a>
+                      )}
+                      {c.url && (
+                        <a href={c.url} target="_blank" rel="noopener noreferrer">
+                          changeset ↗
+                        </a>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            </section>
+          )}
+
+          <EntityNewsSection name={detail.name} news={news} />
 
           {comparison.length > 1 && (
             <section id="compare" className="lrn-section" aria-labelledby="compare-h">
@@ -306,6 +407,22 @@ export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
                 </div>
               )}
             </dl>
+          )}
+
+          {relatedModels.length > 0 && (
+            <div className="lrn-tool-related">
+              <span className="lrn-tool-aside-h">// RELATED LLMS</span>
+              <ul>
+                {relatedModels.map((m) => (
+                  <li key={m.slug}>
+                    <a href={modelPath(m.slug)} data-internal="true">
+                      <span className="lrn-tool-related-name">{m.name}</span>
+                      <span className="lrn-tool-related-stars">registry →</span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
 
           {related.length > 0 && (

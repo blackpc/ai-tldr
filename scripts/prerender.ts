@@ -58,30 +58,13 @@ import { StatsPage } from "../src/components/StatsPage";
 import statsData from "../src/data/stats.json" with { type: "json" };
 import type { StatsData } from "../src/data/stats";
 import landscapeData from "../src/data/learn/landscape.json" with { type: "json" };
-import registryData from "../src/data/models/registry.json" with { type: "json" };
-import type { ModelRegistry } from "../src/data/models/schema";
-import { modelPath } from "../src/data/models/schema";
 import { normalizeMetrics } from "../src/lib/metric-labels";
-
-// Flat list of landscape tool pages ({name, slug}) — used to cross-link a
-// fresh release page to the evergreen tool page it names. Build-script only;
-// this never reaches the SPA bundle (the "no landscape in main bundle" rule).
-const LANDSCAPE_TOOLS: { name: string; slug: string }[] = (
-  landscapeData as {
-    categories: { subcategories: { tools: { name: string; slug: string }[] }[] }[];
-  }
-).categories.flatMap((c) =>
-  c.subcategories.flatMap((s) => s.tools.map((t) => ({ name: t.name, slug: t.slug }))),
-);
-
-// Flat list of LLM-registry model pages ({name, slug}) — used to cross-link a
-// release that NAMES a model (e.g. "GPT-5.5", "Claude Opus 4.8") to its
-// evergreen /models/<slug> detail page. Build-script only; never bundled.
-const LLM_MODELS: { name: string; slug: string }[] = (
-  registryData as ModelRegistry
-).makers.flatMap((mk) =>
-  mk.lines.flatMap((l) => l.versions.map((v) => ({ name: v.name, slug: v.slug }))),
-);
+// Entity matching is the SHARED implementation (src/lib/entities.ts) built on
+// entity-index.json — the same code the live cards/modal/tool/model pages
+// use, so static HTML and the SPA link identically. It only indexes tools
+// that HAVE a detail page, so a release can never link to a tool URL that
+// doesn't exist.
+import { releaseEntities, type LinkEntity } from "../src/lib/entities";
 
 // -----------------------------------------------------------------------
 // Config
@@ -1232,6 +1215,7 @@ const RELEASE_BODY_STYLE = `<style data-rls-css>
       .rls-feed-item{border-top:1px solid #1e1e1e;padding:16px 0}
       .rls-feed-item a{color:#fff;text-decoration:none;font-size:18px}
       .rls-feed-meta{display:block;font-size:12px;color:#9a9a9a;margin:4px 0}
+      .rls-feed-ent{font-size:12px !important;color:#f7ff00 !important;border:1px solid #3a3a00;padding:1px 7px;margin-left:2px}
       .rls-feed-item p{margin:6px 0 0;color:#bbb;font-size:14px}
       .rls-related{margin-top:28px;border-top:1px solid #1e1e1e;padding-top:8px}
       .rls-bench{margin:0 0 16px}
@@ -1262,10 +1246,6 @@ function sectionHtml(label: string, innerHtml: string): string {
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
-
-/** An entity (landscape tool OR registry model) eligible for in-prose linking,
- *  carrying its own destination href + a unique key for first-mention dedup. */
-type LinkEntity = { name: string; key: string; href: string };
 
 /**
  * Linkify the FIRST mention of each high-confidence entity in a prose string to
@@ -1348,64 +1328,6 @@ function renderRelatedSection(item: ReleaseItem, all: ReleaseItem[]): string {
   return `<nav class="rls-related" aria-label="Related releases"><h2>Related releases</h2><ul class="rls-feed">${links}</ul></nav>`;
 }
 
-/** Landscape tool pages whose tool name is named (as a whole word) in this
- *  release's title or tags — relevant evergreen links from a fresh page. */
-function matchedTools(item: ReleaseItem): { name: string; slug: string }[] {
-  const hay = ` ${item.title} ${item.tags.join(" ")} `.toLowerCase();
-  const boundary = (ch: string | undefined) => ch === undefined || !/[a-z0-9]/.test(ch);
-  const out: { name: string; slug: string }[] = [];
-  for (const tool of LANDSCAPE_TOOLS) {
-    const n = tool.name.toLowerCase();
-    if (n.length < 3) continue; // skip 1-2 char names ("ML") to avoid noise
-    const idx = hay.indexOf(n);
-    if (idx === -1) continue;
-    if (boundary(hay[idx - 1]) && boundary(hay[idx + n.length])) {
-      out.push(tool);
-      if (out.length >= 3) break;
-    }
-  }
-  return out;
-}
-
-/** Registry models NAMED (as a whole word) in this release's title or tags —
- *  e.g. a "GPT-5.5" release links to /models/gpt-5-5/. Model names are highly
- *  distinctive ("Claude Opus 4.8", "Llama 4 Maverick"), so false-positive risk
- *  is far lower than for tool names; still whole-word + capped for safety. */
-function matchedModels(item: ReleaseItem): { name: string; slug: string }[] {
-  const hay = ` ${item.title} ${item.tags.join(" ")} `.toLowerCase();
-  const boundary = (ch: string | undefined) => ch === undefined || !/[a-z0-9]/.test(ch);
-  const out: { name: string; slug: string }[] = [];
-  for (const model of LLM_MODELS) {
-    const n = model.name.toLowerCase();
-    if (n.length < 3) continue;
-    const idx = hay.indexOf(n);
-    if (idx === -1) continue;
-    if (boundary(hay[idx - 1]) && boundary(hay[idx + n.length])) {
-      out.push(model);
-      if (out.length >= 3) break;
-    }
-  }
-  return out;
-}
-
-/** Combined in-prose link entities for a release: matched landscape tools
- *  (→ /tools/<slug>) + matched registry models (→ /models/<slug>/).
- *  Keys are namespaced so a tool and a model can't collide in the `used` set. */
-function releaseLinkEntities(item: ReleaseItem): LinkEntity[] {
-  return [
-    ...matchedTools(item).map((t) => ({
-      name: t.name,
-      key: `tool:${t.slug}`,
-      href: `/tools/${t.slug}`,
-    })),
-    ...matchedModels(item).map((m) => ({
-      name: m.name,
-      key: `model:${m.slug}`,
-      href: modelPath(m.slug),
-    })),
-  ];
-}
-
 /**
  * Cross-link a release page INTO the evergreen silos (Learn, landscape,
  * /stats). Releases were near crawl dead-ends — reachable only from home or
@@ -1414,16 +1336,19 @@ function releaseLinkEntities(item: ReleaseItem): LinkEntity[] {
  * use varied, descriptive anchors (anchor variety beats one templated keyword).
  */
 function renderLearnCrossLinks(item: ReleaseItem): string {
-  const toolLinks = matchedTools(item)
+  const entities = releaseEntities(item);
+  const toolLinks = entities
+    .filter((e) => e.kind === "tool")
     .map(
       (t) =>
-        `<li><a href="/tools/${escapeAttr(t.slug)}">${escapeText(t.name)} — overview &amp; getting started</a></li>`,
+        `<li><a href="${escapeAttr(t.href)}">${escapeText(t.name)} — overview, changelog &amp; getting started</a></li>`,
     )
     .join("");
-  const modelLinks = matchedModels(item)
+  const modelLinks = entities
+    .filter((e) => e.kind === "model")
     .map(
       (m) =>
-        `<li><a href="${escapeAttr(modelPath(m.slug))}">${escapeText(m.name)} — specs, benchmarks &amp; pricing</a></li>`,
+        `<li><a href="${escapeAttr(m.href)}">${escapeText(m.name)} — specs, benchmarks &amp; pricing</a></li>`,
     )
     .join("");
   const evergreen =
@@ -1527,7 +1452,7 @@ function renderReleaseBody(item: ReleaseItem, allItems: ReleaseItem[]): string {
   // /models page. `used` enforces first-mention-only across the whole body.
   // Contextual in-prose links beat a footer list for crawl-depth + entity
   // association (a release naming "GPT-5.5" links straight to /models/gpt-5-5/).
-  const entities = releaseLinkEntities(item);
+  const entities = releaseEntities(item);
   const usedLinks = new Set<string>();
   const prose = (t?: string) => (t ? linkifyEntities(t, entities, usedLinks) : "");
 
@@ -1786,13 +1711,28 @@ function renderHomeBody(items: ReleaseItem[]): string {
     )
     .slice(0, 40);
   const cards = recent
-    .map(
-      (it) =>
+    .map((it) => {
+      // Catalogue links: a release naming a tracked tool / LLM links to its
+      // evergreen page straight from the homepage list (same matcher the
+      // live cards use, so static + SPA agree).
+      const entityLinks = releaseEntities(it)
+        .slice(0, 3)
+        .map(
+          (e) =>
+            `<a class="rls-feed-ent" href="${escapeAttr(e.href)}">${
+              e.kind === "tool" ? "🛠" : "▣"
+            } ${escapeText(e.name)}</a>`,
+        )
+        .join(" ");
+      return (
         `<li class="rls-feed-item"><a href="${escapeAttr(`/releases/${it.id}/`)}">` +
         `<strong>${escapeText(it.title)}</strong></a>` +
-        `<span class="rls-feed-meta">${escapeText(it.org)} · ${escapeText(it.date)} · ${escapeText(it.categories[0])}</span>` +
-        `<p>${escapeText(it.summary)}</p></li>`,
-    )
+        `<span class="rls-feed-meta">${escapeText(it.org)} · ${escapeText(it.date)} · ${escapeText(it.categories[0])}${
+          entityLinks ? ` · ${entityLinks}` : ""
+        }</span>` +
+        `<p>${escapeText(it.summary)}</p></li>`
+      );
+    })
     .join("");
   return (
     `<div class="page rls-body"><header class="page-head">` +

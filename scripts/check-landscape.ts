@@ -12,6 +12,7 @@ import { readFileSync, existsSync, writeFileSync } from "node:fs";
 
 const LANDSCAPE = "src/data/learn/landscape.json";
 const STARS = "src/data/learn/github-stars.json";
+const RELEASES = "src/data/releases.json";
 const PUBLIC_DIR = "public";
 const ACCESS = new Set([
   "open-source", "open-core", "freemium", "commercial", "enterprise",
@@ -39,6 +40,54 @@ const data = JSON.parse(readFileSync(LANDSCAPE, "utf8"));
 const stars: Record<string, number> = existsSync(STARS)
   ? JSON.parse(readFileSync(STARS, "utf8"))
   : {};
+// Feed item ids — a changelog entry's `releaseId` must point at a REAL feed
+// item (zero-hallucination: the agent can't invent our own coverage either).
+const releaseIds = new Set<string>(
+  existsSync(RELEASES)
+    ? (JSON.parse(readFileSync(RELEASES, "utf8")).items as { id: string }[]).map(
+        (i) => i.id,
+      )
+    : [],
+);
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Validate a tool detail's optional changelog (see ToolChangelogEntry in
+ *  src/data/learn/schema.ts): newest-first, dated, grounded links only. */
+function checkChangelog(slug: string, changelog: unknown): void {
+  if (changelog === undefined) return;
+  if (!Array.isArray(changelog)) {
+    err(`${slug}.json changelog must be an array`);
+    return;
+  }
+  let prev: string | null = null;
+  changelog.forEach((c, i) => {
+    const w = `${slug}.json changelog[${i}]`;
+    if (typeof c !== "object" || c === null) return err(`${w} not an object`);
+    const e = c as Record<string, unknown>;
+    if (typeof e.date !== "string" || !DATE_RE.test(e.date))
+      err(`${w} date must be YYYY-MM-DD (got ${JSON.stringify(e.date)})`);
+    else {
+      if (prev !== null && e.date > prev)
+        err(`${w} out of order — changelog must be NEWEST first`);
+      prev = e.date;
+    }
+    if (typeof e.note !== "string" || e.note.trim().length < 12)
+      err(`${w} note too short (1–2 plain sentences required)`);
+    if (e.note && typeof e.note === "string" && e.note.length > 400)
+      err(`${w} note too long (${e.note.length} > 400)`);
+    if (e.version !== undefined && typeof e.version !== "string")
+      err(`${w} version must be a string`);
+    if (e.url !== undefined && (typeof e.url !== "string" || !e.url.startsWith("https://")))
+      err(`${w} url must be https`);
+    if (e.releaseId !== undefined) {
+      if (typeof e.releaseId !== "string") err(`${w} releaseId must be a string`);
+      else if (releaseIds.size > 0 && !releaseIds.has(e.releaseId))
+        err(`${w} releaseId "${e.releaseId}" not found in releases.json`);
+    }
+    if (e.releaseId === undefined && e.url === undefined)
+      err(`${w} needs a releaseId or a url — an unlinked entry is unverifiable`);
+  });
+}
 
 if (!Array.isArray(data.categories) || data.categories.length === 0)
   err("categories must be a non-empty array");
@@ -129,6 +178,7 @@ for (const c of data.categories ?? []) {
               err(`${t.slug}.json gettingStarted has no steps`);
             if ((d.seoTitle ?? "").length > 70)
               err(`${t.slug}.json seoTitle too long (${d.seoTitle.length})`);
+            checkChangelog(t.slug, d.changelog);
           } catch {
             err(`${t.slug}.json is not valid JSON`);
           }

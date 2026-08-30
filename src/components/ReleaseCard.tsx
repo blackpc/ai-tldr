@@ -1,8 +1,11 @@
+import { useMemo } from "react";
 import type { ReleaseItem } from "../data/schema";
 import { CATEGORY_META } from "../data/categories";
 import { ReleaseImage } from "./ReleaseImage";
 import { CardShareButton } from "./CardShareButton";
 import { CardAskAIButton } from "./CardAskAIButton";
+import { EntityChips } from "./EntityLinks";
+import { releaseEntities } from "../lib/entities";
 import { track } from "../lib/analytics";
 
 const importanceLabel: Record<ReleaseItem["importance"], string> = {
@@ -19,6 +22,7 @@ export function ReleaseCard({
   item: ReleaseItem;
   onOpen: (item: ReleaseItem) => void;
 }) {
+  const entities = useMemo(() => releaseEntities(item), [item]);
 
   return (
     <article
@@ -90,6 +94,8 @@ export function ReleaseCard({
           {item.explainer.whatIsIt.split(/(?<=\.)\s+/).slice(0, 2).join(" ")}
         </p>
       )}
+
+      <EntityChips item={item} entities={entities} source="card" max={3} />
 
       <div className="card-foot">
         <span className="card-org">{item.org}</span>
