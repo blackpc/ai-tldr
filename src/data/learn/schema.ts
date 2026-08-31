@@ -295,6 +295,17 @@ export type ToolAccess =
   | "commercial"
   | "enterprise";
 
+/** Human label for each access model. Defined ONCE here because both the
+ *  directory's filter chips and the tool page's hero chip render it — two
+ *  copies would eventually disagree about the wording. */
+export const TOOL_ACCESS_LABEL: Record<ToolAccess, string> = {
+  "open-source": "Open source",
+  "open-core": "Open core",
+  freemium: "Freemium",
+  commercial: "Commercial",
+  enterprise: "Enterprise",
+};
+
 export interface LandscapeTool {
   /** Display name of the project. */
   name: string;

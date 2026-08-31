@@ -9,10 +9,15 @@
 
 import landscapeData from "../../data/learn/landscape.json";
 import githubStars from "../../data/learn/github-stars.json";
-import type { Landscape, LandscapeToolDetail } from "../../data/learn/schema";
+import type {
+  Landscape,
+  LandscapeTool,
+  LandscapeToolDetail,
+} from "../../data/learn/schema";
 import {
   learnLandscapePath,
   learnToolPath,
+  TOOL_ACCESS_LABEL as ACCESS_LABEL,
 } from "../../data/learn/schema";
 import { modelPath } from "../../data/models/schema";
 import toolNewsData from "../../data/learn/tool-news.json";
@@ -26,6 +31,15 @@ import {
 import { Breadcrumbs } from "./ArticleBody";
 import { Block } from "./Blocks";
 import { EntityNewsSection } from "./EntityNews";
+import {
+  EntityHero,
+  EntityInstall,
+  EntitySpecs,
+  NewsRail,
+  WhatsNew,
+  type SpecCell,
+} from "./EntityHero";
+import { formatDay, installCommand } from "./entityFormat";
 
 const DATA = landscapeData as Landscape;
 const STARS = githubStars as Record<string, number>;
@@ -41,6 +55,19 @@ function formatStars(n: number): string {
 
 function starsOf(repo?: string): number {
   return repo ? STARS[repo.toLowerCase()] ?? 0 : 0;
+}
+
+/**
+ * The tool's tile in landscape.json — the CANONICAL source of the brand logo
+ * and the access model. Detail files carry neither in practice (0 of 562 have
+ * a `logo`, 4 have an `access`), so reading them off the detail alone would
+ * show a monogram for every tool and label commercial tools "Open source".
+ * The detail's own fields stay as the fallback if that ever changes.
+ */
+function tileOf(detail: LandscapeToolDetail): LandscapeTool | undefined {
+  const cat = DATA.categories.find((c) => c.id === detail.category);
+  const sub = cat?.subcategories.find((s) => s.id === detail.subcategory);
+  return sub?.tools.find((t) => t.slug === detail.slug);
 }
 
 /** Sibling tools in the same subcategory (excluding the current one). */
@@ -135,6 +162,10 @@ export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
   const ghUrl = detail.repo ? `https://github.com/${detail.repo}` : undefined;
   const related = relatedTools(detail);
   const comparison = comparisonRows(detail);
+  // Identity facts come from the landscape tile (see tileOf).
+  const tile = tileOf(detail);
+  const logo = tile?.logo ?? detail.logo;
+  const access = tile?.access ?? detail.access ?? "open-source";
 
   // Cross-links into the rest of the site:
   //  - changelog: agent-curated update timeline (part of the detail JSON);
@@ -166,13 +197,44 @@ export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
     return detail.overview.map((p) => linkifyProse(p, proseEntities, used));
   })();
 
+  // Masthead facts. The newest changelog entry drives both the "What's new"
+  // panel and the version/updated cells — the whole point of the redesign is
+  // that "which version, how fresh" is answered above the fold.
+  const latest = changelog[0];
+  const cmd = installCommand(detail.gettingStarted.steps[0]?.code);
+  const railItems = news.slice(0, 3);
+  // Full sections below are the DESTINATIONS of the masthead's jump links, so
+  // they only render when they hold more than the masthead already showed —
+  // otherwise the page says the same thing twice.
+  const showFullChangelog = changelog.length > 1;
+  const showFullNews = news.length > railItems.length;
+
+  const specCells: SpecCell[] = [
+    ...(stars > 0
+      ? [{ k: "Stars", v: `★ ${formatStars(stars)}`, accent: true }]
+      : []),
+    ...(latest?.version ? [{ k: "Latest", v: latest.version, accent: true }] : []),
+    ...(latest ? [{ k: "Updated", v: formatDay(latest.date)! }] : []),
+    ...(detail.language ? [{ k: "Language", v: detail.language }] : []),
+    ...(detail.license ? [{ k: "License", v: detail.license }] : []),
+    ...(news.length > 0
+      ? [
+          {
+            k: "Coverage",
+            v: `${news.length} ${news.length === 1 ? "story" : "stories"}`,
+            href: showFullNews ? "#news" : `/releases/${news[0].id}/`,
+          },
+        ]
+      : []),
+  ];
+
   const toc = [
     { id: "overview", title: "Overview" },
     ...(detail.features.length > 0 ? [{ id: "features", title: "What it does" }] : []),
     { id: "getting-started", title: "Getting started" },
     ...(detail.useCases.length > 0 ? [{ id: "use-cases", title: "When to use it" }] : []),
-    ...(changelog.length > 0 ? [{ id: "changelog", title: "Changelog" }] : []),
-    ...(news.length > 0 ? [{ id: "news", title: "In the news" }] : []),
+    ...(showFullChangelog ? [{ id: "changelog", title: "Version history" }] : []),
+    ...(showFullNews ? [{ id: "news", title: "In the news" }] : []),
     ...(comparison.length > 1 ? [{ id: "compare", title: "Compare" }] : []),
   ];
 
@@ -189,44 +251,56 @@ export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
             { label: detail.name },
           ]}
         />
-        <div className="lrn-tool-head-row">
-          <div className="lrn-tool-head-main">
-            <h1 className="lrn-art-title">{detail.name}</h1>
-            <p className="lrn-art-tagline">{detail.tagline}</p>
-          </div>
-          {(detail.repo || detail.homepage) && (
-            <div className="lrn-tool-head-links">
-              {detail.repo && (
-                <a
-                  className="lrn-tool-headlink"
-                  href={ghUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  <svg className="lrn-gh-mark" viewBox="0 0 16 16" width="18" height="18" aria-hidden="true">
-                    <path fill="currentColor" d={GH_MARK} />
-                  </svg>
-                  <span className="lrn-tool-headlink-loc">github.com/{detail.repo}</span>
-                  {stars > 0 && (
-                    <span className="lrn-tool-headlink-stars">★ {formatStars(stars)}</span>
-                  )}
-                </a>
-              )}
-              {detail.homepage && (
-                <a
-                  className="lrn-tool-headlink"
-                  href={detail.homepage}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  <GlobeGlyph />
-                  <span className="lrn-tool-headlink-loc">{domainOf(detail.homepage)}</span>
-                  <span className="lrn-tool-headlink-arrow" aria-hidden="true">↗</span>
-                </a>
-              )}
-            </div>
-          )}
-        </div>
+        <EntityHero
+          logo={logo}
+          name={detail.name}
+          seed={detail.slug}
+          tagline={detail.tagline}
+          chips={[
+            { label: detail.subcategoryTitle, href: catHref, tone: "accent" },
+            { label: ACCESS_LABEL[access] },
+          ]}
+          actions={[
+            ...(detail.repo
+              ? [
+                  {
+                    label: "GitHub",
+                    href: ghUrl!,
+                    sub: stars > 0 ? `★ ${formatStars(stars)}` : detail.repo,
+                    primary: true,
+                    icon: (
+                      <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                        <path fill="currentColor" d={GH_MARK} />
+                      </svg>
+                    ),
+                  },
+                ]
+              : []),
+            ...(detail.homepage
+              ? [
+                  {
+                    label: "Website",
+                    href: detail.homepage,
+                    sub: domainOf(detail.homepage),
+                    icon: <GlobeGlyph />,
+                  },
+                ]
+              : []),
+          ]}
+        />
+        {cmd && <EntityInstall cmd={cmd} />}
+        <EntitySpecs cells={specCells} />
+        {latest && (
+          <WhatsNew
+            version={latest.version}
+            date={latest.date}
+            note={latest.note}
+            releaseId={latest.releaseId}
+            url={latest.url}
+            historyCount={changelog.length}
+          />
+        )}
+        <NewsRail items={railItems} total={news.length} />
       </header>
 
       <div className="lrn-tool-layout">
@@ -307,14 +381,15 @@ export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
             </section>
           )}
 
-          {changelog.length > 0 && (
+          {showFullChangelog && (
             <section id="changelog" className="lrn-section" aria-labelledby="changelog-h">
               <h2 className="lrn-h2" id="changelog-h">
-                <span className="lrn-h2-mark" aria-hidden="true">//</span> Changelog
+                <span className="lrn-h2-mark" aria-hidden="true">//</span> Version history
               </h2>
               <p className="lrn-p">
-                Verified updates to {detail.name} that AI/TLDR tracked, newest
-                first — each links to our coverage and the official changeset.
+                Every verified update to {detail.name} that AI/TLDR tracked,
+                newest first — each links to our coverage and the official
+                changeset.
               </p>
               <ol className="lrn-chlog">
                 {changelog.map((c, i) => (
@@ -344,7 +419,7 @@ export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
             </section>
           )}
 
-          <EntityNewsSection name={detail.name} news={news} />
+          {showFullNews && <EntityNewsSection name={detail.name} news={news} />}
 
           {comparison.length > 1 && (
             <section id="compare" className="lrn-section" aria-labelledby="compare-h">
@@ -390,25 +465,9 @@ export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
         </div>
 
         <aside className="lrn-tool-aside" aria-label="Tool details">
-          {/* Repo + website live in the header now (not duplicated here).
-              Category + subcategory live in the breadcrumb. */}
-          {(detail.language || detail.license) && (
-            <dl className="lrn-tool-facts">
-              {detail.language && (
-                <div>
-                  <dt>Language</dt>
-                  <dd>{detail.language}</dd>
-                </div>
-              )}
-              {detail.license && (
-                <div>
-                  <dt>License</dt>
-                  <dd>{detail.license}</dd>
-                </div>
-              )}
-            </dl>
-          )}
-
+          {/* Repo + website live in the hero; language / license / version /
+              freshness live in the spec strip; category + subcategory in the
+              breadcrumb. The rail carries only what none of those show. */}
           {relatedModels.length > 0 && (
             <div className="lrn-tool-related">
               <span className="lrn-tool-aside-h">// RELATED LLMS</span>

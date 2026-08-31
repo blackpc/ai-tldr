@@ -28,6 +28,13 @@ import modelNewsData from "../../data/models/model-news.json";
 import modelToolsData from "../../data/models/model-tools.json";
 import { entitiesInText, type EntityNewsRef } from "../../lib/entities";
 import { EntityNewsSection } from "../learn/EntityNews";
+import {
+  EntityHero,
+  EntitySpecs,
+  NewsRail,
+  type SpecCell,
+} from "../learn/EntityHero";
+import { formatDay } from "../learn/entityFormat";
 
 const DATA = registryData as ModelRegistry;
 
@@ -267,18 +274,6 @@ export function ModelDetailPage({ detail }: { detail: ModelDetail }) {
   if (detail.modalities.length) specs.push({ k: "Modalities", v: detail.modalities.join(", ") });
   if (detail.status) specs.push({ k: "Status", v: detail.status });
 
-  const toc = [
-    { id: "overview", title: "Overview" },
-    ...(hasBenchmarks(detail) ? [{ id: "benchmarks", title: "Benchmarks" }] : []),
-    ...(detail.pricing ? [{ id: "pricing", title: "Pricing" }] : []),
-    ...(detail.strengths.length ? [{ id: "strengths", title: "Strengths" }] : []),
-    ...(detail.useCases.length ? [{ id: "use-cases", title: "Best for" }] : []),
-    ...(detail.apis?.length ? [{ id: "access", title: "How to access" }] : []),
-    ...(versions.length > 1 ? [{ id: "history", title: "Version history" }] : []),
-    ...(news.length ? [{ id: "news", title: "In the news" }] : []),
-    ...(detail.faq?.length ? [{ id: "faq", title: "FAQ" }] : []),
-  ];
-
   // Aside links: a couple of primary buttons (official site, playground), the
   // rest as a compact reference list — ordered by kind for a stable layout.
   const orderIdx = (k: ModelLinkKind) => LINK_GROUP_ORDER.indexOf(k);
@@ -290,6 +285,56 @@ export function ModelDetailPage({ detail }: { detail: ModelDetail }) {
   const restLinks = detail.links
     .filter((l) => !primaryUrls.has(l.url))
     .sort((a, b) => orderIdx(a.kind) - orderIdx(b.kind));
+
+  // Masthead (shared with /tools pages): the release date, size and price a
+  // reader is actually here for, promoted above the fold instead of living
+  // only in the spec table further down.
+  const heroActions = primaryLinks.map((l, i) => ({
+    label: LINK_GROUP_LABEL[l.kind],
+    href: l.url,
+    sub: hostOf(l.url),
+    primary: i === 0,
+  }));
+  const railItems = news.slice(0, 3);
+  const showFullNews = news.length > railItems.length;
+  const specCells: SpecCell[] = [
+    ...(detail.releaseDate
+      ? [{ k: "Released", v: formatDay(detail.releaseDate)!, accent: true }]
+      : []),
+    ...(detail.contextWindow ? [{ k: "Context", v: detail.contextWindow }] : []),
+    ...(detail.parameters ? [{ k: "Parameters", v: detail.parameters }] : []),
+    ...(detail.pricing?.input
+      ? [
+          {
+            k: "Input",
+            v: `${detail.pricing.input} ${detail.pricing.unit ?? "/ 1M"}`,
+            accent: true,
+          },
+        ]
+      : []),
+    { k: "License", v: detail.license },
+    ...(news.length > 0
+      ? [
+          {
+            k: "Coverage",
+            v: `${news.length} ${news.length === 1 ? "story" : "stories"}`,
+            href: showFullNews ? "#news" : `/releases/${news[0].id}/`,
+          },
+        ]
+      : []),
+  ];
+
+  const toc = [
+    { id: "overview", title: "Overview" },
+    ...(hasBenchmarks(detail) ? [{ id: "benchmarks", title: "Benchmarks" }] : []),
+    ...(detail.pricing ? [{ id: "pricing", title: "Pricing" }] : []),
+    ...(detail.strengths.length ? [{ id: "strengths", title: "Strengths" }] : []),
+    ...(detail.useCases.length ? [{ id: "use-cases", title: "Best for" }] : []),
+    ...(detail.apis?.length ? [{ id: "access", title: "How to access" }] : []),
+    ...(versions.length > 1 ? [{ id: "history", title: "Version history" }] : []),
+    ...(showFullNews ? [{ id: "news", title: "In the news" }] : []),
+    ...(detail.faq?.length ? [{ id: "faq", title: "FAQ" }] : []),
+  ];
 
   return (
     <article className="lrn-article">
@@ -311,15 +356,21 @@ export function ModelDetailPage({ detail }: { detail: ModelDetail }) {
             <span className="lrn-crumb-here" aria-current="page">{detail.name}</span>
           </span>
         </nav>
-        <div className="mdl-art-headrow">
-          {makerLogo(detail) && (
-            <span className="reg-mlogo mdl-art-logo" aria-hidden="true">
-              <img src={makerLogo(detail)} alt="" />
-            </span>
-          )}
-          <h1 className="lrn-art-title">{detail.name}</h1>
-        </div>
-        <p className="lrn-art-tagline">{detail.tagline}</p>
+        {/* Same masthead components as a /tools page — one design, one CSS. */}
+        <EntityHero
+          logo={makerLogo(detail)}
+          name={detail.name}
+          seed={detail.slug}
+          tagline={detail.tagline}
+          chips={[
+            { label: detail.lineTitle, href: lineHref, tone: "accent" },
+            { label: detail.openWeights ? "Open weights" : "API only" },
+            ...(detail.status ? [{ label: detail.status }] : []),
+          ]}
+          actions={heroActions}
+        />
+        <EntitySpecs cells={specCells} />
+        <NewsRail items={railItems} total={news.length} />
       </header>
 
       <div className="lrn-tool-layout">
@@ -501,7 +552,7 @@ export function ModelDetailPage({ detail }: { detail: ModelDetail }) {
             </section>
           )}
 
-          <EntityNewsSection name={detail.name} news={news} />
+          {showFullNews && <EntityNewsSection name={detail.name} news={news} />}
 
           {detail.faq && detail.faq.length > 0 && (
             <section id="faq" className="lrn-section lrn-faq" aria-labelledby="faq-h">

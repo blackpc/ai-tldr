@@ -17,7 +17,7 @@
  * calls at view time. Also rendered server-side by prerender-learn.tsx.
  */
 
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import landscapeData from "../../data/learn/landscape.json";
 import githubStars from "../../data/learn/github-stars.json";
@@ -26,7 +26,10 @@ import type {
   LandscapeSubcategory,
   LandscapeTool,
 } from "../../data/learn/schema";
-import { learnToolPath } from "../../data/learn/schema";
+import { learnToolPath, TOOL_ACCESS_LABEL } from "../../data/learn/schema";
+// Monogram hue is SHARED with the tool page's hero icon — one algorithm, so a
+// tool's fallback colour is identical in the directory and on its own page.
+import { monoStyle } from "./entityFormat";
 
 const DATA = landscapeData as Landscape;
 const STARS = githubStars as Record<string, number>;
@@ -74,22 +77,10 @@ const ACCESS_ORDER: Access[] = [
   "commercial",
   "enterprise",
 ];
-const ACCESS_CHIP: Record<Access, string> = {
-  "open-source": "Open source",
-  "open-core": "Open core",
-  freemium: "Freemium",
-  commercial: "Commercial",
-  enterprise: "Enterprise",
-};
+// Labels live in the schema (shared with the tool page's hero chip).
+const ACCESS_CHIP = TOOL_ACCESS_LABEL;
 const accessOf = (t: LandscapeTool): Access =>
   (t.access as Access | undefined) ?? "open-source";
-
-/** Deterministic dark hue for a tool's monogram fallback (no logo on file). */
-function monoStyle(seed: string): CSSProperties {
-  let h = 0;
-  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) % 360;
-  return { background: `hsl(${h} 42% 26%)` };
-}
 
 /** Brand/owner logo on a small plate, or a deterministic monogram fallback so
  *  EVERY tool has a visual. */
