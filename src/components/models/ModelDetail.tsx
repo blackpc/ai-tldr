@@ -29,8 +29,9 @@ import modelToolsData from "../../data/models/model-tools.json";
 import { entitiesInText, type EntityNewsRef } from "../../lib/entities";
 import { EntityNewsSection } from "../learn/EntityNews";
 import {
+  EntityBar,
   EntityHero,
-  EntitySpecs,
+  EntityUpdates,
   NewsRail,
   type SpecCell,
 } from "../learn/EntityHero";
@@ -295,7 +296,7 @@ export function ModelDetailPage({ detail }: { detail: ModelDetail }) {
     sub: hostOf(l.url),
     primary: i === 0,
   }));
-  const railItems = news.slice(0, 3);
+  const railItems = news.slice(0, 4);
   const showFullNews = news.length > railItems.length;
   const specCells: SpecCell[] = [
     ...(detail.releaseDate
@@ -362,15 +363,21 @@ export function ModelDetailPage({ detail }: { detail: ModelDetail }) {
           name={detail.name}
           seed={detail.slug}
           tagline={detail.tagline}
+          actions={heroActions}
+        />
+        <EntityBar
           chips={[
             { label: detail.lineTitle, href: lineHref, tone: "accent" },
             { label: detail.openWeights ? "Open weights" : "API only" },
             ...(detail.status ? [{ label: detail.status }] : []),
           ]}
-          actions={heroActions}
+          cells={specCells}
         />
-        <EntitySpecs cells={specCells} />
-        <NewsRail items={railItems} total={news.length} />
+        {railItems.length > 0 && (
+          <EntityUpdates>
+            <NewsRail items={railItems} total={news.length} />
+          </EntityUpdates>
+        )}
       </header>
 
       <div className="lrn-tool-layout">

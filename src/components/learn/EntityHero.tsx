@@ -1,12 +1,18 @@
 /**
  * Product-page primitives for a catalogue entity (a /tools/<slug> tool or a
- * /models/<slug> model) — the App-Store-style masthead:
+ * /models/<slug> model) — the compact marketplace masthead:
  *
- *   <EntityHero>    app icon + name + tagline + chips + primary actions
- *   <EntityInstall> the one-line install command, copyable
- *   <EntitySpecs>   the scannable spec strip (stars / version / updated / …)
- *   <WhatsNew>      the newest changelog entry, right under the fold line
- *   <NewsRail>      the three latest stories, linking into the full list
+ *   <EntityHero>    app icon + name + tagline + primary actions   (one row)
+ *   <EntityBar>     chips + the whole fact strip                  (one line)
+ *   <EntityInstall> the one-line install command, copyable        (one line)
+ *   <WhatsNew>      newest changelog entry  ┐ side by side in .ent-updates
+ *   <NewsRail>      latest stories, 1 line each ┘
+ *
+ * DENSITY IS THE POINT: every fact a visitor needs to judge "which version,
+ * how fresh, is it maintained" has to fit above the article without pushing
+ * the article off the screen. Earlier versions stacked six boxed rows and ate
+ * ~640px before the first paragraph; this composition does the same job in
+ * roughly 300px. Keep new facts INSIDE the existing rows — do not add a row.
  *
  * SHARED BY CONSTRUCTION: both catalogue page types render these same
  * components and the same `ent-*` CSS (defined once in learn.css), so a tool
@@ -39,7 +45,7 @@ function initialOf(name: string): string {
   return name.replace(/[^a-zA-Z0-9]/g, "").charAt(0).toUpperCase() || "#";
 }
 
-/** The big "app icon": the brand logo on a light plate, or a deterministic
+/** The "app icon": the brand logo on a light plate, or a deterministic
  *  monogram so EVERY entity has a visual identity. */
 export function EntityLogo({
   logo,
@@ -78,26 +84,25 @@ export interface HeroChip {
 export interface HeroAction {
   label: string;
   href: string;
-  /** Small second line inside the button, e.g. "★ 90.2k" or a domain. */
+  /** Small trailing detail inside the button, e.g. "★ 90.6k" or a domain. */
   sub?: string;
   /** The filled accent button (one per page — the "GET" equivalent). */
   primary?: boolean;
   icon?: ReactNode;
 }
 
+/** Identity row: icon, name, tagline, actions — all on ONE line at desktop. */
 export function EntityHero({
   logo,
   name,
   seed,
   tagline,
-  chips = [],
   actions = [],
 }: {
   logo?: string;
   name: string;
   seed: string;
   tagline: string;
-  chips?: HeroChip[];
   actions?: HeroAction[];
 }) {
   return (
@@ -106,29 +111,6 @@ export function EntityHero({
       <div className="ent-hero-main">
         <h1 className="ent-hero-name">{name}</h1>
         <p className="ent-hero-tagline">{tagline}</p>
-        {chips.length > 0 && (
-          <div className="ent-hero-chips">
-            {chips.map((c) =>
-              c.href ? (
-                <a
-                  key={c.label}
-                  className={`ent-chip ent-chip-${c.tone ?? "plain"}`}
-                  href={c.href}
-                  data-internal="true"
-                >
-                  {c.label}
-                </a>
-              ) : (
-                <span
-                  key={c.label}
-                  className={`ent-chip ent-chip-${c.tone ?? "plain"}`}
-                >
-                  {c.label}
-                </span>
-              ),
-            )}
-          </div>
-        )}
       </div>
       {actions.length > 0 && (
         <div className="ent-hero-actions">
@@ -156,15 +138,91 @@ export function EntityHero({
 }
 
 // ---------------------------------------------------------------------------
+// Fact bar
+// ---------------------------------------------------------------------------
+
+export interface SpecCell {
+  k: string;
+  v: string;
+  /** Renders the value as a link (e.g. the story count → the news section). */
+  href?: string;
+  /** Accent the value — used for the live version + star count. */
+  accent?: boolean;
+}
+
+/**
+ * One thin rule-to-rule band carrying the classification chips, every key fact
+ * (version / updated / licence / coverage) AND the install command — all on a
+ * single line at desktop width. This replaced a boxed six-cell grid plus a
+ * separate install row: same information, a fifth of the height, and it wraps
+ * instead of scrolling sideways.
+ */
+export function EntityBar({
+  chips = [],
+  cells,
+  install,
+}: {
+  chips?: HeroChip[];
+  cells: SpecCell[];
+  /** Install one-liner; sits at the right end of the band when there's room. */
+  install?: string;
+}) {
+  if (chips.length === 0 && cells.length === 0 && !install) return null;
+  return (
+    <div className="ent-bar">
+      <div className="ent-bar-main">
+        {chips.map((c) =>
+          c.href ? (
+            <a
+              key={c.label}
+              className={`ent-chip ent-chip-${c.tone ?? "plain"}`}
+              href={c.href}
+              data-internal={internal(c.href)}
+            >
+              {c.label}
+            </a>
+          ) : (
+            <span key={c.label} className={`ent-chip ent-chip-${c.tone ?? "plain"}`}>
+              {c.label}
+            </span>
+          ),
+        )}
+        {cells.length > 0 && (
+          <dl className="ent-facts" aria-label="Key facts">
+            {cells.map((c) => (
+              <div className="ent-fact" key={c.k}>
+                <dt>{c.k}</dt>
+                {/* title carries the untruncated value — some licences and MoE
+                    parameter strings are far too long for one line. */}
+                <dd className={c.accent ? "ent-fact-acc" : undefined} title={c.v}>
+                  {c.href ? (
+                    <a href={c.href} data-internal={internal(c.href)}>
+                      {c.v}
+                    </a>
+                  ) : (
+                    c.v
+                  )}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        )}
+      </div>
+      {install && <EntityInstall cmd={install} />}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Install command
 // ---------------------------------------------------------------------------
 
 /** Copyable one-liner — the dev-tool equivalent of the store's GET button. */
-export function EntityInstall({ cmd }: { cmd: string }) {
+function EntityInstall({ cmd }: { cmd: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <div className="ent-install">
-      <span className="ent-install-lbl">INSTALL</span>
+      <span className="ent-install-lbl">$</span>
       <code className="ent-install-cmd">{cmd}</code>
       <button
         type="button"
@@ -189,55 +247,22 @@ export function EntityInstall({ cmd }: { cmd: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// Spec strip
+// Updates strip
 // ---------------------------------------------------------------------------
 
-export interface SpecCell {
-  k: string;
-  v: string;
-  /** Renders the value as a link (e.g. the story count → the news section). */
-  href?: string;
-  /** Accent the value — used for the live version + star count. */
-  accent?: boolean;
-}
-
 /**
- * The scannable fact strip under the hero — this is where "what version, how
- * fresh" lives, above the fold. Scrolls inside itself on narrow screens (the
- * page body must never scroll sideways).
+ * Lays "what's new" and the news rail side by side. With only one child that
+ * child spans the full width (CSS `:only-child`), so a tool with no changelog
+ * doesn't leave a hole.
  */
-export function EntitySpecs({ cells }: { cells: SpecCell[] }) {
-  if (cells.length === 0) return null;
-  return (
-    <dl className="ent-specs" aria-label="Key facts">
-      {cells.map((c) => (
-        <div className="ent-spec" key={c.k}>
-          <dt>{c.k}</dt>
-          {/* title carries the untruncated value — some licences and MoE
-              parameter strings are far too long for a strip cell. */}
-          <dd className={c.accent ? "ent-spec-acc" : undefined} title={c.v}>
-            {c.href ? (
-              <a href={c.href} data-internal={internal(c.href)}>
-                {c.v}
-              </a>
-            ) : (
-              c.v
-            )}
-          </dd>
-        </div>
-      ))}
-    </dl>
-  );
+export function EntityUpdates({ children }: { children: ReactNode }) {
+  return <div className="ent-updates">{children}</div>;
 }
 
-// ---------------------------------------------------------------------------
-// What's new
-// ---------------------------------------------------------------------------
-
 /**
- * The newest changelog entry, promoted to the top of the page — the store's
- * "What's New" panel. `historyCount` > 1 reveals the jump link down to the
- * full version history.
+ * The newest changelog entry — the store's "What's New" panel, trimmed to a
+ * header line, a clamped note and its links. `historyCount` > 1 reveals the
+ * jump down to the full version history.
  */
 export function WhatsNew({
   version,
@@ -256,12 +281,12 @@ export function WhatsNew({
 }) {
   return (
     <section className="ent-new" aria-labelledby="ent-new-h">
-      <div className="ent-new-head">
-        <h2 className="ent-new-h" id="ent-new-h">
-          <span className="lrn-h2-mark" aria-hidden="true">//</span> What&apos;s new
+      <div className="ent-panel-head">
+        <h2 className="ent-panel-h" id="ent-new-h">
+          What&apos;s new
         </h2>
         {version && <span className="ent-new-ver">{version}</span>}
-        <span className="ent-new-date">{formatDay(date)}</span>
+        <span className="ent-panel-date">{formatDay(date)}</span>
       </div>
       <p className="ent-new-note">{note}</p>
       <div className="ent-new-links">
@@ -277,7 +302,7 @@ export function WhatsNew({
         )}
         {historyCount > 1 && (
           <a className="ent-new-hist" href="#changelog">
-            version history ({historyCount}) ↓
+            {historyCount} versions ↓
           </a>
         )}
       </div>
@@ -296,31 +321,30 @@ export interface RailItem {
   importance: string;
 }
 
-/** The three latest stories as cards, with a jump to the full list below. */
+/** The latest stories as one-line rows, with a jump to the full list below. */
 export function NewsRail({ items, total }: { items: RailItem[]; total: number }) {
   if (items.length === 0) return null;
   return (
     <section className="ent-rail" aria-labelledby="ent-rail-h">
-      <div className="ent-rail-head">
-        <h2 className="ent-rail-h" id="ent-rail-h">
-          <span className="lrn-h2-mark" aria-hidden="true">//</span> Latest news
+      <div className="ent-panel-head">
+        <h2 className="ent-panel-h" id="ent-rail-h">
+          Latest news
         </h2>
-        {total > items.length && <a href="#news">all {total} stories ↓</a>}
+        {total > items.length && (
+          <a className="ent-rail-all" href="#news">
+            all {total} ↓
+          </a>
+        )}
       </div>
       <ul className="ent-rail-list">
         {items.map((it) => (
           <li key={it.id}>
             <a
-              className="ent-rail-card"
+              className="ent-rail-row"
               href={`/releases/${it.id}/`}
               data-internal="true"
             >
-              <span className="ent-rail-meta">
-                <span className="ent-rail-date">{formatDay(it.date)}</span>
-                <span className={`lrn-news-imp lrn-news-imp-${it.importance}`}>
-                  {it.importance.toUpperCase()}
-                </span>
-              </span>
+              <span className="ent-rail-date">{formatDay(it.date)}</span>
               <span className="ent-rail-title">{it.title}</span>
             </a>
           </li>

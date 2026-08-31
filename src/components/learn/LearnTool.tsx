@@ -32,9 +32,9 @@ import { Breadcrumbs } from "./ArticleBody";
 import { Block } from "./Blocks";
 import { EntityNewsSection } from "./EntityNews";
 import {
+  EntityBar,
   EntityHero,
-  EntityInstall,
-  EntitySpecs,
+  EntityUpdates,
   NewsRail,
   WhatsNew,
   type SpecCell,
@@ -202,7 +202,9 @@ export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
   // that "which version, how fresh" is answered above the fold.
   const latest = changelog[0];
   const cmd = installCommand(detail.gettingStarted.steps[0]?.code);
-  const railItems = news.slice(0, 3);
+  // 3 rows beside a what's-new panel (they set the strip's height together);
+  // 4 when the rail is alone, because it then lays out as a 2×2 grid.
+  const railItems = news.slice(0, changelog.length > 0 ? 3 : 4);
   // Full sections below are the DESTINATIONS of the masthead's jump links, so
   // they only render when they hold more than the masthead already showed —
   // otherwise the page says the same thing twice.
@@ -210,9 +212,8 @@ export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
   const showFullNews = news.length > railItems.length;
 
   const specCells: SpecCell[] = [
-    ...(stars > 0
-      ? [{ k: "Stars", v: `★ ${formatStars(stars)}`, accent: true }]
-      : []),
+    // No Stars cell: the GitHub button already carries the count, and at this
+    // density repeating it two lines apart is just noise.
     ...(latest?.version ? [{ k: "Latest", v: latest.version, accent: true }] : []),
     ...(latest ? [{ k: "Updated", v: formatDay(latest.date)! }] : []),
     ...(detail.language ? [{ k: "Language", v: detail.language }] : []),
@@ -256,10 +257,6 @@ export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
           name={detail.name}
           seed={detail.slug}
           tagline={detail.tagline}
-          chips={[
-            { label: detail.subcategoryTitle, href: catHref, tone: "accent" },
-            { label: ACCESS_LABEL[access] },
-          ]}
           actions={[
             ...(detail.repo
               ? [
@@ -288,19 +285,29 @@ export function LearnToolPage({ detail }: { detail: LandscapeToolDetail }) {
               : []),
           ]}
         />
-        {cmd && <EntityInstall cmd={cmd} />}
-        <EntitySpecs cells={specCells} />
-        {latest && (
-          <WhatsNew
-            version={latest.version}
-            date={latest.date}
-            note={latest.note}
-            releaseId={latest.releaseId}
-            url={latest.url}
-            historyCount={changelog.length}
-          />
+        <EntityBar
+          chips={[
+            { label: detail.subcategoryTitle, href: catHref, tone: "accent" },
+            { label: ACCESS_LABEL[access] },
+          ]}
+          cells={specCells}
+          install={cmd ?? undefined}
+        />
+        {(latest || railItems.length > 0) && (
+          <EntityUpdates>
+            {latest && (
+              <WhatsNew
+                version={latest.version}
+                date={latest.date}
+                note={latest.note}
+                releaseId={latest.releaseId}
+                url={latest.url}
+                historyCount={changelog.length}
+              />
+            )}
+            <NewsRail items={railItems} total={news.length} />
+          </EntityUpdates>
         )}
-        <NewsRail items={railItems} total={news.length} />
       </header>
 
       <div className="lrn-tool-layout">
