@@ -865,20 +865,7 @@ function App() {
       {openItem && <ReleaseModal item={openItem} onClose={closeModal} />}
 
       <footer className="page-footer">
-        Built with{" "}
-        <a href="https://shep.bot" target="_blank" rel="noopener noreferrer">
-          Shep
-        </a>{" "}
-        ·{" "}
-        <a
-          href="https://github.com/shep-ai/shep"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          GitHub
-        </a>
-        {" "}·{" "}
-        <a href="mailto:support@shep.bot">support@shep.bot</a>
+        <a href="mailto:aitldrdev@pomegra.io">aitldrdev@pomegra.io</a>
         {" "}·{" "}
         <a
           href="/stats/"
