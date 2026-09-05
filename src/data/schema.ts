@@ -312,6 +312,46 @@ export interface SweepReport {
    * written before the coverage rule; required on new sweeps.
    */
   coverage?: Category[];
+  /**
+   * Catalogue-sync outcome for this sweep's `tool`/`repo` items (prompt
+   * step 7, enforced by scripts/check-catalogue-sync.ts). `skipped` is what
+   * the agent DECLARED in the draft (with one of two allowed reasons);
+   * `resolved` is what the gate VERIFIED after the agent's catalogue edits
+   * — the per-item audit trail (added / updated / skipped).
+   */
+  catalogue?: SweepCatalogue;
+}
+
+/** Why a tool item was NOT reflected in the tools catalogue. Exactly two
+ *  reasons exist on purpose — "reference implementation", "unmaintained",
+ *  "unsure of category" and "the daily job will get it" are not reasons. */
+export type SweepCatalogueSkipReason =
+  /** Nothing to install or run: dataset, benchmark, paper artefact, proof,
+   *  demo, awesome-list, course. */
+  | "not-a-tool"
+  /** The tool is catalogued but this item is not a release/update of it
+   *  (an incident, a tutorial, a story that merely uses it). Rejected when
+   *  the item title carries a version number. */
+  | "not-about-a-change";
+
+export interface SweepCatalogueSkip {
+  id: string;
+  reason: SweepCatalogueSkipReason;
+  /** One sentence, so the decision can be audited later. */
+  why: string;
+}
+
+export interface SweepCatalogueResolution {
+  id: string;
+  repo: string;
+  /** Landscape slug the item resolved to (absent when skipped). */
+  slug?: string;
+  action: "added" | "updated" | "skipped";
+}
+
+export interface SweepCatalogue {
+  skipped?: SweepCatalogueSkip[];
+  resolved?: SweepCatalogueResolution[];
 }
 
 export interface SweepLog {

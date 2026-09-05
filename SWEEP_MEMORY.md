@@ -963,3 +963,83 @@ tool page; if a sweep starts padding catalogue adds (new tools/models on thin
 items), tighten step 7's caps — do NOT loosen check-landscape. Seeded 6
 changelogs (vllm, litellm, ray, sglang, unsloth, sentence-transformers) from
 already-verified feed items as the rendering exemplar.
+
+## 2026-09-05-A — Tools NEVER reached the catalogue from the 2h sweep → mechanical gate (check-catalogue-sync.ts)
+
+**Trigger:** User: "why wasn't anthropic-commerce-agents added to tools? …
+tools are RARELY added — NOT ACCEPTABLE." Evidence: since 08-30-A shipped,
+34 sweep commits, 27 tool/repo items, exactly ONE catalogue touch (openclaw
+changelog), ZERO tool adds (every tool add in the period came from the daily
+job, none of them feed items). Since the catalogue launched (06-18): 182
+feed tool items link a GitHub repo, 22 are catalogued — 160 missing (108 of
+them rated major). Claude Code and Codex CLI — the two most-covered tools
+in the feed — had no tools page at all.
+
+**Root cause (three layers, all confirmed in run 33930148225's log):**
+1. The agent knowingly skipped, and the prompt let it: it checked
+   `landscape commerce-agents MISSING` at 23:49 and then wrote
+   "Catalogue sync (step 7): no-op, correctly … commerce-agents is a
+   self-declared unmaintained reference repo rather than a landscape tool."
+   Step 7's tool clause said "clearly belongs… cap ~1… when in doubt SKIP —
+   the daily registry sweep is the backstop." The LLM clause had no skip
+   escape + a carrot ("makes the name auto-link") → the sweep added 5
+   models and 0 tools. Time was NOT the blocker (14 min, 100 turns, $5.47
+   of a 30-min budget).
+2. The "backstop" cannot backstop: maintain-registry's gap finder searches
+   GitHub by topic with GAP_MIN_STARS=15000 and never reads the feed. A
+   launch-week repo (commerce-agents: 1.9k★) is invisible to it forever.
+   "Skip, the daily will catch it" was false on both ends.
+3. Nothing mechanical checked step 7. Every rule that has held in this repo
+   (source-in-links, releaseId-exists) is a validator; step 7 was prose.
+
+**What changed:**
+- `scripts/check-catalogue-sync.ts` (NEW gate): for every `tool`/`repo`
+  item in the sweep's new report(s) that links a GitHub repo, requires the
+  repo to be a landscape tile WITH a detail page whose `changelog` has an
+  entry with `releaseId` = item id — or a declared skip with one of exactly
+  two reasons: `not-a-tool` (dataset/benchmark/paper artefact/proof/demo/
+  awesome-list) or `not-about-a-change` (catalogued, but the item isn't a
+  release of it; REJECTED when the title carries a version number). Prints
+  likely homepage-only tiles for the same product (the Codex trap: an
+  "OpenAI Codex" tile existed with no `repo`, so `openai/codex` items never
+  matched). `--write` records the verified per-item resolution into the
+  sweep report (`catalogue.resolved[]`) as the audit trail. Exit 1 fails
+  the job → nothing commits → next cron re-sweeps (items still <72h).
+- `finalize-sweep.ts`: draft items may carry `catalogue: {skip, why}`;
+  validated (reason enum, why ≥12 chars, tool items only), stripped from
+  the feed item, recorded as `report.catalogue.skipped[]`.
+- `src/data/schema.ts`: `SweepCatalogue*` types on `SweepReport`.
+- `prompts/update-releases.md` v6.12.0: step 7 rewritten — tools are
+  mechanical, no cap ("padding is impossible here: the gate only asks for
+  tools the feed already accepted"), the four non-reasons named
+  explicitly, the homepage-only-tile and tile-only cases spelled out, the
+  gate is a required command. Draft format documents `catalogue.skip`.
+- `.github/workflows/update-releases.yml`: gate step before commit, output
+  mirrored to the step summary.
+- `scripts/registry-freshness.ts` + `prompts/maintain-registry.md` step 2:
+  `feedToolGaps` — feed tool items of the last 30 days without a
+  tile/detail — listed FIRST for the daily job, so it becomes a real
+  backstop and drains what landed before the gate.
+- Seeded the three glaring gaps by hand from READMEs: `claude-code` (new
+  tile, commercial), `commerce-agents` (new tile, agents/general-agents),
+  and `openai-codex-agent` (existing tile → `repo: openai/codex`, `access:
+  open-core`, detail page written), each with a changelog entry pointing
+  at its feed item. The gate run against sweep-20260904t235322z FAILED
+  before these edits (commerce-agents + claude-code) and passes after.
+- `scripts/tool-repo.ts`: the shared "which repo is this item about"
+  helper used by the gate and the daily context — one join key.
+
+**Scar discipline:** the gate adds NO padding vector — it can only ever ask
+for tools that already passed the feed's inclusion bar (the 04-28 padding
+scars are about inventing items; this is 1:1 with accepted items). The
+escape hatch is enumerated and auditable, not free text. check-landscape
+is unchanged (never loosened).
+
+**Status:** Applied 2026-09-05. Watch the next ~10 crons: every tool/repo
+item should show up in the sweep report's `catalogue.resolved[]` as
+added/updated/skipped, and `git log -- src/data/learn/tools` should show
+the 2h sweep adding tool pages. If the gate fails repeatedly on the same
+class of item, add a reason to the enum — do NOT soften the gate to a
+warning (that is exactly what 08-30-A was, and it was ignored 34/34 times).
+The 160-item backlog is NOT drained by this — that needs a one-time
+backfill (a workflow over `feedToolGaps` with the window widened).

@@ -135,8 +135,21 @@ Skipping is fine when the maker published no comparison — never fabricate one.
 
 ### 2. Add missing notable tools
 
-From the tool-gap candidates, pick the genuinely notable open-source tools we
-lack. For each: confirm the repo via the GitHub API
+**First, `feedToolGaps` in `registry-context.json`** — tools our own news feed
+covered in the last 30 days that the catalogue lacks (no tile) or lists
+tile-only (no detail page). These come BEFORE the star-threshold list: the
+feed already judged them notable by shipping the story, so "is it notable?"
+is settled — add every one that IS a tool (tile + detail; for tile-only ones,
+write the page), and make the feed item the first `changelog` entry
+(`releaseId` = the item's id, `url` = one of its verified links). Model
+releases are already excluded from the list; a dataset, benchmark, proof or
+paper artefact that slipped in is not a tool — leave it and say so in your
+summary. The 2h sweep is gated on its own tool
+items going forward (`scripts/check-catalogue-sync.ts`); this list is the
+backstop for what landed before the gate or slipped past it.
+
+Then, from the star-threshold tool-gap candidates, pick the genuinely notable
+open-source tools we lack. For each: confirm the repo via the GitHub API
 (`bun -e "fetch('https://api.github.com/repos/<owner>/<repo>')..."` or a Bash
 `curl`/`gh`), read its README, then:
 

@@ -181,6 +181,14 @@ the user is unsatisfied with sweep output, append a new entry to
 as broken there. Do not re-fix something already solved unless you can
 explain why the previous fix didn't hold.
 
+**Tool items are gated into the catalogue mechanically.**
+`scripts/check-catalogue-sync.ts` (workflow step before commit; required
+in prompt step 7) fails the sweep unless every `tool`/`repo` item it shipped
+is a landscape tile with a detail page whose `changelog` links the item, or
+carries an enumerated `catalogue.skip`. Prompt-only versions of this rule
+were ignored 34 sweeps in a row (SWEEP_MEMORY 2026-09-05-A) — never
+downgrade the gate to a warning.
+
 ### Zero-hallucination policy
 
 Every URL, image, metric, and claim must be fetched and verified. If it

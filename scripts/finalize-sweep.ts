@@ -31,6 +31,8 @@ import type {
   ReleaseItem,
   SweepLog,
   SweepReport,
+  SweepCatalogueSkip,
+  SweepCatalogueSkipReason,
   Category,
 } from "../src/data/schema.ts";
 
@@ -69,8 +71,18 @@ interface DraftRemoval {
   id: string;
   reason: string;
 }
+/**
+ * A draft item may carry `catalogue.skip` — the ONLY way a tool/repo item
+ * gets past the catalogue-sync gate (check-catalogue-sync.ts) without a
+ * catalogue entry. Validated here, stripped before the item enters the
+ * feed, and recorded on the sweep report as `catalogue.skipped`.
+ */
+type DraftItem = ReleaseItem & {
+  catalogue?: { skip: SweepCatalogueSkipReason; why: string };
+};
+const SKIP_REASONS: SweepCatalogueSkipReason[] = ["not-a-tool", "not-about-a-change"];
 interface Draft {
-  newItems?: ReleaseItem[];
+  newItems?: DraftItem[];
   updates?: DraftUpdate[];
   removals?: DraftRemoval[];
   summary?: string;
@@ -145,6 +157,18 @@ for (const item of newItems) {
   if (!item.explainer) minSchemaErrors.push(`${item.id}: missing explainer`);
   if (!item.categories?.length)
     minSchemaErrors.push(`${item.id}: missing categories`);
+  if (item.catalogue) {
+    const c = item.catalogue;
+    const isTool = (item.categories ?? []).some((k) => k === "tool" || k === "repo");
+    if (!isTool)
+      minSchemaErrors.push(`${item.id}: catalogue.skip only applies to tool/repo items`);
+    if (!SKIP_REASONS.includes(c.skip))
+      minSchemaErrors.push(
+        `${item.id}: catalogue.skip must be one of ${SKIP_REASONS.join(" | ")} (got ${JSON.stringify(c.skip)})`,
+      );
+    if (typeof c.why !== "string" || c.why.trim().length < 12)
+      minSchemaErrors.push(`${item.id}: catalogue.why must be one auditable sentence (≥12 chars)`);
+  }
   // 72h date cap (Hard Rule 2 in prompts/update-releases.md). The
   // Mythos bug shipped a 17-day-old release. Don't repeat it.
   if (item.date) {
@@ -162,6 +186,16 @@ if (minSchemaErrors.length > 0) {
   console.error("finalize-sweep: schema errors in draft:");
   for (const e of minSchemaErrors) console.error(`  - ${e}`);
   process.exit(1);
+}
+
+// 2b) Lift declared catalogue skips off the items (they are sweep-report
+// metadata, not feed data) so releases.json never carries the field.
+const catalogueSkipped: SweepCatalogueSkip[] = [];
+for (const item of newItems) {
+  if (item.catalogue) {
+    catalogueSkipped.push({ id: item.id, reason: item.catalogue.skip, why: item.catalogue.why.trim() });
+    delete item.catalogue;
+  }
 }
 
 // 3) Stamp generatedAt + publishDate on every new item
@@ -237,6 +271,7 @@ const report: SweepReport = {
   updated: updatedReports,
   removed: removedReports,
   coverage: draft.coverage,
+  ...(catalogueSkipped.length > 0 ? { catalogue: { skipped: catalogueSkipped } } : {}),
 };
 
 log.sweeps.push(report);

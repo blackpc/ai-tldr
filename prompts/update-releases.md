@@ -1,6 +1,6 @@
 ---
 prompt-id: tldr.update-releases
-prompt-version: 6.11.0
+prompt-version: 6.12.0
 output-target: src/data/releases.json (via finalize-sweep.ts) + catalogue sync (src/data/learn/*, src/data/models/*)
 schema: src/data/schema.ts
 invoke-as: subagent
@@ -67,6 +67,11 @@ You write a draft. Scripts validate and merge. You do **NOT** edit
      "notes":      { "<id>": "one-sentence why-included" }
    }
    ```
+   A `tool`/`repo` item may additionally carry
+   `"catalogue": { "skip": "not-a-tool" | "not-about-a-change", "why": "one sentence" }`
+   — the ONLY way it gets past the catalogue-sync gate (step 7) without a
+   catalogue entry. finalize-sweep strips it from the feed item and
+   records it on the sweep report.
    `coverage` lists categories you actually queried this run. Entries
    MUST be values from the `categories` enum (model, repo, tool, video,
    dataset, …) — NOT source names like "youtube", "hn", "lab-blog",
@@ -103,20 +108,45 @@ You write a draft. Scripts validate and merge. You do **NOT** edit
    on collision; soft-warns on coverage gaps.
    For non-cron runs override the source label:
    `--source manual-<reason>`. Default is `github-actions-sweep`.
-7. **Catalogue sync (tools + LLMs).** The feed and the evergreen
-   catalogues must not drift: when an item you JUST shipped in this sweep
-   is about a tracked tool or LLM, reflect it in the catalogue in the
-   SAME sweep. Scope is strictly `newItems` from this run — never
+7. **Catalogue sync (tools + LLMs) — MANDATORY, and gated.** The feed
+   and the evergreen catalogues must not drift: every item you JUST
+   shipped that is about a tool or an LLM is reflected in the catalogue
+   in the SAME sweep. Scope is strictly `newItems` from this run — never
    re-sweep the whole feed, never touch entries no new item is about.
    All the maintain-registry rules apply here (zero-hallucination,
-   evergreen wording, source-in-links; read `prompts/maintain-registry.md`
-   if unsure — its steps 1–2 are the canonical add procedure):
+   evergreen wording, source-in-links; `prompts/maintain-registry.md`
+   steps 1–2 are the canonical add procedure).
 
-   - **Tool update news** — a new item covers a version release, pricing/
-     license change, or security fix for a tool in
-     `src/data/learn/landscape.json` that HAS a detail page
-     (`src/data/learn/tools/<slug>.json`): prepend ONE entry to that
-     file's `changelog` array (newest first, create the array if absent):
+   **Tools: the rule is mechanical, not a judgement call.**
+   `bun scripts/check-catalogue-sync.ts` fails the sweep unless EVERY new
+   item whose `categories` include `tool` or `repo` and that links a
+   GitHub repo satisfies one of:
+   - the repo is a tile in `src/data/learn/landscape.json` AND has a
+     detail page `src/data/learn/tools/<slug>.json` AND that page's
+     `changelog` has an entry whose `releaseId` is the item's id — i.e.
+     you ADDED the tool (tile + detail; the launch is its first changelog
+     entry) or you PREPENDED a changelog entry for the update; or
+   - the item declared `catalogue.skip` in the draft (step 4) with one of
+     exactly two reasons:
+     - `not-a-tool` — nothing to install or run: a dataset, benchmark,
+       paper artefact, proof, demo, awesome-list, course.
+     - `not-about-a-change` — the tool IS catalogued but the item is not
+       a release/update of it (an incident, a tutorial, a story that
+       merely uses it). REJECTED when the title carries a version number.
+
+   Not valid reasons, ever: "reference implementation", "unmaintained",
+   "not sure which category", "the daily job will pick it up". The daily
+   job searches GitHub for ≥15k★ repos and will NEVER see a launch-week
+   tool — this sweep is the only path a new tool has into the catalogue.
+   There is NO cap and no padding risk: the gate only ever asks for tools
+   the feed already accepted; by shipping the item you already judged the
+   tool notable. Budget ~5 minutes per tool; a sweep with three tool
+   launches writes three tool pages.
+
+   How to satisfy it:
+   - **Tool update news** (repo already a tile with a detail page):
+     prepend ONE entry to that file's `changelog` array (newest first,
+     create the array if absent):
      ```json
      { "date": "<item.date>", "version": "vX.Y.Z (when versioned)",
        "note": "<1–2 plain-English sentences on what changed>",
@@ -127,27 +157,38 @@ You write a draft. Scripts validate and merge. You do **NOT** edit
      description, stale claim) — verified values only.
      `check-landscape.ts` validates the shape, newest-first order, https
      `url`, and that `releaseId` is a real feed id.
-   - **New notable tool shipped** — the item is a `tool`/`repo` launch
-     that clearly belongs in the landscape and is missing: add the tile +
-     detail file per maintain-registry step 2. Cap ~1 per sweep; when in
-     doubt SKIP — the daily registry sweep is the backstop.
+   - **Tool launch** (repo not a tile): add the tile — `name`, `slug`,
+     `repo` ("owner/repo"), `homepage` when non-GitHub, one-sentence
+     `description`, `access` for non-OSS, `logo` only if a brand file
+     already exists under `public/tools-logos/` — in the subcategory that
+     matches what the tool IS (not what it is used with), then write the
+     detail file per maintain-registry step 2: overview ≥2 paragraphs,
+     features, a README-grounded getting-started with REAL commands, use
+     cases, `language`, `license`, and a first `changelog` entry pointing
+     at this item. Read the README (`bun scripts/gh-repo-meta.ts` +
+     WebFetch); never invent commands.
+   - **Homepage-only tile for the same product** (the gate prints likely
+     matches): that IS the tool — add `repo` to the existing tile, write
+     its detail page if missing, do not create a second tile.
+   - **Tile-only tool** (no detail page) in the news: write its detail
+     page now — a tool in the news deserves its page.
    - **New LLM version shipped** — the item is a `model` release from a
      maker in `src/data/models/registry.json`: add the registry tile +
      detail file per maintain-registry step 1 (never set `current` — it
-     is derived). Cap ~2 per sweep. This is also what makes the model
-     name in your new item auto-link.
+     is derived). This is also what makes the model name in your new
+     item auto-link.
    - **Mis-filed tool** — if a tool you're touching clearly sits in the
-     wrong category/subcategory (categorize by what the tool IS, not what
-     it's used with), move the tile AND re-sync the detail file's
-     `category`/`subcategory`/`categoryTitle`/`subcategoryTitle`
+     wrong category/subcategory, move the tile AND re-sync the detail
+     file's `category`/`subcategory`/`categoryTitle`/`subcategoryTitle`
      (check-landscape fails the build on drift).
-   - Validate what you touched:
+   - Then run, in this order, and fix until all three pass:
+     `bun scripts/check-catalogue-sync.ts` (must print `catalogue-sync ok`)
      `bun scripts/check-landscape.ts && bun scripts/check-models.ts`.
 
-   These are NOT quotas. A sweep whose items are about nothing we
-   catalogue touches zero catalogue files — that is the normal case.
-   Never add a changelog entry for an item you didn't ship this run, and
-   never invent a `url`/`version` the source doesn't state.
+   A sweep whose items are about nothing we catalogue touches zero
+   catalogue files — that is fine and the gate passes trivially. Never
+   add a changelog entry for an item you didn't ship this run, and never
+   invent a `url`/`version` the source doesn't state.
 8. **Build check.** `bun run typecheck && bun run build`. If the build
    breaks, fix; do not commit.
 9. Stop. Don't commit, don't push (the workflow handles that).
