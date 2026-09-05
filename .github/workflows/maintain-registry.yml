@@ -9,9 +9,12 @@ name: Maintain LLMs + Tools (daily)
 #
 # What it does:
 #   1. Checks out the repo, installs deps
-#   2. Discovers missing popular tools (writes .claude/tmp/landscape-gaps.json)
+#   2. Builds THE tool candidate list (scripts/tool-gaps.ts →
+#      .claude/tmp/tool-gaps.json): tools our own feed covered that the
+#      catalogue lacks (no star floor) + ≥1k★ GitHub repos at the head of each
+#      AI topic or created in the last year, minus catalogue-skips.json
 #   3. Builds the registry-freshness context the agent reads (current flagship
-#      per line + tool gaps) and prints it into the run summary
+#      per line) and prints both into the run summary
 #   4. Runs Claude Code against prompts/maintain-registry.md (web-verify every
 #      fact; add/update registry.json + landscape.json + per-entry detail files)
 #   5. Runs `bun run build` to PROVE the new data validates (check-models +
@@ -22,8 +25,11 @@ name: Maintain LLMs + Tools (daily)
 
 on:
   schedule:
-    # once a day at 05:30 UTC — offset from the 2h feed sweep (minute 0)
-    - cron: "30 5 * * *"
+    # Every 6 hours at :30 — offset from the 2h feed sweep (minute 0). Was
+    # daily; raised on 2026-09-05 so the ~160-tool feed backlog drains in
+    # days, not months (SWEEP_MEMORY 2026-09-05-B). Drop back to daily once
+    # tool-gaps.ts reports an empty fromFeed for a week.
+    - cron: "30 */6 * * *"
   workflow_dispatch: {}
 
 permissions:
@@ -37,9 +43,9 @@ concurrency:
 jobs:
   maintain:
     runs-on: ubuntu-latest
-    # One 40m sweep step + ~10m for checkout / install / discovery / build /
-    # commit / push.
-    timeout-minutes: 55
+    # One 80m sweep step (~8 tool pages at ~5 min each + the model check) +
+    # ~15m for checkout / install / discovery / build / commit / push.
+    timeout-minutes: 100
 
     steps:
       - name: Checkout
@@ -55,24 +61,26 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Discover missing popular tools
-        # Writes .claude/tmp/landscape-gaps.json (the tool candidates the agent
-        # reads) and prints the gap list into the run summary. Best-effort.
-        continue-on-error: true
+      - name: Build the tool candidate list
+        # Writes .claude/tmp/tool-gaps.json — fromFeed (tools our feed covered
+        # that we don't list; no star floor) + fromGitHub (≥1k★, active or
+        # created this year) minus catalogue-skips.json — and mirrors it into
+        # the run summary. The feed half needs no network; if the GitHub
+        # search fails the file is still written with fromFeed.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          GAP_MIN_STARS=15000 bun scripts/discover-landscape-gaps.ts --json || true
           {
-            echo '## Tool-gap candidates (popular OSS AI tools we do not list)'
+            echo '## Tool candidates (scripts/tool-gaps.ts)'
             echo '```'
-            GAP_MIN_STARS=15000 bun scripts/discover-landscape-gaps.ts 2>&1 || true
+            bun scripts/tool-gaps.ts 2>&1 || bun scripts/tool-gaps.ts --no-github 2>&1
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          test -f .claude/tmp/tool-gaps.json
 
       - name: Build registry-freshness context
-        # Writes .claude/tmp/registry-context.json (current flagship per line +
-        # tool gaps) the agent reads, and mirrors it into the run summary.
+        # Writes .claude/tmp/registry-context.json (current flagship per line)
+        # the agent reads, and mirrors it into the run summary.
         run: |
           {
             echo '## Registry freshness (current flagship per line)'
@@ -87,7 +95,7 @@ jobs:
 
       - name: Run maintenance sweep with Claude Code
         uses: anthropics/claude-code-action@v1
-        timeout-minutes: 40
+        timeout-minutes: 80
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           show_full_output: "true"
@@ -101,15 +109,26 @@ jobs:
             releases look unfamiliar — your training data predates today.
 
             Read `prompts/maintain-registry.md` and follow it exactly. Verify
-            every fact from a primary source. If nothing has genuinely shipped
-            or changed, change nothing. Do NOT commit or push — the next
-            workflow step does that.
+            every fact from a primary source. Models: if nothing has shipped,
+            change nothing. Tools: work `.claude/tmp/tool-gaps.json` —
+            `fromFeed` is a backlog of tools we already wrote news about, add
+            every real one (up to ~8 this run), and record the non-tools in
+            `src/data/learn/catalogue-skips.json`. Do NOT commit or push —
+            the next workflow step does that.
           claude_args: |
             --model "claude-opus-5[1m]"
             --verbose
             --max-turns 6000
             --permission-mode acceptEdits
             --allowedTools "WebSearch,WebFetch,Read,Write,Edit,Bash(bun:*),Bash(ls:*),Bash(cat:*),Bash(grep:*),Bash(curl:*),Bash(gh:*),Bash(rm:*)"
+
+      - name: Tool-backlog gate
+        # Fails when feed-covered tools are still missing AND this run added
+        # no tool page and recorded no skip — "a no-op day" with real
+        # candidates pending (prompt prose alone was ignored 34 runs in a row,
+        # SWEEP_MEMORY 2026-09-05-A). Recording a skip with a reason is a
+        # valid outcome; the gate never demands a number.
+        run: bun scripts/tool-gaps.ts --check --no-github
 
       - name: Validate the new catalog (gate)
         # Backstop: re-run the full build so check-models + check-landscape PROVE
@@ -126,7 +145,7 @@ jobs:
           set -euo pipefail
           # The evergreen catalog files only. Detail dirs catch new + modified
           # files; registry.json carries the build-derived current/rich flags.
-          FILES="src/data/models/registry.json src/data/models/models src/data/learn/landscape.json src/data/learn/tools src/data/learn/github-stars.json public/models-media public/models-logos"
+          FILES="src/data/models/registry.json src/data/models/models src/data/learn/landscape.json src/data/learn/tools src/data/learn/catalogue-skips.json src/data/learn/github-stars.json public/models-media public/models-logos"
           if [[ -z "$(git status --porcelain $FILES)" ]]; then
             echo "No catalog changes — nothing to commit."
             echo "pushed=false" >> "$GITHUB_OUTPUT"

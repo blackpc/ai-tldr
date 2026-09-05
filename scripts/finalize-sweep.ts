@@ -35,6 +35,7 @@ import type {
   SweepCatalogueSkipReason,
   Category,
 } from "../src/data/schema.ts";
+import { githubRepoOf } from "./tool-repo.ts";
 
 const args = process.argv.slice(2);
 const sourceIdx = args.indexOf("--source");
@@ -189,14 +190,28 @@ if (minSchemaErrors.length > 0) {
 }
 
 // 2b) Lift declared catalogue skips off the items (they are sweep-report
-// metadata, not feed data) so releases.json never carries the field.
+// metadata, not feed data) so releases.json never carries the field. A
+// `not-a-tool` ruling is also persisted by repo in catalogue-skips.json so
+// the repo stops surfacing as a gap for the daily job and later sweeps.
 const catalogueSkipped: SweepCatalogueSkip[] = [];
+const SKIPS_FILE = "src/data/learn/catalogue-skips.json";
+const persistentSkips: Record<string, { reason: string; why: string; date: string; by: string }> = existsSync(SKIPS_FILE)
+  ? JSON.parse(readFileSync(SKIPS_FILE, "utf8"))
+  : {};
+let skipsDirty = false;
 for (const item of newItems) {
   if (item.catalogue) {
-    catalogueSkipped.push({ id: item.id, reason: item.catalogue.skip, why: item.catalogue.why.trim() });
+    const why = item.catalogue.why.trim();
+    catalogueSkipped.push({ id: item.id, reason: item.catalogue.skip, why });
+    const repo = item.catalogue.skip === "not-a-tool" ? githubRepoOf(item) : null;
+    if (repo && !persistentSkips[repo]) {
+      persistentSkips[repo] = { reason: "not-a-tool", why, date: new Date().toISOString().slice(0, 10), by: sourceLabel };
+      skipsDirty = true;
+    }
     delete item.catalogue;
   }
 }
+if (skipsDirty) writeFileSync(SKIPS_FILE, JSON.stringify(persistentSkips, null, 2) + "\n");
 
 // 3) Stamp generatedAt + publishDate on every new item
 const generatedAt = new Date().toISOString();

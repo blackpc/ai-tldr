@@ -51,6 +51,30 @@ const releaseIds = new Set<string>(
 );
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+// catalogue-skips.json — persistent "not a tool" rulings keyed by "owner/repo".
+// Read by tool-gaps.ts (candidates) and check-catalogue-sync.ts (the sweep
+// gate). Shape-checked here so a hand edit can't silently disable either.
+const SKIPS = "src/data/learn/catalogue-skips.json";
+if (existsSync(SKIPS)) {
+  let skips: unknown;
+  try {
+    skips = JSON.parse(readFileSync(SKIPS, "utf8"));
+  } catch {
+    err(`${SKIPS} is not valid JSON`);
+  }
+  if (skips && typeof skips === "object" && !Array.isArray(skips)) {
+    for (const [repo, s] of Object.entries(skips as Record<string, any>)) {
+      const w = `${SKIPS} → "${repo}"`;
+      if (!/^[^/\s]+\/[^/\s]+$/.test(repo)) err(`${w}: key must be "owner/repo"`);
+      if (s?.reason !== "not-a-tool") err(`${w}: reason must be "not-a-tool" (per-item reasons live on the sweep report)`);
+      if (typeof s?.why !== "string" || s.why.trim().length < 12) err(`${w}: why must be one auditable sentence (≥12 chars)`);
+      if (!DATE_RE.test(String(s?.date))) err(`${w}: date must be YYYY-MM-DD`);
+    }
+  } else if (skips !== undefined) {
+    err(`${SKIPS} must be an object keyed by "owner/repo"`);
+  }
+}
+
 /** Validate a tool detail's optional changelog (see ToolChangelogEntry in
  *  src/data/learn/schema.ts): newest-first, dated, grounded links only. */
 function checkChangelog(slug: string, changelog: unknown): void {

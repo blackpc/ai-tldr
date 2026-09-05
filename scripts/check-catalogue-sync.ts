@@ -48,12 +48,20 @@ const opt = (n: string) => {
 const SWEEPS = "src/data/sweeps.json";
 const RELEASES = "src/data/releases.json";
 const LANDSCAPE = "src/data/learn/landscape.json";
+const SKIPS = "src/data/learn/catalogue-skips.json";
 const TOOLS_DIR = "src/data/learn/tools";
 const VERSION_RE = /\bv?\d+\.\d+(?:\.\d+)?\b/;
 
 const log = JSON.parse(readFileSync(SWEEPS, "utf8")) as SweepLog;
 const feed = JSON.parse(readFileSync(RELEASES, "utf8")) as ReleaseFeed;
 const landscape = JSON.parse(readFileSync(LANDSCAPE, "utf8")) as Landscape;
+/** Persistent "not a tool" rulings keyed by "owner/repo" (lowercased here) —
+ *  a repo ruled out once (by a sweep, the daily job or a human) stays out. */
+const persistentSkips = new Map<string, { reason: string; why: string }>(
+  Object.entries(
+    existsSync(SKIPS) ? (JSON.parse(readFileSync(SKIPS, "utf8")) as Record<string, { reason: string; why: string }>) : {},
+  ).map(([repo, s]) => [repo.toLowerCase(), s]),
+);
 
 const items = new Map(feed.items.map((i) => [i.id, i]));
 
@@ -179,8 +187,9 @@ for (const report of reports) {
 
     const tile = tileByRepo.get(repo.toLowerCase());
     if (!tile) {
-      if (skip?.reason === "not-a-tool") {
-        okLines.push(`${item.id}: skipped — not-a-tool: ${skip.why}`);
+      const ruled = persistentSkips.get(repo.toLowerCase());
+      if (skip?.reason === "not-a-tool" || ruled?.reason === "not-a-tool") {
+        okLines.push(`${item.id}: skipped — not-a-tool: ${(skip ?? ruled)!.why}`);
         resolved.push({ id: item.id, repo, action: "skipped" });
         continue;
       }

@@ -189,6 +189,15 @@ carries an enumerated `catalogue.skip`. Prompt-only versions of this rule
 were ignored 34 sweeps in a row (SWEEP_MEMORY 2026-09-05-A) — never
 downgrade the gate to a warning.
 
+**Tool discovery has ONE owner.** `scripts/tool-gaps.ts` writes the only
+candidate list (`fromFeed`: feed-covered tools we don't list, no star floor;
+`fromGitHub`: ≥1k★ active/new repos), minus `src/data/learn/catalogue-skips.json`
+(persistent "not a tool" rulings). The 6-hourly maintain-registry job works
+it feed-first, may create categories/subcategories (rules in
+`prompts/maintain-registry.md` step 2), and is gated by `tool-gaps.ts --check`.
+Don't add a second finder or a star threshold anywhere (SWEEP_MEMORY
+2026-09-05-B).
+
 ### Zero-hallucination policy
 
 Every URL, image, metric, and claim must be fetched and verified. If it

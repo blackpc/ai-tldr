@@ -12,8 +12,12 @@ You keep two EVERGREEN catalogs accurate and complete:
 This is NOT the news feed. It runs once a day. Your job is to make sure that
 when a new model or tool has shipped — or a tracked one has materially changed
 (a price cut, a new official benchmark, a deprecation) — the catalog reflects
-it, with every fact verified. If nothing has changed, you change nothing. **A
-no-op day is a correct day.**
+it, with every fact verified. For MODELS, if nothing has shipped you change
+nothing — a no-op is correct. For TOOLS, a no-op is correct ONLY when
+`.claude/tmp/tool-gaps.json` has an empty `fromFeed`: every entry there is a
+tool our own feed already covered and the catalogue still lacks, and
+`bun scripts/tool-gaps.ts --check` fails the run if candidates remain and you
+neither added a page nor recorded a skip.
 
 ---
 
@@ -28,11 +32,14 @@ no-op day is a correct day.**
    `check-models.ts` FAILS THE BUILD otherwise. Same for tools and
    `check-landscape.ts`. This is the mechanical guard — you cannot render a
    number without pointing at where it came from.
-3. **No padding. The catalog is not a quota.** Don't invent a "new" model or
-   add a tool just to have done something. `registry-context.json` shows you our
-   current flagships and missing-tool candidates as *where to look* — it can
-   never pressure an add. Add ONLY genuinely-new, genuinely-notable, fully-
-   verified entries.
+3. **No padding — but the feed backlog is not padding.** Never invent a "new"
+   model, and never add a GitHub-sourced tool just to have done something:
+   those you judge (real tool? maintained? used?). Feed-sourced tool gaps are
+   different: each one is a story we already published about that tool, so
+   notability is settled — adding every real tool in `fromFeed` is catching up,
+   not padding. The only reason to leave one out is that it is not a tool
+   (dataset, benchmark, proof, paper artefact), and that ruling is recorded in
+   `src/data/learn/catalogue-skips.json` so it stops resurfacing.
 4. **Evergreen wording — never time-relative.** These pages live forever. NEVER
    write "current", "latest", "newest", "most recent", "now the", "brand-new",
    or "just released" in a blurb / tagline / overview. Say what it IS and DATE
@@ -58,9 +65,11 @@ restating old numbers, a rumor, an unverifiable leak.
 
 ## Caps (bound the blast radius — these are ceilings, NOT targets)
 
-At most ~3 new models, ~3 new tools, and a handful of updates per run. If more
-than that is genuinely pending, do the most important and note the rest in your
-summary for tomorrow. Never pad to reach a cap.
+At most ~3 new models, ~8 new tools, and a handful of updates per run (the
+job runs every 6 hours; a tool page is ~5 minutes of work). If more is
+pending, do the newest feed-sourced gaps first and note the rest — the next
+run picks them up. Never pad to reach a cap; never stop short of it while
+`fromFeed` still has real tools in it.
 
 ---
 
@@ -68,8 +77,13 @@ summary for tomorrow. Never pad to reach a cap.
 
 ### 0. Read your context
 
-- `cat .claude/tmp/registry-context.json` — our current flagship per model line
-  + the missing-tool candidates.
+- `cat .claude/tmp/registry-context.json` — our current flagship per model line.
+- `cat .claude/tmp/tool-gaps.json` — THE tool candidate list: `fromFeed`
+  (tools our feed covered that we don't list — add every real one, newest
+  first) and `fromGitHub` (≥1k★ repos at the head of each AI topic or created
+  in the last year — judge these). Written by `bun scripts/tool-gaps.ts`.
+- `cat src/data/learn/catalogue-skips.json` — repos already ruled "not a
+  tool"; they are excluded from the candidates automatically.
 - Skim `SWEEP_MEMORY.md` (scar history) and these schema files so you write
   VALID data:
   - `src/data/models/schema.ts` — `ModelEntry` (registry tile) + `ModelDetail`.
@@ -133,25 +147,37 @@ maker publishes at launch. Capture whichever of these the source actually has
 
 Skipping is fine when the maker published no comparison — never fabricate one.
 
-### 2. Add missing notable tools
+### 2. Add missing tools (this is where most of your time goes)
 
-**First, `feedToolGaps` in `registry-context.json`** — tools our own news feed
-covered in the last 30 days that the catalogue lacks (no tile) or lists
-tile-only (no detail page). These come BEFORE the star-threshold list: the
-feed already judged them notable by shipping the story, so "is it notable?"
-is settled — add every one that IS a tool (tile + detail; for tile-only ones,
-write the page), and make the feed item the first `changelog` entry
-(`releaseId` = the item's id, `url` = one of its verified links). Model
-releases are already excluded from the list; a dataset, benchmark, proof or
-paper artefact that slipped in is not a tool — leave it and say so in your
-summary. The 2h sweep is gated on its own tool
-items going forward (`scripts/check-catalogue-sync.ts`); this list is the
-backstop for what landed before the gate or slipped past it.
+Work `.claude/tmp/tool-gaps.json` top to bottom:
 
-Then, from the star-threshold tool-gap candidates, pick the genuinely notable
-open-source tools we lack. For each: confirm the repo via the GitHub API
-(`bun -e "fetch('https://api.github.com/repos/<owner>/<repo>')..."` or a Bash
-`curl`/`gh`), read its README, then:
+**a. `fromFeed` first, newest first — add every one that IS a tool.** Each
+entry is a story our feed already shipped about that repo; the catalogue
+lacks it (no tile) or lists it tile-only (no detail page). Notability is
+settled. For each: confirm the repo (`bun scripts/gh-repo-meta.ts owner/repo`
+or `gh api repos/owner/repo`), read its README, then add the tile + write the
+detail page (tile-only → just the page), and make the feed item the FIRST
+`changelog` entry: `{ date: <item date>, version?: <if the story is a
+versioned release>, note, releaseId: <the id in brackets>, url: <one of the
+feed item's links> }`. Model releases never appear here (excluded by
+category). If an entry is genuinely not a tool — a dataset, benchmark, proof,
+paper artefact, demo — record it in `src/data/learn/catalogue-skips.json`:
+`"owner/repo": { "reason": "not-a-tool", "why": "<one sentence>", "date":
+"<today>", "by": "daily" }` and move on; it will not resurface. Not valid
+reasons: "reference implementation", "unmaintained", "small", "unsure where
+it goes".
+
+**b. Then `fromGitHub`, as capacity allows** — ≥1k★ repos at the head of each
+AI topic or created in the last year, not yet listed. These you judge: a real
+tool people install and run, with a README that says what it does. Skip
+awesome-lists, courses, papers-with-code dumps, model-weight repos, forks.
+There is no star floor to argue about; the question is only "is it a tool".
+
+The 2h feed sweep is gated on its own new tool items
+(`scripts/check-catalogue-sync.ts`); you are the backstop that drains what
+landed before the gate and what the sweep skipped with a reason.
+
+For each tool you add:
 
 **a. Add the tile** to the right category → subcategory in `landscape.json`
 (`name`, `slug`, `repo` as `owner/repo`, `homepage` if non-GitHub, one-sentence
@@ -169,10 +195,29 @@ refreshed elsewhere.
 > share the tool's core job. Run the `audit-tool-categories` workflow
 > (`.claude/tmp/audit-categories.mjs`) after any bulk add to catch slips.
 
+> **When NO subcategory fits, create one — the taxonomy is yours to grow.**
+> Categories and subcategories are plain data in `landscape.json` (nothing in
+> the UI is hard-coded to their ids); `check-landscape` only requires a
+> category to have `id` (kebab-case), `title`, `blurb` (one line) and ≥1
+> subcategory, and a subcategory to have `id`, `title` and ≥1 tool. Create a
+> subcategory when a tool's core job is one that ≥2 tools share (or clearly
+> will) and none of the existing siblings do it — e.g. a wave of "agent
+> skills" registries, "evaluation harnesses for computer-use agents", "LLM
+> cost/FinOps". Create a whole category only when a new subcategory fits under
+> none of the existing category headings. Never create one for a single
+> oddball when a neighbouring subcategory is a reasonable home, and never for
+> a vendor, a licence or a model family (Anthropic-tools, open-core, Llama-x
+> are not categories). When you create one, move the existing tools that
+> obviously belong in it (re-sync each moved detail file's `category` /
+> `subcategory` / `categoryTitle` / `subcategoryTitle`), and say so in your
+> summary. Function-first ids and titles, matching the neighbours' style.
+
 **b. Write the detail file** `src/data/learn/tools/<slug>.json` matching
 `LandscapeToolDetail`: overview (≥2 paras), feature bullets, a README-grounded
 getting-started walkthrough with REAL commands/code, use cases, license,
-language. Ground every step in the project's own docs.
+language. Ground every step in the project's own docs. `logo` only when a
+brand file already exists under `public/tools-logos/` (a missing file fails
+the build); otherwise leave it out — a monogram renders.
 
 ### 3. Update materially-changed entries
 
@@ -200,8 +245,13 @@ the entries this run already touches.
 ```bash
 bun scripts/check-models.ts
 bun scripts/check-landscape.ts
+bun scripts/tool-gaps.ts --check --no-github
 bun run build
 ```
+
+`tool-gaps --check` fails when feed-sourced candidates remain and this run
+neither added a tool page nor recorded a skip — fix by doing one of the two,
+never by editing the check.
 
 All must pass. `check-models` re-derives the `current` flag + `count.json`;
 `build` regenerates other derived files (fine — the workflow discards them).

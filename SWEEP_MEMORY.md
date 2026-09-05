@@ -1043,3 +1043,69 @@ class of item, add a reason to the enum — do NOT soften the gate to a
 warning (that is exactly what 08-30-A was, and it was ignored 34/34 times).
 The 160-item backlog is NOT drained by this — that needs a one-time
 backfill (a workflow over `feedToolGaps` with the window widened).
+
+## 2026-09-05-B — ONE tool pipeline: tool-gaps.ts + catalogue-skips.json; 15k★ wall removed; taxonomy grows; daily job every 6h
+
+**Trigger:** User, after 09-05-A: "FIX EVERY PLACE, I want NEW TOOLS TO
+APPEAR, NEW CATEGORIES/SUB-CATEGORIES if needed, the 15k limit is
+ridiculous, make an order here, it looks like a mess."
+
+**The mess, enumerated:** three places ran the same GitHub-only gap finder
+(`discover-landscape-gaps.ts`) with `GAP_MIN_STARS=15000` — the daily job
+(twice) AND the 2h sweep workflow (advisory) — none of which read the feed;
+09-05-A had bolted a 30-day `feedToolGaps` list onto `registry-freshness.ts`
+(a models script); two prompts carried different tool rules and caps (~1 vs
+~3); nothing said a category could be created; the daily prompt said "a
+no-op day is a correct day" while 160 feed-covered tools were missing.
+
+**What changed (one list, one exclusion file, one rule set, one owner):**
+- `scripts/tool-gaps.ts` (NEW, replaces discover-landscape-gaps.ts and the
+  feedToolGaps block): writes `.claude/tmp/tool-gaps.json` with `fromFeed`
+  (feed tool items of the last 180 days not catalogued / tile-only — NO star
+  floor, the feed already vetted them) and `fromGitHub` (≥1k★, pushed OR
+  created in the last year, per-topic head + "created:>1y" so a 6-month-old
+  3k★ tool surfaces; awesome-lists excluded; capped 80). `--check` is the
+  daily job's post-run gate: fails when fromFeed is non-empty AND the run
+  added no tool page AND touched no skip. Never demands a number.
+- `src/data/learn/catalogue-skips.json` (NEW): persistent `not-a-tool`
+  rulings keyed by "owner/repo" {reason, why, date, by}. Written by
+  finalize-sweep (from a draft `catalogue.skip`), by the daily agent by
+  hand, or by a human. Read by tool-gaps (excluded) and check-catalogue-sync
+  (a ruled repo passes the sweep gate). Shape validated in check-landscape.
+  In both workflows' commit allowlists + the sweep's retry reset.
+- `prompts/maintain-registry.md`: hard rule 3 reframed ("the feed backlog is
+  not padding"); "no-op day is correct" now ONLY for models / when fromFeed
+  is empty; caps ~8 tools per run; step 0 reads tool-gaps.json; step 2 is
+  feed-first then GitHub; explicit "When NO subcategory fits, create one"
+  procedure (categories are plain data — nothing in the UI is bound to ids;
+  check-landscape needs id/title/blurb/≥1 sub, sub needs id/title/≥1 tool;
+  rules: ≥2 tools share the job, function-first, never vendor/licence/model
+  family, move obvious existing members + re-sync their detail files).
+  `tool-gaps --check` added to the validate step.
+- `prompts/update-releases.md` step 7: "No subcategory fits → create one"
+  bullet pointing at the same procedure; note that not-a-tool skips persist.
+- `maintain-registry.yml`: cron daily → every 6h (drain the backlog in days;
+  drop back to daily once fromFeed is empty for a week); discover step →
+  tool-gaps (falls back to --no-github if the search fails; file must
+  exist); agent 40 → 80 min, job 55 → 100; "Tool-backlog gate" step before
+  the build gate; prompt shim names the backlog.
+- `update-releases.yml`: the advisory 15k gap step DELETED — discovery has
+  one owner now.
+- `registry-freshness.ts` back to models-only (+ a pointer to tool-gaps.json).
+
+**Scar discipline:** the 04-28 padding scars are about INVENTING items;
+`fromFeed` is 1:1 with items the feed already accepted, and `fromGitHub`
+still goes through the agent's "is it a real tool" judgement — the star
+floor was never what kept padding out, the README check was. The only
+mechanical demands are "do something about the backlog" (--check) and
+"every sweep tool item resolves" (09-05-A); both have an enumerated,
+auditable escape hatch (catalogue-skips.json / catalogue.skip). Category
+creation is bounded by check-landscape's structure rules, not by prose.
+
+**Status:** Applied 2026-09-05; first 6-hourly run dispatched by hand right
+after the push. Watch: `fromFeed` count in each run's summary should fall by
+~8 per run; `git log -- src/data/learn/tools` should show ~8 adds per daily
+commit; new subcategories should appear only with ≥2 members. If runs time
+out, lower the tool cap before raising the timeout again. If --check fails
+repeatedly with the agent claiming "nothing is a tool", read the skips it
+wrote — that is the audit trail.

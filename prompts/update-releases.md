@@ -181,6 +181,14 @@ You write a draft. Scripts validate and merge. You do **NOT** edit
      wrong category/subcategory, move the tile AND re-sync the detail
      file's `category`/`subcategory`/`categoryTitle`/`subcategoryTitle`
      (check-landscape fails the build on drift).
+   - **No subcategory fits** — create one (or, rarely, a category): the
+     taxonomy is plain data and nothing in the UI is bound to its ids.
+     Rules and shape are in `prompts/maintain-registry.md` step 2 ("When
+     NO subcategory fits"). "Unsure where it goes" is never a reason to
+     skip a tool.
+   - A `not-a-tool` skip is persisted by repo in
+     `src/data/learn/catalogue-skips.json` (finalize-sweep writes it), so
+     the repo stops surfacing as a gap for the daily job and later sweeps.
    - Then run, in this order, and fix until all three pass:
      `bun scripts/check-catalogue-sync.ts` (must print `catalogue-sync ok`)
      `bun scripts/check-landscape.ts && bun scripts/check-models.ts`.
