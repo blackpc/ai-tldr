@@ -344,9 +344,10 @@ export interface SweepCatalogueSkip {
 export interface SweepCatalogueResolution {
   id: string;
   repo: string;
-  /** Landscape slug the item resolved to (absent when skipped). */
+  /** Landscape slug the item resolved to (absent when skipped or no tile). */
   slug?: string;
-  action: "added" | "updated" | "skipped";
+  /** `missing` = the sweep left it; the 6-hourly catalogue job picks it up. */
+  action: "added" | "updated" | "skipped" | "missing";
 }
 
 export interface SweepCatalogue {

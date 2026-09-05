@@ -15,9 +15,10 @@ when a new model or tool has shipped — or a tracked one has materially changed
 it, with every fact verified. For MODELS, if nothing has shipped you change
 nothing — a no-op is correct. For TOOLS, a no-op is correct ONLY when
 `.claude/tmp/tool-gaps.json` has an empty `fromFeed`: every entry there is a
-tool our own feed already covered and the catalogue still lacks, and
-`bun scripts/tool-gaps.ts --check` fails the run if candidates remain and you
-neither added a page nor recorded a skip.
+tool our own feed already covered and the catalogue still lacks. The run
+summary prints how many remain and whether you added pages or recorded
+skips; nothing blocks or retries — the next run just gets the same list, so
+the number only goes down if you work it.
 
 ---
 
@@ -249,9 +250,9 @@ bun scripts/tool-gaps.ts --check --no-github
 bun run build
 ```
 
-`tool-gaps --check` fails when feed-sourced candidates remain and this run
-neither added a tool page nor recorded a skip — fix by doing one of the two,
-never by editing the check.
+`tool-gaps --check` reports (exit 1, informational) when feed-sourced
+candidates remain and this run neither added a tool page nor recorded a skip.
+It is a progress line, not a loop: one round, then stop.
 
 All must pass. `check-models` re-derives the `current` flag + `count.json`;
 `build` regenerates other derived files (fine — the workflow discards them).

@@ -181,13 +181,17 @@ the user is unsatisfied with sweep output, append a new entry to
 as broken there. Do not re-fix something already solved unless you can
 explain why the previous fix didn't hold.
 
-**Tool items are gated into the catalogue mechanically.**
-`scripts/check-catalogue-sync.ts` (workflow step before commit; required
-in prompt step 7) fails the sweep unless every `tool`/`repo` item it shipped
-is a landscape tile with a detail page whose `changelog` links the item, or
-carries an enumerated `catalogue.skip`. Prompt-only versions of this rule
-were ignored 34 sweeps in a row (SWEEP_MEMORY 2026-09-05-A) — never
-downgrade the gate to a warning.
+**Tool items are checked into the catalogue mechanically — and the check
+never blocks.** `scripts/check-catalogue-sync.ts` (run by the agent in
+prompt step 7, and by the workflow before commit) lists every `tool`/`repo`
+item a sweep shipped that is not yet a landscape tile with a detail page
+whose `changelog` links the item (or an enumerated `catalogue.skip`). In CI
+it is informational: it records added/updated/skipped/missing on the sweep
+report and the run summary; a miss never fails the run and never starts a
+second agent pass — the 6-hourly catalogue job reads the feed and picks the
+tool up. Editor's decisions (SWEEP_MEMORY 2026-09-05-A/B/C): no red runs
+over a missing tool page, no retry loops, no star thresholds, no "when in
+doubt skip" wording.
 
 **Tool discovery has ONE owner.** `scripts/tool-gaps.ts` writes the only
 candidate list (`fromFeed`: feed-covered tools we don't list, no star floor;

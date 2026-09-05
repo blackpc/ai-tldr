@@ -1109,3 +1109,48 @@ commit; new subcategories should appear only with ≥2 members. If runs time
 out, lower the tool cap before raising the timeout again. If --check fails
 repeatedly with the agent claiming "nothing is a tool", read the skips it
 wrote — that is the audit trail.
+
+## 2026-09-05-C — The catalogue checks REPORT, they never block or retry (editor's call)
+
+**Trigger:** User, on seeing that 09-05-A/B made the checks fail the job:
+"wtf, so I will see errors in that case? why so dumb" — and, on the
+proposed fix-up agent pass: "that's not a guardrail, that's a hole how to
+stuck the agent FOREVER."
+
+**Decision (both explicit):** (1) a missing tool page must never turn a
+run red or throw away the news; (2) no second agent pass, no retry loop,
+nothing that can run again on the same input. One bounded pass, then
+commit.
+
+**What changed:**
+- `update-releases.yml`: the gate step is now "Catalogue sync result" —
+  `continue-on-error`, `|| echo`, prints to the summary, `--write` records
+  added / updated / skipped / **missing** per item on the sweep report
+  regardless of outcome. Nothing downstream depends on its exit code.
+- `maintain-registry.yml`: "Tool-backlog gate" → "Tool backlog result", same
+  treatment (progress line only). The build gate there stays — it fails
+  only on genuinely invalid data, which is the one red run we want.
+- `check-catalogue-sync.ts`: `--write` now records `missing` entries and
+  writes even when misses exist (the audit trail is the point); header says
+  informational-in-CI. `SweepCatalogueResolution.action` gained `missing`.
+- Prompts: "fails the sweep" / "fails the run" wording → "lists" /
+  "reports"; step 7 tells the agent the check is run ONCE (fix what it
+  lists, run once more, stop regardless); the stale "the daily job searches
+  ≥15k★" sentence replaced (the 6-hourly job reads the feed).
+- CLAUDE.md paragraph rewritten to state the editor's rules: no red runs
+  over a missing tool page, no retry loops, no star thresholds, no "when in
+  doubt skip".
+
+**How enforcement works now (so nobody re-adds a hard gate):** three
+bounded, visible mechanisms — the sweep agent runs the check itself in
+step 7 (one round); the 6-hourly job's task is deterministic ("top 8 of
+fromFeed"); every run's summary and every sweep report carry the per-item
+outcome and the remaining count, so drift is visible in one glance at
+/log or the Actions summary. If tools stop appearing, the fix is in the
+prompt or the cap, never a blocking step.
+
+**Status:** Applied 2026-09-05. The run dispatched under 09-05-B
+(33970020087) still carries the old fatal backlog step; if it goes red once,
+that is why. Watch: `catalogue.resolved[]` on sweep reports should show
+`added`/`updated` far more often than `missing`; the backlog count in the
+6-hourly summary should fall ~8 per run.

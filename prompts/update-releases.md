@@ -118,9 +118,9 @@ You write a draft. Scripts validate and merge. You do **NOT** edit
    steps 1–2 are the canonical add procedure).
 
    **Tools: the rule is mechanical, not a judgement call.**
-   `bun scripts/check-catalogue-sync.ts` fails the sweep unless EVERY new
-   item whose `categories` include `tool` or `repo` and that links a
-   GitHub repo satisfies one of:
+   `bun scripts/check-catalogue-sync.ts` lists EVERY new item whose
+   `categories` include `tool` or `repo` and that links a GitHub repo
+   which does not yet satisfy one of:
    - the repo is a tile in `src/data/learn/landscape.json` AND has a
      detail page `src/data/learn/tools/<slug>.json` AND that page's
      `changelog` has an entry whose `releaseId` is the item's id — i.e.
@@ -135,13 +135,16 @@ You write a draft. Scripts validate and merge. You do **NOT** edit
        merely uses it). REJECTED when the title carries a version number.
 
    Not valid reasons, ever: "reference implementation", "unmaintained",
-   "not sure which category", "the daily job will pick it up". The daily
-   job searches GitHub for ≥15k★ repos and will NEVER see a launch-week
-   tool — this sweep is the only path a new tool has into the catalogue.
-   There is NO cap and no padding risk: the gate only ever asks for tools
+   "not sure which category", "the 6-hourly job will pick it up". (It
+   will — it reads the feed — but a story published without its tool page
+   is exactly the failure this rule exists for; do it in this run.)
+   There is NO cap and no padding risk: the check only ever asks for tools
    the feed already accepted; by shipping the item you already judged the
    tool notable. Budget ~5 minutes per tool; a sweep with three tool
-   launches writes three tool pages.
+   launches writes three tool pages. The check is something you RUN, not
+   something you loop on: run it once after your catalogue edits, fix what
+   it lists, run it once more, and move on. The workflow records whatever
+   is left and never blocks, fails or retries on it.
 
    How to satisfy it:
    - **Tool update news** (repo already a tile with a detail page):
@@ -189,9 +192,10 @@ You write a draft. Scripts validate and merge. You do **NOT** edit
    - A `not-a-tool` skip is persisted by repo in
      `src/data/learn/catalogue-skips.json` (finalize-sweep writes it), so
      the repo stops surfacing as a gap for the daily job and later sweeps.
-   - Then run, in this order, and fix until all three pass:
-     `bun scripts/check-catalogue-sync.ts` (must print `catalogue-sync ok`)
-     `bun scripts/check-landscape.ts && bun scripts/check-models.ts`.
+   - Then run `bun scripts/check-catalogue-sync.ts` — ONE round of fixes
+     for what it lists, then run it once more and stop regardless — and
+     `bun scripts/check-landscape.ts && bun scripts/check-models.ts`
+     (data validity; these must pass before step 8).
 
    A sweep whose items are about nothing we catalogue touches zero
    catalogue files — that is fine and the gate passes trivially. Never

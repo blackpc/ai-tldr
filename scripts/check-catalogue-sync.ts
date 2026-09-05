@@ -8,7 +8,7 @@
  * 27 tool/repo items and touched the tools catalogue once. Every run's
  * summary said "catalogue sync: no-op, correctly". The prompt's tool rule
  * was "when in doubt SKIP — the daily job is the backstop"; the daily job
- * only searches GitHub for ≥15k★ repos, so a launch-week tool never reached
+ * then searched GitHub for ≥15k★ repos only, so a launch-week tool never reached
  * the catalogue from either side (SWEEP_MEMORY 2026-09-05-A). Prompt
  * wording did not hold; a validator does — same lesson as source-in-links.
  *
@@ -19,12 +19,18 @@
  *     item with reason `not-a-tool` (nothing to install/run) or
  *     `not-about-a-change` (catalogued tool, but the item isn't a release of
  *     it — rejected when the title carries a version number).
- * Anything else FAILS (exit 1) with an actionable line per item. Items
- * without a GitHub repo are reported for information only.
+ * Anything else is listed with an actionable line per item and exit 1 —
+ * INFORMATIONAL in CI: the workflow prints it, records it, and moves on
+ * (never fails the run, never starts another agent pass — editor's call,
+ * SWEEP_MEMORY 2026-09-05-C); the 6-hourly catalogue job reads the feed and
+ * picks the tool up. The exit code exists so the sweep agent, which runs
+ * this itself, sees what is left. Items without a GitHub repo are reported
+ * for information only.
  *
  * Which sweep(s): the reports in sweeps.json that are NOT yet in HEAD (i.e.
  * what this run produced). `--sweep <id>` checks one specific report.
- * `--write` records the verified resolution into the report (audit trail).
+ * `--write` records the per-item resolution — added / updated / skipped /
+ * missing — into the report (the audit trail), whatever the outcome.
  */
 import { readFileSync, existsSync, writeFileSync } from "node:fs";
 import { execSync } from "node:child_process";
@@ -194,6 +200,7 @@ for (const report of reports) {
         continue;
       }
       const hint = likelyExistingTiles(repo);
+      resolved.push({ id: item.id, repo, action: "missing" });
       failures.push(
         `${item.id}: ${repo} is NOT in the tools catalogue → add a tile in landscape.json + write ${TOOLS_DIR}/<slug>.json (first changelog entry: releaseId "${item.id}"), or declare catalogue.skip "not-a-tool" in the draft` +
           (hint.length
@@ -206,6 +213,7 @@ for (const report of reports) {
 
     const detail = readDetail(tile.slug);
     if (!detail) {
+      resolved.push({ id: item.id, repo, slug: tile.slug, action: "missing" });
       failures.push(
         `${item.id}: ${repo} is tile "${tile.slug}" but has NO detail page → write ${TOOLS_DIR}/${tile.slug}.json (a tool in the news deserves its page) with a changelog entry for releaseId "${item.id}"`,
       );
@@ -221,6 +229,7 @@ for (const report of reports) {
     }
     if (skip?.reason === "not-about-a-change") {
       if (VERSION_RE.test(item.title)) {
+        resolved.push({ id: item.id, repo, slug: tile.slug, action: "missing" });
         failures.push(
           `${item.id}: declared "not-about-a-change" but the title carries a version number ("${item.title}") — that IS a change; prepend a changelog entry to ${TOOLS_DIR}/${tile.slug}.json`,
         );
@@ -230,6 +239,7 @@ for (const report of reports) {
       resolved.push({ id: item.id, repo, slug: tile.slug, action: "skipped" });
       continue;
     }
+    resolved.push({ id: item.id, repo, slug: tile.slug, action: "missing" });
     failures.push(
       `${item.id}: ${TOOLS_DIR}/${tile.slug}.json has no changelog entry with releaseId "${item.id}" → prepend { date, version?, note, releaseId, url } (newest first), or declare catalogue.skip "not-about-a-change" in the draft` +
         (skip ? `\n      (declared skip "${skip.reason}" does not apply — the tool IS catalogued)` : ""),
@@ -244,9 +254,14 @@ for (const report of reports) {
       failures.push(`${s.id}: catalogue.skip declared for an id that is not a tool/repo item of sweep ${report.id}`);
   }
 
-  if (flag("--write") && failures.length === 0 && toolItems > 0) {
+  // Recorded whatever the outcome — a "missing" line on the report is the
+  // audit trail that shows the 6-hourly job (and the editor) what was left.
+  if (flag("--write") && toolItems > 0) {
     report.catalogue = { ...(report.catalogue ?? {}), resolved };
   }
+}
+if (flag("--write") && toolItems > 0) {
+  writeFileSync(SWEEPS, JSON.stringify(log, null, 2) + "\n");
 }
 
 for (const l of okLines) console.log(`  ok    ${l}`);
@@ -256,14 +271,11 @@ if (failures.length > 0) {
   console.error(`\ncatalogue-sync FAILED — ${failures.length} tool item(s) not reflected in the tools catalogue:`);
   for (const f of failures) console.error(`  ✗ ${f}`);
   console.error(
-    `\nRule (prompts/update-releases.md step 7): every tool/repo item this sweep shipped is a landscape tile with a detail page whose changelog links the item, or carries an explicit catalogue.skip. "Reference implementation", "unmaintained", "unsure of category", "the daily job will get it" are not skip reasons.`,
+    `\nRule (prompts/update-releases.md step 7): every tool/repo item this sweep shipped is a landscape tile with a detail page whose changelog links the item, or carries an explicit catalogue.skip. "Reference implementation", "unmaintained", "unsure of category", "the daily job will get it" are not skip reasons.\nIn CI this is informational — whatever is left here is picked up by the 6-hourly catalogue job from the feed.`,
   );
   process.exit(1);
 }
 
-if (flag("--write") && toolItems > 0) {
-  writeFileSync(SWEEPS, JSON.stringify(log, null, 2) + "\n");
-}
 console.log(
   `catalogue-sync ok — ${reports.length} sweep(s), ${toolItems} tool item(s): ${okLines.length} resolved, ${info.length} without a repo`,
 );

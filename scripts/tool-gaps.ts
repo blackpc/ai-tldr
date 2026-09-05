@@ -25,9 +25,10 @@
  *
  * --check: exit 1 when feed-sourced gaps remain AND the working tree shows
  * the run added no tool page and recorded no skip — i.e. "a no-op day" with
- * real candidates pending. It never demands a number; recording a skip with
- * a reason is a valid outcome. (Prompt prose alone was ignored 34 sweeps in a
- * row — SWEEP_MEMORY 2026-09-05-A.)
+ * real candidates pending. INFORMATIONAL: the workflow prints it in the run
+ * summary and never fails or retries on it (editor's call, SWEEP_MEMORY
+ * 2026-09-05-C) — the next run simply gets the same list. It never demands
+ * a number; recording a skip with a reason is a valid outcome.
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { execSync } from "node:child_process";
